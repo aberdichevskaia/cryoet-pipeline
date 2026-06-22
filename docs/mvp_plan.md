@@ -1,0 +1,41 @@
+# MVP plan
+
+## Summary
+
+Build a non-agentic, extensible Python MVP that processes EMPIAR-10164 `TS_01`
+and `TS_43` from multiframe MRC plus `.mdoc` metadata to visual/QC-ready
+tomograms.
+
+Internal storage is Zarr plus JSON manifests. External exports must remain
+compatible with IMOD-style workflows: `.st`, `.rec`, `.tlt`, `.xf`.
+
+## Decisions
+
+- Runtime target: Linux + CUDA for full-size production processing; Apple Silicon
+  MPS and CPU are supported as development/runtime preferences where backends allow it.
+- Package shape: typed Python API first, CLI as a thin wrapper.
+- First dataset target: EMPIAR-10164 `TS_01` and `TS_43`.
+- Storage: Zarr artifact store plus MRC/IMOD exports.
+- Third-party policy: adapters first; vendor or fork only when real
+  customization requires it.
+- Motion correction: first backend is our own global phase-correlation
+  implementation, with average-only fallback for debugging.
+- Alignment/reconstruction: TeamTomo adapters around `tttsa` and
+  `torch-tomogram`.
+- Quality target: visual/QC-ready, not publication-grade.
+
+## First implementation slice
+
+1. Project scaffold, package config, CLI entrypoint.
+2. Core models: project config, tilt-series manifest, artifact records.
+3. SerialEM `.mdoc` parser and EMPIAR file mapping.
+4. Backend protocols for motion correction, alignment, and reconstruction.
+5. Tests for metadata parsing and artifact serialization.
+
+## Acceptance for MVP
+
+- Local EMPIAR data is provided by the user.
+- `TS_01` validates as 41 tilts with 8 frames per tilt.
+- `TS_43` validates as 41 tilts with 10 frames per tilt.
+- Both tilt-series produce corrected projections, `.st`, `.tlt`, `.xf`, `.rec`,
+  Zarr artifacts, and QC reports.
