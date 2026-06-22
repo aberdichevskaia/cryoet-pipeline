@@ -25,6 +25,36 @@ python -m pip install -e ".[dev,io]"
 pytest
 ```
 
+## Download the MVP dataset subset
+
+Avoid downloading EMPIAR-10164 as a browser ZIP: the selected subset is large and
+browser-generated ZIP files can fail without a valid central directory. Download
+the two MVP tilt-series as individual files instead:
+
+```bash
+cryoet download-empiar-10164 --dry-run
+cryoet download-empiar-10164
+```
+
+This writes:
+
+```text
+data/empiar-10164/data/frames/TS_01_*.mrc
+data/empiar-10164/data/frames/TS_43_*.mrc
+data/empiar-10164/data/mdoc-files/TS_01.mrc.mdoc
+data/empiar-10164/data/mdoc-files/TS_43.mrc.mdoc
+```
+
+Initialize a local project manifest after the files are present:
+
+```bash
+cryoet init \
+  --frames data/empiar-10164/data/frames \
+  --mdocs data/empiar-10164/data/mdoc-files \
+  --out outputs/dev \
+  --device auto
+```
+
 The default device is `auto`: CUDA is preferred on Linux GPU machines, Apple
 Silicon MPS is used when available, and CPU is the fallback. On M4 Macs this is
 intended for ingest, QC, small tests, and backends that support PyTorch MPS;

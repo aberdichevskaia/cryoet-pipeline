@@ -4,7 +4,9 @@ from pathlib import Path
 
 import typer
 
+from cryoet_pipeline.empiar import DEFAULT_TILT_SERIES, build_empiar_10164_file_list, download_files
 from cryoet_pipeline.models import ProjectConfig
+from cryoet_pipeline.project import initialize_project
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
@@ -21,10 +23,7 @@ def init(
     ),
     device: str = typer.Option("auto", help="Runtime device: auto, cuda, mps, or cpu."),
 ) -> None:
-    """Validate and print the initial project config.
-
-    This is a placeholder command until the ingest workflow writes project state.
-    """
+    """Validate local inputs and write project manifests."""
 
     config = ProjectConfig(
         frames_dir=frames,
@@ -33,7 +32,37 @@ def init(
         tilt_series=tilt_series,
         device=device,
     )
-    typer.echo(config.model_dump_json(indent=2))
+    result = initialize_project(config)
+    typer.echo(f"wrote {result.project_path}")
+    for path in result.manifest_paths:
+        typer.echo(f"wrote {path}")
+
+
+@app.command("download-empiar-10164")
+def download_empiar_10164(
+    out: Path = typer.Option(
+        Path("data/empiar-10164"),
+        help="Output root for EMPIAR-10164 files.",
+    ),
+    tilt_series: list[str] = typer.Option(
+        list(DEFAULT_TILT_SERIES),
+        "--tilt-series",
+        help="Tilt-series ids to download.",
+    ),
+    dry_run: bool = typer.Option(False, help="Print files without downloading."),
+    overwrite: bool = typer.Option(False, help="Redownload files even if they exist."),
+) -> None:
+    """Download selected EMPIAR-10164 tilt-series without using browser ZIPs."""
+
+    files = build_empiar_10164_file_list(tilt_series)
+    typer.echo(f"selected {len(files)} files")
+    for file in files:
+        typer.echo(f"{file.relative_path} <- {file.url}")
+
+    if dry_run:
+        return
+
+    download_files(files, output_root=out, overwrite=overwrite, progress=typer.echo)
 
 
 @app.command()
