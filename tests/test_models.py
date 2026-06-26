@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder, ProjectConfig
+from cryoet_pipeline.models import (
+    Artifact,
+    ArtifactKind,
+    AxisOrder,
+    ProjectConfig,
+    RetentionPolicy,
+    StorageRole,
+)
 
 
 def test_project_config_defaults_to_mvp_tilt_series() -> None:
@@ -32,7 +39,26 @@ def test_artifact_serializes_lineage() -> None:
 
 
 def test_new_artifact_kinds_serialize_as_stable_values() -> None:
+    assert AxisOrder.YX.value == "yx"
     assert ArtifactKind.DENOISED_TOMOGRAM.value == "denoised_tomogram"
     assert ArtifactKind.SEGMENTATION.value == "segmentation"
     assert ArtifactKind.PICKS.value == "picks"
     assert ArtifactKind.DATASET_EXPORT.value == "dataset_export"
+
+
+def test_artifact_storage_metadata_serializes_as_stable_values() -> None:
+    artifact = Artifact(
+        kind=ArtifactKind.CORRECTED_PROJECTION,
+        path=Path("outputs/corrected.mrc"),
+        storage_role=StorageRole.EXPORT,
+        retention_policy=RetentionPolicy.KEEP,
+        can_recompute=False,
+        size_bytes=128,
+    )
+
+    payload = artifact.model_dump(mode="json")
+
+    assert payload["storage_role"] == "export"
+    assert payload["retention_policy"] == "keep"
+    assert payload["can_recompute"] is False
+    assert payload["size_bytes"] == 128

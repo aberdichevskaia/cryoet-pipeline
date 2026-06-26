@@ -9,20 +9,28 @@ tomograms.
 Internal storage is Zarr plus JSON manifests. External exports must remain
 compatible with IMOD-style workflows: `.st`, `.rec`, `.tlt`, `.xf`.
 
+The MVP should be agent-ready but not agentic: deterministic stages, clean
+backend contracts, structured artifacts, logs, and QC signals should make it easy
+to attach a future copilot or web cockpit without rewriting processing code.
+
 ## Decisions
 
 - Runtime target: Linux + CUDA for full-size production processing; Apple Silicon
   MPS and CPU are supported as development/runtime preferences where backends allow it.
 - Package shape: typed Python API first, CLI as a thin wrapper.
 - First dataset target: EMPIAR-10164 `TS_01` and `TS_43`.
-- Storage: Zarr artifact store plus MRC/IMOD exports.
+- Storage: Zarr artifact store plus policy-controlled MRC/IMOD exports.
 - Third-party policy: adapters first; vendor or fork only when real
   customization requires it.
-- Motion correction: first backend is our own global phase-correlation
-  implementation, with average-only fallback for debugging.
+- Motion correction: first backend is average-only for baseline/debugging;
+  global phase-correlation or third-party adapters can follow.
 - Alignment/reconstruction: TeamTomo adapters around `tttsa` and
   `torch-tomogram`.
 - Quality target: visual/QC-ready, not publication-grade.
+- Visualization: no full 3D web viewer in the MVP; prefer IMOD exports plus
+  lightweight previews.
+- Benchmarks: public datasets and known failure cases should drive acceptance
+  before expanding scope.
 
 ## First implementation slice
 
@@ -30,7 +38,19 @@ compatible with IMOD-style workflows: `.st`, `.rec`, `.tlt`, `.xf`.
 2. Core models: project config, tilt-series manifest, artifact records.
 3. SerialEM `.mdoc` parser and EMPIAR file mapping.
 4. Backend protocols for motion correction, alignment, and reconstruction.
-5. Tests for metadata parsing and artifact serialization.
+5. Artifact registry with storage roles, retention policies, and size tracking.
+6. Average-only motion-correction backend and `correct-motion` command.
+7. Tests for metadata parsing, artifact serialization, registry behavior, CLI
+   commands, and baseline processing.
+
+## Supporting docs
+
+- [architecture_decisions.md](architecture_decisions.md)
+- [project_scope.md](project_scope.md)
+- [agent_readiness.md](agent_readiness.md)
+- [benchmark_strategy.md](benchmark_strategy.md)
+- [qc_strategy.md](qc_strategy.md)
+- [storage_policy.md](storage_policy.md)
 
 ## Acceptance for MVP
 

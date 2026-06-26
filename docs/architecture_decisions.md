@@ -72,6 +72,15 @@ files, and Dynamo tables when needed so users can continue in established tools.
 
 These formats should remain compatible outputs, not the internal source of truth.
 
+## Storage principle
+
+Large artifacts should be classified by storage role and retention policy as
+soon as they are written. Raw data is immutable external input; Zarr plus
+manifests and the artifact registry are the internal working store; IMOD/MRC
+files are compatibility or debug outputs unless explicitly promoted.
+
+The detailed storage policy lives in [storage_policy.md](storage_policy.md).
+
 ## Backend design principle
 
 Backends should depend on pipeline-owned protocols and models. A backend may call

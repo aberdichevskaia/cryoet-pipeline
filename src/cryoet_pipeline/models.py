@@ -13,6 +13,7 @@ from cryoet_pipeline.runtime import DevicePreference, normalize_device
 class AxisOrder(StrEnum):
     """Known array axis conventions used by this pipeline."""
 
+    YX = "yx"
     ZYX = "zyx"
     TYX = "tyx"
     FYX = "fyx"
@@ -31,6 +32,25 @@ class ArtifactKind(StrEnum):
     PICKS = "picks"
     DATASET_EXPORT = "dataset_export"
     QC = "qc"
+
+
+class StorageRole(StrEnum):
+    """How an artifact should be treated by storage and cleanup policies."""
+
+    SOURCE = "source"
+    CANONICAL = "canonical"
+    CACHE = "cache"
+    EXPORT = "export"
+    TEMPORARY = "temporary"
+    QC = "qc"
+
+
+class RetentionPolicy(StrEnum):
+    """Whether an artifact should be kept or can be regenerated/deleted."""
+
+    KEEP = "keep"
+    RECOMPUTE = "recompute"
+    DELETE_AFTER_EXPORT = "delete_after_export"
 
 
 class ProjectConfig(BaseModel):
@@ -124,3 +144,7 @@ class Artifact(BaseModel):
     binning: int | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     software_versions: dict[str, str] = Field(default_factory=dict)
+    storage_role: StorageRole = StorageRole.CACHE
+    retention_policy: RetentionPolicy = RetentionPolicy.RECOMPUTE
+    can_recompute: bool = True
+    size_bytes: int | None = Field(default=None, ge=0)

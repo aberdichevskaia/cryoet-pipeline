@@ -7,7 +7,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from cryoet_pipeline.models import Artifact, ArtifactKind
+from cryoet_pipeline.models import Artifact, ArtifactKind, StorageRole
 
 
 class ArtifactRegistry(BaseModel):
@@ -53,25 +53,24 @@ class ArtifactRegistry(BaseModel):
         payload = self.model_dump(mode="json")
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
-    def add(self, artifact: Artifact) -> None:
-        existing_ids = self.artifact_ids
-        if artifact.id in existing_ids:
+    def add(self, artifact: Artifact, *, replace: bool = False) -> None:
+        existing_index = self._find_index(artifact.id)
+        if existing_index is not None and not replace:
             raise ValueError(f"duplicate artifact id: {artifact.id}")
 
-        missing_parent_ids = [
-            parent_id for parent_id in artifact.parent_ids if parent_id not in existing_ids
-        ]
-        if missing_parent_ids:
-            raise ValueError(
-                f"{artifact.id}: parent artifacts must be registered first; "
-                f"missing {missing_parent_ids}"
-            )
+        if existing_index is not None:
+            existing_ids = {entry.id for entry in self.artifacts[:existing_index]}
+            self._validate_parent_ids(artifact, existing_ids)
+            self.artifacts[existing_index] = artifact
+            return
 
+        existing_ids = self.artifact_ids
+        self._validate_parent_ids(artifact, existing_ids)
         self.artifacts.append(artifact)
 
-    def extend(self, artifacts: Iterable[Artifact]) -> None:
+    def extend(self, artifacts: Iterable[Artifact], *, replace: bool = False) -> None:
         for artifact in artifacts:
-            self.add(artifact)
+            self.add(artifact, replace=replace)
 
     def get(self, artifact_id: str) -> Artifact:
         for artifact in self.artifacts:
@@ -82,11 +81,42 @@ class ArtifactRegistry(BaseModel):
     def by_kind(self, kind: ArtifactKind) -> list[Artifact]:
         return [artifact for artifact in self.artifacts if artifact.kind == kind]
 
+    def by_storage_role(self, role: StorageRole) -> list[Artifact]:
+        return [artifact for artifact in self.artifacts if artifact.storage_role == role]
+
     def children_of(self, artifact_id: str) -> list[Artifact]:
         return [
             artifact for artifact in self.artifacts if artifact_id in artifact.parent_ids
         ]
 
     @property
+    def total_size_bytes(self) -> int:
+        return sum(artifact.size_bytes or 0 for artifact in self.artifacts)
+
+    @property
+    def size_bytes_by_storage_role(self) -> dict[StorageRole, int]:
+        sizes = {role: 0 for role in StorageRole}
+        for artifact in self.artifacts:
+            sizes[artifact.storage_role] += artifact.size_bytes or 0
+        return sizes
+
+    @property
     def artifact_ids(self) -> set[str]:
         return {artifact.id for artifact in self.artifacts}
+
+    def _find_index(self, artifact_id: str) -> int | None:
+        for index, artifact in enumerate(self.artifacts):
+            if artifact.id == artifact_id:
+                return index
+        return None
+
+    @staticmethod
+    def _validate_parent_ids(artifact: Artifact, existing_ids: set[str]) -> None:
+        missing_parent_ids = [
+            parent_id for parent_id in artifact.parent_ids if parent_id not in existing_ids
+        ]
+        if missing_parent_ids:
+            raise ValueError(
+                f"{artifact.id}: parent artifacts must be registered first; "
+                f"missing {missing_parent_ids}"
+            )

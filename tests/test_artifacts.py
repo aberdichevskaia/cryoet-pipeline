@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
-from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder
+from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder, StorageRole
 
 
 def test_artifact_registry_adds_and_queries_lineage(tmp_path: Path) -> None:
@@ -18,6 +18,9 @@ def test_artifact_registry_adds_and_queries_lineage(tmp_path: Path) -> None:
         shape=(8, 16, 16),
         dtype="int8",
         axis_order=AxisOrder.FYX,
+        storage_role=StorageRole.SOURCE,
+        can_recompute=False,
+        size_bytes=2048,
     )
     corrected = Artifact(
         id="corrected-0",
@@ -26,14 +29,20 @@ def test_artifact_registry_adds_and_queries_lineage(tmp_path: Path) -> None:
         parent_ids=["raw-0"],
         shape=(16, 16),
         dtype="float32",
+        storage_role=StorageRole.CACHE,
+        size_bytes=1024,
     )
 
     registry.extend([raw, corrected])
 
     assert registry.get("raw-0") == raw
     assert registry.by_kind(ArtifactKind.CORRECTED_PROJECTION) == [corrected]
+    assert registry.by_storage_role(StorageRole.SOURCE) == [raw]
     assert registry.children_of("raw-0") == [corrected]
     assert registry.artifact_ids == {"raw-0", "corrected-0"}
+    assert registry.total_size_bytes == 3072
+    assert registry.size_bytes_by_storage_role[StorageRole.SOURCE] == 2048
+    assert registry.size_bytes_by_storage_role[StorageRole.CACHE] == 1024
 
 
 def test_artifact_registry_roundtrips_json(tmp_path: Path) -> None:
@@ -76,6 +85,29 @@ def test_artifact_registry_rejects_duplicate_ids(tmp_path: Path) -> None:
                 path=tmp_path / "qc.json",
             )
         )
+
+
+def test_artifact_registry_can_replace_existing_artifact(tmp_path: Path) -> None:
+    registry = ArtifactRegistry.empty()
+    first = Artifact(
+        id="projection",
+        kind=ArtifactKind.CORRECTED_PROJECTION,
+        path=tmp_path / "first.mrc",
+        parameters={"run": "first"},
+    )
+    second = Artifact(
+        id="projection",
+        kind=ArtifactKind.CORRECTED_PROJECTION,
+        path=tmp_path / "second.mrc",
+        parameters={"run": "second"},
+    )
+
+    registry.add(first)
+    registry.add(second, replace=True)
+
+    assert len(registry.artifacts) == 1
+    assert registry.get("projection").path == tmp_path / "second.mrc"
+    assert registry.get("projection").parameters == {"run": "second"}
 
 
 def test_artifact_registry_rejects_unknown_parent(tmp_path: Path) -> None:

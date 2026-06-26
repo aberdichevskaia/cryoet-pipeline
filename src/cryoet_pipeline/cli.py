@@ -5,14 +5,21 @@ from typing import Annotated
 
 import typer
 
+from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.motion import (
+    AverageMotionCorrectionBackend,
+    correct_and_register,
+)
+from cryoet_pipeline.backends.protocols import BackendContext, MotionCorrectionBackend
 from cryoet_pipeline.empiar import (
     DEFAULT_TILT_SERIES,
     build_empiar_10164_file_list,
     download_files,
 )
-from cryoet_pipeline.models import ProjectConfig
+from cryoet_pipeline.models import ProjectConfig, TiltSeriesManifest
 from cryoet_pipeline.project import initialize_project
-from cryoet_pipeline.runtime import normalize_device
+from cryoet_pipeline.runtime import normalize_device, resolve_device
+from cryoet_pipeline.storage import resolve_storage_policy
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
@@ -85,6 +92,70 @@ def download_empiar_10164(
     download_files(files, output_root=out, overwrite=overwrite, progress=typer.echo)
 
 
+@app.command("correct-motion")
+def correct_motion(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for corrected projections.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Motion-correction backend to use."),
+    ] = "average",
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite corrected projection files and registry entries."),
+    ] = False,
+    storage_policy: Annotated[
+        str,
+        typer.Option(help="Storage policy: debug, working, or minimal."),
+    ] = "debug",
+) -> None:
+    """Correct multiframe tilt movies and register corrected projections."""
+
+    motion_backend = _motion_backend(backend)
+    try:
+        resolved_storage_policy = resolve_storage_policy(storage_policy)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="storage-policy") from exc
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters={
+            "overwrite": overwrite,
+            "artifact_format": resolved_storage_policy.artifact_format,
+            "storage_role": resolved_storage_policy.storage_role,
+            "retention_policy": resolved_storage_policy.retention_policy,
+            "can_recompute": resolved_storage_policy.can_recompute,
+        },
+    )
+
+    artifacts = correct_and_register(
+        motion_backend,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    typer.echo(f"wrote {len(artifacts)} corrected projections")
+    typer.echo(f"updated {registry}")
+    typer.echo(f"storage policy: {resolved_storage_policy.name.value}")
+    typer.echo(f"registered size: {artifact_registry.total_size_bytes} bytes")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
@@ -117,4 +188,15 @@ def qc(project: Annotated[Path, typer.Option(help="Project directory.")]) -> Non
     raise typer.BadParameter(
         f"QC is not implemented yet; project={project}",
         param_hint="project",
+    )
+
+
+def _motion_backend(name: str) -> MotionCorrectionBackend:
+    normalized = name.lower()
+    if normalized == "average":
+        return AverageMotionCorrectionBackend()
+
+    raise typer.BadParameter(
+        f"unsupported motion-correction backend {name!r}; expected: average",
+        param_hint="backend",
     )
