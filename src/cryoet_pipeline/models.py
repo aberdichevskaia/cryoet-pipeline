@@ -26,6 +26,10 @@ class ArtifactKind(StrEnum):
     TILT_STACK = "tilt_stack"
     ALIGNMENT = "alignment"
     TOMOGRAM = "tomogram"
+    DENOISED_TOMOGRAM = "denoised_tomogram"
+    SEGMENTATION = "segmentation"
+    PICKS = "picks"
+    DATASET_EXPORT = "dataset_export"
     QC = "qc"
 
 

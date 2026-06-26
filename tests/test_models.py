@@ -29,3 +29,10 @@ def test_artifact_serializes_lineage() -> None:
     assert payload["kind"] == "tomogram"
     assert payload["axis_order"] == "zyx"
     assert payload["parent_ids"] == ["stack", "alignment"]
+
+
+def test_new_artifact_kinds_serialize_as_stable_values() -> None:
+    assert ArtifactKind.DENOISED_TOMOGRAM.value == "denoised_tomogram"
+    assert ArtifactKind.SEGMENTATION.value == "segmentation"
+    assert ArtifactKind.PICKS.value == "picks"
+    assert ArtifactKind.DATASET_EXPORT.value == "dataset_export"

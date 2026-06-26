@@ -9,7 +9,6 @@ from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-
 EMPIAR_10164_BASE_URL = "https://ftp.ebi.ac.uk/empiar/world_availability/10164/data/"
 DEFAULT_TILT_SERIES = ("TS_01", "TS_43")
 _HREF_RE = re.compile(r'href="([^"]+)"')
@@ -155,7 +154,8 @@ def download_file(
 
 def read_text_url(url: str) -> str:
     with urlopen(url) as response:
-        return response.read().decode("utf-8", errors="replace")
+        text: str = response.read().decode("utf-8", errors="replace")
+        return text
 
 
 def _frame_sort_key(name: str) -> tuple[str, int, str]:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.ingest import parse_mdoc_text
 from cryoet_pipeline.models import ProjectConfig, TiltSeriesManifest
 
@@ -20,12 +21,16 @@ EXPECTED_SUBFRAMES_BY_SERIES = {
 class InitResult:
     project_path: Path
     manifest_paths: list[Path]
+    artifact_registry_path: Path
 
 
 def initialize_project(config: ProjectConfig) -> InitResult:
     """Validate local input data and write project manifests."""
 
-    manifests = [load_tilt_series_manifest(config, tilt_series_id) for tilt_series_id in config.tilt_series]
+    manifests = [
+        load_tilt_series_manifest(config, tilt_series_id)
+        for tilt_series_id in config.tilt_series
+    ]
     for manifest in manifests:
         validate_tilt_series_manifest(manifest)
 
@@ -39,6 +44,9 @@ def initialize_project(config: ProjectConfig) -> InitResult:
         write_json(path, manifest.model_dump(mode="json"))
         manifest_paths.append(path)
 
+    artifact_registry_path = config.output_dir / "artifacts.json"
+    ArtifactRegistry.empty().write(artifact_registry_path)
+
     project_path = config.output_dir / "project.json"
     write_json(
         project_path,
@@ -46,10 +54,15 @@ def initialize_project(config: ProjectConfig) -> InitResult:
             "config": config.model_dump(mode="json"),
             "tilt_series": [manifest.tilt_series_id for manifest in manifests],
             "manifests": [str(path) for path in manifest_paths],
+            "artifact_registry": str(artifact_registry_path),
         },
     )
 
-    return InitResult(project_path=project_path, manifest_paths=manifest_paths)
+    return InitResult(
+        project_path=project_path,
+        manifest_paths=manifest_paths,
+        artifact_registry_path=artifact_registry_path,
+    )
 
 
 def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> TiltSeriesManifest:
@@ -80,15 +93,20 @@ def validate_tilt_series_manifest(manifest: TiltSeriesManifest) -> None:
             f"found {sorted(manifest.num_subframes_set)}"
         )
 
-    missing = [image.local_frame_file for image in manifest.images if not image.local_frame_file]
-    if missing:
-        raise ValueError(f"{manifest.tilt_series_id}: some mdoc entries did not resolve to local files")
+    local_frame_files: list[Path] = []
+    for image in manifest.images:
+        if image.local_frame_file is None:
+            raise ValueError(
+                f"{manifest.tilt_series_id}: some mdoc entries did not resolve to local files"
+            )
+        local_frame_files.append(image.local_frame_file)
 
-    missing_files = [image.local_frame_file for image in manifest.images if not image.local_frame_file.exists()]
+    missing_files = [path for path in local_frame_files if not path.exists()]
     if missing_files:
         preview = ", ".join(str(path) for path in missing_files[:5])
         raise FileNotFoundError(
-            f"{manifest.tilt_series_id}: {len(missing_files)} frame files are missing; first: {preview}"
+            f"{manifest.tilt_series_id}: {len(missing_files)} frame files are missing; "
+            f"first: {preview}"
         )
 
 

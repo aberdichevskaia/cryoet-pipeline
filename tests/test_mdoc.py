@@ -2,7 +2,6 @@ from pathlib import Path
 
 from cryoet_pipeline.ingest import parse_mdoc_text
 
-
 MDOC_TEXT = """PixelSpacing = 5.4
 ImageFile = TS_01.mrc
 ImageSize = 924 958

@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 
+from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.models import ProjectConfig
 from cryoet_pipeline.project import initialize_project
 
@@ -40,8 +42,15 @@ def test_initialize_project_writes_manifests(tmp_path: Path) -> None:
     )
 
     assert result.project_path.exists()
+    assert result.artifact_registry_path.exists()
     assert len(result.manifest_paths) == 2
     assert all(path.exists() for path in result.manifest_paths)
+
+    project_payload = json.loads(result.project_path.read_text())
+    assert project_payload["artifact_registry"] == str(result.artifact_registry_path)
+
+    registry = ArtifactRegistry.load(result.artifact_registry_path)
+    assert registry.artifacts == []
 
 
 def test_initialize_project_rejects_missing_frames(tmp_path: Path) -> None:
@@ -54,5 +63,10 @@ def test_initialize_project_rejects_missing_frames(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError):
         initialize_project(
-            ProjectConfig(frames_dir=frames, mdocs_dir=mdocs, output_dir=out, tilt_series=["TS_01"])
+            ProjectConfig(
+                frames_dir=frames,
+                mdocs_dir=mdocs,
+                output_dir=out,
+                tilt_series=["TS_01"],
+            )
         )

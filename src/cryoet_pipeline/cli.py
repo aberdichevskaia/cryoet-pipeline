@@ -1,27 +1,45 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
-from cryoet_pipeline.empiar import DEFAULT_TILT_SERIES, build_empiar_10164_file_list, download_files
+from cryoet_pipeline.empiar import (
+    DEFAULT_TILT_SERIES,
+    build_empiar_10164_file_list,
+    download_files,
+)
 from cryoet_pipeline.models import ProjectConfig
 from cryoet_pipeline.project import initialize_project
+from cryoet_pipeline.runtime import normalize_device
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
+
+DEFAULT_OUTPUT_ROOT = Path("data/empiar-10164")
+DEFAULT_INIT_TILT_SERIES = list(DEFAULT_TILT_SERIES)
+DEFAULT_DOWNLOAD_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 
 
 @app.command()
 def init(
-    frames: Path = typer.Option(..., help="Directory containing multiframe MRC files."),
-    mdocs: Path = typer.Option(..., help="Directory containing SerialEM .mdoc files."),
-    out: Path = typer.Option(..., help="Project output directory."),
-    tilt_series: list[str] = typer.Option(
-        ["TS_01", "TS_43"],
-        "--tilt-series",
-        help="Tilt-series ids to include in the project.",
-    ),
-    device: str = typer.Option("auto", help="Runtime device: auto, cuda, mps, or cpu."),
+    frames: Annotated[
+        Path,
+        typer.Option(help="Directory containing multiframe MRC files."),
+    ],
+    mdocs: Annotated[
+        Path,
+        typer.Option(help="Directory containing SerialEM .mdoc files."),
+    ],
+    out: Annotated[Path, typer.Option(help="Project output directory.")],
+    tilt_series: Annotated[
+        list[str],
+        typer.Option("--tilt-series", help="Tilt-series ids to include in the project."),
+    ] = DEFAULT_INIT_TILT_SERIES,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
 ) -> None:
     """Validate local inputs and write project manifests."""
 
@@ -30,7 +48,7 @@ def init(
         mdocs_dir=mdocs,
         output_dir=out,
         tilt_series=tilt_series,
-        device=device,
+        device=normalize_device(device),
     )
     result = initialize_project(config)
     typer.echo(f"wrote {result.project_path}")
@@ -40,17 +58,19 @@ def init(
 
 @app.command("download-empiar-10164")
 def download_empiar_10164(
-    out: Path = typer.Option(
-        Path("data/empiar-10164"),
-        help="Output root for EMPIAR-10164 files.",
-    ),
-    tilt_series: list[str] = typer.Option(
-        list(DEFAULT_TILT_SERIES),
-        "--tilt-series",
-        help="Tilt-series ids to download.",
-    ),
-    dry_run: bool = typer.Option(False, help="Print files without downloading."),
-    overwrite: bool = typer.Option(False, help="Redownload files even if they exist."),
+    out: Annotated[
+        Path,
+        typer.Option(help="Output root for EMPIAR-10164 files."),
+    ] = DEFAULT_OUTPUT_ROOT,
+    tilt_series: Annotated[
+        list[str],
+        typer.Option("--tilt-series", help="Tilt-series ids to download."),
+    ] = DEFAULT_DOWNLOAD_TILT_SERIES,
+    dry_run: Annotated[bool, typer.Option(help="Print files without downloading.")] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Redownload files even if they exist."),
+    ] = False,
 ) -> None:
     """Download selected EMPIAR-10164 tilt-series without using browser ZIPs."""
 
@@ -66,7 +86,9 @@ def download_empiar_10164(
 
 
 @app.command()
-def run(project: Path = typer.Option(..., help="Project directory created by init.")) -> None:
+def run(
+    project: Annotated[Path, typer.Option(help="Project directory created by init.")],
+) -> None:
     """Run the pipeline for the configured tilt-series."""
 
     raise typer.BadParameter(
@@ -77,8 +99,8 @@ def run(project: Path = typer.Option(..., help="Project directory created by ini
 
 @app.command()
 def export(
-    project: Path = typer.Option(..., help="Project directory."),
-    format: str = typer.Option("imod", help="Export format."),
+    project: Annotated[Path, typer.Option(help="Project directory.")],
+    format: Annotated[str, typer.Option(help="Export format.")] = "imod",
 ) -> None:
     """Export artifacts for external tools."""
 
@@ -89,7 +111,7 @@ def export(
 
 
 @app.command()
-def qc(project: Path = typer.Option(..., help="Project directory.")) -> None:
+def qc(project: Annotated[Path, typer.Option(help="Project directory.")]) -> None:
     """Generate or inspect QC outputs."""
 
     raise typer.BadParameter(
