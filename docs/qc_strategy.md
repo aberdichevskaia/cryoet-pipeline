@@ -43,9 +43,16 @@ For the first release:
 
 ### Alignment
 
+- dose-symmetric acquisition order is normalized to ascending tilt angle for
+  correlation, then transforms are mapped back to manifest order;
+- low-variance input tilts are recorded and excluded from alignment rather than
+  silently producing extreme transforms;
 - transform file or alignment artifact exists;
 - transform count matches tilt count when applicable;
 - transform values are finite and within broad sanity bounds;
+- a reduced prealigned MRC preview is retained for inspection in `3dmod`;
+- residual shifts are measured on the preview and recorded with explicit
+  warning and failure thresholds;
 - alignment summary plots or logs are recorded.
 
 ### Reconstruction

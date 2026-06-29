@@ -9,6 +9,8 @@ from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
+from cryoet_pipeline.mrc_validation import IncompleteMrcError, validate_complete_mrc
+
 EMPIAR_10164_BASE_URL = "https://ftp.ebi.ac.uk/empiar/world_availability/10164/data/"
 DEFAULT_TILT_SERIES = ("TS_01", "TS_43")
 _HREF_RE = re.compile(r'href="([^"]+)"')
@@ -114,8 +116,23 @@ def download_file(
     """Download one file, resuming from `destination.part` when present."""
 
     if destination.exists() and not overwrite:
-        _emit(progress, f"skip existing {destination}")
-        return
+        if destination.suffix.lower() != ".mrc":
+            _emit(progress, f"skip existing {destination}")
+            return
+        try:
+            validate_complete_mrc(destination)
+        except IncompleteMrcError as exc:
+            partial = destination.with_suffix(destination.suffix + ".part")
+            if partial.exists():
+                raise FileExistsError(
+                    f"both incomplete destination and partial download exist: "
+                    f"{destination}, {partial}"
+                ) from exc
+            destination.replace(partial)
+            _emit(progress, f"recover incomplete {destination}")
+        else:
+            _emit(progress, f"skip existing {destination}")
+            return
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + ".part")
@@ -143,11 +160,15 @@ def download_file(
                 shutil.copyfileobj(response, handle, length=chunk_size)
     except HTTPError as exc:
         if exc.code == 416 and resume_at:
+            if destination.suffix.lower() == ".mrc":
+                validate_complete_mrc(partial)
             partial.replace(destination)
             _emit(progress, f"complete {destination}")
             return
         raise
 
+    if destination.suffix.lower() == ".mrc":
+        validate_complete_mrc(partial)
     partial.replace(destination)
     _emit(progress, f"complete {destination}")
 

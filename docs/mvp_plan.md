@@ -24,8 +24,11 @@ to attach a future copilot or web cockpit without rewriting processing code.
   customization requires it.
 - Motion correction: first backend is average-only for baseline/debugging;
   global phase-correlation or third-party adapters can follow.
-- Alignment/reconstruction: TeamTomo adapters around `tttsa` and
-  `torch-tomogram`.
+- Alignment: first backend is IMOD `tiltxcorr` for coarse alignment, followed by
+  a separate fiducial-tracking/fine-alignment backend. `tttsa`, AreTomo, and
+  other tools remain replaceable adapter options.
+- Reconstruction: a replaceable backend, with `torch-tomogram` and IMOD
+  reconstruction adapters as planned options.
 - Quality target: visual/QC-ready, not publication-grade.
 - Visualization: no full 3D web viewer in the MVP; prefer IMOD exports plus
   lightweight previews.
@@ -39,8 +42,14 @@ to attach a future copilot or web cockpit without rewriting processing code.
 3. SerialEM `.mdoc` parser and EMPIAR file mapping.
 4. Backend protocols for motion correction, alignment, and reconstruction.
 5. Artifact registry with storage roles, retention policies, and size tracking.
-6. Average-only motion-correction backend and `correct-motion` command.
-7. Tests for metadata parsing, artifact serialization, registry behavior, CLI
+6. Average-only motion-correction backend and tilt-stack preparation backend.
+7. `prepare-tilt-series` command that corrects movies and prepares
+   alignment-ready stack/angle artifacts as one user-facing step.
+8. Canonical alignment models plus an IMOD `tiltxcorr` coarse-alignment adapter
+   that emits normalized JSON and an IMOD-compatible `.xf`.
+9. Coarse-alignment QC with a retained bin16 prealigned preview, residual-shift
+   metrics, and machine-readable `pass`, `warning`, or `fail` status.
+10. Tests for metadata parsing, artifact serialization, registry behavior, CLI
    commands, and baseline processing.
 
 ## Supporting docs

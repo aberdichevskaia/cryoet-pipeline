@@ -1,6 +1,10 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from cryoet_pipeline.models import (
+    AlignmentTransform,
     Artifact,
     ArtifactKind,
     AxisOrder,
@@ -43,6 +47,7 @@ def test_new_artifact_kinds_serialize_as_stable_values() -> None:
     assert ArtifactKind.DENOISED_TOMOGRAM.value == "denoised_tomogram"
     assert ArtifactKind.SEGMENTATION.value == "segmentation"
     assert ArtifactKind.PICKS.value == "picks"
+    assert ArtifactKind.TILT_ANGLES.value == "tilt_angles"
     assert ArtifactKind.DATASET_EXPORT.value == "dataset_export"
 
 
@@ -62,3 +67,17 @@ def test_artifact_storage_metadata_serializes_as_stable_values() -> None:
     assert payload["retention_policy"] == "keep"
     assert payload["can_recompute"] is False
     assert payload["size_bytes"] == 128
+
+
+def test_alignment_transform_rejects_nonfinite_values() -> None:
+    with pytest.raises(ValidationError, match="must be finite"):
+        AlignmentTransform(
+            z_value=0,
+            tilt_angle_deg=0.0,
+            a11=1.0,
+            a12=0.0,
+            a21=0.0,
+            a22=1.0,
+            shift_x_px=float("nan"),
+            shift_y_px=0.0,
+        )

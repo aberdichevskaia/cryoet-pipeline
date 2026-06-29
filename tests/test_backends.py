@@ -5,6 +5,7 @@ from pathlib import Path
 
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
+    CoarseAlignmentQcBackend,
     DatasetExportBackend,
     DenoisingBackend,
     MotionCorrectionBackend,
@@ -73,6 +74,22 @@ class _FakeBackends:
             parent_ids=[tilt_stack.id, alignment.id],
             axis_order=AxisOrder.ZYX,
         )
+
+    def evaluate(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        return [
+            Artifact(
+                id="alignment-qc",
+                kind=ArtifactKind.QC,
+                path=context.output_dir / f"{manifest.tilt_series_id}_alignment_qc.json",
+                parent_ids=[tilt_stack.id, alignment.id],
+            )
+        ]
 
     def denoise(
         self,
@@ -148,6 +165,7 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     motion: MotionCorrectionBackend = backend
     stacker: TiltStackBackend = backend
     aligner: TiltAlignmentBackend = backend
+    alignment_qc_backend: CoarseAlignmentQcBackend = backend
     reconstructor: ReconstructionBackend = backend
     denoiser: DenoisingBackend = backend
     segmenter: SegmentationBackend = backend
@@ -157,6 +175,12 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     corrected = motion.correct(manifest, context)
     tilt_stack = stacker.build_stack(corrected, manifest, context)
     alignment = aligner.align(tilt_stack, manifest, context)
+    alignment_qc = alignment_qc_backend.evaluate(
+        tilt_stack,
+        alignment,
+        manifest,
+        context,
+    )
     tomogram = reconstructor.reconstruct(tilt_stack, alignment, manifest, context)
     denoised = denoiser.denoise(tomogram, manifest, context)
     segmentation = segmenter.segment(denoised, manifest, context)
@@ -166,6 +190,7 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     assert [artifact.kind for artifact in corrected] == [ArtifactKind.CORRECTED_PROJECTION]
     assert tilt_stack.kind == ArtifactKind.TILT_STACK
     assert alignment.kind == ArtifactKind.ALIGNMENT
+    assert alignment_qc[0].kind == ArtifactKind.QC
     assert tomogram.kind == ArtifactKind.TOMOGRAM
     assert denoised.kind == ArtifactKind.DENOISED_TOMOGRAM
     assert denoised.parameters == {"method": "average"}

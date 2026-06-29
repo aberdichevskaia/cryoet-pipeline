@@ -129,6 +129,49 @@ def test_average_motion_correction_rejects_single_frame_mrc(tmp_path: Path) -> N
         AverageMotionCorrectionBackend().correct(manifest, context)
 
 
+def test_average_motion_correction_preflights_all_movies_before_writing(
+    tmp_path: Path,
+) -> None:
+    complete_path = tmp_path / "frames" / "complete.mrc"
+    incomplete_path = tmp_path / "frames" / "incomplete.mrc"
+    movie_data = np.ones((2, 2, 2), dtype=np.float32)
+    _write_mrc(complete_path, movie_data)
+    _write_mrc(incomplete_path, movie_data)
+    incomplete_path.write_bytes(incomplete_path.read_bytes()[:-4])
+    manifest = TiltSeriesManifest(
+        tilt_series_id="TS_TEST",
+        source_mdoc=Path("TS_TEST.mrc.mdoc"),
+        raw_pixel_spacing_angstrom=1.35,
+        images=[
+            TiltImage(
+                z_value=0,
+                tilt_angle_deg=0.0,
+                subframe_path=str(complete_path),
+                local_frame_file=complete_path,
+                num_subframes=2,
+                pixel_spacing_angstrom=1.35,
+                binning=1,
+            ),
+            TiltImage(
+                z_value=1,
+                tilt_angle_deg=3.0,
+                subframe_path=str(incomplete_path),
+                local_frame_file=incomplete_path,
+                num_subframes=2,
+                pixel_spacing_angstrom=1.35,
+                binning=1,
+            ),
+        ],
+    )
+    output_dir = tmp_path / "outputs"
+    context = BackendContext(output_dir=output_dir, device=DevicePreference.CPU)
+
+    with pytest.raises(ValueError, match="incomplete MRC file"):
+        AverageMotionCorrectionBackend().correct(manifest, context)
+
+    assert not output_dir.exists()
+
+
 def test_average_motion_correction_requires_overwrite_flag(tmp_path: Path) -> None:
     movie_path = tmp_path / "movie.mrc"
     _write_mrc(movie_path, np.ones((2, 2, 2), dtype=np.float32))

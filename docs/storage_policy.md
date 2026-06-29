@@ -74,13 +74,13 @@ cleanup tooling may remove it after downstream artifacts or exports exist.
 
 ## Current MVP behavior
 
-`cryoet correct-motion` defaults to `--storage-policy debug`, because the current
-development loop uses IMOD/`3dmod` for visual QC.
+`cryoet prepare-tilt-series` defaults to `--storage-policy debug`, because the
+current development loop uses IMOD/`3dmod` for visual QC.
 
 For lower disk usage, run:
 
 ```bash
-cryoet correct-motion \
+cryoet prepare-tilt-series \
   --manifest outputs/dev-ts01-registry/manifests/TS_01.json \
   --registry outputs/dev-ts01-registry/artifacts.json \
   --out outputs/dev-ts01-registry \
@@ -90,3 +90,12 @@ cryoet correct-motion \
 The first full `TS_01` debug run will create 41 float32 MRC corrected
 projections. This is useful for visual inspection but should be treated as a
 cache, not as canonical project state.
+
+External alignment backends may need a reduced MRC stack even when the working
+stack is Zarr. Such alignment inputs are temporary: create them with explicit
+binning, consume them inside the backend, and remove them after normalized
+transforms and logs have been captured.
+
+A small prealigned stack may be retained as a QC artifact. The current coarse
+alignment preview uses bin16 data, while the unaligned bin16 input remains
+temporary and is removed after IMOD finishes.

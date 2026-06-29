@@ -21,6 +21,7 @@ from cryoet_pipeline.models import (
     TiltImage,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.mrc_validation import validate_complete_mrc
 from cryoet_pipeline.storage import ArtifactFormat
 
 
@@ -32,6 +33,7 @@ class AverageMotionCorrectionBackend:
     def correct(self, manifest: TiltSeriesManifest, context: BackendContext) -> list[Artifact]:
         """Average every local multiframe movie listed in the tilt-series manifest."""
 
+        _validate_manifest_movies(manifest)
         return [self.correct_image(image, manifest, context) for image in manifest.images]
 
     def correct_image(
@@ -108,12 +110,51 @@ def correct_and_register(
 def _average_movie_frames(path: Path) -> NDArray[np.float32]:
     with mrcfile.open(path, permissive=True) as mrc:
         data = np.asarray(mrc.data)
+        if data.ndim != 3:
+            raise ValueError(
+                f"expected multiframe MRC with shape (frames, y, x), got {data.shape}"
+            )
 
-    if data.ndim != 3:
-        raise ValueError(f"expected multiframe MRC with shape (frames, y, x), got {data.shape}")
-
-    projection = data.astype(np.float32, copy=False).mean(axis=0, dtype=np.float32)
+        projection = np.zeros(data.shape[1:], dtype=np.float32)
+        for frame in data:
+            np.add(projection, frame, out=projection, casting="unsafe")
+        projection /= data.shape[0]
     return cast(NDArray[np.float32], projection)
+
+
+def _validate_manifest_movies(manifest: TiltSeriesManifest) -> None:
+    issues: list[str] = []
+    for image in manifest.images:
+        path = image.local_frame_file
+        if path is None:
+            issues.append(
+                f"{manifest.tilt_series_id} z={image.z_value}: missing local frame file"
+            )
+            continue
+        if not path.is_file():
+            issues.append(f"{manifest.tilt_series_id} z={image.z_value}: file not found: {path}")
+            continue
+
+        try:
+            info = validate_complete_mrc(path)
+        except (OSError, ValueError) as exc:
+            issues.append(str(exc))
+            continue
+
+        if len(info.shape) != 3:
+            issues.append(
+                f"{path}: expected multiframe MRC with shape (frames, y, x), "
+                f"got {info.shape}"
+            )
+        elif image.num_subframes is not None and info.shape[0] != image.num_subframes:
+            issues.append(
+                f"{path}: manifest declares {image.num_subframes} frames, "
+                f"MRC header declares {info.shape[0]}"
+            )
+
+    if issues:
+        details = "\n".join(f"- {issue}" for issue in issues)
+        raise ValueError(f"input movie validation failed:\n{details}")
 
 
 def _write_projection(

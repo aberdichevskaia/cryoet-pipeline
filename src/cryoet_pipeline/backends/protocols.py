@@ -58,6 +58,22 @@ class TiltAlignmentBackend(Protocol):
         ...
 
 
+class CoarseAlignmentQcBackend(Protocol):
+    """Replaceable backend for coarse-alignment previews and QC metrics."""
+
+    name: str
+
+    def evaluate(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return preview and machine-readable QC artifacts."""
+        ...
+
+
 class ReconstructionBackend(Protocol):
     """Replaceable backend for tomogram reconstruction."""
 
