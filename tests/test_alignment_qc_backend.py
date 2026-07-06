@@ -89,7 +89,7 @@ def test_coarse_alignment_qc_writes_ordered_preview_and_report(
     preview_artifact, report_artifact = artifacts
     assert registry.get(preview_artifact.id) == preview_artifact
     assert registry.get(report_artifact.id) == report_artifact
-    assert preview_artifact.kind == ArtifactKind.QC
+    assert preview_artifact.kind == ArtifactKind.ALIGNED_TILT_STACK
     assert preview_artifact.shape == (2, 4, 4)
     assert preview_artifact.axis_order == AxisOrder.TYX
     assert preview_artifact.binning == 2
@@ -175,6 +175,7 @@ def _alignment_artifact(tmp_path: Path, stack: Artifact) -> Artifact:
         input_stack_id=stack.id,
         input_binning=2,
         tilt_axis_angle_deg=85.3,
+        transform_semantics="global",
         transforms=[
             AlignmentTransform(
                 z_value=0,

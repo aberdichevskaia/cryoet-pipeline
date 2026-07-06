@@ -261,7 +261,7 @@ class ImodCoarseAlignmentQcBackend:
 
         preview_artifact = Artifact(
             id=f"{manifest.tilt_series_id}:qc:coarse_alignment:preview",
-            kind=ArtifactKind.QC,
+            kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.preview,
             parent_ids=[tilt_stack.id, alignment.id],
             shape=preview_info.shape,

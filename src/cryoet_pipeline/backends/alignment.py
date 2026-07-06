@@ -68,8 +68,30 @@ class ImodTiltXcorrAlignmentBackend:
             minimum=0.0,
             maximum=1.0,
         )
+        filter_sigma1 = _float_parameter(
+            context,
+            "filter_sigma1",
+            default=0.03,
+            minimum=0.0,
+            maximum=0.5,
+        )
+        filter_radius2 = _float_parameter(
+            context,
+            "filter_radius2",
+            default=0.25,
+            minimum=0.0,
+            maximum=0.5,
+        )
+        filter_sigma2 = _float_parameter(
+            context,
+            "filter_sigma2",
+            default=0.05,
+            minimum=0.0,
+            maximum=0.5,
+        )
         tilt_axis_angle_deg = _tilt_axis_angle(manifest, context)
-        executable = resolve_imod_executable("tiltxcorr", context)
+        tiltxcorr_executable = resolve_imod_executable("tiltxcorr", context)
+        xftoxg_executable = resolve_imod_executable("xftoxg", context)
         overwrite = _bool_parameter(context, "overwrite", default=False)
         paths = _alignment_paths(context.output_dir, manifest)
         _require_available_output_paths(paths, overwrite=overwrite)
@@ -87,6 +109,7 @@ class ImodTiltXcorrAlignmentBackend:
             binned_stack_path = temporary_root / f"{manifest.tilt_series_id}_bin.st"
             tilt_angles_path = temporary_root / f"{manifest.tilt_series_id}.tlt"
             raw_transform_path = temporary_root / f"{manifest.tilt_series_id}.prexf"
+            global_transform_path = temporary_root / f"{manifest.tilt_series_id}.prexg"
 
             projection_std_in_alignment_order = write_binned_mrc_stack(
                 tilt_stack.path,
@@ -115,7 +138,7 @@ class ImodTiltXcorrAlignmentBackend:
             if len(excluded_alignment_indices) == manifest.num_tilts:
                 raise ValueError("input QC excluded every tilt image")
             command = [
-                str(executable),
+                str(tiltxcorr_executable),
                 "-input",
                 str(binned_stack_path),
                 "-output",
@@ -124,6 +147,12 @@ class ImodTiltXcorrAlignmentBackend:
                 str(tilt_angles_path),
                 "-rotation",
                 f"{tilt_axis_angle_deg:.6f}",
+                "-sigma1",
+                f"{filter_sigma1:.6f}",
+                "-radius2",
+                f"{filter_radius2:.6f}",
+                "-sigma2",
+                f"{filter_sigma2:.6f}",
                 "-verbose",
                 "1",
             ]
@@ -140,13 +169,13 @@ class ImodTiltXcorrAlignmentBackend:
             result = self._command_runner(
                 command,
                 cwd=temporary_root,
-                env=imod_environment(executable, context),
+                env=imod_environment(tiltxcorr_executable, context),
             )
-            _write_command_log(paths.log, command, result)
+            _write_command_log(paths.tiltxcorr_log, command, result)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD tiltxcorr failed with exit code {result.returncode}; "
-                    f"see {paths.log}"
+                    f"see {paths.tiltxcorr_log}"
                 )
             if not raw_transform_path.is_file():
                 raise RuntimeError(
@@ -154,10 +183,42 @@ class ImodTiltXcorrAlignmentBackend:
                 )
 
             raw_transforms = parse_imod_xf(raw_transform_path)
+            if len(raw_transforms) != manifest.num_tilts:
+                raise ValueError(
+                    f"IMOD tiltxcorr returned {len(raw_transforms)} transforms for "
+                    f"{manifest.num_tilts} tilts"
+                )
 
-        if len(raw_transforms) != manifest.num_tilts:
+            xftoxg_command = [
+                str(xftoxg_executable),
+                "-input",
+                str(raw_transform_path),
+                "-goutput",
+                str(global_transform_path),
+                "-nfit",
+                "0",
+            ]
+            xftoxg_result = self._command_runner(
+                xftoxg_command,
+                cwd=temporary_root,
+                env=imod_environment(xftoxg_executable, context),
+            )
+            _write_command_log(paths.xftoxg_log, xftoxg_command, xftoxg_result)
+            if xftoxg_result.returncode != 0:
+                raise RuntimeError(
+                    f"IMOD xftoxg failed with exit code {xftoxg_result.returncode}; "
+                    f"see {paths.xftoxg_log}"
+                )
+            if not global_transform_path.is_file():
+                raise RuntimeError(
+                    f"IMOD xftoxg did not write global transforms: "
+                    f"{global_transform_path}"
+                )
+            global_transforms = parse_imod_xf(global_transform_path)
+
+        if len(global_transforms) != manifest.num_tilts:
             raise ValueError(
-                f"IMOD tiltxcorr returned {len(raw_transforms)} transforms for "
+                f"IMOD xftoxg returned {len(global_transforms)} transforms for "
                 f"{manifest.num_tilts} tilts"
             )
 
@@ -165,7 +226,7 @@ class ImodTiltXcorrAlignmentBackend:
             manifest_index: transform
             for manifest_index, transform in zip(
                 alignment_order,
-                raw_transforms,
+                global_transforms,
                 strict=True,
             )
         }
@@ -203,6 +264,7 @@ class ImodTiltXcorrAlignmentBackend:
             input_stack_id=tilt_stack.id,
             input_binning=input_binning,
             tilt_axis_angle_deg=tilt_axis_angle_deg,
+            transform_semantics="global",
             transforms=normalized_transforms,
             input_projection_std=[
                 projection_std_by_manifest_index[index]
@@ -233,11 +295,16 @@ class ImodTiltXcorrAlignmentBackend:
                 "tilt_series_id": manifest.tilt_series_id,
                 "input_binning": input_binning,
                 "alignment_order": "tilt_angle_ascending",
+                "transform_semantics": "global",
                 "min_std_ratio": min_std_ratio,
                 "excluded_z_values": alignment.excluded_z_values,
+                "filter_sigma1": filter_sigma1,
+                "filter_radius2": filter_radius2,
+                "filter_sigma2": filter_sigma2,
                 "tilt_axis_angle_deg": tilt_axis_angle_deg,
                 "imod_xf_path": str(paths.imod_xf),
-                "log_path": str(paths.log),
+                "tiltxcorr_log_path": str(paths.tiltxcorr_log),
+                "xftoxg_log_path": str(paths.xftoxg_log),
                 "translation_units": "full_resolution_pixels",
             },
             software_versions={"imod": "external"},
@@ -247,7 +314,8 @@ class ImodTiltXcorrAlignmentBackend:
             size_bytes=_paths_size_bytes(
                 paths.canonical,
                 paths.imod_xf,
-                paths.log,
+                paths.tiltxcorr_log,
+                paths.xftoxg_log,
             ),
         )
 
@@ -297,15 +365,28 @@ def parse_imod_xf(path: Path) -> list[tuple[float, float, float, float, float, f
 
 
 class _AlignmentPaths:
-    def __init__(self, output_dir: Path, canonical: Path, imod_xf: Path, log: Path) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        canonical: Path,
+        imod_xf: Path,
+        tiltxcorr_log: Path,
+        xftoxg_log: Path,
+    ) -> None:
         self.output_dir = output_dir
         self.canonical = canonical
         self.imod_xf = imod_xf
-        self.log = log
+        self.tiltxcorr_log = tiltxcorr_log
+        self.xftoxg_log = xftoxg_log
 
     @property
-    def outputs(self) -> tuple[Path, Path, Path]:
-        return (self.canonical, self.imod_xf, self.log)
+    def outputs(self) -> tuple[Path, Path, Path, Path]:
+        return (
+            self.canonical,
+            self.imod_xf,
+            self.tiltxcorr_log,
+            self.xftoxg_log,
+        )
 
 
 def _alignment_paths(output_root: Path, manifest: TiltSeriesManifest) -> _AlignmentPaths:
@@ -315,7 +396,8 @@ def _alignment_paths(output_root: Path, manifest: TiltSeriesManifest) -> _Alignm
         output_dir=output_dir,
         canonical=output_dir / f"{prefix}_alignment.json",
         imod_xf=output_dir / f"{prefix}.xf",
-        log=output_dir / f"{prefix}_tiltxcorr.log",
+        tiltxcorr_log=output_dir / f"{prefix}_tiltxcorr.log",
+        xftoxg_log=output_dir / f"{prefix}_xftoxg.log",
     )
 
 

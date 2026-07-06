@@ -309,6 +309,7 @@ def test_align_tilt_series_command_updates_registry(
     executable = imod_dir / "bin" / "tiltxcorr"
     executable.parent.mkdir(parents=True)
     executable.touch()
+    (executable.parent / "xftoxg").touch()
 
     def fake_runner(
         command: Sequence[str],
@@ -317,8 +318,12 @@ def test_align_tilt_series_command_updates_registry(
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
-        output_path = Path(command[command.index("-output") + 1])
-        output_path.write_text("1 0 0 1 0 0\n1 0 0 1 1 -1\n")
+        if Path(command[0]).name == "tiltxcorr":
+            output_path = Path(command[command.index("-output") + 1])
+            output_path.write_text("1 0 0 1 0 0\n1 0 0 1 1 -1\n")
+        else:
+            output_path = Path(command[command.index("-goutput") + 1])
+            output_path.write_text("1 0 0 1 0 0\n1 0 0 1 2 -2\n")
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
 
     backend = ImodTiltXcorrAlignmentBackend(fake_runner)
@@ -442,6 +447,396 @@ def test_qc_coarse_alignment_command_updates_registry(
     assert result.exit_code == 0
     assert "QC status: pass" in result.output
     assert len(ArtifactRegistry.load(registry_path).by_kind(ArtifactKind.QC)) == 2
+
+
+def test_fiducial_seed_and_tracking_commands_update_registry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_stack = Artifact(
+        id="TS_TEST:tilt_stack",
+        kind=ArtifactKind.TILT_STACK,
+        path=tmp_path / "source.zarr",
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    alignment_path = tmp_path / "alignment.json"
+    alignment_path.write_text("{}")
+    alignment = Artifact(
+        id="TS_TEST:alignment:coarse",
+        kind=ArtifactKind.ALIGNMENT,
+        path=alignment_path,
+        parent_ids=[source_stack.id],
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "stage": "coarse",
+        },
+    )
+    registry_path = tmp_path / "artifacts.json"
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment])
+    registry.write(registry_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
+
+    class FakeSeedBackend:
+        name = "fake-seed"
+
+        def generate(
+            self,
+            tilt_stack: Artifact,
+            alignment_artifact: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> list[Artifact]:
+            assert context.parameters["raw_pixel_spacing_angstrom"] == 0.7
+            assert context.parameters["fiducial_diameter_unbinned_px"] == 140.0
+            output_dir = context.output_dir / "fiducials"
+            output_dir.mkdir(parents=True)
+            tracking_path = output_dir / "tracking.st"
+            seed_path = output_dir / "seed.mod"
+            report_path = output_dir / "seed_qc.json"
+            tracking_path.write_bytes(b"tracking")
+            seed_path.write_bytes(b"seed")
+            report_path.write_text("{}")
+            tracking = Artifact(
+                id=f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tracking_path,
+                parent_ids=[tilt_stack.id, alignment_artifact.id],
+                parameters={
+                    "tilt_series_id": manifest.tilt_series_id,
+                    "purpose": "fiducial_tracking",
+                },
+            )
+            seed = Artifact(
+                id=f"{manifest.tilt_series_id}:fiducial_seed",
+                kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
+                path=seed_path,
+                parent_ids=[tracking.id],
+                parameters={"tilt_series_id": manifest.tilt_series_id},
+            )
+            report = Artifact(
+                id=f"{manifest.tilt_series_id}:qc:fiducial_seed",
+                kind=ArtifactKind.QC,
+                path=report_path,
+                parent_ids=[seed.id],
+                parameters={"status": "pass"},
+            )
+            return [tracking, seed, report]
+
+    class FakeTrackingBackend:
+        name = "fake-tracking"
+
+        def track(
+            self,
+            tracking_stack: Artifact,
+            seed_model: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> list[Artifact]:
+            output_dir = context.output_dir / "fiducials"
+            model_path = output_dir / "tracked.fid"
+            report_path = output_dir / "tracking_qc.json"
+            model_path.write_bytes(b"fid")
+            report_path.write_text("{}")
+            model = Artifact(
+                id=f"{manifest.tilt_series_id}:fiducial_model",
+                kind=ArtifactKind.FIDUCIAL_MODEL,
+                path=model_path,
+                parent_ids=[tracking_stack.id, seed_model.id],
+                parameters={"tilt_series_id": manifest.tilt_series_id},
+            )
+            report = Artifact(
+                id=f"{manifest.tilt_series_id}:qc:fiducial_tracking",
+                kind=ArtifactKind.QC,
+                path=report_path,
+                parent_ids=[model.id],
+                parameters={"status": "warning"},
+            )
+            return [model, report]
+
+    class FakeFineAlignmentBackend:
+        name = "fake-fine"
+
+        def align(
+            self,
+            tracking_stack: Artifact,
+            fiducial_model: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> list[Artifact]:
+            output_dir = context.output_dir / "alignments"
+            output_dir.mkdir(parents=True)
+            alignment_path = output_dir / "fine.json"
+            transform_path = output_dir / "fine.xf"
+            report_path = output_dir / "fine_qc.json"
+            alignment_path.write_text("{}")
+            transform_path.write_text("1 0 0 1 0 0\n")
+            report_path.write_text("{}")
+            alignment = Artifact(
+                id=f"{manifest.tilt_series_id}:alignment:fine",
+                kind=ArtifactKind.ALIGNMENT,
+                path=alignment_path,
+                parent_ids=[tracking_stack.id, fiducial_model.id],
+                parameters={
+                    "tilt_series_id": manifest.tilt_series_id,
+                    "stage": "fine",
+                    "imod_xf_path": str(transform_path),
+                },
+            )
+            report = Artifact(
+                id=f"{manifest.tilt_series_id}:qc:alignment:fine",
+                kind=ArtifactKind.QC,
+                path=report_path,
+                parent_ids=[alignment.id],
+                parameters={"status": "pass"},
+            )
+            return [alignment, report]
+
+    class FakeFinalStackBackend:
+        name = "fake-final-stack"
+
+        def build(
+            self,
+            tilt_stack: Artifact,
+            fine_alignment: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> Artifact:
+            output_dir = context.output_dir / "aligned"
+            output_dir.mkdir(parents=True)
+            stack_path = output_dir / "final.st"
+            tilt_path = output_dir / "final.tlt"
+            stack_path.write_bytes(b"aligned")
+            tilt_path.write_text("0\n")
+            return Artifact(
+                id=f"{manifest.tilt_series_id}:aligned_tilt_stack:final",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=stack_path,
+                parent_ids=[tilt_stack.id, fine_alignment.id],
+                parameters={
+                    "tilt_series_id": manifest.tilt_series_id,
+                    "purpose": "final_alignment",
+                    "tilt_file_path": str(tilt_path),
+                },
+            )
+
+    monkeypatch.setattr(
+        cli,
+        "_fiducial_seed_backend",
+        lambda name: FakeSeedBackend(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fiducial_tracking_backend",
+        lambda name: FakeTrackingBackend(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_fine_alignment_backend",
+        lambda name: FakeFineAlignmentBackend(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_final_aligned_stack_backend",
+        lambda name: FakeFinalStackBackend(),
+    )
+    runner = CliRunner()
+    seed_result = runner.invoke(
+        cli.app,
+        [
+            "generate-fiducial-seed",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--raw-pixel-spacing",
+            "0.7",
+            "--fiducial-diameter-px",
+            "140",
+            "--device",
+            "cpu",
+        ],
+    )
+    tracking_result = runner.invoke(
+        cli.app,
+        [
+            "track-fiducials",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--device",
+            "cpu",
+        ],
+    )
+    fine_result = runner.invoke(
+        cli.app,
+        [
+            "fine-align-tilt-series",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--device",
+            "cpu",
+        ],
+    )
+    final_stack_result = runner.invoke(
+        cli.app,
+        [
+            "build-final-aligned-stack",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--output-binning",
+            "8",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert seed_result.exit_code == 0
+    assert "wrote fiducial seed model" in seed_result.output
+    assert "QC status: pass" in seed_result.output
+    assert tracking_result.exit_code == 0
+    assert "wrote tracked fiducial model" in tracking_result.output
+    assert "QC status: warning" in tracking_result.output
+    assert fine_result.exit_code == 0
+    assert "wrote fine alignment" in fine_result.output
+    assert "QC status: pass" in fine_result.output
+    assert final_stack_result.exit_code == 0
+    assert "wrote final aligned stack" in final_stack_result.output
+    updated = ArtifactRegistry.load(registry_path)
+    assert len(updated.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)) == 1
+    assert len(updated.by_kind(ArtifactKind.FIDUCIAL_MODEL)) == 1
+    fine_alignments = [
+        artifact
+        for artifact in updated.by_kind(ArtifactKind.ALIGNMENT)
+        if artifact.parameters.get("stage") == "fine"
+    ]
+    assert len(fine_alignments) == 1
+    final_stacks = [
+        artifact
+        for artifact in updated.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("purpose") == "final_alignment"
+    ]
+    assert len(final_stacks) == 1
+
+
+def test_reconstruct_tomogram_command_updates_registry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_stack = Artifact(
+        id="TS_TEST:tilt_stack",
+        kind=ArtifactKind.TILT_STACK,
+        path=tmp_path / "source.zarr",
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    alignment_path = tmp_path / "alignment.json"
+    alignment_path.write_text("{}")
+    alignment = Artifact(
+        id="TS_TEST:alignment:fine",
+        kind=ArtifactKind.ALIGNMENT,
+        path=alignment_path,
+        parent_ids=[source_stack.id],
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "stage": "fine",
+            "recommended_x_axis_tilt_deg": -1.0,
+            "recommended_unbinned_thickness_px": 4.0,
+            "recommended_unbinned_z_shift_px": 0.0,
+        },
+    )
+    aligned_path = tmp_path / "aligned.st"
+    aligned_path.write_bytes(b"aligned")
+    aligned_stack = Artifact(
+        id="TS_TEST:aligned_tilt_stack:final",
+        kind=ArtifactKind.ALIGNED_TILT_STACK,
+        path=aligned_path,
+        parent_ids=[source_stack.id, alignment.id],
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "purpose": "final_alignment",
+            "alignment_stage": "fine",
+        },
+    )
+    registry_path = tmp_path / "artifacts.json"
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack])
+    registry.write(registry_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
+
+    class FakeReconstructionBackend:
+        name = "fake"
+
+        def reconstruct(
+            self,
+            tilt_stack: Artifact,
+            alignment_artifact: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> list[Artifact]:
+            tomogram_path = context.output_dir / "tomogram.zarr"
+            rec_path = context.output_dir / "tomogram.rec"
+            report_path = context.output_dir / "reconstruction_qc.json"
+            tomogram_path.mkdir(parents=True)
+            rec_path.write_bytes(b"rec")
+            report_path.write_text("{}")
+            tomogram = Artifact(
+                id=f"{manifest.tilt_series_id}:tomogram:fine",
+                kind=ArtifactKind.TOMOGRAM,
+                path=tomogram_path,
+                parent_ids=[tilt_stack.id, alignment_artifact.id],
+                parameters={"imod_rec_path": str(rec_path)},
+            )
+            report = Artifact(
+                id=f"{manifest.tilt_series_id}:qc:reconstruction:fine",
+                kind=ArtifactKind.QC,
+                path=report_path,
+                parent_ids=[tomogram.id],
+                parameters={"status": "warning"},
+            )
+            return [tomogram, report]
+
+    monkeypatch.setattr(
+        cli,
+        "_reconstruction_backend",
+        lambda name: FakeReconstructionBackend(),
+    )
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "reconstruct-tomogram",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--thickness",
+            "2",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "wrote canonical tomogram" in result.output
+    assert "QC status: warning" in result.output
+    updated = ArtifactRegistry.load(registry_path)
+    assert len(updated.by_kind(ArtifactKind.TOMOGRAM)) == 1
 
 
 def _manifest(movie_path: Path) -> TiltSeriesManifest:

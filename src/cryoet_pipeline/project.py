@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from math import isclose
 from pathlib import Path
 from typing import Any
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
-from cryoet_pipeline.ingest import parse_mdoc_text
+from cryoet_pipeline.ingest import parse_mdoc_text, with_raw_pixel_spacing
 from cryoet_pipeline.models import ProjectConfig, TiltSeriesManifest
+from cryoet_pipeline.mrc_validation import validate_complete_mrc
 
-EMPIAR_10164_RAW_PIXEL_SPACING_ANGSTROM = 1.35
 EXPECTED_TILTS_PER_SERIES = 41
 EXPECTED_SUBFRAMES_BY_SERIES = {
     "TS_01": 8,
@@ -70,12 +71,15 @@ def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> Til
     if not mdoc_path.exists():
         raise FileNotFoundError(f"missing mdoc file for {tilt_series_id}: {mdoc_path}")
 
-    return parse_mdoc_text(
+    manifest = parse_mdoc_text(
         mdoc_path.read_text(),
         source_mdoc=mdoc_path,
         tilt_series_id=tilt_series_id,
         frames_dir=config.frames_dir,
-        raw_pixel_spacing_angstrom=EMPIAR_10164_RAW_PIXEL_SPACING_ANGSTROM,
+    )
+    return with_raw_pixel_spacing(
+        manifest,
+        _raw_frame_pixel_spacing_angstrom(manifest),
     )
 
 
@@ -108,6 +112,41 @@ def validate_tilt_series_manifest(manifest: TiltSeriesManifest) -> None:
             f"{manifest.tilt_series_id}: {len(missing_files)} frame files are missing; "
             f"first: {preview}"
         )
+
+
+def _raw_frame_pixel_spacing_angstrom(manifest: TiltSeriesManifest) -> float:
+    spacings: list[tuple[Path, float]] = []
+    for image in manifest.images:
+        path = image.local_frame_file
+        if path is None:
+            raise ValueError(
+                f"{manifest.tilt_series_id} z={image.z_value}: "
+                "missing local frame file"
+            )
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{manifest.tilt_series_id} z={image.z_value}: "
+                f"frame file not found: {path}"
+            )
+        info = validate_complete_mrc(path)
+        if info.pixel_spacing_angstrom is None:
+            raise ValueError(f"raw MRC header has no pixel spacing: {path}")
+        spacings.append((path, info.pixel_spacing_angstrom))
+
+    reference_path, reference_spacing = spacings[0]
+    inconsistent = [
+        (path, spacing)
+        for path, spacing in spacings[1:]
+        if not isclose(spacing, reference_spacing, rel_tol=1e-5, abs_tol=1e-6)
+    ]
+    if inconsistent:
+        path, spacing = inconsistent[0]
+        raise ValueError(
+            f"{manifest.tilt_series_id}: inconsistent raw MRC pixel spacing; "
+            f"{reference_path} has {reference_spacing} angstrom, "
+            f"{path} has {spacing} angstrom"
+        )
+    return reference_spacing
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

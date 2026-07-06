@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isclose
 from pathlib import Path
 
 import mrcfile  # type: ignore[import-untyped]
@@ -17,6 +18,7 @@ class MrcFileInfo:
 
     shape: tuple[int, ...]
     dtype: str
+    pixel_spacing_angstrom: float | None
     expected_size_bytes: int
     actual_size_bytes: int
 
@@ -37,6 +39,23 @@ def inspect_mrc_file(path: Path) -> MrcFileInfo:
         nz = int(mrc.header.nz)
         extended_header_size = int(mrc.header.nsymbt)
         dtype = mrc_utils.dtype_from_mode(mrc.header.mode)
+        voxel_size_x = float(mrc.voxel_size.x)
+        voxel_size_y = float(mrc.voxel_size.y)
+
+    if voxel_size_x > 0.0 and voxel_size_y > 0.0:
+        if not isclose(voxel_size_x, voxel_size_y, rel_tol=1e-5, abs_tol=1e-6):
+            raise ValueError(
+                f"MRC file {path} has inconsistent X/Y pixel spacing: "
+                f"{voxel_size_x} versus {voxel_size_y} angstrom"
+            )
+        pixel_spacing_angstrom = voxel_size_x
+    elif voxel_size_x == 0.0 and voxel_size_y == 0.0:
+        pixel_spacing_angstrom = None
+    else:
+        raise ValueError(
+            f"MRC file {path} has incomplete X/Y pixel spacing: "
+            f"{voxel_size_x} versus {voxel_size_y} angstrom"
+        )
 
     shape = (nz, ny, nx) if nz > 1 else (ny, nx)
     expected_size_bytes = (
@@ -45,6 +64,7 @@ def inspect_mrc_file(path: Path) -> MrcFileInfo:
     return MrcFileInfo(
         shape=shape,
         dtype=str(dtype),
+        pixel_spacing_angstrom=pixel_spacing_angstrom,
         expected_size_bytes=expected_size_bytes,
         actual_size_bytes=actual_size_bytes,
     )

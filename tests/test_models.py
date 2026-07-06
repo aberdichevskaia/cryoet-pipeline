@@ -11,6 +11,7 @@ from cryoet_pipeline.models import (
     ProjectConfig,
     RetentionPolicy,
     StorageRole,
+    TiltAlignment,
 )
 
 
@@ -47,6 +48,9 @@ def test_new_artifact_kinds_serialize_as_stable_values() -> None:
     assert ArtifactKind.DENOISED_TOMOGRAM.value == "denoised_tomogram"
     assert ArtifactKind.SEGMENTATION.value == "segmentation"
     assert ArtifactKind.PICKS.value == "picks"
+    assert ArtifactKind.ALIGNED_TILT_STACK.value == "aligned_tilt_stack"
+    assert ArtifactKind.FIDUCIAL_SEED_MODEL.value == "fiducial_seed_model"
+    assert ArtifactKind.FIDUCIAL_MODEL.value == "fiducial_model"
     assert ArtifactKind.TILT_ANGLES.value == "tilt_angles"
     assert ArtifactKind.DATASET_EXPORT.value == "dataset_export"
 
@@ -80,4 +84,29 @@ def test_alignment_transform_rejects_nonfinite_values() -> None:
             a22=1.0,
             shift_x_px=float("nan"),
             shift_y_px=0.0,
+        )
+
+
+def test_tilt_alignment_rejects_relative_transforms() -> None:
+    transform = AlignmentTransform(
+        z_value=0,
+        tilt_angle_deg=0.0,
+        a11=1.0,
+        a12=0.0,
+        a21=0.0,
+        a22=1.0,
+        shift_x_px=0.0,
+        shift_y_px=0.0,
+    )
+
+    with pytest.raises(ValidationError, match="must be global"):
+        TiltAlignment(
+            tilt_series_id="TS_TEST",
+            backend="imod_tiltxcorr",
+            stage="coarse",
+            input_stack_id="TS_TEST:tilt_stack",
+            input_binning=8,
+            tilt_axis_angle_deg=85.3,
+            transform_semantics="relative",
+            transforms=[transform],
         )

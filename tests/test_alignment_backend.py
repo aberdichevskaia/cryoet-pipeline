@@ -37,7 +37,7 @@ def test_imod_tiltxcorr_backend_normalizes_and_registers_transforms(
     registry = ArtifactRegistry.empty()
     registry.add(stack_artifact)
     executable = _fake_imod_executable(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"commands": []}
 
     def fake_runner(
         command: Sequence[str],
@@ -45,29 +45,57 @@ def test_imod_tiltxcorr_backend_normalizes_and_registers_transforms(
         cwd: Path,
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
-        captured["command"] = list(command)
+        commands = captured["commands"]
+        assert isinstance(commands, list)
+        commands.append(list(command))
         captured["env"] = dict(env)
-        input_path = Path(command[command.index("-input") + 1])
-        output_path = Path(command[command.index("-output") + 1])
-        tilt_path = Path(command[command.index("-tiltfile") + 1])
-        rotation = command[command.index("-rotation") + 1]
+        program = Path(command[0]).name
+        if program == "tiltxcorr":
+            input_path = Path(command[command.index("-input") + 1])
+            output_path = Path(command[command.index("-output") + 1])
+            tilt_path = Path(command[command.index("-tiltfile") + 1])
+            rotation = command[command.index("-rotation") + 1]
 
-        with mrcfile.open(input_path, permissive=True) as binned:
-            expected = stack_data[[1, 0]].reshape(2, 2, 2, 3, 2).mean(
-                axis=(2, 4),
-                dtype=np.float32,
+            with mrcfile.open(input_path, permissive=True) as binned:
+                expected = stack_data[[1, 0]].reshape(2, 2, 2, 3, 2).mean(
+                    axis=(2, 4),
+                    dtype=np.float32,
+                )
+                np.testing.assert_allclose(binned.data, expected)
+                assert float(binned.voxel_size.x) == pytest.approx(2.7)
+            assert tilt_path.read_text() == "-3.000000\n3.000000\n"
+            assert rotation == "85.300000"
+            assert command[command.index("-sigma1") + 1] == "0.030000"
+            assert command[command.index("-radius2") + 1] == "0.250000"
+            assert command[command.index("-sigma2") + 1] == "0.050000"
+            assert cwd == input_path.parent
+
+            output_path.write_text(
+                "1.0 0.0 0.0 1.0 1.5 -2.0\n"
+                "0.99 0.01 -0.01 1.01 -3.0 4.0\n"
             )
-            np.testing.assert_allclose(binned.data, expected)
-            assert float(binned.voxel_size.x) == pytest.approx(2.7)
-        assert tilt_path.read_text() == "-3.000000\n3.000000\n"
-        assert rotation == "85.300000"
-        assert cwd == input_path.parent
-
-        output_path.write_text(
-            "1.0 0.0 0.0 1.0 1.5 -2.0\n"
-            "0.99 0.01 -0.01 1.01 -3.0 4.0\n"
-        )
-        return subprocess.CompletedProcess(command, 0, stdout="aligned", stderr="")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="relative transforms",
+                stderr="",
+            )
+        if program == "xftoxg":
+            assert command[command.index("-nfit") + 1] == "0"
+            raw_path = Path(command[command.index("-input") + 1])
+            assert "1.5 -2.0" in raw_path.read_text()
+            global_path = Path(command[command.index("-goutput") + 1])
+            global_path.write_text(
+                "1.0 0.0 0.0 1.0 10.0 20.0\n"
+                "0.98 0.02 -0.02 1.02 -30.0 40.0\n"
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="global transforms",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {command}")
 
     context = _context(
         tmp_path,
@@ -91,21 +119,27 @@ def test_imod_tiltxcorr_backend_normalizes_and_registers_transforms(
     assert artifact.shape == (2, 6)
     assert artifact.parameters["input_binning"] == 2
     assert artifact.parameters["tilt_axis_angle_deg"] == pytest.approx(85.3)
+    assert artifact.parameters["transform_semantics"] == "global"
 
     alignment = TiltAlignment.model_validate_json(artifact.path.read_text())
+    assert alignment.schema_version == 2
     assert alignment.input_stack_id == stack_artifact.id
     assert alignment.stage == "coarse"
-    assert alignment.transforms[0].shift_x_px == pytest.approx(-6.0)
-    assert alignment.transforms[0].shift_y_px == pytest.approx(8.0)
-    assert alignment.transforms[1].shift_x_px == pytest.approx(3.0)
-    assert alignment.transforms[1].shift_y_px == pytest.approx(-4.0)
+    assert alignment.transform_semantics == "global"
+    assert alignment.transforms[0].shift_x_px == pytest.approx(-60.0)
+    assert alignment.transforms[0].shift_y_px == pytest.approx(80.0)
+    assert alignment.transforms[1].shift_x_px == pytest.approx(20.0)
+    assert alignment.transforms[1].shift_y_px == pytest.approx(40.0)
 
     imod_xf_path = Path(artifact.parameters["imod_xf_path"])
     exported = parse_imod_xf(imod_xf_path)
-    assert exported[0][4:] == pytest.approx((-6.0, 8.0))
-    assert exported[1][4:] == pytest.approx((3.0, -4.0))
-    assert "aligned" in Path(artifact.parameters["log_path"]).read_text()
-    assert captured["command"]
+    assert exported[0][4:] == pytest.approx((-60.0, 80.0))
+    assert exported[1][4:] == pytest.approx((20.0, 40.0))
+    tiltxcorr_log = Path(artifact.parameters["tiltxcorr_log_path"]).read_text()
+    xftoxg_log = Path(artifact.parameters["xftoxg_log_path"]).read_text()
+    assert "relative transforms" in tiltxcorr_log
+    assert "global transforms" in xftoxg_log
+    assert len(captured["commands"]) == 2
     assert captured["env"]["IMOD_DIR"] == str(executable.parent.parent)
     assert not list(artifact.path.parent.glob(".TS_TEST-tiltxcorr-*"))
 
@@ -171,6 +205,44 @@ def test_imod_tiltxcorr_backend_reports_external_failure(tmp_path: Path) -> None
     assert "bad input" in log_path.read_text()
 
 
+def test_imod_tiltxcorr_backend_reports_xftoxg_failure(tmp_path: Path) -> None:
+    stack_artifact = _zarr_stack_artifact(
+        tmp_path,
+        np.arange(32, dtype=np.float32).reshape(2, 4, 4),
+    )
+    executable = _fake_imod_executable(tmp_path)
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        if Path(command[0]).name == "tiltxcorr":
+            output_path = Path(command[command.index("-output") + 1])
+            output_path.write_text("1 0 0 1 0 0\n1 0 0 1 1 -1\n")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            3,
+            stdout="",
+            stderr="cannot globalize",
+        )
+
+    context = _context(tmp_path, executable, parameters={"binning": 2})
+
+    with pytest.raises(RuntimeError, match="xftoxg failed with exit code 3"):
+        ImodTiltXcorrAlignmentBackend(fake_runner).align(
+            stack_artifact,
+            _manifest(),
+            context,
+        )
+
+    log_path = tmp_path / "outputs/alignments/TS_TEST/TS_TEST_coarse_xftoxg.log"
+    assert "cannot globalize" in log_path.read_text()
+
+
 def test_imod_tiltxcorr_backend_skips_low_variance_tilt(tmp_path: Path) -> None:
     stack_data = np.stack(
         [
@@ -189,9 +261,13 @@ def test_imod_tiltxcorr_backend_skips_low_variance_tilt(tmp_path: Path) -> None:
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
-        captured_command.extend(command)
-        output_path = Path(command[command.index("-output") + 1])
-        output_path.write_text("1 0 0 1 0 0\n1 0 0 1 1 -1\n")
+        if Path(command[0]).name == "tiltxcorr":
+            captured_command.extend(command)
+            output_path = Path(command[command.index("-output") + 1])
+            output_path.write_text("1 0 0 1 0 0\n1 0 0 1 1 -1\n")
+        else:
+            output_path = Path(command[command.index("-goutput") + 1])
+            output_path.write_text("1 0 0 1 0 0\n1 0 0 1 2 -2\n")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     context = _context(tmp_path, executable, parameters={"binning": 2})
@@ -267,6 +343,7 @@ def _fake_imod_executable(tmp_path: Path) -> Path:
     executable = tmp_path / "imod" / "bin" / "tiltxcorr"
     executable.parent.mkdir(parents=True)
     executable.touch()
+    (executable.parent / "xftoxg").touch()
     return executable
 
 

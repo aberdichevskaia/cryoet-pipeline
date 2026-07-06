@@ -26,8 +26,11 @@ class ArtifactKind(StrEnum):
     RAW_TILT_MOVIE = "raw_tilt_movie"
     CORRECTED_PROJECTION = "corrected_projection"
     TILT_STACK = "tilt_stack"
+    ALIGNED_TILT_STACK = "aligned_tilt_stack"
     TILT_ANGLES = "tilt_angles"
     ALIGNMENT = "alignment"
+    FIDUCIAL_SEED_MODEL = "fiducial_seed_model"
+    FIDUCIAL_MODEL = "fiducial_model"
     TOMOGRAM = "tomogram"
     DENOISED_TOMOGRAM = "denoised_tomogram"
     SEGMENTATION = "segmentation"
@@ -173,13 +176,14 @@ class TiltAlignment(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: int = 2
     tilt_series_id: str
     backend: str
     stage: str
     input_stack_id: str
     input_binning: int = Field(ge=1)
     tilt_axis_angle_deg: float
+    transform_semantics: str
     transforms: list[AlignmentTransform]
     input_projection_std: list[float] = Field(default_factory=list)
     excluded_z_values: list[int] = Field(default_factory=list)
@@ -189,6 +193,13 @@ class TiltAlignment(BaseModel):
     def require_finite_tilt_axis_angle(cls, value: float) -> float:
         if not isfinite(value):
             raise ValueError("tilt-axis angle must be finite")
+        return value
+
+    @field_validator("transform_semantics")
+    @classmethod
+    def require_global_transforms(cls, value: str) -> str:
+        if value != "global":
+            raise ValueError("canonical alignment transforms must be global")
         return value
 
     @field_validator("transforms")
@@ -222,8 +233,11 @@ class TiltAlignment(BaseModel):
         transform_z_values = {transform.z_value for transform in self.transforms}
         if len(self.excluded_z_values) != len(set(self.excluded_z_values)):
             raise ValueError("excluded z_value entries must be unique")
-        if not set(self.excluded_z_values).issubset(transform_z_values):
-            raise ValueError("excluded z_value entries must refer to transforms")
+        excluded = set(self.excluded_z_values)
+        if self.stage == "coarse" and not excluded.issubset(transform_z_values):
+            raise ValueError("coarse excluded z_value entries must refer to transforms")
+        if self.stage == "fine" and excluded & transform_z_values:
+            raise ValueError("fine transforms must not contain excluded z_value entries")
         return self
 
 
@@ -267,6 +281,152 @@ class CoarseAlignmentQc(BaseModel):
         ]
         if not all(isfinite(value) for value in residual_values):
             raise ValueError("residual shifts must be finite")
+        return self
+
+
+class FiducialModelQc(BaseModel):
+    """QC summary for an IMOD seed or fully tracked fiducial model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    stage: str
+    model_id: str
+    image_count: int = Field(ge=1)
+    num_fiducials: int = Field(ge=0)
+    num_points: int = Field(ge=0)
+    min_points_per_fiducial: int = Field(ge=0)
+    median_points_per_fiducial: float = Field(ge=0.0)
+    max_points_per_fiducial: int = Field(ge=0)
+    coverage_fraction: float = Field(ge=0.0, le=1.0)
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("stage")
+    @classmethod
+    def require_known_stage(cls, value: str) -> str:
+        if value not in {"seed", "tracked"}:
+            raise ValueError("fiducial model QC stage must be seed or tracked")
+        return value
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> FiducialModelQc:
+        if self.num_fiducials == 0:
+            if self.num_points != 0:
+                raise ValueError("fiducial model with no contours cannot contain points")
+            return self
+        if self.num_points < self.num_fiducials:
+            raise ValueError("each fiducial contour must contain at least one point")
+        if not (
+            self.min_points_per_fiducial
+            <= self.median_points_per_fiducial
+            <= self.max_points_per_fiducial
+        ):
+            raise ValueError("fiducial point-count statistics are inconsistent")
+        return self
+
+
+class FineAlignmentQc(BaseModel):
+    """Residual and geometry summary for fiducial-based fine alignment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    alignment_id: str
+    image_count: int = Field(ge=1)
+    fiducial_count: int = Field(ge=1)
+    projection_point_count: int = Field(ge=1)
+    residual_mean_nm: float = Field(ge=0.0)
+    residual_sd_nm: float = Field(ge=0.0)
+    residual_mean_unbinned_px: float = Field(ge=0.0)
+    residual_rms_tracking_px: float = Field(ge=0.0)
+    residual_p95_tracking_px: float = Field(ge=0.0)
+    residual_max_tracking_px: float = Field(ge=0.0)
+    residual_outlier_count: int = Field(ge=0)
+    pruned_point_count: int = Field(ge=0)
+    alignment_rounds: int = Field(ge=1)
+    global_leave_out_error_nm: float | None = Field(default=None, ge=0.0)
+    minimum_tilt_rotation_deg: float
+    recommended_x_axis_tilt_deg: float | None = None
+    recommended_unbinned_thickness_px: float | None = Field(default=None, gt=0.0)
+    recommended_unbinned_z_shift_px: float | None = None
+    applied_tilt_angle_offset_deg: float | None = None
+    applied_axis_z_shift_unbinned_px: float | None = None
+    positioning_incremental_tilt_angle_deg: float | None = None
+    positioning_incremental_z_shift_unbinned_px: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_finite_values(self) -> FineAlignmentQc:
+        values = [
+            self.residual_mean_nm,
+            self.residual_sd_nm,
+            self.residual_mean_unbinned_px,
+            self.residual_rms_tracking_px,
+            self.residual_p95_tracking_px,
+            self.residual_max_tracking_px,
+            self.minimum_tilt_rotation_deg,
+        ]
+        if self.global_leave_out_error_nm is not None:
+            values.append(self.global_leave_out_error_nm)
+        optional_geometry = (
+            self.recommended_x_axis_tilt_deg,
+            self.recommended_unbinned_thickness_px,
+            self.recommended_unbinned_z_shift_px,
+            self.applied_tilt_angle_offset_deg,
+            self.applied_axis_z_shift_unbinned_px,
+            self.positioning_incremental_tilt_angle_deg,
+            self.positioning_incremental_z_shift_unbinned_px,
+        )
+        values.extend(value for value in optional_geometry if value is not None)
+        if not all(isfinite(value) for value in values):
+            raise ValueError("fine-alignment QC values must be finite")
+        return self
+
+
+class TomogramQc(BaseModel):
+    """Machine-readable statistics and preview paths for a reconstructed tomogram."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    tomogram_id: str
+    shape: tuple[int, int, int]
+    voxel_spacing_angstrom: float = Field(gt=0.0)
+    minimum: float
+    maximum: float
+    mean: float
+    standard_deviation: float = Field(ge=0.0)
+    finite: bool
+    ctf_corrected: bool
+    alignment_stage: str
+    central_slice_paths: dict[str, Path]
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> TomogramQc:
+        values = (
+            self.voxel_spacing_angstrom,
+            self.minimum,
+            self.maximum,
+            self.mean,
+            self.standard_deviation,
+        )
+        if not all(isfinite(value) for value in values):
+            raise ValueError("tomogram QC statistics must be finite")
+        required_slices = {"xy", "xz", "yz"}
+        if set(self.central_slice_paths) != required_slices:
+            raise ValueError(
+                "central_slice_paths must contain exactly: xy, xz, yz"
+            )
         return self
 
 

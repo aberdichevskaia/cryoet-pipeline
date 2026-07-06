@@ -8,6 +8,10 @@ from cryoet_pipeline.backends.protocols import (
     CoarseAlignmentQcBackend,
     DatasetExportBackend,
     DenoisingBackend,
+    FiducialSeedBackend,
+    FiducialTrackingBackend,
+    FinalAlignedStackBackend,
+    FineAlignmentBackend,
     MotionCorrectionBackend,
     PickingBackend,
     ReconstructionBackend,
@@ -66,14 +70,16 @@ class _FakeBackends:
         alignment: Artifact,
         manifest: TiltSeriesManifest,
         context: BackendContext,
-    ) -> Artifact:
-        return Artifact(
-            id="tomogram",
-            kind=ArtifactKind.TOMOGRAM,
-            path=context.output_dir / f"{manifest.tilt_series_id}.rec",
-            parent_ids=[tilt_stack.id, alignment.id],
-            axis_order=AxisOrder.ZYX,
-        )
+    ) -> list[Artifact]:
+        return [
+            Artifact(
+                id="tomogram",
+                kind=ArtifactKind.TOMOGRAM,
+                path=context.output_dir / f"{manifest.tilt_series_id}.rec",
+                parent_ids=[tilt_stack.id, alignment.id],
+                axis_order=AxisOrder.ZYX,
+            )
+        ]
 
     def evaluate(
         self,
@@ -88,6 +94,43 @@ class _FakeBackends:
                 kind=ArtifactKind.QC,
                 path=context.output_dir / f"{manifest.tilt_series_id}_alignment_qc.json",
                 parent_ids=[tilt_stack.id, alignment.id],
+            )
+        ]
+
+    def generate(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        tracking_stack = Artifact(
+            id="tracking-stack",
+            kind=ArtifactKind.ALIGNED_TILT_STACK,
+            path=context.output_dir / f"{manifest.tilt_series_id}_tracking.st",
+            parent_ids=[tilt_stack.id, alignment.id],
+        )
+        seed = Artifact(
+            id="seed",
+            kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
+            path=context.output_dir / f"{manifest.tilt_series_id}.seed",
+            parent_ids=[tracking_stack.id],
+        )
+        return [tracking_stack, seed]
+
+    def track(
+        self,
+        tracking_stack: Artifact,
+        seed_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        return [
+            Artifact(
+                id="fiducial-model",
+                kind=ArtifactKind.FIDUCIAL_MODEL,
+                path=context.output_dir / f"{manifest.tilt_series_id}.fid",
+                parent_ids=[tracking_stack.id, seed_model.id],
             )
         ]
 
@@ -153,6 +196,46 @@ class _FakeBackends:
         ]
 
 
+class _FakeFineAlignmentBackend:
+    name = "fake-fine"
+
+    def align(
+        self,
+        tracking_stack: Artifact,
+        fiducial_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        return [
+            Artifact(
+                id="fine-alignment",
+                kind=ArtifactKind.ALIGNMENT,
+                path=context.output_dir / f"{manifest.tilt_series_id}_fine.json",
+                parent_ids=[tracking_stack.id, fiducial_model.id],
+                parameters={"stage": "fine"},
+            )
+        ]
+
+
+class _FakeFinalAlignedStackBackend:
+    name = "fake-final-stack"
+
+    def build(
+        self,
+        tilt_stack: Artifact,
+        fine_alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> Artifact:
+        return Artifact(
+            id="final-stack",
+            kind=ArtifactKind.ALIGNED_TILT_STACK,
+            path=context.output_dir / f"{manifest.tilt_series_id}_final.st",
+            parent_ids=[tilt_stack.id, fine_alignment.id],
+            parameters={"purpose": "final_alignment"},
+        )
+
+
 def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     manifest = _manifest()
     context = BackendContext(
@@ -166,6 +249,10 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     stacker: TiltStackBackend = backend
     aligner: TiltAlignmentBackend = backend
     alignment_qc_backend: CoarseAlignmentQcBackend = backend
+    seed_backend: FiducialSeedBackend = backend
+    tracking_backend: FiducialTrackingBackend = backend
+    fine_backend: FineAlignmentBackend = _FakeFineAlignmentBackend()
+    final_stack_backend: FinalAlignedStackBackend = _FakeFinalAlignedStackBackend()
     reconstructor: ReconstructionBackend = backend
     denoiser: DenoisingBackend = backend
     segmenter: SegmentationBackend = backend
@@ -181,7 +268,31 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
         manifest,
         context,
     )
-    tomogram = reconstructor.reconstruct(tilt_stack, alignment, manifest, context)
+    tracking_stack, seed_model = seed_backend.generate(
+        tilt_stack,
+        alignment,
+        manifest,
+        context,
+    )
+    fiducial_model = tracking_backend.track(
+        tracking_stack,
+        seed_model,
+        manifest,
+        context,
+    )[0]
+    fine_alignment = fine_backend.align(
+        tracking_stack,
+        fiducial_model,
+        manifest,
+        context,
+    )[0]
+    final_stack = final_stack_backend.build(
+        tilt_stack,
+        fine_alignment,
+        manifest,
+        context,
+    )
+    tomogram = reconstructor.reconstruct(tilt_stack, alignment, manifest, context)[0]
     denoised = denoiser.denoise(tomogram, manifest, context)
     segmentation = segmenter.segment(denoised, manifest, context)
     picks = picker.pick(denoised, manifest, context, supporting_artifacts=[segmentation])
@@ -191,6 +302,10 @@ def test_backend_protocols_share_pipeline_artifacts(tmp_path: Path) -> None:
     assert tilt_stack.kind == ArtifactKind.TILT_STACK
     assert alignment.kind == ArtifactKind.ALIGNMENT
     assert alignment_qc[0].kind == ArtifactKind.QC
+    assert seed_model.kind == ArtifactKind.FIDUCIAL_SEED_MODEL
+    assert fiducial_model.kind == ArtifactKind.FIDUCIAL_MODEL
+    assert fine_alignment.parameters["stage"] == "fine"
+    assert final_stack.parameters["purpose"] == "final_alignment"
     assert tomogram.kind == ArtifactKind.TOMOGRAM
     assert denoised.kind == ArtifactKind.DENOISED_TOMOGRAM
     assert denoised.parameters == {"method": "average"}

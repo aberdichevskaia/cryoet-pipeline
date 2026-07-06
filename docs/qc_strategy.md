@@ -45,6 +45,9 @@ For the first release:
 
 - dose-symmetric acquisition order is normalized to ascending tilt angle for
   correlation, then transforms are mapped back to manifest order;
+- `tiltxcorr` relative transforms are converted with `xftoxg` before they enter
+  canonical state or are applied to an image stack;
+- canonical and exported `.xf` transforms always have global semantics;
 - low-variance input tilts are recorded and excluded from alignment rather than
   silently producing extreme transforms;
 - transform file or alignment artifact exists;
@@ -53,12 +56,29 @@ For the first release:
 - a reduced prealigned MRC preview is retained for inspection in `3dmod`;
 - residual shifts are measured on the preview and recorded with explicit
   warning and failure thresholds;
+- automatic fiducial seeds and tracked models record contour counts, point
+  counts, per-view coverage, and explicit QC status;
+- fine alignment records mean, RMS, percentile, and maximum point residuals;
+- high-residual points may be pruned only within a configured fraction, and the
+  original model, cleaned model, threshold, and rerun count remain traceable;
+- two-surface analysis records recommended tomogram thickness, Z shift, tilt
+  angle offset, and X-axis tilt in unbinned coordinates;
+- fine alignment reruns with the total `AngleOffset` and `AxisZShift` until the
+  remaining surface correction is within explicit tolerances or the bounded
+  iteration limit is reached;
 - alignment summary plots or logs are recorded.
 
 ### Reconstruction
 
 - tomogram artifact exists;
+- reconstruction accepts only the final fine-aligned stack and its matching
+  fine-alignment artifact;
+- solved tilt angles are used instead of reverting to acquisition angles;
+- `AngleOffset` and `AxisZShift` are applied in fine alignment, while
+  reconstruction applies only the remaining X-axis tilt and thickness; the
+  same Z shift must not be applied twice;
 - volume shape, dtype, voxel size, and axes are recorded;
+- IMOD `YZX` reconstruction layout is explicitly converted to canonical `ZYX`;
 - no NaN or infinite values;
 - small binned slices or preview movie are generated;
 - reconstruction parameters and parent artifacts are recorded.

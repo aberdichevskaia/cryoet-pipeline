@@ -14,15 +14,39 @@ from cryoet_pipeline.backends.alignment_qc import (
     ImodCoarseAlignmentQcBackend,
     evaluate_coarse_alignment_and_register,
 )
+from cryoet_pipeline.backends.fiducials import (
+    ImodAutofidseedBackend,
+    ImodBeadtrackBackend,
+    generate_seed_and_register,
+    track_fiducials_and_register,
+)
+from cryoet_pipeline.backends.final_stack import (
+    ImodFinalAlignedStackBackend,
+    build_final_stack_and_register,
+)
+from cryoet_pipeline.backends.fine_alignment import (
+    ImodTiltalignBackend,
+    fine_align_and_register,
+)
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
+    PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
 )
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
+    FiducialSeedBackend,
+    FiducialTrackingBackend,
+    FinalAlignedStackBackend,
+    FineAlignmentBackend,
     MotionCorrectionBackend,
+    ReconstructionBackend,
     TiltAlignmentBackend,
+)
+from cryoet_pipeline.backends.reconstruction import (
+    ImodTiltReconstructionBackend,
+    reconstruct_and_register,
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
 from cryoet_pipeline.empiar import (
@@ -405,6 +429,512 @@ def qc_coarse_alignment(
     typer.echo(f"updated {registry}")
 
 
+@app.command("generate-fiducial-seed")
+def generate_fiducial_seed(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for fiducial artifacts.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Fiducial seed-generation backend to use."),
+    ] = "imod-autofidseed",
+    tracking_binning: Annotated[
+        int,
+        typer.Option(min=1, help="Binning used for fiducial finding and tracking."),
+    ] = 4,
+    fiducial_diameter_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Nominal gold fiducial diameter in nanometers."),
+    ] = 10.0,
+    target_beads: Annotated[
+        int,
+        typer.Option(min=1, help="Desired number of seed fiducials."),
+    ] = 150,
+    min_seed_fiducials: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum seed count required for QC pass."),
+    ] = 10,
+    raw_pixel_spacing: Annotated[
+        float | None,
+        typer.Option(
+            "--raw-pixel-spacing",
+            min=0.0,
+            help="Optional calibrated raw pixel spacing in angstrom.",
+        ),
+    ] = None,
+    fiducial_diameter_px: Annotated[
+        float | None,
+        typer.Option(
+            "--fiducial-diameter-px",
+            min=0.0,
+            help="Optional unbinned bead diameter override in pixels.",
+        ),
+    ] = None,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite seed, tracking-stack, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Prepare an aligned tracking stack and generate a fiducial seed model."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
+    alignment = _alignment_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _fiducial_seed_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "tracking_binning": tracking_binning,
+        "fiducial_diameter_nm": fiducial_diameter_nm,
+        "target_beads": target_beads,
+        "min_seed_fiducials": min_seed_fiducials,
+    }
+    if raw_pixel_spacing is not None:
+        parameters["raw_pixel_spacing_angstrom"] = raw_pixel_spacing
+    if fiducial_diameter_px is not None:
+        parameters["fiducial_diameter_unbinned_px"] = fiducial_diameter_px
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = generate_seed_and_register(
+        selected_backend,
+        tilt_stack,
+        alignment,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    tracking_stack, seed_model, report = artifacts
+    typer.echo(f"wrote fiducial tracking stack: {tracking_stack.path}")
+    typer.echo(f"wrote fiducial seed model: {seed_model.path}")
+    typer.echo(f"wrote fiducial seed QC: {report.path}")
+    typer.echo(f"QC status: {report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("track-fiducials")
+def track_fiducials(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for fiducial artifacts.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Fiducial-tracking backend to use."),
+    ] = "imod-beadtrack",
+    rounds: Annotated[
+        int,
+        typer.Option(min=1, help="Number of Beadtrack tracking rounds."),
+    ] = 2,
+    min_tracked_fiducials: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum tracked fiducials required for QC pass."),
+    ] = 10,
+    coverage_warning: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Tracking coverage warning threshold."),
+    ] = 0.8,
+    coverage_failure: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Tracking coverage failure threshold."),
+    ] = 0.5,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite fiducial model, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Track the generated fiducial seed model through the tilt series."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tracking_stack = _fiducial_tracking_stack_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    seed_model = _fiducial_seed_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _fiducial_tracking_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "rounds": rounds,
+        "min_tracked_fiducials": min_tracked_fiducials,
+        "coverage_warning": coverage_warning,
+        "coverage_failure": coverage_failure,
+    }
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = track_fiducials_and_register(
+        selected_backend,
+        tracking_stack,
+        seed_model,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    fiducial_model, report = artifacts
+    typer.echo(f"wrote tracked fiducial model: {fiducial_model.path}")
+    typer.echo(f"wrote fiducial tracking QC: {report.path}")
+    typer.echo(f"QC status: {report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("fine-align-tilt-series")
+def fine_align_tilt_series(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for alignment artifacts.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Fine-alignment backend to use."),
+    ] = "imod-tiltalign",
+    residual_warning_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Mean residual warning threshold in nanometers."),
+    ] = 0.8,
+    residual_failure_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Mean residual failure threshold in nanometers."),
+    ] = 1.5,
+    residual_max_warning_px: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="Maximum point-residual warning threshold in tracking pixels.",
+        ),
+    ] = 5.0,
+    residual_max_failure_px: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="Maximum point-residual failure threshold in tracking pixels.",
+        ),
+    ] = 20.0,
+    cross_validate: Annotated[
+        bool,
+        typer.Option(help="Run Tiltalign global leave-out cross-validation."),
+    ] = True,
+    robust_fitting: Annotated[
+        bool,
+        typer.Option(help="Use Tiltalign robust fitting to down-weight outliers."),
+    ] = True,
+    auto_prune_outliers: Annotated[
+        bool,
+        typer.Option(help="Prune failure-level fiducial points and rerun Tiltalign."),
+    ] = True,
+    max_pruned_fraction: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Maximum fraction of fiducial points removable in one run.",
+        ),
+    ] = 0.02,
+    max_positioning_rounds: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Maximum Tiltalign reruns for surface-positioning convergence.",
+        ),
+    ] = 3,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite fine-alignment, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Solve fiducial fine alignment and compose final global transforms."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tracking_stack = _fiducial_tracking_stack_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    fiducial_model = _fiducial_model_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _fine_alignment_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "residual_warning_nm": residual_warning_nm,
+        "residual_failure_nm": residual_failure_nm,
+        "residual_max_warning_tracking_px": residual_max_warning_px,
+        "residual_max_failure_tracking_px": residual_max_failure_px,
+        "cross_validate": cross_validate,
+        "robust_fitting": robust_fitting,
+        "auto_prune_outliers": auto_prune_outliers,
+        "max_pruned_fraction": max_pruned_fraction,
+        "max_positioning_rounds": max_positioning_rounds,
+    }
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = fine_align_and_register(
+        selected_backend,
+        tracking_stack,
+        fiducial_model,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    alignment, report = artifacts
+    typer.echo(f"wrote fine alignment: {alignment.path}")
+    typer.echo(f"wrote final IMOD transforms: {alignment.parameters['imod_xf_path']}")
+    typer.echo(f"wrote fine-alignment QC: {report.path}")
+    typer.echo(f"QC status: {report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("build-final-aligned-stack")
+def build_final_aligned_stack(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for aligned data.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Final aligned-stack backend to use."),
+    ] = "imod-newstack",
+    output_binning: Annotated[
+        int,
+        typer.Option(min=1, help="Binning for the final aligned stack."),
+    ] = 8,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite final aligned-stack and registry entry."),
+    ] = False,
+) -> None:
+    """Apply fine transforms and build a reconstruction-ready tilt stack."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
+    fine_alignment = _fine_alignment_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _final_aligned_stack_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "output_binning": output_binning,
+    }
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifact = build_final_stack_and_register(
+        selected_backend,
+        tilt_stack,
+        fine_alignment,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    typer.echo(f"wrote final aligned stack: {artifact.path}")
+    typer.echo(f"wrote solved tilt angles: {artifact.parameters['tilt_file_path']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("reconstruct-tomogram")
+def reconstruct_tomogram(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for tomogram artifacts.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Tomogram reconstruction backend to use."),
+    ] = "imod-tilt",
+    thickness: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help=(
+                "Reconstructed depth in output voxels; defaults to the "
+                "fine-alignment surface analysis."
+            ),
+        ),
+    ] = None,
+    x_axis_tilt: Annotated[
+        float | None,
+        typer.Option(
+            min=-90.0,
+            max=90.0,
+            help=(
+                "Specimen X-axis tilt in degrees; defaults to the "
+                "fine-alignment surface analysis."
+            ),
+        ),
+    ] = None,
+    z_shift: Annotated[
+        float | None,
+        typer.Option(
+            help=(
+                "Tomogram Z shift in output pixels; defaults to the "
+                "fine-alignment surface analysis."
+            ),
+        ),
+    ] = None,
+    radial_cutoff: Annotated[
+        float,
+        typer.Option(min=0.0, max=0.5, help="IMOD radial filter cutoff."),
+    ] = 0.35,
+    radial_falloff: Annotated[
+        float,
+        typer.Option(min=0.0, max=0.5, help="IMOD radial filter falloff."),
+    ] = 0.05,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite tomogram, export, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Reconstruct a positioned tomogram from the final fine-aligned stack."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    aligned_stack = _final_aligned_stack_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    alignment = _fine_alignment_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _reconstruction_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "radial_cutoff": radial_cutoff,
+        "radial_falloff": radial_falloff,
+    }
+    if thickness is not None:
+        parameters["thickness"] = thickness
+    if x_axis_tilt is not None:
+        parameters["x_axis_tilt_deg"] = x_axis_tilt
+    if z_shift is not None:
+        parameters["z_shift_px"] = z_shift
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = reconstruct_and_register(
+        selected_backend,
+        aligned_stack,
+        alignment,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    tomogram, qc_report = artifacts
+    typer.echo(f"wrote canonical tomogram: {tomogram.path}")
+    typer.echo(f"wrote IMOD reconstruction: {tomogram.parameters['imod_rec_path']}")
+    typer.echo(f"wrote reconstruction QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
@@ -444,9 +974,11 @@ def _motion_backend(name: str) -> MotionCorrectionBackend:
     normalized = name.lower()
     if normalized == "average":
         return AverageMotionCorrectionBackend()
+    if normalized in ("phase-corr", "phase_corr"):
+        return PhaseCorrelationMotionCorrectionBackend()
 
     raise typer.BadParameter(
-        f"unsupported motion-correction backend {name!r}; expected: average",
+        f"unsupported motion-correction backend {name!r}; expected: average, phase-corr",
         param_hint="backend",
     )
 
@@ -473,6 +1005,65 @@ def _coarse_alignment_qc_backend(name: str) -> CoarseAlignmentQcBackend:
     )
 
 
+def _fiducial_seed_backend(name: str) -> FiducialSeedBackend:
+    normalized = name.lower()
+    if normalized == "imod-autofidseed":
+        return ImodAutofidseedBackend()
+
+    raise typer.BadParameter(
+        f"unsupported fiducial seed backend {name!r}; "
+        "expected: imod-autofidseed",
+        param_hint="backend",
+    )
+
+
+def _fiducial_tracking_backend(name: str) -> FiducialTrackingBackend:
+    normalized = name.lower()
+    if normalized == "imod-beadtrack":
+        return ImodBeadtrackBackend()
+
+    raise typer.BadParameter(
+        f"unsupported fiducial tracking backend {name!r}; "
+        "expected: imod-beadtrack",
+        param_hint="backend",
+    )
+
+
+def _fine_alignment_backend(name: str) -> FineAlignmentBackend:
+    normalized = name.lower()
+    if normalized == "imod-tiltalign":
+        return ImodTiltalignBackend()
+
+    raise typer.BadParameter(
+        f"unsupported fine-alignment backend {name!r}; "
+        "expected: imod-tiltalign",
+        param_hint="backend",
+    )
+
+
+def _final_aligned_stack_backend(name: str) -> FinalAlignedStackBackend:
+    normalized = name.lower()
+    if normalized == "imod-newstack":
+        return ImodFinalAlignedStackBackend()
+
+    raise typer.BadParameter(
+        f"unsupported final aligned-stack backend {name!r}; "
+        "expected: imod-newstack",
+        param_hint="backend",
+    )
+
+
+def _reconstruction_backend(name: str) -> ReconstructionBackend:
+    normalized = name.lower()
+    if normalized == "imod-tilt":
+        return ImodTiltReconstructionBackend()
+
+    raise typer.BadParameter(
+        f"unsupported reconstruction backend {name!r}; expected: imod-tilt",
+        param_hint="backend",
+    )
+
+
 def _tilt_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
@@ -486,6 +1077,99 @@ def _tilt_stack_artifact(
         raise typer.BadParameter(
             f"expected exactly one tilt stack for {manifest.tilt_series_id}, "
             f"found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _final_aligned_stack_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("purpose") == "final_alignment"
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one final aligned stack for "
+            f"{manifest.tilt_series_id}, found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _fiducial_tracking_stack_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("purpose") == "fiducial_tracking"
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one fiducial tracking stack for "
+            f"{manifest.tilt_series_id}, found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _fiducial_seed_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one fiducial seed model for "
+            f"{manifest.tilt_series_id}, found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _fiducial_model_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_MODEL)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one tracked fiducial model for "
+            f"{manifest.tilt_series_id}, found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _fine_alignment_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNMENT)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("stage") == "fine"
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one fine alignment for "
+            f"{manifest.tilt_series_id}, found {len(matches)}",
             param_hint="registry",
         )
     return matches[0]

@@ -99,3 +99,14 @@ transforms and logs have been captured.
 A small prealigned stack may be retained as a QC artifact. The current coarse
 alignment preview uses bin16 data, while the unaligned bin16 input remains
 temporary and is removed after IMOD finishes.
+
+The development reconstruction currently retains both representations:
+
+- chunked Zarr in canonical `ZYX` order for pipeline use;
+- IMOD `.rec` in native `YZX` section order for `3dmod`.
+
+For `TS_01` at bin8 and automatically selected depth 296, the current run is
+approximately 925 MiB of Zarr plus 1.0 GiB for the `.rec`; the final aligned
+stack is approximately 140 MiB. The `.rec` and final aligned stack are explicit
+compatibility/debug copies and can become removable or recomputable under the
+future minimal cleanup policy.

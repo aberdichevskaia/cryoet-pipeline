@@ -74,6 +74,70 @@ class CoarseAlignmentQcBackend(Protocol):
         ...
 
 
+class FiducialSeedBackend(Protocol):
+    """Replaceable backend for generating an initial fiducial seed model."""
+
+    name: str
+
+    def generate(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a tracking stack, seed model, and seed QC artifacts."""
+        ...
+
+
+class FiducialTrackingBackend(Protocol):
+    """Replaceable backend for tracking seed fiducials across tilt images."""
+
+    name: str
+
+    def track(
+        self,
+        tracking_stack: Artifact,
+        seed_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a fully tracked fiducial model and QC artifact."""
+        ...
+
+
+class FineAlignmentBackend(Protocol):
+    """Replaceable backend for fiducial-based fine alignment."""
+
+    name: str
+
+    def align(
+        self,
+        tracking_stack: Artifact,
+        fiducial_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return canonical fine-alignment and QC artifacts."""
+        ...
+
+
+class FinalAlignedStackBackend(Protocol):
+    """Replaceable backend for applying final alignment to a tilt stack."""
+
+    name: str
+
+    def build(
+        self,
+        tilt_stack: Artifact,
+        fine_alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> Artifact:
+        """Return a final aligned tilt stack ready for reconstruction."""
+        ...
+
+
 class ReconstructionBackend(Protocol):
     """Replaceable backend for tomogram reconstruction."""
 
@@ -85,8 +149,8 @@ class ReconstructionBackend(Protocol):
         alignment: Artifact,
         manifest: TiltSeriesManifest,
         context: BackendContext,
-    ) -> Artifact:
-        """Return a reconstructed tomogram artifact."""
+    ) -> list[Artifact]:
+        """Return a reconstructed tomogram and its QC artifacts."""
         ...
 
 

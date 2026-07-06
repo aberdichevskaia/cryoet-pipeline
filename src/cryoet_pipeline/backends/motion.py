@@ -25,6 +25,83 @@ from cryoet_pipeline.mrc_validation import validate_complete_mrc
 from cryoet_pipeline.storage import ArtifactFormat
 
 
+class PhaseCorrelationMotionCorrectionBackend:
+    """Motion correction using per-frame phase-correlation shift estimation.
+
+    Each frame is registered to the first frame via normalized cross-power
+    spectrum (phase correlation). Shifts are applied with subpixel accuracy
+    using the Fourier shift theorem. Corrected frames are then averaged.
+    """
+
+    name = "phase_corr"
+
+    def correct(self, manifest: TiltSeriesManifest, context: BackendContext) -> list[Artifact]:
+        """Correct every movie in the manifest and return projection artifacts."""
+
+        _validate_manifest_movies(manifest)
+        return [self.correct_image(image, manifest, context) for image in manifest.images]
+
+    def correct_image(
+        self,
+        image: TiltImage,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> Artifact:
+        """Phase-correlate and average one multiframe movie."""
+
+        if image.local_frame_file is None:
+            raise ValueError(
+                f"{manifest.tilt_series_id} z={image.z_value}: missing local frame file"
+            )
+
+        frames = _read_movie_frames(image.local_frame_file)
+        shifts = _estimate_frame_shifts(frames)
+        projection = _apply_shifts_and_average(frames, shifts)
+
+        artifact_format = _artifact_format_parameter(context)
+        output_path = _corrected_projection_path(
+            context.output_dir,
+            manifest,
+            image,
+            artifact_format=artifact_format,
+            suffix="mc",
+        )
+        overwrite = _bool_parameter(context, "overwrite", default=False)
+        _write_projection(
+            output_path,
+            projection,
+            artifact_format=artifact_format,
+            pixel_spacing_angstrom=manifest.raw_pixel_spacing_angstrom,
+            overwrite=overwrite,
+        )
+
+        return Artifact(
+            id=f"{manifest.tilt_series_id}:corrected_projection:{image.z_value:03d}",
+            kind=ArtifactKind.CORRECTED_PROJECTION,
+            path=output_path,
+            shape=tuple(int(s) for s in projection.shape),
+            dtype=str(projection.dtype),
+            axis_order=AxisOrder.YX,
+            pixel_spacing_angstrom=manifest.raw_pixel_spacing_angstrom,
+            binning=image.binning,
+            parameters={
+                "backend": self.name,
+                "method": "phase_correlation",
+                "artifact_format": artifact_format.value,
+                "source_frame_file": str(image.local_frame_file),
+                "z_value": image.z_value,
+                "tilt_angle_deg": image.tilt_angle_deg,
+                "num_subframes": image.num_subframes,
+                "frame_correction_shifts_yx_px": shifts.tolist(),
+            },
+            software_versions=_software_versions(),
+            storage_role=_storage_role_parameter(context),
+            retention_policy=_retention_policy_parameter(context),
+            can_recompute=_bool_parameter(context, "can_recompute", default=True),
+            size_bytes=_path_size_bytes(output_path),
+        )
+
+
 class AverageMotionCorrectionBackend:
     """Baseline motion correction that averages frames in each multiframe MRC."""
 
@@ -107,6 +184,59 @@ def correct_and_register(
     return artifacts
 
 
+def _read_movie_frames(path: Path) -> NDArray[np.float32]:
+    with mrcfile.open(path, permissive=True) as mrc:
+        data = np.asarray(mrc.data, dtype=np.float32)
+    if data.ndim != 3:
+        raise ValueError(
+            f"expected multiframe MRC with shape (frames, y, x), got {data.shape}"
+        )
+    return data
+
+
+def _estimate_frame_shifts(frames: NDArray[np.float32]) -> NDArray[np.float64]:
+    """Estimate (dy, dx) corrections that register each frame to frame zero."""
+    n_frames, height, width = frames.shape
+    shifts = np.zeros((n_frames, 2), dtype=np.float64)
+    ref_fft = np.fft.rfft2(frames[0])
+    for i in range(1, n_frames):
+        frame_fft = np.fft.rfft2(frames[i])
+        cross_power = ref_fft * np.conj(frame_fft)
+        norm = np.abs(cross_power)
+        normalized = np.zeros_like(cross_power)
+        np.divide(cross_power, norm, out=normalized, where=norm > 1e-10)
+        cross_power = normalized
+        cc = np.fft.irfft2(cross_power, s=(height, width))
+        peak = np.unravel_index(np.argmax(cc), cc.shape)
+        dy = int(peak[0])
+        dx = int(peak[1])
+        if dy > height // 2:
+            dy -= height
+        if dx > width // 2:
+            dx -= width
+        shifts[i] = [dy, dx]
+    return shifts
+
+
+def _apply_shifts_and_average(
+    frames: NDArray[np.float32],
+    shifts: NDArray[np.float64],
+) -> NDArray[np.float32]:
+    """Apply Fourier-domain shifts to each frame and return their mean."""
+    n_frames, height, width = frames.shape
+    ky = np.fft.fftfreq(height)[:, None]
+    kx = np.fft.rfftfreq(width)[None, :]
+    accumulator = np.zeros((height, width), dtype=np.float64)
+    for i in range(n_frames):
+        dy, dx = shifts[i]
+        fft = np.fft.rfft2(frames[i])
+        phase = np.exp(-2j * np.pi * (dy * ky + dx * kx))
+        shifted = np.fft.irfft2(fft * phase, s=(height, width))
+        accumulator += shifted
+    result = (accumulator / n_frames).astype(np.float32)
+    return cast(NDArray[np.float32], result)
+
+
 def _average_movie_frames(path: Path) -> NDArray[np.float32]:
     with mrcfile.open(path, permissive=True) as mrc:
         data = np.asarray(mrc.data)
@@ -187,13 +317,14 @@ def _corrected_projection_path(
     image: TiltImage,
     *,
     artifact_format: ArtifactFormat,
+    suffix: str = "avg",
 ) -> Path:
     extension = "zarr" if artifact_format is ArtifactFormat.ZARR else "mrc"
     return (
         output_dir
         / "corrected"
         / manifest.tilt_series_id
-        / f"{manifest.tilt_series_id}_{image.z_value:03d}_avg.{extension}"
+        / f"{manifest.tilt_series_id}_{image.z_value:03d}_{suffix}.{extension}"
     )
 
 

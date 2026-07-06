@@ -10,6 +10,8 @@ import zarr
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
+    PhaseCorrelationMotionCorrectionBackend,
+    _estimate_frame_shifts,
     correct_and_register,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -220,6 +222,90 @@ def test_average_motion_correction_rejects_unknown_artifact_format(tmp_path: Pat
 
     with pytest.raises(ValueError, match="artifact_format"):
         AverageMotionCorrectionBackend().correct(manifest, context)
+
+
+def test_estimate_frame_shifts_returns_corrections_for_known_shifts() -> None:
+    rng = np.random.default_rng(42)
+    base = rng.standard_normal((64, 64)).astype(np.float32)
+    dy, dx = 3, -5
+    shifted = np.roll(np.roll(base, dy, axis=0), dx, axis=1)
+    frames = np.stack([base, shifted])
+
+    shifts = _estimate_frame_shifts(frames)
+
+    assert shifts[0, 0] == pytest.approx(0.0)
+    assert shifts[0, 1] == pytest.approx(0.0)
+    assert shifts[1, 0] == pytest.approx(-dy, abs=1)
+    assert shifts[1, 1] == pytest.approx(-dx, abs=1)
+
+
+def test_phase_correlation_backend_corrects_known_shift(tmp_path: Path) -> None:
+    rng = np.random.default_rng(0)
+    base = rng.standard_normal((32, 32)).astype(np.float32)
+    dy, dx = 2, -3
+    shifted = np.roll(np.roll(base, dy, axis=0), dx, axis=1)
+    movie_data = np.stack([base, shifted, base])
+
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, movie_data)
+    manifest = _manifest(movie_path, num_subframes=3)
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CPU,
+        parameters={"overwrite": False},
+    )
+
+    artifacts = PhaseCorrelationMotionCorrectionBackend().correct(manifest, context)
+
+    assert len(artifacts) == 1
+    artifact = artifacts[0]
+    assert artifact.kind == ArtifactKind.CORRECTED_PROJECTION
+    assert artifact.path == tmp_path / "outputs/corrected/TS_TEST/TS_TEST_000_mc.mrc"
+    assert artifact.parameters["backend"] == "phase_corr"
+    assert artifact.parameters["method"] == "phase_correlation"
+    assert "frame_correction_shifts_yx_px" in artifact.parameters
+    assert len(artifact.parameters["frame_correction_shifts_yx_px"]) == 3
+    assert artifact.shape == (32, 32)
+    assert artifact.size_bytes is not None and artifact.size_bytes > 0
+
+    with mrcfile.open(artifact.path, permissive=True) as corrected:
+        result = corrected.data
+        assert result.shape == (32, 32)
+        assert result.dtype == np.float32
+        assert np.isfinite(result).all()
+        np.testing.assert_allclose(result, base, atol=1e-4)
+
+
+def test_phase_correlation_backend_zero_shift_matches_average(tmp_path: Path) -> None:
+    rng = np.random.default_rng(7)
+    frame = rng.standard_normal((32, 32)).astype(np.float32)
+    movie_data = np.stack([frame, frame, frame])
+
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, movie_data)
+    manifest = _manifest(movie_path, num_subframes=3)
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CPU,
+    )
+
+    artifacts = PhaseCorrelationMotionCorrectionBackend().correct(manifest, context)
+
+    with mrcfile.open(artifacts[0].path, permissive=True) as corrected:
+        np.testing.assert_allclose(corrected.data, frame, atol=1e-4)
+
+
+def test_phase_correlation_backend_requires_overwrite_flag(tmp_path: Path) -> None:
+    movie_path = tmp_path / "movie.mrc"
+    _write_mrc(movie_path, np.ones((2, 16, 16), dtype=np.float32))
+    manifest = _manifest(movie_path, num_subframes=2)
+    context = BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU)
+    backend = PhaseCorrelationMotionCorrectionBackend()
+
+    backend.correct(manifest, context)
+
+    with pytest.raises(FileExistsError):
+        backend.correct(manifest, context)
 
 
 def _manifest(

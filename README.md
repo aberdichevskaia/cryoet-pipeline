@@ -15,8 +15,19 @@ from multiframe MRC files plus SerialEM `.mdoc` metadata to visual/QC-ready tomo
 
 ## Current status
 
-This repository starts with the project skeleton, typed data models, `.mdoc` parsing, backend protocols, and CLI placeholders.
-The compute-heavy motion/alignment/reconstruction implementations are intentionally added behind interfaces in later steps.
+The current implementation covers a deterministic fiducial-based baseline from
+multiframe MRC movies through a positioned, visual-QC-ready tomogram:
+
+```text
+ingest -> frame averaging -> tilt stack -> coarse IMOD alignment
+       -> aligned preview/QC -> automatic fiducial seed -> bead tracking
+       -> fine alignment -> final aligned stack -> positioned reconstruction
+```
+
+The canonical tomogram is stored as Zarr in `ZYX` order. IMOD `.xf`, `.st`, and
+`.rec` files are retained as compatibility and visual-QC outputs. The coarse
+aligned stack is diagnostic only and cannot be selected by the reconstruction
+command. CTF estimation and correction remain later stages.
 
 ## Development
 
@@ -54,6 +65,79 @@ cryoet init \
   --out outputs/dev \
   --device auto
 ```
+
+Run the current baseline stages:
+
+```bash
+cryoet prepare-tilt-series \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --storage-policy working \
+  --device cpu
+
+cryoet align-tilt-series \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --binning 8 \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet qc-coarse-alignment \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --preview-binning 16 \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet generate-fiducial-seed \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --tracking-binning 4 \
+  --fiducial-diameter-nm 10 \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet track-fiducials \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet fine-align-tilt-series \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet build-final-aligned-stack \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --output-binning 8 \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
+cryoet reconstruct-tomogram \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+```
+
+Fine alignment iterates `AngleOffset` and `AxisZShift` until the two-surface
+positioning correction converges. Reconstruction then uses the positioned
+transforms, solved tilt angles, recommended thickness, and X-axis tilt without
+applying the Z shift a second time. Explicit CLI options can override the
+reconstruction values for controlled experiments. Pixel spacing can likewise
+be overridden during fiducial seeding when acquisition metadata needs
+calibration.
 
 The default device is `auto`: CUDA is preferred on Linux GPU machines, Apple
 Silicon MPS is used when available, and CPU is the fallback. On M4 Macs this is

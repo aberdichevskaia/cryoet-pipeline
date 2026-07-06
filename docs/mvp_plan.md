@@ -24,11 +24,11 @@ to attach a future copilot or web cockpit without rewriting processing code.
   customization requires it.
 - Motion correction: first backend is average-only for baseline/debugging;
   global phase-correlation or third-party adapters can follow.
-- Alignment: first backend is IMOD `tiltxcorr` for coarse alignment, followed by
-  a separate fiducial-tracking/fine-alignment backend. `tttsa`, AreTomo, and
-  other tools remain replaceable adapter options.
-- Reconstruction: a replaceable backend, with `torch-tomogram` and IMOD
-  reconstruction adapters as planned options.
+- Alignment: first backend is IMOD `tiltxcorr` plus `xftoxg` for coarse global
+  alignment, followed by a separate fiducial-tracking/fine-alignment backend.
+  `tttsa`, AreTomo, and other tools remain replaceable adapter options.
+- Reconstruction: first backend is IMOD `tilt`; `torch-tomogram` and other
+  reconstruction tools remain replaceable adapter options.
 - Quality target: visual/QC-ready, not publication-grade.
 - Visualization: no full 3D web viewer in the MVP; prefer IMOD exports plus
   lightweight previews.
@@ -45,12 +45,22 @@ to attach a future copilot or web cockpit without rewriting processing code.
 6. Average-only motion-correction backend and tilt-stack preparation backend.
 7. `prepare-tilt-series` command that corrects movies and prepares
    alignment-ready stack/angle artifacts as one user-facing step.
-8. Canonical alignment models plus an IMOD `tiltxcorr` coarse-alignment adapter
-   that emits normalized JSON and an IMOD-compatible `.xf`.
+8. Canonical alignment models plus an IMOD coarse-alignment adapter that
+   converts `tiltxcorr` relative transforms to global transforms with `xftoxg`,
+   then emits normalized JSON and an IMOD-compatible `.xf`.
 9. Coarse-alignment QC with a retained bin16 prealigned preview, residual-shift
-   metrics, and machine-readable `pass`, `warning`, or `fail` status.
-10. Tests for metadata parsing, artifact serialization, registry behavior, CLI
-   commands, and baseline processing.
+   metrics, and machine-readable `pass`, `warning`, or `fail` status. This stack
+   is diagnostic and is not a reconstruction input.
+10. Automatic IMOD fiducial seeding and bead tracking with model coverage QC.
+11. Fiducial-based `tiltalign` fine alignment with robust fitting, bounded
+    outlier pruning, residual QC, and bounded two-surface positioning iterations
+    that apply `AngleOffset` and `AxisZShift`.
+12. Final aligned-stack generation with solved angles and explicit calibration
+    provenance.
+13. Positioned IMOD reconstruction from the fine-aligned stack, with `.rec`
+    compatibility output, canonical `ZYX` Zarr, and central-slice QC artifacts.
+14. Tests for metadata parsing, artifact serialization, registry behavior, CLI
+    commands, backend contracts, and baseline processing.
 
 ## Supporting docs
 

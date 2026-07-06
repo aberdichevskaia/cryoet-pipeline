@@ -98,13 +98,44 @@ def parse_mdoc_text(
                 "this usually indicates binned mdoc metadata"
             )
 
-    return TiltSeriesManifest(
+    manifest = TiltSeriesManifest(
         tilt_series_id=tilt_series_id,
         source_mdoc=source_mdoc,
         images=images,
         mdoc_pixel_spacing_angstrom=mdoc_pixel_spacing,
-        raw_pixel_spacing_angstrom=raw_pixel_spacing_angstrom,
         notes=notes,
+    )
+    if raw_pixel_spacing_angstrom is None:
+        return manifest
+    return with_raw_pixel_spacing(manifest, raw_pixel_spacing_angstrom)
+
+
+def with_raw_pixel_spacing(
+    manifest: TiltSeriesManifest,
+    raw_pixel_spacing_angstrom: float,
+) -> TiltSeriesManifest:
+    """Attach authoritative raw-frame spacing and record mdoc differences."""
+
+    notes = [
+        note
+        for note in manifest.notes
+        if not note.startswith("raw pixel spacing differs from mdoc pixel spacing")
+    ]
+    mdoc_pixel_spacing = manifest.mdoc_pixel_spacing_angstrom
+    if (
+        mdoc_pixel_spacing is not None
+        and abs(raw_pixel_spacing_angstrom - mdoc_pixel_spacing) > 1e-6
+    ):
+        notes.append(
+            "raw pixel spacing differs from mdoc pixel spacing; "
+            "the raw MRC header is used as the default and may require "
+            "a calibration override"
+        )
+    return manifest.model_copy(
+        update={
+            "raw_pixel_spacing_angstrom": raw_pixel_spacing_angstrom,
+            "notes": notes,
+        }
     )
 
 
