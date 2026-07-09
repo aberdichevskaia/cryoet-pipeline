@@ -19,11 +19,13 @@ The current implementation covers a deterministic fiducial-based baseline from
 multiframe MRC movies through a positioned, visual-QC-ready tomogram:
 
 ```text
-ingest -> frame averaging -> tilt stack -> coarse IMOD alignment
+ingest -> selectable motion correction -> tilt stack -> coarse IMOD alignment
        -> aligned preview/QC -> automatic fiducial seed -> bead tracking
        -> fine alignment -> final aligned stack -> positioned reconstruction
 ```
 
+Motion correction currently supports the `average` debug baseline,
+`phase-corr` Python baseline, and a `motioncor3` external-tool adapter.
 The canonical tomogram is stored as Zarr in `ZYX` order. IMOD `.xf`, `.st`, and
 `.rec` files are retained as compatibility and visual-QC outputs. The coarse
 aligned stack is diagnostic only and cannot be selected by the reconstruction
@@ -130,6 +132,26 @@ cryoet reconstruct-tomogram \
   --imod-dir /Applications/IMOD \
   --device cpu
 ```
+
+On a Linux/NVIDIA processing host where MotionCor3 is already managed by the
+user or cluster, replace only the motion backend:
+
+```bash
+cryoet prepare-tilt-series \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --motion-backend motioncor3 \
+  --motioncor3-executable /path/to/MotionCor3 \
+  --motioncor3-gpu 0 \
+  --device cuda \
+  --storage-policy working
+```
+
+The adapter defaults to a `5 x 5` patch grid, keeps MotionCor3 logs and
+alignment metadata, and does not save the corrected frame stack. Dose weighting
+is intentionally disabled until pixel size and dose metadata are validated.
+See [docs/motioncor3_backend.md](docs/motioncor3_backend.md).
 
 Fine alignment iterates `AngleOffset` and `AxisZShift` until the two-surface
 positioning correction converges. Reconstruction then uses the positioned

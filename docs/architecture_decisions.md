@@ -91,6 +91,12 @@ manifests/artifacts and return pipeline artifacts.
 This keeps the project modular: replacing a backend should not require rewriting
 the surrounding pipeline state, artifact lineage, or downstream exports.
 
+The MotionCor3 integration follows this rule: the external process receives one
+multiframe MRC and the adapter returns the same pipeline-owned
+`CORRECTED_PROJECTION` artifact used by the Python baselines. MotionCor3 command
+lines, logs, alignment metadata, and software version remain provenance rather
+than becoming project state.
+
 ## Testing rule
 
 Every pipeline stage should be added with tests at the same time as the code.
@@ -114,7 +120,7 @@ The near-term MVP should prioritize:
 
 1. a small artifact registry;
 2. stable backend protocols for each processing stage;
-3. a simple internal motion-correction baseline;
+3. internal motion-correction baselines plus a MotionCor3 production adapter;
 4. IMOD-compatible exports for manual inspection;
 5. later adapters for BioImage.IO, Croissant, copick, TeamTomo, and other
    ecosystem tools.

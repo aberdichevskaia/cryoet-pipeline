@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import shlex
 import shutil
+import subprocess
+import tempfile
+from collections.abc import Sequence
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, cast
@@ -11,6 +18,7 @@ import zarr
 from numpy.typing import NDArray
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.alignment import CommandRunner, run_command
 from cryoet_pipeline.backends.protocols import BackendContext, MotionCorrectionBackend
 from cryoet_pipeline.models import (
     Artifact,
@@ -22,7 +30,187 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.runtime import DevicePreference
 from cryoet_pipeline.storage import ArtifactFormat
+
+
+@dataclass(frozen=True)
+class _MotionCor3Settings:
+    executable: Path
+    executable_sha256: str
+    gpu_ids: tuple[int, ...]
+    patch_x: int
+    patch_y: int
+    pixel_spacing_angstrom: float
+    gain_reference: Path | None
+    gain_rotation: int
+    gain_flip: int
+    software_version: str
+
+
+class MotionCor3MotionCorrectionBackend:
+    """Run MotionCor3 patch-based correction for one tilt movie at a time."""
+
+    name = "motioncor3"
+
+    def __init__(self, command_runner: CommandRunner | None = None) -> None:
+        self._command_runner = command_runner or run_command
+
+    def correct(self, manifest: TiltSeriesManifest, context: BackendContext) -> list[Artifact]:
+        """Correct every movie with MotionCor3 and canonicalize its frame sum."""
+
+        _validate_manifest_movies(manifest)
+        settings = _motioncor3_settings(manifest, context)
+        artifact_format = _artifact_format_parameter(context)
+        overwrite = _bool_parameter(context, "overwrite", default=False)
+        output_paths = [
+            _corrected_projection_path(
+                context.output_dir,
+                manifest,
+                image,
+                artifact_format=artifact_format,
+                suffix="mc3",
+            )
+            for image in manifest.images
+        ]
+        _require_available_paths(output_paths, overwrite=overwrite)
+
+        _storage_role_parameter(context)
+        _retention_policy_parameter(context)
+        _bool_parameter(context, "can_recompute", default=True)
+        try:
+            return [
+                self._correct_image(
+                    image,
+                    manifest,
+                    context,
+                    settings=settings,
+                    artifact_format=artifact_format,
+                    overwrite=overwrite,
+                )
+                for image in manifest.images
+            ]
+        except Exception:
+            if not overwrite:
+                for path in output_paths:
+                    if path.exists():
+                        _remove_existing_path(path)
+            raise
+
+    def _correct_image(
+        self,
+        image: TiltImage,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+        *,
+        settings: _MotionCor3Settings,
+        artifact_format: ArtifactFormat,
+        overwrite: bool,
+    ) -> Artifact:
+        if image.local_frame_file is None:
+            raise ValueError(
+                f"{manifest.tilt_series_id} z={image.z_value}: missing local frame file"
+            )
+
+        output_path = _corrected_projection_path(
+            context.output_dir,
+            manifest,
+            image,
+            artifact_format=artifact_format,
+            suffix="mc3",
+        )
+        work_dir = context.output_dir / "motion" / "motioncor3" / manifest.tilt_series_id
+        log_dir = context.output_dir / "logs" / "motioncor3" / manifest.tilt_series_id
+        alignment_dir = work_dir / "alignment"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        alignment_dir.mkdir(parents=True, exist_ok=True)
+
+        output_stem = f"{manifest.tilt_series_id}_{image.z_value:03d}_mc3"
+        command_log_path = log_dir / f"{output_stem}.runner.log"
+        motioncor3_log_path = log_dir / f"{output_stem}.log"
+        with tempfile.TemporaryDirectory(
+            prefix=f".{output_stem}-",
+            dir=work_dir.resolve(),
+        ) as temporary_directory:
+            temporary_output = Path(temporary_directory) / f"{output_stem}.mrc"
+            command = _motioncor3_command(
+                settings,
+                input_path=image.local_frame_file,
+                output_path=temporary_output,
+                log_dir=log_dir,
+                alignment_dir=alignment_dir,
+            )
+            result = self._command_runner(
+                command,
+                cwd=work_dir,
+                env=os.environ.copy(),
+            )
+            _write_command_log(command_log_path, command, result)
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "no process output").strip()
+                raise RuntimeError(
+                    f"MotionCor3 failed for {image.local_frame_file} with exit code "
+                    f"{result.returncode}: {detail}; see {command_log_path}"
+                )
+
+            projection = _read_motioncor3_projection(
+                temporary_output,
+                input_path=image.local_frame_file,
+            )
+            _write_projection(
+                output_path,
+                projection,
+                artifact_format=artifact_format,
+                pixel_spacing_angstrom=settings.pixel_spacing_angstrom,
+                overwrite=overwrite,
+            )
+
+        software_versions = _software_versions()
+        software_versions["MotionCor3"] = settings.software_version
+        return Artifact(
+            id=f"{manifest.tilt_series_id}:corrected_projection:{image.z_value:03d}",
+            kind=ArtifactKind.CORRECTED_PROJECTION,
+            path=output_path,
+            shape=tuple(int(axis_size) for axis_size in projection.shape),
+            dtype=str(projection.dtype),
+            axis_order=AxisOrder.YX,
+            pixel_spacing_angstrom=settings.pixel_spacing_angstrom,
+            binning=image.binning,
+            parameters={
+                "backend": self.name,
+                "method": "motioncor3_patch_correction",
+                "artifact_format": artifact_format.value,
+                "source_frame_file": str(image.local_frame_file),
+                "z_value": image.z_value,
+                "tilt_angle_deg": image.tilt_angle_deg,
+                "num_subframes": image.num_subframes,
+                "patch_grid_xy": [settings.patch_x, settings.patch_y],
+                "gpu_ids": list(settings.gpu_ids),
+                "pixel_spacing_angstrom": settings.pixel_spacing_angstrom,
+                "gain_reference": (
+                    str(settings.gain_reference)
+                    if settings.gain_reference is not None
+                    else None
+                ),
+                "gain_rotation": settings.gain_rotation,
+                "gain_flip": settings.gain_flip,
+                "dose_weighting": False,
+                "aligned_movie_saved": False,
+                "ctf_estimation": False,
+                "motioncor3_executable": str(settings.executable),
+                "motioncor3_executable_sha256": settings.executable_sha256,
+                "command": command,
+                "command_log": str(command_log_path),
+                "motioncor3_log": str(motioncor3_log_path),
+                "alignment_dir": str(alignment_dir),
+            },
+            software_versions=software_versions,
+            storage_role=_storage_role_parameter(context),
+            retention_policy=_retention_policy_parameter(context),
+            can_recompute=_bool_parameter(context, "can_recompute", default=True),
+            size_bytes=_path_size_bytes(output_path),
+        )
 
 
 class PhaseCorrelationMotionCorrectionBackend:
@@ -182,6 +370,267 @@ def correct_and_register(
     artifacts = backend.correct(manifest, context)
     registry.extend(artifacts, replace=replace_existing)
     return artifacts
+
+
+def _motioncor3_settings(
+    manifest: TiltSeriesManifest,
+    context: BackendContext,
+) -> _MotionCor3Settings:
+    if context.device is not DevicePreference.CUDA:
+        raise ValueError(
+            "MotionCor3 requires an NVIDIA CUDA device; run it on a Linux/CUDA host "
+            "with --device cuda"
+        )
+
+    configured_pixel_spacing = context.parameters.get("motioncor3_pixel_size_angstrom")
+    pixel_spacing_value = (
+        manifest.raw_pixel_spacing_angstrom
+        if configured_pixel_spacing is None
+        else configured_pixel_spacing
+    )
+    pixel_spacing = _positive_float_value(
+        pixel_spacing_value,
+        name="motioncor3_pixel_size_angstrom",
+    )
+    software_version = context.parameters.get("motioncor3_version", "unknown")
+    if not isinstance(software_version, str) or not software_version.strip():
+        raise TypeError("context parameter 'motioncor3_version' must be a non-empty string")
+
+    executable = _resolve_motioncor3_executable(context)
+    return _MotionCor3Settings(
+        executable=executable,
+        executable_sha256=_sha256_file(executable),
+        gpu_ids=_motioncor3_gpu_ids(context),
+        patch_x=_bounded_int_parameter(
+            context,
+            "motioncor3_patch_x",
+            default=5,
+            minimum=1,
+        ),
+        patch_y=_bounded_int_parameter(
+            context,
+            "motioncor3_patch_y",
+            default=5,
+            minimum=1,
+        ),
+        pixel_spacing_angstrom=pixel_spacing,
+        gain_reference=_optional_existing_file_parameter(
+            context,
+            "motioncor3_gain_reference",
+        ),
+        gain_rotation=_bounded_int_parameter(
+            context,
+            "motioncor3_gain_rotation",
+            default=0,
+            minimum=0,
+            maximum=3,
+        ),
+        gain_flip=_bounded_int_parameter(
+            context,
+            "motioncor3_gain_flip",
+            default=0,
+            minimum=0,
+            maximum=2,
+        ),
+        software_version=software_version.strip(),
+    )
+
+
+def _motioncor3_command(
+    settings: _MotionCor3Settings,
+    *,
+    input_path: Path,
+    output_path: Path,
+    log_dir: Path,
+    alignment_dir: Path,
+) -> list[str]:
+    command = [
+        str(settings.executable),
+        "-InMrc",
+        str(input_path),
+        "-OutMrc",
+        str(output_path),
+        "-Patch",
+        str(settings.patch_x),
+        str(settings.patch_y),
+        "-FtBin",
+        "1.0",
+        "-Align",
+        "1",
+        "-OutStack",
+        "0",
+        "1",
+        "-FmDose",
+        "0",
+        "-PixSize",
+        f"{settings.pixel_spacing_angstrom:.8g}",
+        "-Cs",
+        "0",
+        "-Gpu",
+        *(str(gpu_id) for gpu_id in settings.gpu_ids),
+        "-LogDir",
+        str(log_dir),
+        "-OutAln",
+        str(alignment_dir),
+    ]
+    if settings.gain_reference is not None:
+        command.extend(["-Gain", str(settings.gain_reference)])
+    if settings.gain_rotation:
+        command.extend(["-RotGain", str(settings.gain_rotation)])
+    if settings.gain_flip:
+        command.extend(["-FlipGain", str(settings.gain_flip)])
+    return command
+
+
+def _read_motioncor3_projection(
+    output_path: Path,
+    *,
+    input_path: Path,
+) -> NDArray[np.float32]:
+    try:
+        output_info = validate_complete_mrc(output_path)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"MotionCor3 did not produce a valid MRC output: {exc}") from exc
+
+    input_info = validate_complete_mrc(input_path)
+    expected_shape = tuple(input_info.shape[-2:])
+    with mrcfile.open(output_path, permissive=True) as mrc:
+        data = np.asarray(mrc.data)
+        if data.ndim == 3 and data.shape[0] == 1:
+            data = data[0]
+        if data.ndim != 2:
+            raise ValueError(
+                "MotionCor3 output must contain one 2D projection, "
+                f"got shape {output_info.shape}"
+            )
+        if data.shape != expected_shape:
+            raise ValueError(
+                f"MotionCor3 output shape {data.shape} does not match input frame "
+                f"shape {expected_shape}"
+            )
+        projection = np.asarray(data, dtype=np.float32).copy()
+    if not np.isfinite(projection).all():
+        raise ValueError(f"MotionCor3 output contains non-finite pixels: {output_path}")
+    return projection
+
+
+def _resolve_motioncor3_executable(context: BackendContext) -> Path:
+    configured = context.parameters.get("motioncor3_executable")
+    if configured is not None:
+        if not isinstance(configured, (str, Path)):
+            raise TypeError(
+                "context parameter 'motioncor3_executable' must be a path string"
+            )
+        candidates = [Path(configured).expanduser()]
+    else:
+        discovered = shutil.which("MotionCor3")
+        candidates = [Path(discovered)] if discovered is not None else []
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        "MotionCor3 executable not found; put MotionCor3 on PATH or configure "
+        "'motioncor3_executable'"
+    )
+
+
+def _motioncor3_gpu_ids(context: BackendContext) -> tuple[int, ...]:
+    value = context.parameters.get("motioncor3_gpu_ids", (0,))
+    if isinstance(value, bool):
+        raise TypeError("context parameter 'motioncor3_gpu_ids' must contain integers")
+    if isinstance(value, int):
+        values: Sequence[object] = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        values = value
+    else:
+        raise TypeError("context parameter 'motioncor3_gpu_ids' must contain integers")
+
+    gpu_ids: list[int] = []
+    for gpu_id in values:
+        if isinstance(gpu_id, bool) or not isinstance(gpu_id, int):
+            raise TypeError("context parameter 'motioncor3_gpu_ids' must contain integers")
+        if gpu_id < 0:
+            raise ValueError("context parameter 'motioncor3_gpu_ids' cannot be negative")
+        gpu_ids.append(gpu_id)
+    if not gpu_ids:
+        raise ValueError("context parameter 'motioncor3_gpu_ids' cannot be empty")
+    return tuple(gpu_ids)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _optional_existing_file_parameter(
+    context: BackendContext,
+    key: str,
+) -> Path | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, (str, Path)):
+        raise TypeError(f"context parameter {key!r} must be a path string")
+    path = Path(value).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"context parameter {key!r} does not exist: {path}")
+    return path.resolve()
+
+
+def _bounded_int_parameter(
+    context: BackendContext,
+    key: str,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        suffix = f" and {maximum}" if maximum is not None else ""
+        raise ValueError(
+            f"context parameter {key!r} must be between {minimum}{suffix}"
+        )
+    return value
+
+
+def _positive_float_value(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {name!r} must be numeric")
+    normalized = float(value)
+    if not np.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"context parameter {name!r} must be greater than zero")
+    return normalized
+
+
+def _require_available_paths(paths: Sequence[Path], *, overwrite: bool) -> None:
+    if overwrite:
+        return
+    existing = [path for path in paths if path.exists()]
+    if existing:
+        formatted = "\n".join(f"- {path}" for path in existing)
+        raise FileExistsError(
+            f"corrected projection output already exists:\n{formatted}"
+        )
+
+
+def _write_command_log(
+    path: Path,
+    command: Sequence[str],
+    result: subprocess.CompletedProcess[str],
+) -> None:
+    path.write_text(
+        f"$ {shlex.join(command)}\n\n"
+        f"[stdout]\n{result.stdout or ''}\n"
+        f"[stderr]\n{result.stderr or ''}\n"
+        f"[exit_code]\n{result.returncode}\n"
+    )
 
 
 def _read_movie_frames(path: Path) -> NDArray[np.float32]:

@@ -30,6 +30,7 @@ from cryoet_pipeline.backends.fine_alignment import (
 )
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
+    MotionCor3MotionCorrectionBackend,
     PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
 )
@@ -157,6 +158,38 @@ def correct_motion(
         str,
         typer.Option(help="Storage policy: debug, working, or minimal."),
     ] = "debug",
+    motioncor3_executable: Annotated[
+        Path | None,
+        typer.Option(help="MotionCor3 executable path for the motioncor3 backend."),
+    ] = None,
+    motioncor3_gpu: Annotated[
+        int,
+        typer.Option(min=0, help="GPU id passed to MotionCor3."),
+    ] = 0,
+    motioncor3_patch_x: Annotated[
+        int,
+        typer.Option(min=1, help="MotionCor3 patch count along x."),
+    ] = 5,
+    motioncor3_patch_y: Annotated[
+        int,
+        typer.Option(min=1, help="MotionCor3 patch count along y."),
+    ] = 5,
+    motioncor3_pixel_size: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="MotionCor3 raw pixel size override in angstrom."),
+    ] = None,
+    motioncor3_gain: Annotated[
+        Path | None,
+        typer.Option(help="Optional gain-reference MRC passed to MotionCor3."),
+    ] = None,
+    motioncor3_gain_rotation: Annotated[
+        int,
+        typer.Option(min=0, max=3, help="MotionCor3 gain rotation: 0, 1, 2, or 3."),
+    ] = 0,
+    motioncor3_gain_flip: Annotated[
+        int,
+        typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
+    ] = 0,
 ) -> None:
     """Correct multiframe tilt movies and register corrected projections."""
 
@@ -176,6 +209,16 @@ def correct_motion(
             "storage_role": resolved_storage_policy.storage_role,
             "retention_policy": resolved_storage_policy.retention_policy,
             "can_recompute": resolved_storage_policy.can_recompute,
+            **_motioncor3_cli_parameters(
+                executable=motioncor3_executable,
+                gpu=motioncor3_gpu,
+                patch_x=motioncor3_patch_x,
+                patch_y=motioncor3_patch_y,
+                pixel_size=motioncor3_pixel_size,
+                gain=motioncor3_gain,
+                gain_rotation=motioncor3_gain_rotation,
+                gain_flip=motioncor3_gain_flip,
+            ),
         },
     )
 
@@ -221,6 +264,38 @@ def prepare_tilt_series(
         str,
         typer.Option(help="Storage policy: debug, working, or minimal."),
     ] = "debug",
+    motioncor3_executable: Annotated[
+        Path | None,
+        typer.Option(help="MotionCor3 executable path for the motioncor3 backend."),
+    ] = None,
+    motioncor3_gpu: Annotated[
+        int,
+        typer.Option(min=0, help="GPU id passed to MotionCor3."),
+    ] = 0,
+    motioncor3_patch_x: Annotated[
+        int,
+        typer.Option(min=1, help="MotionCor3 patch count along x."),
+    ] = 5,
+    motioncor3_patch_y: Annotated[
+        int,
+        typer.Option(min=1, help="MotionCor3 patch count along y."),
+    ] = 5,
+    motioncor3_pixel_size: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="MotionCor3 raw pixel size override in angstrom."),
+    ] = None,
+    motioncor3_gain: Annotated[
+        Path | None,
+        typer.Option(help="Optional gain-reference MRC passed to MotionCor3."),
+    ] = None,
+    motioncor3_gain_rotation: Annotated[
+        int,
+        typer.Option(min=0, max=3, help="MotionCor3 gain rotation: 0, 1, 2, or 3."),
+    ] = 0,
+    motioncor3_gain_flip: Annotated[
+        int,
+        typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
+    ] = 0,
 ) -> None:
     """Correct movies and prepare an alignment-ready tilt-series stack."""
 
@@ -241,6 +316,16 @@ def prepare_tilt_series(
             "storage_role": resolved_storage_policy.storage_role,
             "retention_policy": resolved_storage_policy.retention_policy,
             "can_recompute": resolved_storage_policy.can_recompute,
+            **_motioncor3_cli_parameters(
+                executable=motioncor3_executable,
+                gpu=motioncor3_gpu,
+                patch_x=motioncor3_patch_x,
+                patch_y=motioncor3_patch_y,
+                pixel_size=motioncor3_pixel_size,
+                gain=motioncor3_gain,
+                gain_rotation=motioncor3_gain_rotation,
+                gain_flip=motioncor3_gain_flip,
+            ),
         },
     )
 
@@ -970,15 +1055,45 @@ def qc(project: Annotated[Path, typer.Option(help="Project directory.")]) -> Non
     )
 
 
+def _motioncor3_cli_parameters(
+    *,
+    executable: Path | None,
+    gpu: int,
+    patch_x: int,
+    patch_y: int,
+    pixel_size: float | None,
+    gain: Path | None,
+    gain_rotation: int,
+    gain_flip: int,
+) -> dict[str, object]:
+    parameters: dict[str, object] = {
+        "motioncor3_gpu_ids": [gpu],
+        "motioncor3_patch_x": patch_x,
+        "motioncor3_patch_y": patch_y,
+        "motioncor3_gain_rotation": gain_rotation,
+        "motioncor3_gain_flip": gain_flip,
+    }
+    if executable is not None:
+        parameters["motioncor3_executable"] = executable
+    if pixel_size is not None:
+        parameters["motioncor3_pixel_size_angstrom"] = pixel_size
+    if gain is not None:
+        parameters["motioncor3_gain_reference"] = gain
+    return parameters
+
+
 def _motion_backend(name: str) -> MotionCorrectionBackend:
     normalized = name.lower()
     if normalized == "average":
         return AverageMotionCorrectionBackend()
     if normalized in ("phase-corr", "phase_corr"):
         return PhaseCorrelationMotionCorrectionBackend()
+    if normalized in ("motioncor3", "motioncor-3"):
+        return MotionCor3MotionCorrectionBackend()
 
     raise typer.BadParameter(
-        f"unsupported motion-correction backend {name!r}; expected: average, phase-corr",
+        "unsupported motion-correction backend "
+        f"{name!r}; expected: average, phase-corr, motioncor3",
         param_hint="backend",
     )
 

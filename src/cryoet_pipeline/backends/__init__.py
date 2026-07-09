@@ -24,6 +24,7 @@ from cryoet_pipeline.backends.fine_alignment import (
 )
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
+    MotionCor3MotionCorrectionBackend,
     PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
 )
@@ -55,6 +56,7 @@ from cryoet_pipeline.backends.stack import (
 
 __all__ = [
     "AverageMotionCorrectionBackend",
+    "MotionCor3MotionCorrectionBackend",
     "PhaseCorrelationMotionCorrectionBackend",
     "BackendContext",
     "CoarseAlignmentQcBackend",

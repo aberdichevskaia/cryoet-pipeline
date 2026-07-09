@@ -1,0 +1,6 @@
+comparam.prenewst.newstack.BinByFactor = 1
+comparam.preblend.blendmont.BinByFactor = 1
+runtime.Fiducials.any.trackingMethod = 0
+runtime.Fiducials.any.seedingMethod = 3
+runtime.AlignedStack.any.binByFactor = 1
+runtime.Reconstruction.any.doBackprojAlso = 1

@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from cryoet_pipeline import cli
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import ImodTiltXcorrAlignmentBackend
+from cryoet_pipeline.backends.motion import MotionCor3MotionCorrectionBackend
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -221,6 +222,98 @@ def test_correct_motion_command_rejects_unknown_storage_policy(tmp_path: Path) -
 
     assert result.exit_code != 0
     assert "unsupported storage policy" in result.output
+
+
+def test_correct_motion_command_passes_motioncor3_configuration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, np.ones((2, 2, 2), dtype=np.float32))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(movie_path).model_dump_json())
+    registry_path = tmp_path / "artifacts.json"
+    ArtifactRegistry.empty().write(registry_path)
+    executable = tmp_path / "MotionCor3"
+    executable.touch()
+    gain_path = tmp_path / "gain.mrc"
+    _write_mrc(gain_path, np.ones((2, 2), dtype=np.float32))
+    captured: dict[str, object] = {}
+
+    class FakeMotionCor3Backend:
+        name = "motioncor3"
+
+        def correct(
+            self,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> list[Artifact]:
+            captured["manifest"] = manifest
+            captured["context"] = context
+            output_path = context.output_dir / "fake-motioncor3.mrc"
+            _write_mrc(output_path, np.ones((2, 2), dtype=np.float32))
+            return [
+                Artifact(
+                    id="TS_TEST:corrected_projection:000",
+                    kind=ArtifactKind.CORRECTED_PROJECTION,
+                    path=output_path,
+                    shape=(2, 2),
+                    dtype="float32",
+                    axis_order=AxisOrder.YX,
+                    pixel_spacing_angstrom=0.7,
+                )
+            ]
+
+    monkeypatch.setattr(cli, "_motion_backend", lambda name: FakeMotionCor3Backend())
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "correct-motion",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--backend",
+            "motioncor3",
+            "--device",
+            "cuda",
+            "--motioncor3-executable",
+            str(executable),
+            "--motioncor3-gpu",
+            "2",
+            "--motioncor3-patch-x",
+            "7",
+            "--motioncor3-patch-y",
+            "5",
+            "--motioncor3-pixel-size",
+            "0.7",
+            "--motioncor3-gain",
+            str(gain_path),
+            "--motioncor3-gain-rotation",
+            "1",
+            "--motioncor3-gain-flip",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    context = captured["context"]
+    assert context.device == DevicePreference.CUDA
+    assert context.parameters["motioncor3_executable"] == executable
+    assert context.parameters["motioncor3_gpu_ids"] == [2]
+    assert context.parameters["motioncor3_patch_x"] == 7
+    assert context.parameters["motioncor3_patch_y"] == 5
+    assert context.parameters["motioncor3_pixel_size_angstrom"] == 0.7
+    assert context.parameters["motioncor3_gain_reference"] == gain_path
+    assert context.parameters["motioncor3_gain_rotation"] == 1
+    assert context.parameters["motioncor3_gain_flip"] == 2
+
+
+def test_motion_backend_selector_supports_motioncor3() -> None:
+    assert isinstance(cli._motion_backend("motioncor3"), MotionCor3MotionCorrectionBackend)
 
 
 def test_prepare_tilt_series_command_corrects_movies_and_builds_stack(

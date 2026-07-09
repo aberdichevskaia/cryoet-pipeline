@@ -22,8 +22,9 @@ to attach a future copilot or web cockpit without rewriting processing code.
 - Storage: Zarr artifact store plus policy-controlled MRC/IMOD exports.
 - Third-party policy: adapters first; vendor or fork only when real
   customization requires it.
-- Motion correction: first backend is average-only for baseline/debugging;
-  global phase-correlation or third-party adapters can follow.
+- Motion correction: average-only and global phase-correlation implementations
+  remain local baselines; MotionCor3 is available through a Linux/CUDA adapter
+  with the same artifact contract.
 - Alignment: first backend is IMOD `tiltxcorr` plus `xftoxg` for coarse global
   alignment, followed by a separate fiducial-tracking/fine-alignment backend.
   `tttsa`, AreTomo, and other tools remain replaceable adapter options.
@@ -42,7 +43,8 @@ to attach a future copilot or web cockpit without rewriting processing code.
 3. SerialEM `.mdoc` parser and EMPIAR file mapping.
 4. Backend protocols for motion correction, alignment, and reconstruction.
 5. Artifact registry with storage roles, retention policies, and size tracking.
-6. Average-only motion-correction backend and tilt-stack preparation backend.
+6. Average-only, phase-correlation, and MotionCor3 motion-correction backends,
+   plus a tilt-stack preparation backend.
 7. `prepare-tilt-series` command that corrects movies and prepares
    alignment-ready stack/angle artifacts as one user-facing step.
 8. Canonical alignment models plus an IMOD coarse-alignment adapter that
