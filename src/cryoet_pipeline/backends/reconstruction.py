@@ -150,13 +150,10 @@ class ImodTiltReconstructionBackend:
             _write_command_log(paths.log, command, result)
             if result.returncode != 0:
                 raise RuntimeError(
-                    f"IMOD tilt failed with exit code {result.returncode}; "
-                    f"see {paths.log}"
+                    f"IMOD tilt failed with exit code {result.returncode}; see {paths.log}"
                 )
             if not temporary_rec.is_file():
-                raise RuntimeError(
-                    f"IMOD tilt did not write reconstruction: {temporary_rec}"
-                )
+                raise RuntimeError(f"IMOD tilt did not write reconstruction: {temporary_rec}")
 
             rec_info = validate_complete_mrc(temporary_rec)
             expected_rec_shape = (
@@ -216,8 +213,7 @@ class ImodTiltReconstructionBackend:
                 warnings=warnings,
             )
             temporary_report.write_text(
-                json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True)
-                + "\n"
+                json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
             )
 
             _replace_output(temporary_rec, paths.imod_rec)
@@ -241,6 +237,7 @@ class ImodTiltReconstructionBackend:
             parameters={
                 "backend": self.name,
                 "tilt_series_id": manifest.tilt_series_id,
+                "tomogram_branch": "full",
                 "alignment_stage": alignment_result.stage,
                 "ctf_corrected": False,
                 "included_z_values": included_z_values,
@@ -387,9 +384,7 @@ def _reconstruction_paths(
 ) -> _ReconstructionPaths:
     tomogram_dir = output_root / "tomograms" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "reconstruction"
-    prefix = (
-        f"{manifest.tilt_series_id}_{alignment_stage}_bin{output_binning}"
-    )
+    prefix = f"{manifest.tilt_series_id}_{alignment_stage}_bin{output_binning}"
     return _ReconstructionPaths(
         tomogram_dir=tomogram_dir,
         qc_dir=qc_dir,
@@ -406,9 +401,7 @@ def _reconstruction_paths(
 
 def _validate_final_aligned_stack(tilt_stack: Artifact) -> tuple[int, int, int]:
     if tilt_stack.kind is not ArtifactKind.ALIGNED_TILT_STACK:
-        raise ValueError(
-            f"expected aligned tilt stack artifact, got {tilt_stack.kind}"
-        )
+        raise ValueError(f"expected aligned tilt stack artifact, got {tilt_stack.kind}")
     if tilt_stack.parameters.get("purpose") != "final_alignment":
         raise ValueError("reconstruction requires a final fine-aligned stack")
     if tilt_stack.parameters.get("alignment_stage") != "fine":
@@ -420,9 +413,7 @@ def _validate_final_aligned_stack(tilt_stack: Artifact) -> tuple[int, int, int]:
         raise ValueError(f"expected aligned tilt stack shape (tilts, y, x), got {info.shape}")
     shape = info.shape
     if tilt_stack.shape is not None and tuple(tilt_stack.shape) != shape:
-        raise ValueError(
-            f"aligned stack artifact shape {tilt_stack.shape} does not match {shape}"
-        )
+        raise ValueError(f"aligned stack artifact shape {tilt_stack.shape} does not match {shape}")
     return shape
 
 
@@ -436,13 +427,10 @@ def _load_alignment(
     result = TiltAlignment.model_validate_json(alignment.path.read_text())
     if result.tilt_series_id != manifest.tilt_series_id:
         raise ValueError(
-            f"alignment is for {result.tilt_series_id}, expected "
-            f"{manifest.tilt_series_id}"
+            f"alignment is for {result.tilt_series_id}, expected {manifest.tilt_series_id}"
         )
     if alignment.id not in tilt_stack.parent_ids:
-        raise ValueError(
-            f"aligned stack {tilt_stack.id} is not derived from {alignment.id}"
-        )
+        raise ValueError(f"aligned stack {tilt_stack.id} is not derived from {alignment.id}")
     if result.stage != "fine" or alignment.parameters.get("stage") != "fine":
         raise ValueError("reconstruction requires fine alignment")
     return result
@@ -454,9 +442,7 @@ def _included_z_values(tilt_stack: Artifact, num_tilts: int) -> list[int]:
         raise ValueError("aligned stack must record integer included_z_values")
     included = cast(list[int], value)
     if len(included) != num_tilts:
-        raise ValueError(
-            f"aligned stack has {num_tilts} images but {len(included)} z values"
-        )
+        raise ValueError(f"aligned stack has {num_tilts} images but {len(included)} z values")
     if len(included) != len(set(included)):
         raise ValueError("aligned stack included_z_values must be unique")
     return included
@@ -476,16 +462,13 @@ def _solved_tilt_angles(tilt_stack: Artifact, num_tilts: int) -> list[float]:
         try:
             angle = float(line)
         except ValueError as exc:
-            raise ValueError(
-                f"{path}:{line_number}: invalid solved tilt angle"
-            ) from exc
+            raise ValueError(f"{path}:{line_number}: invalid solved tilt angle") from exc
         if not math.isfinite(angle):
             raise ValueError(f"{path}:{line_number}: tilt angle must be finite")
         angles.append(angle)
     if len(angles) != num_tilts:
         raise ValueError(
-            f"final aligned stack has {num_tilts} images but "
-            f"{len(angles)} solved tilt angles"
+            f"final aligned stack has {num_tilts} images but {len(angles)} solved tilt angles"
         )
     return angles
 
@@ -497,8 +480,7 @@ def _reconstruction_geometry(
     output_binning: int,
 ) -> _ReconstructionGeometry:
     explicit = any(
-        key in context.parameters
-        for key in ("thickness", "x_axis_tilt_deg", "z_shift_px")
+        key in context.parameters for key in ("thickness", "x_axis_tilt_deg", "z_shift_px")
     )
     if "thickness" in context.parameters:
         thickness = _positive_int_parameter(context, "thickness", default=1)
@@ -691,9 +673,7 @@ def _bounded_float_parameter(
         raise TypeError(f"context parameter {key!r} must be numeric")
     normalized = float(value)
     if not math.isfinite(normalized) or not minimum <= normalized <= maximum:
-        raise ValueError(
-            f"context parameter {key!r} must be between {minimum} and {maximum}"
-        )
+        raise ValueError(f"context parameter {key!r} must be between {minimum} and {maximum}")
     return normalized
 
 

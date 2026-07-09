@@ -39,6 +39,14 @@ class ArtifactKind(StrEnum):
     QC = "qc"
 
 
+class TomogramBranch(StrEnum):
+    """Logical tomogram branches used by post-reconstruction steps."""
+
+    FULL = "full"
+    EVEN = "even"
+    ODD = "odd"
+
+
 class StorageRole(StrEnum):
     """How an artifact should be treated by storage and cleanup policies."""
 
@@ -219,13 +227,8 @@ class TiltAlignment(BaseModel):
     def validate_input_quality(self) -> TiltAlignment:
         if self.input_projection_std:
             if len(self.input_projection_std) != len(self.transforms):
-                raise ValueError(
-                    "input projection standard deviations must match transform count"
-                )
-            if not all(
-                isfinite(value) and value >= 0.0
-                for value in self.input_projection_std
-            ):
+                raise ValueError("input projection standard deviations must match transform count")
+            if not all(isfinite(value) and value >= 0.0 for value in self.input_projection_std):
                 raise ValueError(
                     "input projection standard deviations must be finite and nonnegative"
                 )
@@ -424,9 +427,45 @@ class TomogramQc(BaseModel):
             raise ValueError("tomogram QC statistics must be finite")
         required_slices = {"xy", "xz", "yz"}
         if set(self.central_slice_paths) != required_slices:
-            raise ValueError(
-                "central_slice_paths must contain exactly: xy, xz, yz"
-            )
+            raise ValueError("central_slice_paths must contain exactly: xy, xz, yz")
+        return self
+
+
+class TomogramRestorationQc(BaseModel):
+    """Machine-readable statistics for a restored tomogram."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    input_tomogram_id: str
+    restored_tomogram_id: str
+    tomogram_branch: TomogramBranch = TomogramBranch.FULL
+    shape: tuple[int, int, int]
+    voxel_spacing_angstrom: float = Field(gt=0.0)
+    minimum: float
+    maximum: float
+    mean: float
+    standard_deviation: float = Field(ge=0.0)
+    finite: bool
+    command_log_path: Path
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> TomogramRestorationQc:
+        values = (
+            self.voxel_spacing_angstrom,
+            self.minimum,
+            self.maximum,
+            self.mean,
+            self.standard_deviation,
+        )
+        if not all(isfinite(value) for value in values):
+            raise ValueError("restoration QC statistics must be finite")
+        if any(axis_size < 1 for axis_size in self.shape):
+            raise ValueError("restored tomogram shape must be positive")
         return self
 
 

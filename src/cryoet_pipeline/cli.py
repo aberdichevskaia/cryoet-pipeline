@@ -37,6 +37,7 @@ from cryoet_pipeline.backends.motion import (
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
+    DenoisingBackend,
     FiducialSeedBackend,
     FiducialTrackingBackend,
     FinalAlignedStackBackend,
@@ -48,6 +49,10 @@ from cryoet_pipeline.backends.protocols import (
 from cryoet_pipeline.backends.reconstruction import (
     ImodTiltReconstructionBackend,
     reconstruct_and_register,
+)
+from cryoet_pipeline.backends.restoration import (
+    IsoNet2RestorationBackend,
+    restore_and_register,
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
 from cryoet_pipeline.empiar import (
@@ -382,9 +387,7 @@ def align_tilt_series(
     ] = 0.2,
     tilt_axis_angle: Annotated[
         float | None,
-        typer.Option(
-            help="IMOD tilt-axis angle in degrees; defaults to mdoc RotationAngle - 90."
-        ),
+        typer.Option(help="IMOD tilt-axis angle in degrees; defaults to mdoc RotationAngle - 90."),
     ] = None,
     imod_dir: Annotated[
         Path | None,
@@ -935,8 +938,7 @@ def reconstruct_tomogram(
             min=-90.0,
             max=90.0,
             help=(
-                "Specimen X-axis tilt in degrees; defaults to the "
-                "fine-alignment surface analysis."
+                "Specimen X-axis tilt in degrees; defaults to the fine-alignment surface analysis."
             ),
         ),
     ] = None,
@@ -1016,6 +1018,79 @@ def reconstruct_tomogram(
     typer.echo(f"wrote canonical tomogram: {tomogram.path}")
     typer.echo(f"wrote IMOD reconstruction: {tomogram.parameters['imod_rec_path']}")
     typer.echo(f"wrote reconstruction QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("restore-tomogram")
+def restore_tomogram(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for restored tomograms.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Tomogram restoration backend to use."),
+    ] = "isonet2",
+    isonet2_executable: Annotated[
+        Path | None,
+        typer.Option(help="IsoNet2 executable path when it is not on PATH."),
+    ] = None,
+    isonet2_arg: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--isonet2-arg",
+            help=(
+                "IsoNet2 argument token. May include {input}, {output}, and "
+                "{voxel_spacing_angstrom}; repeat to override the default command."
+            ),
+        ),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite restored tomogram, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Restore a reconstructed tomogram and register a canonical Zarr result."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _restoration_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+    }
+    if isonet2_executable is not None:
+        parameters["isonet2_executable"] = isonet2_executable
+    if isonet2_arg is not None:
+        parameters["isonet2_args"] = isonet2_arg
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = restore_and_register(
+        selected_backend,
+        tomogram,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    restored, qc_report = artifacts
+    typer.echo(f"wrote restored tomogram: {restored.path}")
+    typer.echo(f"wrote restoration QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
     typer.echo(f"updated {registry}")
 
@@ -1126,8 +1201,7 @@ def _fiducial_seed_backend(name: str) -> FiducialSeedBackend:
         return ImodAutofidseedBackend()
 
     raise typer.BadParameter(
-        f"unsupported fiducial seed backend {name!r}; "
-        "expected: imod-autofidseed",
+        f"unsupported fiducial seed backend {name!r}; expected: imod-autofidseed",
         param_hint="backend",
     )
 
@@ -1138,8 +1212,7 @@ def _fiducial_tracking_backend(name: str) -> FiducialTrackingBackend:
         return ImodBeadtrackBackend()
 
     raise typer.BadParameter(
-        f"unsupported fiducial tracking backend {name!r}; "
-        "expected: imod-beadtrack",
+        f"unsupported fiducial tracking backend {name!r}; expected: imod-beadtrack",
         param_hint="backend",
     )
 
@@ -1150,8 +1223,7 @@ def _fine_alignment_backend(name: str) -> FineAlignmentBackend:
         return ImodTiltalignBackend()
 
     raise typer.BadParameter(
-        f"unsupported fine-alignment backend {name!r}; "
-        "expected: imod-tiltalign",
+        f"unsupported fine-alignment backend {name!r}; expected: imod-tiltalign",
         param_hint="backend",
     )
 
@@ -1162,8 +1234,7 @@ def _final_aligned_stack_backend(name: str) -> FinalAlignedStackBackend:
         return ImodFinalAlignedStackBackend()
 
     raise typer.BadParameter(
-        f"unsupported final aligned-stack backend {name!r}; "
-        "expected: imod-newstack",
+        f"unsupported final aligned-stack backend {name!r}; expected: imod-newstack",
         param_hint="backend",
     )
 
@@ -1179,6 +1250,17 @@ def _reconstruction_backend(name: str) -> ReconstructionBackend:
     )
 
 
+def _restoration_backend(name: str) -> DenoisingBackend:
+    normalized = name.lower()
+    if normalized == "isonet2":
+        return IsoNet2RestorationBackend()
+
+    raise typer.BadParameter(
+        f"unsupported restoration backend {name!r}; expected: isonet2",
+        param_hint="backend",
+    )
+
+
 def _tilt_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
@@ -1190,7 +1272,25 @@ def _tilt_stack_artifact(
     ]
     if len(matches) != 1:
         raise typer.BadParameter(
-            f"expected exactly one tilt stack for {manifest.tilt_series_id}, "
+            f"expected exactly one tilt stack for {manifest.tilt_series_id}, found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _tomogram_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.TOMOGRAM)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("tomogram_branch", "full") == "full"
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one full tomogram for {manifest.tilt_series_id}, "
             f"found {len(matches)}",
             param_hint="registry",
         )

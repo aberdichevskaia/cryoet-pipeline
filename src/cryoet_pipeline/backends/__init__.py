@@ -48,6 +48,10 @@ from cryoet_pipeline.backends.reconstruction import (
     ImodTiltReconstructionBackend,
     reconstruct_and_register,
 )
+from cryoet_pipeline.backends.restoration import (
+    IsoNet2RestorationBackend,
+    restore_and_register,
+)
 from cryoet_pipeline.backends.stack import (
     SimpleTiltStackBackend,
     build_stack_and_register,
@@ -73,6 +77,7 @@ __all__ = [
     "ImodTiltXcorrAlignmentBackend",
     "ImodCoarseAlignmentQcBackend",
     "ImodTiltReconstructionBackend",
+    "IsoNet2RestorationBackend",
     "MotionCorrectionBackend",
     "PickingBackend",
     "ReconstructionBackend",
@@ -90,6 +95,7 @@ __all__ = [
     "parse_imod_xf",
     "parse_tiltalign_log",
     "reconstruct_and_register",
+    "restore_and_register",
     "track_fiducials_and_register",
     "write_tilt_angles",
 ]

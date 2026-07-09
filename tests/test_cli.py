@@ -13,6 +13,7 @@ from cryoet_pipeline import cli
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import ImodTiltXcorrAlignmentBackend
 from cryoet_pipeline.backends.motion import MotionCor3MotionCorrectionBackend
+from cryoet_pipeline.backends.restoration import IsoNet2RestorationBackend
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -175,9 +176,7 @@ def test_correct_motion_command_supports_working_zarr_storage_policy(
     assert result.exit_code == 0
     assert "storage policy: working" in result.output
 
-    artifact = ArtifactRegistry.load(registry_path).by_kind(
-        ArtifactKind.CORRECTED_PROJECTION
-    )[0]
+    artifact = ArtifactRegistry.load(registry_path).by_kind(ArtifactKind.CORRECTED_PROJECTION)[0]
     assert artifact.path == tmp_path / "outputs/corrected/TS_TEST/TS_TEST_000_avg.zarr"
     assert artifact.path.is_dir()
     assert artifact.storage_role == StorageRole.CACHE
@@ -316,6 +315,10 @@ def test_motion_backend_selector_supports_motioncor3() -> None:
     assert isinstance(cli._motion_backend("motioncor3"), MotionCor3MotionCorrectionBackend)
 
 
+def test_restoration_backend_selector_supports_isonet2() -> None:
+    assert isinstance(cli._restoration_backend("isonet2"), IsoNet2RestorationBackend)
+
+
 def test_prepare_tilt_series_command_corrects_movies_and_builds_stack(
     tmp_path: Path,
 ) -> None:
@@ -325,9 +328,7 @@ def test_prepare_tilt_series_command_corrects_movies_and_builds_stack(
     _write_mrc(second_movie, np.full((2, 2, 2), 20, dtype=np.float32))
     manifest_path = tmp_path / "manifest.json"
     manifest_path.write_text(
-        _manifest_from_movies(
-            [(first_movie, 0, 0.0), (second_movie, 1, 3.0)]
-        ).model_dump_json()
+        _manifest_from_movies([(first_movie, 0, 0.0), (second_movie, 1, 3.0)]).model_dump_json()
     )
     registry_path = tmp_path / "artifacts.json"
     ArtifactRegistry.empty().write(registry_path)
@@ -481,9 +482,7 @@ def test_qc_coarse_alignment_command_updates_registry(
     registry.extend([stack_artifact, alignment_artifact])
     registry.write(registry_path)
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(
-        _manifest(tmp_path / "movie.mrc").model_dump_json()
-    )
+    manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
 
     class FakeQcBackend:
         name = "fake"
@@ -930,6 +929,109 @@ def test_reconstruct_tomogram_command_updates_registry(
     assert "QC status: warning" in result.output
     updated = ArtifactRegistry.load(registry_path)
     assert len(updated.by_kind(ArtifactKind.TOMOGRAM)) == 1
+
+
+def test_restore_tomogram_command_updates_registry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tomogram_path = tmp_path / "tomogram.zarr"
+    zarr.save(tomogram_path, np.ones((2, 3, 4), dtype=np.float32))
+    tomogram = Artifact(
+        id="TS_TEST:tomogram:fine",
+        kind=ArtifactKind.TOMOGRAM,
+        path=tomogram_path,
+        shape=(2, 3, 4),
+        dtype="float32",
+        axis_order=AxisOrder.ZYX,
+        pixel_spacing_angstrom=13.5,
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "tomogram_branch": "full",
+        },
+    )
+    registry_path = tmp_path / "artifacts.json"
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    registry.write(registry_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
+    executable = tmp_path / "isonet.py"
+    executable.touch()
+
+    class FakeRestorationBackend:
+        name = "isonet2"
+
+        def denoise(
+            self,
+            input_tomogram: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+        ) -> Artifact:
+            assert input_tomogram == tomogram
+            assert context.parameters["isonet2_executable"] == executable
+            assert context.parameters["isonet2_args"] == [
+                "predict",
+                "--input",
+                "{input}",
+                "--output",
+                "{output}",
+            ]
+            output_path = context.output_dir / "restored.zarr"
+            qc_path = context.output_dir / "restoration_qc.json"
+            output_path.mkdir(parents=True)
+            qc_path.write_text("{}")
+            return Artifact(
+                id=f"{manifest.tilt_series_id}:tomogram:full:isonet2",
+                kind=ArtifactKind.DENOISED_TOMOGRAM,
+                path=output_path,
+                parent_ids=[input_tomogram.id],
+                parameters={
+                    "backend": "isonet2",
+                    "tilt_series_id": manifest.tilt_series_id,
+                    "tomogram_branch": "full",
+                    "qc_path": str(qc_path),
+                },
+            )
+
+    monkeypatch.setattr(
+        cli,
+        "_restoration_backend",
+        lambda name: FakeRestorationBackend(),
+    )
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "restore-tomogram",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--isonet2-executable",
+            str(executable),
+            "--isonet2-arg",
+            "predict",
+            "--isonet2-arg",
+            "--input",
+            "--isonet2-arg",
+            "{input}",
+            "--isonet2-arg",
+            "--output",
+            "--isonet2-arg",
+            "{output}",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "wrote restored tomogram" in result.output
+    assert "QC status: pass" in result.output
+    updated = ArtifactRegistry.load(registry_path)
+    assert len(updated.by_kind(ArtifactKind.DENOISED_TOMOGRAM)) == 1
+    assert len(updated.by_kind(ArtifactKind.QC)) == 1
 
 
 def _manifest(movie_path: Path) -> TiltSeriesManifest:
