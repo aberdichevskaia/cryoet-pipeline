@@ -59,6 +59,12 @@ class IsoNet2RestorationBackend:
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         executable = _resolve_isonet2_executable(context)
+        model = _resolve_isonet2_model(context)
+        number_subtomos = _positive_int_parameter(
+            context,
+            "isonet2_number_subtomos",
+            default=100,
+        )
 
         paths.restoration_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
@@ -67,34 +73,57 @@ class IsoNet2RestorationBackend:
             dir=paths.restoration_dir.resolve(),
         ) as temporary_directory:
             temporary_root = Path(temporary_directory)
-            temporary_input = temporary_root / f"{manifest.tilt_series_id}_input.mrc"
-            temporary_output = temporary_root / f"{manifest.tilt_series_id}_restored.mrc"
+            isonet_input_dir = temporary_root / "isonet_input"
+            isonet_output_dir = temporary_root / "isonet_output"
+            temporary_input = isonet_input_dir / f"{manifest.tilt_series_id}.mrc"
+            temporary_star = temporary_root / "tomograms.star"
             temporary_zarr = temporary_root / f"{manifest.tilt_series_id}_restored.zarr"
             temporary_report = temporary_root / "isonet2_qc.json"
 
+            isonet_input_dir.mkdir()
+            isonet_output_dir.mkdir()
             _write_zarr_to_mrc(
                 tomogram.path,
                 temporary_input,
                 voxel_spacing_angstrom=voxel_spacing,
             )
-            command = _isonet2_command(
+            prepare_command = _isonet2_prepare_star_command(
+                executable,
+                input_dir=isonet_input_dir,
+                star_path=temporary_star,
+                voxel_spacing_angstrom=voxel_spacing,
+                number_subtomos=number_subtomos,
+            )
+            prepare_result = self._command_runner(prepare_command, cwd=temporary_root, env={})
+            _write_command_log(paths.log, [(prepare_command, prepare_result)])
+            if prepare_result.returncode != 0:
+                raise RuntimeError(
+                    f"IsoNet2 prepare_star failed with exit code "
+                    f"{prepare_result.returncode}; see {paths.log}"
+                )
+
+            predict_command = _isonet2_predict_command(
                 executable,
                 context,
-                input_path=temporary_input,
-                output_path=temporary_output,
-                voxel_spacing_angstrom=voxel_spacing,
+                star_path=temporary_star,
+                model_path=model,
+                output_dir=isonet_output_dir,
             )
-            result = self._command_runner(command, cwd=temporary_root, env={})
-            _write_command_log(paths.log, command, result)
-            if result.returncode != 0:
+            predict_result = self._command_runner(predict_command, cwd=temporary_root, env={})
+            _write_command_log(
+                paths.log,
+                [(prepare_command, prepare_result), (predict_command, predict_result)],
+            )
+            if predict_result.returncode != 0:
                 raise RuntimeError(
-                    f"IsoNet2 failed with exit code {result.returncode}; see {paths.log}"
+                    f"IsoNet2 predict failed with exit code {predict_result.returncode}; "
+                    f"see {paths.log}"
                 )
-            if not temporary_output.is_file():
-                raise RuntimeError(f"IsoNet2 did not write restored tomogram: {temporary_output}")
+
+            restored_mrc = _find_isonet2_restored_mrc(isonet_output_dir)
 
             statistics = _write_mrc_to_canonical_zarr(
-                temporary_output,
+                restored_mrc,
                 temporary_zarr,
                 expected_shape=shape,
                 voxel_spacing_angstrom=voxel_spacing,
@@ -139,6 +168,9 @@ class IsoNet2RestorationBackend:
                 "tomogram_branch": branch.value,
                 "input_tomogram_id": tomogram.id,
                 "restoration_method": "isonet2",
+                "isonet2_model_path": str(model),
+                "isonet2_number_subtomos": number_subtomos,
+                "isonet2_output_mrc_name": restored_mrc.name,
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
             },
@@ -292,41 +324,78 @@ def _resolve_isonet2_executable(context: BackendContext) -> Path:
     )
 
 
-def _isonet2_command(
+def _resolve_isonet2_model(context: BackendContext) -> Path:
+    configured = context.parameters.get("isonet2_model")
+    if not isinstance(configured, Path):
+        raise TypeError("context parameter 'isonet2_model' must be a Path")
+    if not configured.is_file():
+        raise FileNotFoundError(f"IsoNet2 model not found: {configured}")
+    return configured
+
+
+def _isonet2_prepare_star_command(
+    executable: Path,
+    *,
+    input_dir: Path,
+    star_path: Path,
+    voxel_spacing_angstrom: float,
+    number_subtomos: int,
+) -> list[str]:
+    return [
+        str(executable),
+        "prepare_star",
+        str(input_dir),
+        "--output_star",
+        str(star_path),
+        "--pixel_size",
+        f"{voxel_spacing_angstrom:.6f}",
+        "--number_subtomos",
+        str(number_subtomos),
+    ]
+
+
+def _isonet2_predict_command(
     executable: Path,
     context: BackendContext,
     *,
-    input_path: Path,
-    output_path: Path,
-    voxel_spacing_angstrom: float,
+    star_path: Path,
+    model_path: Path,
+    output_dir: Path,
 ) -> list[str]:
-    value = context.parameters.get(
-        "isonet2_args",
-        [
-            "predict",
-            "--input",
-            "{input}",
-            "--output",
-            "{output}",
-            "--pixel-size",
-            "{voxel_spacing_angstrom}",
-        ],
+    command = [
+        str(executable),
+        "predict",
+        str(star_path),
+        str(model_path),
+        "--output_dir",
+        str(output_dir),
+    ]
+    gpu_id = _optional_string_parameter(context, "isonet2_gpu_id")
+    if gpu_id is not None:
+        command.extend(["--gpuID", gpu_id])
+    cube_size = _positive_int_parameter(context, "isonet2_cube_size", default=64)
+    crop_size = _positive_int_parameter(context, "isonet2_crop_size", default=96)
+    command.extend(["--cube_size", str(cube_size), "--crop_size", str(crop_size)])
+    batch_size = _optional_positive_int_parameter(context, "isonet2_batch_size")
+    if batch_size is not None:
+        command.extend(["--batch_size", str(batch_size)])
+    normalize_percentile = _bool_parameter(context, "isonet2_normalize_percentile", default=True)
+    command.extend(["--normalize_percentile", str(normalize_percentile)])
+    return command
+
+
+def _find_isonet2_restored_mrc(output_dir: Path) -> Path:
+    candidates = sorted(
+        path
+        for path in output_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".mrc", ".rec"}
     )
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        raise TypeError("context parameter 'isonet2_args' must be a sequence of strings")
-    replacements = {
-        "{input}": str(input_path),
-        "{output}": str(output_path),
-        "{voxel_spacing_angstrom}": f"{voxel_spacing_angstrom:.6f}",
-    }
-    args: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            raise TypeError("context parameter 'isonet2_args' must contain strings")
-        for placeholder, replacement in replacements.items():
-            item = item.replace(placeholder, replacement)
-        args.append(item)
-    return [str(executable), *args]
+    if not candidates:
+        raise RuntimeError(f"IsoNet2 did not write a restored .mrc/.rec in {output_dir}")
+    if len(candidates) > 1:
+        joined = ", ".join(path.name for path in candidates)
+        raise RuntimeError(f"IsoNet2 wrote multiple restored volumes in {output_dir}: {joined}")
+    return candidates[0]
 
 
 def _write_zarr_to_mrc(
@@ -390,15 +459,17 @@ def _write_mrc_to_canonical_zarr(
 
 def _write_command_log(
     path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
+    command_results: Sequence[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
 ) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
+    sections = []
+    for command, result in command_results:
+        sections.append(
+            f"$ {shlex.join(command)}\n\n"
+            f"[stdout]\n{result.stdout or ''}\n"
+            f"[stderr]\n{result.stderr or ''}\n"
+            f"[exit_code]\n{result.returncode}\n"
+        )
+    path.write_text("\n\n".join(sections))
 
 
 def _replace_output(source: Path, destination: Path) -> None:
@@ -418,6 +489,42 @@ def _bool_parameter(context: BackendContext, key: str, *, default: bool) -> bool
     value = context.parameters.get(key, default)
     if not isinstance(value, bool):
         raise TypeError(f"context parameter {key!r} must be a bool")
+    return value
+
+
+def _positive_int_parameter(
+    context: BackendContext,
+    key: str,
+    *,
+    default: int,
+) -> int:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value < 1:
+        raise ValueError(f"context parameter {key!r} must be at least 1")
+    return value
+
+
+def _optional_positive_int_parameter(context: BackendContext, key: str) -> int | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value < 1:
+        raise ValueError(f"context parameter {key!r} must be at least 1")
+    return value
+
+
+def _optional_string_parameter(context: BackendContext, key: str) -> str | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"context parameter {key!r} must be a string")
+    if not value:
+        raise ValueError(f"context parameter {key!r} must not be empty")
     return value
 
 

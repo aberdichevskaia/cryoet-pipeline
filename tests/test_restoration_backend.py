@@ -31,7 +31,9 @@ def test_isonet2_restoration_writes_canonical_zarr_and_qc(tmp_path: Path) -> Non
     registry.add(tomogram)
     executable = tmp_path / "isonet.py"
     executable.touch()
-    captured_command: list[str] = []
+    model = tmp_path / "isonet_model.h5"
+    model.touch()
+    captured_commands: list[list[str]] = []
 
     def fake_runner(
         command: Sequence[str],
@@ -40,15 +42,25 @@ def test_isonet2_restoration_writes_canonical_zarr_and_qc(tmp_path: Path) -> Non
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
-        captured_command.extend(command)
-        input_path = Path(command[command.index("--input") + 1])
-        output_path = Path(command[command.index("--output") + 1])
-        with mrcfile.open(input_path, permissive=True) as mrc:
-            np.testing.assert_allclose(mrc.data, np.arange(24, dtype=np.float32).reshape(2, 3, 4))
-            assert float(mrc.voxel_size.x) == pytest.approx(13.5)
+        command_list = list(command)
+        captured_commands.append(command_list)
+        if command_list[1] == "prepare_star":
+            input_dir = Path(command_list[2])
+            input_path = input_dir / "TS_TEST.mrc"
+            with mrcfile.open(input_path, permissive=True) as mrc:
+                np.testing.assert_allclose(
+                    mrc.data,
+                    np.arange(24, dtype=np.float32).reshape(2, 3, 4),
+                )
+                assert float(mrc.voxel_size.x) == pytest.approx(13.5)
+            Path(command_list[command_list.index("--output_star") + 1]).write_text("star")
+            return subprocess.CompletedProcess(command, 0, stdout="star", stderr="")
+
+        output_dir = Path(command_list[command_list.index("--output_dir") + 1])
+        output_path = output_dir / "TS_TEST_corrected.mrc"
         with mrcfile.new(output_path, overwrite=True) as output:
             output.set_data(np.full((2, 3, 4), 7.0, dtype=np.float32))
-        return subprocess.CompletedProcess(command, 0, stdout="restored", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="predicted", stderr="")
 
     artifacts = restore_and_register(
         IsoNet2RestorationBackend(fake_runner),
@@ -59,6 +71,9 @@ def test_isonet2_restoration_writes_canonical_zarr_and_qc(tmp_path: Path) -> Non
             device=DevicePreference.CPU,
             parameters={
                 "isonet2_executable": executable,
+                "isonet2_model": model,
+                "isonet2_gpu_id": "0",
+                "isonet2_batch_size": 2,
             },
         ),
         registry,
@@ -74,9 +89,23 @@ def test_isonet2_restoration_writes_canonical_zarr_and_qc(tmp_path: Path) -> Non
     assert restored.pixel_spacing_angstrom == pytest.approx(13.5)
     assert restored.parameters["tomogram_branch"] == "full"
     assert restored.parameters["input_tomogram_id"] == tomogram.id
-    assert captured_command[:2] == [str(executable), "predict"]
-    assert "--pixel-size" in captured_command
-    assert captured_command[captured_command.index("--pixel-size") + 1] == "13.500000"
+    assert restored.parameters["isonet2_model_path"] == str(model)
+    assert restored.parameters["isonet2_output_mrc_name"] == "TS_TEST_corrected.mrc"
+    assert captured_commands[0][:3] == [
+        str(executable),
+        "prepare_star",
+        str(captured_commands[0][2]),
+    ]
+    assert "--pixel_size" in captured_commands[0]
+    assert captured_commands[0][captured_commands[0].index("--pixel_size") + 1] == "13.500000"
+    assert captured_commands[1][:4] == [
+        str(executable),
+        "predict",
+        captured_commands[1][2],
+        str(model),
+    ]
+    assert captured_commands[1][captured_commands[1].index("--gpuID") + 1] == "0"
+    assert captured_commands[1][captured_commands[1].index("--batch_size") + 1] == "2"
 
     restored_zarr = zarr.open(restored.path, mode="r")
     np.testing.assert_allclose(restored_zarr[:], np.full((2, 3, 4), 7.0, dtype=np.float32))
@@ -102,6 +131,25 @@ def test_isonet2_restoration_requires_voxel_spacing(tmp_path: Path) -> None:
             BackendContext(
                 output_dir=tmp_path / "outputs",
                 device=DevicePreference.CPU,
+            ),
+        )
+
+
+def test_isonet2_restoration_requires_model_path(tmp_path: Path) -> None:
+    tomogram = _tomogram_artifact(tmp_path)
+    executable = tmp_path / "isonet.py"
+    executable.touch()
+
+    with pytest.raises(TypeError, match="isonet2_model"):
+        IsoNet2RestorationBackend().denoise(
+            tomogram,
+            _manifest(),
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CPU,
+                parameters={
+                    "isonet2_executable": executable,
+                },
             ),
         )
 

@@ -958,6 +958,8 @@ def test_restore_tomogram_command_updates_registry(
     manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
     executable = tmp_path / "isonet.py"
     executable.touch()
+    model = tmp_path / "isonet_model.h5"
+    model.touch()
 
     class FakeRestorationBackend:
         name = "isonet2"
@@ -970,13 +972,13 @@ def test_restore_tomogram_command_updates_registry(
         ) -> Artifact:
             assert input_tomogram == tomogram
             assert context.parameters["isonet2_executable"] == executable
-            assert context.parameters["isonet2_args"] == [
-                "predict",
-                "--input",
-                "{input}",
-                "--output",
-                "{output}",
-            ]
+            assert context.parameters["isonet2_model"] == model
+            assert context.parameters["isonet2_gpu_id"] == "0"
+            assert context.parameters["isonet2_cube_size"] == 80
+            assert context.parameters["isonet2_crop_size"] == 112
+            assert context.parameters["isonet2_batch_size"] == 2
+            assert context.parameters["isonet2_number_subtomos"] == 25
+            assert context.parameters["isonet2_normalize_percentile"] is False
             output_path = context.output_dir / "restored.zarr"
             qc_path = context.output_dir / "restoration_qc.json"
             output_path.mkdir(parents=True)
@@ -1011,16 +1013,19 @@ def test_restore_tomogram_command_updates_registry(
             str(tmp_path / "outputs"),
             "--isonet2-executable",
             str(executable),
-            "--isonet2-arg",
-            "predict",
-            "--isonet2-arg",
-            "--input",
-            "--isonet2-arg",
-            "{input}",
-            "--isonet2-arg",
-            "--output",
-            "--isonet2-arg",
-            "{output}",
+            "--isonet2-model",
+            str(model),
+            "--isonet2-gpu-id",
+            "0",
+            "--isonet2-cube-size",
+            "80",
+            "--isonet2-crop-size",
+            "112",
+            "--isonet2-batch-size",
+            "2",
+            "--isonet2-number-subtomos",
+            "25",
+            "--no-isonet2-normalize-percentile",
             "--device",
             "cpu",
         ],

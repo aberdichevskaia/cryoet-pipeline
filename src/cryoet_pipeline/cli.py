@@ -1041,16 +1041,37 @@ def restore_tomogram(
         Path | None,
         typer.Option(help="IsoNet2 executable path when it is not on PATH."),
     ] = None,
-    isonet2_arg: Annotated[
-        list[str] | None,
+    isonet2_model: Annotated[
+        Path | None,
+        typer.Option(help="Trained IsoNet .h5 model path."),
+    ] = None,
+    isonet2_gpu_id: Annotated[
+        str | None,
+        typer.Option(help="GPU id string passed to IsoNet --gpuID, for example 0 or 0,1."),
+    ] = None,
+    isonet2_cube_size: Annotated[
+        int,
+        typer.Option(min=1, help="IsoNet prediction cube size."),
+    ] = 64,
+    isonet2_crop_size: Annotated[
+        int,
+        typer.Option(min=1, help="IsoNet prediction crop size."),
+    ] = 96,
+    isonet2_batch_size: Annotated[
+        int | None,
         typer.Option(
-            "--isonet2-arg",
-            help=(
-                "IsoNet2 argument token. May include {input}, {output}, and "
-                "{voxel_spacing_angstrom}; repeat to override the default command."
-            ),
+            min=1,
+            help="Optional IsoNet prediction batch size.",
         ),
     ] = None,
+    isonet2_number_subtomos: Annotated[
+        int,
+        typer.Option(min=1, help="Number of subtomograms recorded in the IsoNet star file."),
+    ] = 100,
+    isonet2_normalize_percentile: Annotated[
+        bool,
+        typer.Option(help="Pass IsoNet --normalize_percentile for prediction."),
+    ] = True,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -1071,8 +1092,16 @@ def restore_tomogram(
     }
     if isonet2_executable is not None:
         parameters["isonet2_executable"] = isonet2_executable
-    if isonet2_arg is not None:
-        parameters["isonet2_args"] = isonet2_arg
+    if isonet2_model is not None:
+        parameters["isonet2_model"] = isonet2_model
+    if isonet2_gpu_id is not None:
+        parameters["isonet2_gpu_id"] = isonet2_gpu_id
+    parameters["isonet2_cube_size"] = isonet2_cube_size
+    parameters["isonet2_crop_size"] = isonet2_crop_size
+    if isonet2_batch_size is not None:
+        parameters["isonet2_batch_size"] = isonet2_batch_size
+    parameters["isonet2_number_subtomos"] = isonet2_number_subtomos
+    parameters["isonet2_normalize_percentile"] = isonet2_normalize_percentile
     context = BackendContext(
         output_dir=out,
         device=resolve_device(device),
