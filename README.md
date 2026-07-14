@@ -131,7 +131,23 @@ cryoet reconstruct-tomogram \
   --out outputs/dev \
   --imod-dir /Applications/IMOD \
   --device cpu
+
+cryoet segment-tomogram \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --backend membrain-seg \
+  --membrain-executable /path/to/membrain \
+  --membrain-model /path/to/membrain_model.ckpt \
+  --device cuda
 ```
+
+`segment-tomogram` consumes the reconstructed canonical Zarr tomogram directly;
+IsoNet2 restoration is not required. The MemBrain-seg adapter exports a
+temporary MRC with voxel size metadata, runs the external `membrain segment`
+command, and canonicalizes the selected segmentation output back to Zarr. Use
+`--membrain-output-name` if MemBrain-seg writes multiple `.mrc`/`.rec` outputs
+and the adapter cannot infer the intended segmentation volume.
 
 On a Linux/NVIDIA processing host where MotionCor3 is already managed by the
 user or cluster, replace only the motion backend:

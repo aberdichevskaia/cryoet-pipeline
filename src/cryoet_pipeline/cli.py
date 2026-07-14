@@ -44,6 +44,7 @@ from cryoet_pipeline.backends.protocols import (
     FineAlignmentBackend,
     MotionCorrectionBackend,
     ReconstructionBackend,
+    SegmentationBackend,
     TiltAlignmentBackend,
 )
 from cryoet_pipeline.backends.reconstruction import (
@@ -53,6 +54,10 @@ from cryoet_pipeline.backends.reconstruction import (
 from cryoet_pipeline.backends.restoration import (
     IsoNet2RestorationBackend,
     restore_and_register,
+)
+from cryoet_pipeline.backends.segmentation import (
+    MemBrainSegSegmentationBackend,
+    segment_and_register,
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
 from cryoet_pipeline.empiar import (
@@ -1124,6 +1129,130 @@ def restore_tomogram(
     typer.echo(f"updated {registry}")
 
 
+@app.command("segment-tomogram")
+def segment_tomogram(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for segmentations.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Tomogram segmentation backend to use."),
+    ] = "membrain-seg",
+    membrain_executable: Annotated[
+        Path | None,
+        typer.Option(help="MemBrain-seg executable path when membrain is not on PATH."),
+    ] = None,
+    membrain_model: Annotated[
+        Path | None,
+        typer.Option(help="Pre-trained MemBrain-seg checkpoint path."),
+    ] = None,
+    membrain_rescale_patches: Annotated[
+        bool,
+        typer.Option(help="Pass MemBrain-seg patch rescaling for inference."),
+    ] = True,
+    membrain_out_pixel_size: Annotated[
+        float,
+        typer.Option(min=0.0, help="MemBrain-seg internal patch pixel size in angstrom."),
+    ] = 10.0,
+    membrain_store_probabilities: Annotated[
+        bool,
+        typer.Option(help="Ask MemBrain-seg to store probability maps."),
+    ] = False,
+    membrain_store_connected_components: Annotated[
+        bool,
+        typer.Option(help="Ask MemBrain-seg to store connected-component labels."),
+    ] = False,
+    membrain_connected_component_threshold: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Remove connected components smaller than this voxel count.",
+        ),
+    ] = None,
+    membrain_test_time_augmentation: Annotated[
+        bool,
+        typer.Option(help="Use MemBrain-seg test-time augmentation."),
+    ] = True,
+    membrain_store_uncertainty_map: Annotated[
+        bool,
+        typer.Option(help="Ask MemBrain-seg to store an uncertainty map."),
+    ] = False,
+    membrain_segmentation_threshold: Annotated[
+        float,
+        typer.Option(help="MemBrain-seg membrane score threshold."),
+    ] = 0.0,
+    membrain_sliding_window_size: Annotated[
+        int,
+        typer.Option(min=1, help="MemBrain-seg sliding-window size."),
+    ] = 160,
+    membrain_output_name: Annotated[
+        str | None,
+        typer.Option(help="Specific MemBrain-seg output .mrc/.rec name to canonicalize."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite segmentation, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Segment a reconstructed tomogram and register a canonical Zarr mask."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _segmentation_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "membrain_rescale_patches": membrain_rescale_patches,
+        "membrain_out_pixel_size": membrain_out_pixel_size,
+        "membrain_store_probabilities": membrain_store_probabilities,
+        "membrain_store_connected_components": membrain_store_connected_components,
+        "membrain_test_time_augmentation": membrain_test_time_augmentation,
+        "membrain_store_uncertainty_map": membrain_store_uncertainty_map,
+        "membrain_segmentation_threshold": membrain_segmentation_threshold,
+        "membrain_sliding_window_size": membrain_sliding_window_size,
+    }
+    if membrain_executable is not None:
+        parameters["membrain_executable"] = membrain_executable
+    if membrain_model is not None:
+        parameters["membrain_model"] = membrain_model
+    if membrain_connected_component_threshold is not None:
+        parameters["membrain_connected_component_threshold"] = (
+            membrain_connected_component_threshold
+        )
+    if membrain_output_name is not None:
+        parameters["membrain_output_name"] = membrain_output_name
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = segment_and_register(
+        selected_backend,
+        tomogram,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    segmentation, qc_report = artifacts
+    typer.echo(f"wrote segmentation: {segmentation.path}")
+    typer.echo(f"wrote segmentation QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
@@ -1286,6 +1415,17 @@ def _restoration_backend(name: str) -> DenoisingBackend:
 
     raise typer.BadParameter(
         f"unsupported restoration backend {name!r}; expected: isonet2",
+        param_hint="backend",
+    )
+
+
+def _segmentation_backend(name: str) -> SegmentationBackend:
+    normalized = name.lower()
+    if normalized == "membrain-seg":
+        return MemBrainSegSegmentationBackend()
+
+    raise typer.BadParameter(
+        f"unsupported segmentation backend {name!r}; expected: membrain-seg",
         param_hint="backend",
     )
 

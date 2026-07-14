@@ -52,6 +52,10 @@ from cryoet_pipeline.backends.restoration import (
     IsoNet2RestorationBackend,
     restore_and_register,
 )
+from cryoet_pipeline.backends.segmentation import (
+    MemBrainSegSegmentationBackend,
+    segment_and_register,
+)
 from cryoet_pipeline.backends.stack import (
     SimpleTiltStackBackend,
     build_stack_and_register,
@@ -78,6 +82,7 @@ __all__ = [
     "ImodCoarseAlignmentQcBackend",
     "ImodTiltReconstructionBackend",
     "IsoNet2RestorationBackend",
+    "MemBrainSegSegmentationBackend",
     "MotionCorrectionBackend",
     "PickingBackend",
     "ReconstructionBackend",
@@ -96,6 +101,7 @@ __all__ = [
     "parse_tiltalign_log",
     "reconstruct_and_register",
     "restore_and_register",
+    "segment_and_register",
     "track_fiducials_and_register",
     "write_tilt_angles",
 ]
