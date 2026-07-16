@@ -48,7 +48,7 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
         input_path = Path(command[command.index("-input") + 1])
         output_path = Path(command[command.index("-output") + 1])
         transform_path = Path(command[command.index("-xform") + 1])
-        assert command[command.index("-size") + 1] == "4,3"
+        assert command[command.index("-size") + 1] == "3,4"
         assert command[command.index("-taper") + 1] == "1,0"
         with mrcfile.open(input_path, permissive=True) as binned:
             expected = source_data[[3, 2, 0]].reshape(3, 4, 2, 3, 2).mean(
@@ -61,7 +61,7 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
         assert transforms[0][0:4] == pytest.approx((0.087, 0.996, -0.996, 0.087))
         assert transforms[0][4:] == pytest.approx((-2.0, 3.0))
         with mrcfile.new(output_path) as output:
-            output.set_data(np.zeros((3, 3, 4), dtype=np.float32))
+            output.set_data(np.zeros((3, 4, 3), dtype=np.float32))
             output.voxel_size = 1.4
         return subprocess.CompletedProcess(
             command,
@@ -84,7 +84,7 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
     )
 
     assert artifact.kind == ArtifactKind.ALIGNED_TILT_STACK
-    assert artifact.shape == (3, 3, 4)
+    assert artifact.shape == (3, 4, 3)
     assert artifact.axis_order == AxisOrder.TYX
     assert artifact.pixel_spacing_angstrom == pytest.approx(1.4)
     assert artifact.parameters["purpose"] == "final_alignment"
@@ -132,10 +132,10 @@ def test_final_stack_backend_rounds_canvas_up_for_partial_bins(
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
-        assert command[command.index("-size") + 1] == "5,4"
+        assert command[command.index("-size") + 1] == "4,5"
         output_path = Path(command[command.index("-output") + 1])
         with mrcfile.new(output_path) as output:
-            output.set_data(np.zeros((3, 4, 5), dtype=np.float32))
+            output.set_data(np.zeros((3, 5, 4), dtype=np.float32))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     artifact = ImodFinalAlignedStackBackend(fake_runner).build(
@@ -149,7 +149,7 @@ def test_final_stack_backend_rounds_canvas_up_for_partial_bins(
         ),
     )
 
-    assert artifact.shape == (3, 4, 5)
+    assert artifact.shape == (3, 5, 4)
 
 
 def _input_artifacts(

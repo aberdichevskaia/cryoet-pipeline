@@ -122,6 +122,7 @@ def test_imod_tiltalign_backend_writes_fine_alignment_and_qc(
         if program == "xfproduct":
             assert _path_after(command, "-in1").name == "tracking.prexg"
             assert _path_after(command, "-in2").is_file()
+            assert command[command.index("-ScaleShifts") + 1] == "1.0,2.000000"
             _path_after(command, "-output").write_text(
                 "0.087 0.996 -0.996 0.087 -4 6\n"
                 "0.087 0.996 -0.996 0.087 -2 2\n"
@@ -314,6 +315,7 @@ def test_imod_tiltalign_prunes_failure_level_point_and_reruns(
                 stderr="",
             )
         if program == "xfproduct":
+            assert command[command.index("-ScaleShifts") + 1] == "1.0,2.000000"
             _path_after(command, "-output").write_text(
                 "0.087 0.996 -0.996 0.087 0 0\n"
                 "0.087 0.996 -0.996 0.087 0 0\n"

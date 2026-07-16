@@ -456,6 +456,8 @@ class ImodTiltalignBackend:
                 str(metadata.prealign_transform.resolve()),
                 "-in2",
                 str(fine_transform),
+                "-ScaleShifts",
+                f"1.0,{float(metadata.tracking_binning):.6f}",
                 "-output",
                 str(final_transform),
             ]

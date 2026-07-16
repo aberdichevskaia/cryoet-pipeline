@@ -112,8 +112,8 @@ class ImodFinalAlignedStackBackend:
                 transform_by_z,
                 binning=output_binning,
             )
-            output_x = _ceil_div(stack_shape[1], output_binning)
-            output_y = _ceil_div(stack_shape[2], output_binning)
+            output_y = _ceil_div(stack_shape[1], output_binning)
+            output_x = _ceil_div(stack_shape[2], output_binning)
             command = [
                 str(newstack),
                 "-input",
@@ -161,8 +161,8 @@ class ImodFinalAlignedStackBackend:
         info = validate_complete_mrc(paths.stack)
         expected_shape = (
             len(alignment.transforms),
-            _ceil_div(stack_shape[2], output_binning),
             _ceil_div(stack_shape[1], output_binning),
+            _ceil_div(stack_shape[2], output_binning),
         )
         if info.shape != expected_shape:
             raise ValueError(
