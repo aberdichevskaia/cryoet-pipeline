@@ -34,6 +34,10 @@ from cryoet_pipeline.backends.motion import (
     PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
 )
+from cryoet_pipeline.backends.picking import (
+    PytomMatchPickBackend,
+    pick_and_register,
+)
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
@@ -43,6 +47,7 @@ from cryoet_pipeline.backends.protocols import (
     FinalAlignedStackBackend,
     FineAlignmentBackend,
     MotionCorrectionBackend,
+    PickingBackend,
     ReconstructionBackend,
     SegmentationBackend,
     TiltAlignmentBackend,
@@ -1253,6 +1258,150 @@ def segment_tomogram(
     typer.echo(f"updated {registry}")
 
 
+@app.command("pick-particles")
+def pick_particles(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for picks.")],
+    pytom_template: Annotated[
+        Path,
+        typer.Option(help="Template density map (MRC), resampled to the tomogram pixel size."),
+    ],
+    pytom_template_mask: Annotated[
+        Path,
+        typer.Option(help="Template mask (MRC), same box size as the template."),
+    ],
+    backend: Annotated[
+        str,
+        typer.Option(help="Particle picking backend to use."),
+    ] = "pytom-match-pick",
+    use_segmentation_mask: Annotated[
+        bool,
+        typer.Option(
+            help="Constrain picking to the registered membrane segmentation, if present."
+        ),
+    ] = True,
+    pytom_match_template_executable: Annotated[
+        Path | None,
+        typer.Option(
+            help="pytom_match_template.py path when it is not on PATH."
+        ),
+    ] = None,
+    pytom_extract_candidates_executable: Annotated[
+        Path | None,
+        typer.Option(
+            help="pytom_extract_candidates.py path when it is not on PATH."
+        ),
+    ] = None,
+    pytom_gpu_ids: Annotated[
+        str,
+        typer.Option(help="Comma-separated GPU ids passed to pytom_match_template.py -g."),
+    ] = "0",
+    pytom_particle_diameter: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Particle diameter, angstrom (exclusive with angular-search)."),
+    ] = None,
+    pytom_angular_search: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Angular search in degrees (mutually exclusive with diameter)."),
+    ] = None,
+    pytom_low_pass: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Low-pass filter resolution in angstrom."),
+    ] = None,
+    pytom_high_pass: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="High-pass filter resolution in angstrom."),
+    ] = None,
+    pytom_random_phase_correction: Annotated[
+        bool,
+        typer.Option(help="Enable phase-randomized background control (roughly doubles runtime)."),
+    ] = False,
+    pytom_number_of_false_positives: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Expected false positives for the automatic score cutoff."),
+    ] = None,
+    pytom_cut_off: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Hard LCCmax cutoff, overriding number-of-false-positives."),
+    ] = None,
+    pytom_tophat_filter: Annotated[
+        bool,
+        typer.Option(help="Apply the tophat-transform false-positive filter during extraction."),
+    ] = False,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite picks, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Pick particles from a reconstructed tomogram and register a canonical STAR result."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _picking_backend(backend)
+    supporting_artifacts: list[Artifact] = []
+    if use_segmentation_mask:
+        segmentation = _optional_segmentation_artifact(artifact_registry, tilt_series_manifest)
+        if segmentation is not None:
+            supporting_artifacts.append(segmentation)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "pytom_template": pytom_template,
+        "pytom_template_mask": pytom_template_mask,
+        "pytom_gpu_ids": pytom_gpu_ids,
+        "pytom_random_phase_correction": pytom_random_phase_correction,
+        "pytom_tophat_filter": pytom_tophat_filter,
+    }
+    if pytom_match_template_executable is not None:
+        parameters["pytom_match_template_executable"] = pytom_match_template_executable
+    if pytom_extract_candidates_executable is not None:
+        parameters["pytom_extract_candidates_executable"] = pytom_extract_candidates_executable
+    if pytom_particle_diameter is not None:
+        parameters["pytom_particle_diameter"] = pytom_particle_diameter
+    if pytom_angular_search is not None:
+        parameters["pytom_angular_search"] = pytom_angular_search
+    if pytom_low_pass is not None:
+        parameters["pytom_low_pass"] = pytom_low_pass
+    if pytom_high_pass is not None:
+        parameters["pytom_high_pass"] = pytom_high_pass
+    if pytom_number_of_false_positives is not None:
+        parameters["pytom_number_of_false_positives"] = pytom_number_of_false_positives
+    if pytom_cut_off is not None:
+        parameters["pytom_cut_off"] = pytom_cut_off
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = pick_and_register(
+        selected_backend,
+        tomogram,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        supporting_artifacts=supporting_artifacts,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    picks, qc_report = artifacts
+    typer.echo(f"wrote picks: {picks.path}")
+    typer.echo(f"wrote picking QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
@@ -1428,6 +1577,35 @@ def _segmentation_backend(name: str) -> SegmentationBackend:
         f"unsupported segmentation backend {name!r}; expected: membrain-seg",
         param_hint="backend",
     )
+
+
+def _picking_backend(name: str) -> PickingBackend:
+    normalized = name.lower()
+    if normalized == "pytom-match-pick":
+        return PytomMatchPickBackend()
+
+    raise typer.BadParameter(
+        f"unsupported picking backend {name!r}; expected: pytom-match-pick",
+        param_hint="backend",
+    )
+
+
+def _optional_segmentation_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact | None:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.SEGMENTATION)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) > 1:
+        raise typer.BadParameter(
+            f"expected at most one segmentation for {manifest.tilt_series_id}, "
+            f"found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0] if matches else None
 
 
 def _tilt_stack_artifact(

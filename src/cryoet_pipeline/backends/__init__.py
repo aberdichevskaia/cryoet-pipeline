@@ -28,6 +28,10 @@ from cryoet_pipeline.backends.motion import (
     PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
 )
+from cryoet_pipeline.backends.picking import (
+    PytomMatchPickBackend,
+    pick_and_register,
+)
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
@@ -85,6 +89,7 @@ __all__ = [
     "MemBrainSegSegmentationBackend",
     "MotionCorrectionBackend",
     "PickingBackend",
+    "PytomMatchPickBackend",
     "ReconstructionBackend",
     "SegmentationBackend",
     "SimpleTiltStackBackend",
@@ -99,6 +104,7 @@ __all__ = [
     "generate_seed_and_register",
     "parse_imod_xf",
     "parse_tiltalign_log",
+    "pick_and_register",
     "reconstruct_and_register",
     "restore_and_register",
     "segment_and_register",

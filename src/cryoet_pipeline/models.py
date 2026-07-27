@@ -469,6 +469,38 @@ class TomogramRestorationQc(BaseModel):
         return self
 
 
+class PicksQc(BaseModel):
+    """Machine-readable statistics for a particle-picking result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    input_tomogram_id: str
+    segmentation_id: str | None = None
+    picks_id: str
+    particle_count: int = Field(ge=0)
+    minimum_score: float | None = None
+    maximum_score: float | None = None
+    mean_score: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> PicksQc:
+        score_values = [
+            value
+            for value in (self.minimum_score, self.maximum_score, self.mean_score)
+            if value is not None
+        ]
+        if not all(isfinite(value) for value in score_values):
+            raise ValueError("picks QC score statistics must be finite")
+        if self.particle_count == 0 and score_values:
+            raise ValueError("picks QC cannot report score statistics with zero particles")
+        return self
+
+
 class Artifact(BaseModel):
     """Serializable record for any artifact written by the pipeline."""
 
