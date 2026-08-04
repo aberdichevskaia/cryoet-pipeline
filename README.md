@@ -45,8 +45,8 @@ browser-generated ZIP files can fail without a valid central directory. Download
 the two MVP tilt-series as individual files instead:
 
 ```bash
-cryoet download-empiar-10164 --dry-run
-cryoet download-empiar-10164
+cryoet download-empiar --out data/empiar-10164 --dry-run
+cryoet download-empiar --out data/empiar-10164
 ```
 
 This writes:
@@ -57,6 +57,44 @@ data/empiar-10164/data/frames/TS_43_*.mrc
 data/empiar-10164/data/mdoc-files/TS_01.mrc.mdoc
 data/empiar-10164/data/mdoc-files/TS_43.mrc.mdoc
 ```
+
+### Downloading a different EMPIAR deposition
+
+`download-empiar` only ships a built-in directory layout for EMPIAR-10164
+(`frames/` + `mdoc-files/`, `TS_<id>_*.mrc` frame names). Other depositions are
+organized however their depositor chose to organize them, so there is no
+generic auto-discovery — instead, describe the layout once in a small YAML
+file and pass it with `--layout`:
+
+```yaml
+# configs/empiar-layouts/11538-untreated.yaml
+groups:
+  - remote_dir: mdoc_files
+    file_pattern: "{tilt_series}.mrc.mdoc"
+  - remote_dir: Untreated_dataset
+    file_pattern: "{tilt_series}.mrc"
+```
+
+```bash
+cryoet download-empiar \
+  --out data/empiar-11538 \
+  --empiar-id 11538 \
+  --tilt-series TS_0002 \
+  --layout configs/empiar-layouts/11538-untreated.yaml \
+  --dry-run
+```
+
+Each `groups` entry names one remote subdirectory (relative to the
+deposition's `data/` root, as browsable at
+`https://ftp.ebi.ac.uk/empiar/world_availability/<id>/data/`) and a glob
+pattern identifying files that belong to one requested tilt-series id within
+it; `{tilt_series}` is substituted before matching, and `*`/`?` wildcards are
+supported for depositions with multiple files per tilt-series (like
+EMPIAR-10164's per-frame files). Copy
+[`configs/empiar-layouts/example.yaml`](configs/empiar-layouts/example.yaml)
+to a new file under the same directory and edit it for your deposition; only
+that example is tracked in git (see `.gitignore`) since most layouts are
+one-off/exploratory rather than a fixed part of the pipeline.
 
 Initialize a local project manifest after the files are present:
 

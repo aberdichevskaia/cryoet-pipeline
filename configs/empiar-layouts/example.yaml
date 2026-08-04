@@ -1,0 +1,20 @@
+# Template for `cryoet download-empiar --layout <this file>`.
+#
+# Copy this to a new, non-tracked file (e.g. 11538-untreated.yaml) and edit it
+# for your deposition. Only this example.yaml is committed; real layout files
+# are gitignored, since most are one-off/exploratory rather than a fixed part
+# of the pipeline (EMPIAR-10164 has a built-in layout and does not need one).
+#
+# Each group names one remote subdirectory, relative to the deposition's
+# `data/` root (browse it at
+# https://ftp.ebi.ac.uk/empiar/world_availability/<empiar_id>/data/), and a
+# glob pattern identifying files that belong to one requested tilt-series id
+# within it. `{tilt_series}` is substituted with the id before matching;
+# `*`/`?` wildcards are supported for depositions with multiple files per
+# tilt-series (e.g. EMPIAR-10164's per-frame files).
+
+groups:
+  - remote_dir: mdoc_files
+    file_pattern: "{tilt_series}.mrc.mdoc"
+  - remote_dir: Untreated_dataset
+    file_pattern: "{tilt_series}.mrc"

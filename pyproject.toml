@@ -16,6 +16,7 @@ dependencies = [
   "numpy>=1.26",
   "pydantic>=2.7",
   "typer>=0.12",
+  "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,7 @@ dev = [
   "pytest>=8.2",
   "ruff>=0.5",
   "mypy>=1.10",
+  "types-PyYAML>=6.0",
 ]
 
 [project.scripts]

@@ -20,3 +20,7 @@ outputs/
 *.tif
 *.tiff
 *.zarr/
+
+# EMPIAR download layouts are per-user/exploratory; keep only the example.
+configs/empiar-layouts/*
+!configs/empiar-layouts/example.yaml

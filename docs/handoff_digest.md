@@ -181,12 +181,16 @@ Important EMPIAR-10164 caveat captured in manifests:
 Implemented in `src/cryoet_pipeline/empiar.py` and exposed through CLI:
 
 ```bash
-cryoet download-empiar-10164 --dry-run
-cryoet download-empiar-10164
+cryoet download-empiar --out data/empiar-10164 --dry-run
+cryoet download-empiar --out data/empiar-10164
 ```
 
 It downloads only the selected tilt-series files as individual files, avoiding
-browser-generated ZIP archives and Aspera token issues.
+browser-generated ZIP archives and Aspera token issues. EMPIAR-10164 has a
+built-in directory layout; other depositions need a `--layout <file.yaml>`
+describing their `groups` (remote subdirectory + filename pattern) since each
+deposition organizes its files differently — see the README section
+"Downloading a different EMPIAR deposition".
 
 Default selected tilt-series:
 
@@ -405,8 +409,8 @@ pytest
 4. Download the MVP subset if data is not copied already:
 
 ```bash
-cryoet download-empiar-10164 --dry-run
-cryoet download-empiar-10164
+cryoet download-empiar --out data/empiar-10164 --dry-run
+cryoet download-empiar --out data/empiar-10164
 ```
 
 5. Initialize manifests:

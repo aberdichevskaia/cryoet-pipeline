@@ -76,9 +76,12 @@ from cryoet_pipeline.backends.segmentation import (
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
 from cryoet_pipeline.empiar import (
+    DEFAULT_EMPIAR_10164_LAYOUT,
+    DEFAULT_EMPIAR_ID,
     DEFAULT_TILT_SERIES,
-    build_empiar_10164_file_list,
+    build_empiar_file_list,
     download_files,
+    load_dataset_layout,
 )
 from cryoet_pipeline.models import Artifact, ArtifactKind, ProjectConfig, TiltSeriesManifest
 from cryoet_pipeline.project import initialize_project
@@ -87,7 +90,6 @@ from cryoet_pipeline.storage import resolve_storage_policy
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
-DEFAULT_OUTPUT_ROOT = Path("data/empiar-10164")
 DEFAULT_INIT_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 DEFAULT_DOWNLOAD_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 
@@ -127,25 +129,52 @@ def init(
         typer.echo(f"wrote {path}")
 
 
-@app.command("download-empiar-10164")
-def download_empiar_10164(
+@app.command("download-empiar")
+def download_empiar(
     out: Annotated[
         Path,
-        typer.Option(help="Output root for EMPIAR-10164 files."),
-    ] = DEFAULT_OUTPUT_ROOT,
+        typer.Option(help="Output root for the downloaded EMPIAR files."),
+    ],
+    empiar_id: Annotated[
+        str,
+        typer.Option(help="Numeric EMPIAR deposition id, for example 10164."),
+    ] = DEFAULT_EMPIAR_ID,
     tilt_series: Annotated[
         list[str],
-        typer.Option("--tilt-series", help="Tilt-series ids to download."),
+        typer.Option(
+            "--tilt-series",
+            help="Tilt-series ids to download; defaults only apply to EMPIAR-10164.",
+        ),
     ] = DEFAULT_DOWNLOAD_TILT_SERIES,
+    layout: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "YAML file describing this deposition's directory layout; "
+                "required for any EMPIAR id other than 10164."
+            ),
+        ),
+    ] = None,
     dry_run: Annotated[bool, typer.Option(help="Print files without downloading.")] = False,
     overwrite: Annotated[
         bool,
         typer.Option(help="Redownload files even if they exist."),
     ] = False,
 ) -> None:
-    """Download selected EMPIAR-10164 tilt-series without using browser ZIPs."""
+    """Download selected tilt-series from one EMPIAR deposition without browser ZIPs."""
 
-    files = build_empiar_10164_file_list(tilt_series)
+    if layout is not None:
+        selected_layout = load_dataset_layout(layout)
+    elif empiar_id == DEFAULT_EMPIAR_ID:
+        selected_layout = DEFAULT_EMPIAR_10164_LAYOUT
+    else:
+        raise typer.BadParameter(
+            f"--layout is required for EMPIAR-{empiar_id} "
+            "(only EMPIAR-10164 has a built-in layout)",
+            param_hint="layout",
+        )
+
+    files = build_empiar_file_list(empiar_id, tilt_series, selected_layout)
     typer.echo(f"selected {len(files)} files")
     for file in files:
         typer.echo(f"{file.relative_path} <- {file.url}")
