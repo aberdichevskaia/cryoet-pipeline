@@ -138,6 +138,37 @@ class FinalAlignedStackBackend(Protocol):
         ...
 
 
+class DefocusEstimationBackend(Protocol):
+    """Replaceable backend for estimating a single-image defocus hint."""
+
+    name: str
+
+    def estimate(
+        self,
+        corrected_projection: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a defocus-hint artifact and its QC artifact."""
+        ...
+
+
+class CtfCorrectionBackend(Protocol):
+    """Replaceable backend for tilt-series CTF estimation and phase correction."""
+
+    name: str
+
+    def correct(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a CTF model, a CTF-corrected aligned stack, and a QC artifact."""
+        ...
+
+
 class ReconstructionBackend(Protocol):
     """Replaceable backend for tomogram reconstruction."""
 

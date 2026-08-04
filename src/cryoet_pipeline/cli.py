@@ -14,6 +14,14 @@ from cryoet_pipeline.backends.alignment_qc import (
     ImodCoarseAlignmentQcBackend,
     evaluate_coarse_alignment_and_register,
 )
+from cryoet_pipeline.backends.ctf import (
+    ImodCtfPlotterBackend,
+    correct_ctf_and_register,
+)
+from cryoet_pipeline.backends.defocus_hint import (
+    Ctffind5DefocusHintBackend,
+    estimate_defocus_hint_and_register,
+)
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
@@ -41,6 +49,8 @@ from cryoet_pipeline.backends.picking import (
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
+    CtfCorrectionBackend,
+    DefocusEstimationBackend,
     DenoisingBackend,
     FiducialSeedBackend,
     FiducialTrackingBackend,
@@ -917,6 +927,253 @@ def build_final_aligned_stack(
     typer.echo(f"updated {registry}")
 
 
+@app.command("estimate-defocus-hint")
+def estimate_defocus_hint(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for the defocus hint.")],
+    ctf_voltage_kv: Annotated[
+        float,
+        typer.Option(min=0.0, help="Microscope accelerating voltage in kV."),
+    ],
+    ctf_spherical_aberration_mm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Objective spherical aberration (Cs) in mm."),
+    ],
+    backend: Annotated[
+        str,
+        typer.Option(help="Defocus-hint backend to use."),
+    ] = "ctffind5",
+    ctf_amplitude_contrast: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Amplitude contrast fraction."),
+    ] = 0.07,
+    ctffind_executable: Annotated[
+        Path | None,
+        typer.Option(help="CTFFIND executable path when it is not on PATH."),
+    ] = None,
+    defocus_hint_box_size: Annotated[
+        int,
+        typer.Option(min=1, help="CTFFIND power-spectrum box size, pixels."),
+    ] = 512,
+    defocus_hint_min_resolution_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Minimum resolution to fit, angstrom."),
+    ] = 30.0,
+    defocus_hint_max_resolution_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Maximum resolution to fit, angstrom."),
+    ] = 5.0,
+    defocus_hint_min_defocus_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Minimum defocus to search, angstrom."),
+    ] = 5000.0,
+    defocus_hint_max_defocus_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Maximum defocus to search, angstrom."),
+    ] = 80000.0,
+    defocus_hint_step_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Defocus search step, angstrom."),
+    ] = 500.0,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite defocus hint, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Estimate a single-image defocus hint to seed CTF correction."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    corrected_projection = _zero_tilt_corrected_projection_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _defocus_estimation_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "ctf_voltage_kv": ctf_voltage_kv,
+        "ctf_spherical_aberration_mm": ctf_spherical_aberration_mm,
+        "ctf_amplitude_contrast": ctf_amplitude_contrast,
+        "defocus_hint_box_size": defocus_hint_box_size,
+        "defocus_hint_min_resolution_angstrom": defocus_hint_min_resolution_angstrom,
+        "defocus_hint_max_resolution_angstrom": defocus_hint_max_resolution_angstrom,
+        "defocus_hint_min_defocus_angstrom": defocus_hint_min_defocus_angstrom,
+        "defocus_hint_max_defocus_angstrom": defocus_hint_max_defocus_angstrom,
+        "defocus_hint_step_angstrom": defocus_hint_step_angstrom,
+    }
+    if ctffind_executable is not None:
+        parameters["ctffind_executable"] = ctffind_executable
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = estimate_defocus_hint_and_register(
+        selected_backend,
+        corrected_projection,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    defocus_hint, qc_report = artifacts
+    typer.echo(f"wrote defocus hint: {defocus_hint.path}")
+    typer.echo(f"defocus_um: {defocus_hint.parameters['defocus_um']}")
+    typer.echo(f"wrote defocus hint QC: {qc_report.path}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("correct-ctf")
+def correct_ctf(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for CTF artifacts.")],
+    ctf_voltage_kv: Annotated[
+        float,
+        typer.Option(min=0.0, help="Microscope accelerating voltage in kV."),
+    ],
+    ctf_spherical_aberration_mm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Objective spherical aberration (Cs) in mm."),
+    ],
+    backend: Annotated[
+        str,
+        typer.Option(help="CTF correction backend to use."),
+    ] = "imod-ctfplotter",
+    ctf_amplitude_contrast: Annotated[
+        float,
+        typer.Option(min=0.0, max=1.0, help="Amplitude contrast fraction."),
+    ] = 0.07,
+    ctf_expected_defocus_um: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="Expected defocus at the tilt axis, um; else uses a defocus hint or manifest.",
+        ),
+    ] = None,
+    ctf_defocus_tol_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Defocus tolerance for center strips, nm."),
+    ] = 200.0,
+    ctf_left_defocus_tol_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Defocus tolerance for strips left of center, nm."),
+    ] = 2000.0,
+    ctf_right_defocus_tol_nm: Annotated[
+        float,
+        typer.Option(min=0.0, help="Defocus tolerance for strips right of center, nm."),
+    ] = 2000.0,
+    ctf_tile_size: Annotated[
+        int,
+        typer.Option(min=1, help="Square tile size for power-spectrum strips, pixels."),
+    ] = 256,
+    ctf_autofit_range_deg: Annotated[
+        float,
+        typer.Option(min=0.0, help="ctfplotter autofit angular range, degrees."),
+    ] = 16.0,
+    ctf_autofit_step_deg: Annotated[
+        float,
+        typer.Option(min=0.0, help="ctfplotter autofit angular step, degrees."),
+    ] = 2.0,
+    ctf_ps_resolution: Annotated[
+        int,
+        typer.Option(min=1, help="Power spectrum resolution (PSResolution)."),
+    ] = 101,
+    ctf_interpolation_width: Annotated[
+        int,
+        typer.Option(min=1, help="ctfphaseflip strip interpolation width, pixels."),
+    ] = 15,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite CTF model, corrected stack, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Estimate defocus and phase-flip-correct the final aligned stack."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    aligned_stack = _final_aligned_stack_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    alignment = _fine_alignment_artifact(
+        artifact_registry,
+        tilt_series_manifest,
+    )
+    selected_backend = _ctf_correction_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "ctf_voltage_kv": ctf_voltage_kv,
+        "ctf_spherical_aberration_mm": ctf_spherical_aberration_mm,
+        "ctf_amplitude_contrast": ctf_amplitude_contrast,
+        "ctf_defocus_tol_nm": ctf_defocus_tol_nm,
+        "ctf_left_defocus_tol_nm": ctf_left_defocus_tol_nm,
+        "ctf_right_defocus_tol_nm": ctf_right_defocus_tol_nm,
+        "ctf_tile_size": ctf_tile_size,
+        "ctf_autofit_range_deg": ctf_autofit_range_deg,
+        "ctf_autofit_step_deg": ctf_autofit_step_deg,
+        "ctf_ps_resolution": ctf_ps_resolution,
+        "ctf_interpolation_width": ctf_interpolation_width,
+    }
+    if ctf_expected_defocus_um is not None:
+        parameters["ctf_expected_defocus_um"] = ctf_expected_defocus_um
+    else:
+        defocus_hint = _optional_defocus_hint_artifact(artifact_registry, tilt_series_manifest)
+        if defocus_hint is not None:
+            parameters["ctf_expected_defocus_um"] = defocus_hint.parameters["defocus_um"]
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = correct_ctf_and_register(
+        selected_backend,
+        aligned_stack,
+        alignment,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    ctf_model, corrected_stack, qc_report = artifacts
+    typer.echo(f"wrote CTF model: {ctf_model.path}")
+    typer.echo(f"wrote CTF-corrected stack: {corrected_stack.path}")
+    typer.echo(f"wrote CTF QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command("reconstruct-tomogram")
 def reconstruct_tomogram(
     manifest: Annotated[
@@ -986,7 +1243,7 @@ def reconstruct_tomogram(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    aligned_stack = _final_aligned_stack_artifact(
+    aligned_stack = _reconstruction_input_stack_artifact(
         artifact_registry,
         tilt_series_manifest,
     )
@@ -1546,6 +1803,28 @@ def _final_aligned_stack_backend(name: str) -> FinalAlignedStackBackend:
     )
 
 
+def _defocus_estimation_backend(name: str) -> DefocusEstimationBackend:
+    normalized = name.lower()
+    if normalized == "ctffind5":
+        return Ctffind5DefocusHintBackend()
+
+    raise typer.BadParameter(
+        f"unsupported defocus-hint backend {name!r}; expected: ctffind5",
+        param_hint="backend",
+    )
+
+
+def _ctf_correction_backend(name: str) -> CtfCorrectionBackend:
+    normalized = name.lower()
+    if normalized == "imod-ctfplotter":
+        return ImodCtfPlotterBackend()
+
+    raise typer.BadParameter(
+        f"unsupported CTF correction backend {name!r}; expected: imod-ctfplotter",
+        param_hint="backend",
+    )
+
+
 def _reconstruction_backend(name: str) -> ReconstructionBackend:
     normalized = name.lower()
     if normalized == "imod-tilt":
@@ -1661,6 +1940,75 @@ def _final_aligned_stack_artifact(
             param_hint="registry",
         )
     return matches[0]
+
+
+def _reconstruction_input_stack_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    """Prefer a CTF-corrected stack over the plain final aligned stack, if present."""
+
+    corrected_matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("purpose") == "ctf_corrected"
+    ]
+    if len(corrected_matches) > 1:
+        raise typer.BadParameter(
+            f"expected at most one CTF-corrected stack for "
+            f"{manifest.tilt_series_id}, found {len(corrected_matches)}",
+            param_hint="registry",
+        )
+    if len(corrected_matches) == 1:
+        return corrected_matches[0]
+    return _final_aligned_stack_artifact(registry, manifest)
+
+
+def _zero_tilt_corrected_projection_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    id_prefix = f"{manifest.tilt_series_id}:corrected_projection:"
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.CORRECTED_PROJECTION)
+        if artifact.id.startswith(id_prefix)
+    ]
+    if not matches:
+        raise typer.BadParameter(
+            f"expected at least one corrected projection for {manifest.tilt_series_id}, found 0",
+            param_hint="registry",
+        )
+
+    def _tilt_angle(artifact: Artifact) -> float:
+        value = artifact.parameters.get("tilt_angle_deg")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise typer.BadParameter(
+                f"corrected projection {artifact.id} is missing a numeric tilt_angle_deg",
+                param_hint="registry",
+            )
+        return float(value)
+
+    return min(matches, key=lambda artifact: abs(_tilt_angle(artifact)))
+
+
+def _optional_defocus_hint_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact | None:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.DEFOCUS_HINT)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) > 1:
+        raise typer.BadParameter(
+            f"expected at most one defocus hint for {manifest.tilt_series_id}, "
+            f"found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0] if matches else None
 
 
 def _fiducial_tracking_stack_artifact(

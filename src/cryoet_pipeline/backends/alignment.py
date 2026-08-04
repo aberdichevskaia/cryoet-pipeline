@@ -37,6 +37,7 @@ class CommandRunner(Protocol):
         *,
         cwd: Path,
         env: Mapping[str, str],
+        stdin: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run a command and return captured text output."""
         ...
@@ -698,11 +699,13 @@ def run_command(
     *,
     cwd: Path,
     env: Mapping[str, str],
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
         cwd=cwd,
         env=dict(env),
+        input=stdin,
         capture_output=True,
         text=True,
         check=False,

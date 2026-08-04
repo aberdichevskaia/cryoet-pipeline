@@ -187,10 +187,10 @@ class ImodTiltReconstructionBackend:
                 voxel_spacing_angstrom=voxel_spacing_angstrom,
             )
 
+            ctf_corrected = tilt_stack.parameters.get("purpose") == "ctf_corrected"
             tomogram_id = f"{manifest.tilt_series_id}:tomogram:fine"
-            warnings = [
-                "CTF correction was not applied",
-            ]
+            warnings = [] if ctf_corrected else ["CTF correction was not applied"]
+            qc_status = QcStatus.PASS if ctf_corrected else QcStatus.WARNING
             report = TomogramQc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
@@ -202,14 +202,14 @@ class ImodTiltReconstructionBackend:
                 mean=statistics.mean,
                 standard_deviation=statistics.standard_deviation,
                 finite=True,
-                ctf_corrected=False,
+                ctf_corrected=ctf_corrected,
                 alignment_stage=alignment_result.stage,
                 central_slice_paths={
                     "xy": paths.central_xy,
                     "xz": paths.central_xz,
                     "yz": paths.central_yz,
                 },
-                status=QcStatus.WARNING,
+                status=qc_status,
                 warnings=warnings,
             )
             temporary_report.write_text(
@@ -239,7 +239,7 @@ class ImodTiltReconstructionBackend:
                 "tilt_series_id": manifest.tilt_series_id,
                 "tomogram_branch": "full",
                 "alignment_stage": alignment_result.stage,
-                "ctf_corrected": False,
+                "ctf_corrected": ctf_corrected,
                 "included_z_values": included_z_values,
                 "excluded_z_values": alignment_result.excluded_z_values,
                 "thickness": geometry.thickness_px,
@@ -275,7 +275,7 @@ class ImodTiltReconstructionBackend:
             parameters={
                 "qc_type": "fine_reconstruction",
                 "tilt_series_id": manifest.tilt_series_id,
-                "status": QcStatus.WARNING.value,
+                "status": qc_status.value,
                 "central_slice_paths": {
                     "xy": str(paths.central_xy),
                     "xz": str(paths.central_xz),
@@ -402,7 +402,7 @@ def _reconstruction_paths(
 def _validate_final_aligned_stack(tilt_stack: Artifact) -> tuple[int, int, int]:
     if tilt_stack.kind is not ArtifactKind.ALIGNED_TILT_STACK:
         raise ValueError(f"expected aligned tilt stack artifact, got {tilt_stack.kind}")
-    if tilt_stack.parameters.get("purpose") != "final_alignment":
+    if tilt_stack.parameters.get("purpose") not in {"final_alignment", "ctf_corrected"}:
         raise ValueError("reconstruction requires a final fine-aligned stack")
     if tilt_stack.parameters.get("alignment_stage") != "fine":
         raise ValueError("final aligned stack must record alignment_stage='fine'")

@@ -31,6 +31,8 @@ class ArtifactKind(StrEnum):
     ALIGNMENT = "alignment"
     FIDUCIAL_SEED_MODEL = "fiducial_seed_model"
     FIDUCIAL_MODEL = "fiducial_model"
+    DEFOCUS_HINT = "defocus_hint"
+    CTF_MODEL = "ctf_model"
     TOMOGRAM = "tomogram"
     DENOISED_TOMOGRAM = "denoised_tomogram"
     SEGMENTATION = "segmentation"
@@ -428,6 +430,77 @@ class TomogramQc(BaseModel):
         required_slices = {"xy", "xz", "yz"}
         if set(self.central_slice_paths) != required_slices:
             raise ValueError("central_slice_paths must contain exactly: xy, xz, yz")
+        return self
+
+
+class DefocusHintQc(BaseModel):
+    """Machine-readable statistics for a single-image CTFFIND defocus hint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    input_projection_id: str
+    defocus_hint_id: str
+    tilt_angle_deg: float
+    defocus_um: float = Field(gt=0.0)
+    astigmatism_um: float = Field(ge=0.0)
+    azimuth_deg: float
+    cross_correlation: float
+    fit_resolution_angstrom: float = Field(gt=0.0)
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> DefocusHintQc:
+        values = (
+            self.tilt_angle_deg,
+            self.defocus_um,
+            self.astigmatism_um,
+            self.azimuth_deg,
+            self.cross_correlation,
+            self.fit_resolution_angstrom,
+        )
+        if not all(isfinite(value) for value in values):
+            raise ValueError("defocus hint QC statistics must be finite")
+        return self
+
+
+class CtfEstimationQc(BaseModel):
+    """Machine-readable statistics for tilt-series CTF estimation and correction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    input_stack_id: str
+    ctf_model_id: str
+    corrected_stack_id: str
+    num_tilts: int = Field(ge=1)
+    voltage_kv: float = Field(gt=0.0)
+    spherical_aberration_mm: float = Field(gt=0.0)
+    amplitude_contrast: float = Field(ge=0.0, le=1.0)
+    axis_angle_deg: float
+    mean_defocus_um: float
+    minimum_defocus_um: float
+    maximum_defocus_um: float
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> CtfEstimationQc:
+        values = (
+            self.axis_angle_deg,
+            self.mean_defocus_um,
+            self.minimum_defocus_um,
+            self.maximum_defocus_um,
+        )
+        if not all(isfinite(value) for value in values):
+            raise ValueError("CTF estimation QC statistics must be finite")
+        if not (self.minimum_defocus_um <= self.mean_defocus_um <= self.maximum_defocus_um):
+            raise ValueError("CTF defocus statistics are inconsistent")
         return self
 
 
