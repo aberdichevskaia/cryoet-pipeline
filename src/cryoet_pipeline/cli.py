@@ -83,6 +83,7 @@ from cryoet_pipeline.empiar import (
     download_files,
     load_dataset_layout,
 )
+from cryoet_pipeline.external_stack import import_external_tilt_stack
 from cryoet_pipeline.models import Artifact, ArtifactKind, ProjectConfig, TiltSeriesManifest
 from cryoet_pipeline.project import initialize_project
 from cryoet_pipeline.runtime import normalize_device, resolve_device
@@ -127,6 +128,50 @@ def init(
     typer.echo(f"wrote {result.project_path}")
     for path in result.manifest_paths:
         typer.echo(f"wrote {path}")
+
+
+@app.command("import-tilt-stack")
+def import_tilt_stack(
+    mdoc: Annotated[
+        Path,
+        typer.Option(help="Path to the tilt-series' SerialEM .mdoc file."),
+    ],
+    stack: Annotated[
+        Path,
+        typer.Option(help="Path to the pre-assembled tilt-series MRC stack."),
+    ],
+    tilt_series_id: Annotated[
+        str,
+        typer.Option(help="Tilt-series id, for example TS_0002."),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(help="Output directory for the manifest, stack, and registry."),
+    ],
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite manifest, tilt stack, and registry entries."),
+    ] = False,
+) -> None:
+    """Import an already-assembled tilt-series stack, bypassing motion correction.
+
+    Use this instead of `init` + `prepare-tilt-series` for depositions that do
+    not provide individually addressable raw per-tilt movies (unlike
+    EMPIAR-10164) -- only a single already-combined MRC stack per tilt-series,
+    with one already-corrected image per tilt.
+    """
+
+    result = import_external_tilt_stack(
+        mdoc_path=mdoc,
+        stack_path=stack,
+        tilt_series_id=tilt_series_id,
+        out=out,
+        overwrite=overwrite,
+    )
+    typer.echo(f"wrote manifest: {result.manifest_path}")
+    typer.echo(f"wrote tilt stack: {result.tilt_stack.path}")
+    typer.echo(f"wrote tilt angles: {result.tilt_angles.path}")
+    typer.echo(f"updated {result.artifact_registry_path}")
 
 
 @app.command("download-empiar")

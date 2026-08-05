@@ -20,6 +20,9 @@ outputs/
 *.tif
 *.tiff
 *.zarr/
+*.log*
+*.com
+
 
 # EMPIAR download layouts are per-user/exploratory; keep only the example.
 configs/empiar-layouts/*
