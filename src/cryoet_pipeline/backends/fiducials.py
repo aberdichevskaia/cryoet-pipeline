@@ -568,6 +568,634 @@ class ImodBeadtrackBackend:
         return [model_artifact, report_artifact]
 
 
+def _compute_patch_size_px(
+    full_size_px: int,
+    num_patches: int,
+    *,
+    margin_px: int,
+    overlap_fraction: float,
+) -> int:
+    """Size square patches from a target count, margin, and neighbor overlap.
+
+    Mirrors etomo's own patch-tracking sizing so a user-facing patch count and
+    overlap fraction (rather than an IMOD patch size in pixels) drive the
+    ``tiltxcorr -size``/``-number`` pair; passing both together lets us avoid
+    ``-overlap``, which ``tiltxcorr`` treats as mutually exclusive with
+    ``-number``.
+    """
+
+    if num_patches < 1:
+        raise ValueError("num_patches must be at least 1")
+    if margin_px < 0:
+        raise ValueError("margin_px must not be negative")
+    if not (0.0 <= overlap_fraction < 1.0):
+        raise ValueError("overlap_fraction must be in [0.0, 1.0)")
+    usable_px = full_size_px - 2 * margin_px
+    if usable_px <= 0:
+        raise ValueError(
+            f"margin {margin_px}px on each side leaves no usable area in a "
+            f"{full_size_px}px image"
+        )
+    denominator = 1.0 + (num_patches - 1) * (1.0 - overlap_fraction)
+    patch_size_px = int(usable_px / denominator)
+    if patch_size_px < 32:
+        raise ValueError(
+            f"computed patch size {patch_size_px}px is too small (minimum 32px); "
+            "reduce num_patches or margin_px, or increase overlap_fraction"
+        )
+    return patch_size_px
+
+
+class ImodPatchTrackingSeedBackend:
+    """Bin a tracking stack and size a patch grid for IMOD Tiltxcorr."""
+
+    name = "imod_patch_seed"
+
+    def generate(
+        self,
+        tilt_stack: Artifact,
+        alignment: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Create a plain binned tracking stack plus a patch-grid descriptor."""
+
+        stack_shape, alignment_result = _validate_seed_inputs(
+            tilt_stack,
+            alignment,
+            manifest,
+        )
+        pre_binning = _positive_int_parameter(context, "pre_binning", default=8)
+        if pre_binning > min(stack_shape[1:]):
+            raise ValueError(
+                f"pre-binning {pre_binning} exceeds image shape {stack_shape[1:]}"
+            )
+        num_patches_x = _positive_int_parameter(context, "num_patches_x", default=5)
+        num_patches_y = _positive_int_parameter(context, "num_patches_y", default=5)
+        patch_overlap = _overlap_fraction_parameter(
+            context,
+            "patch_overlap",
+            default=0.33,
+        )
+        patch_margin_px = _nonnegative_int_parameter(
+            context,
+            "patch_margin_px",
+            default=100,
+        )
+        overwrite = _bool_parameter(context, "overwrite", default=False)
+        raw_pixel_spacing = _raw_pixel_spacing(manifest, tilt_stack, context)
+
+        included_indices = _included_indices(alignment_result, manifest)
+        binned_height = stack_shape[1] // pre_binning
+        binned_width = stack_shape[2] // pre_binning
+        patch_size_x_px = _compute_patch_size_px(
+            binned_width,
+            num_patches_x,
+            margin_px=patch_margin_px,
+            overlap_fraction=patch_overlap,
+        )
+        patch_size_y_px = _compute_patch_size_px(
+            binned_height,
+            num_patches_y,
+            margin_px=patch_margin_px,
+            overlap_fraction=patch_overlap,
+        )
+
+        paths = _patch_seed_paths(
+            context.output_dir,
+            manifest,
+            pre_binning=pre_binning,
+        )
+        _require_available_paths(paths.outputs, overwrite=overwrite)
+        paths.output_dir.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(
+            prefix=f".{manifest.tilt_series_id}-patch-seed-",
+            dir=paths.output_dir.resolve(),
+        ) as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            binned_stack = temporary_root / "tracking_bin.mrc"
+            prealign_transform = temporary_root / "tracking.prexg"
+            tilt_file = temporary_root / "tracking.rawtlt"
+
+            write_binned_mrc_stack(
+                tilt_stack.path,
+                binned_stack,
+                binning=pre_binning,
+                pixel_spacing_angstrom=raw_pixel_spacing,
+                section_indices=included_indices,
+            )
+            transforms_by_z = {
+                transform.z_value: transform
+                for transform in alignment_result.transforms
+            }
+            _write_imod_transforms(
+                prealign_transform,
+                included_indices,
+                manifest,
+                transforms_by_z,
+                shift_scale=1.0,
+            )
+            write_tilt_angles_file(
+                tilt_file,
+                [
+                    manifest.images[index].tilt_angle_deg
+                    for index in included_indices
+                ],
+            )
+
+            _replace_file(binned_stack, paths.tracking_stack)
+            _replace_file(prealign_transform, paths.prealign_transform)
+            _replace_file(tilt_file, paths.tilt_file)
+
+        grid = {
+            "num_patches_x": num_patches_x,
+            "num_patches_y": num_patches_y,
+            "patch_size_x_px": patch_size_x_px,
+            "patch_size_y_px": patch_size_y_px,
+            "patch_margin_px": patch_margin_px,
+            "patch_overlap": patch_overlap,
+            "binned_width_px": binned_width,
+            "binned_height_px": binned_height,
+        }
+        _write_json(paths.grid, grid)
+
+        report = FiducialModelQc(
+            tilt_series_id=manifest.tilt_series_id,
+            backend=self.name,
+            stage="seed",
+            model_id=f"{manifest.tilt_series_id}:fiducial_seed",
+            image_count=len(included_indices),
+            num_fiducials=0,
+            num_points=0,
+            min_points_per_fiducial=0,
+            median_points_per_fiducial=0.0,
+            max_points_per_fiducial=0,
+            coverage_fraction=0.0,
+            status=QcStatus.PASS,
+            warnings=[],
+        )
+        _write_json(paths.report, report.model_dump(mode="json"))
+        tracking_info = validate_complete_mrc(paths.tracking_stack)
+
+        tracking_stack_artifact = Artifact(
+            id=f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial",
+            kind=ArtifactKind.ALIGNED_TILT_STACK,
+            path=paths.tracking_stack,
+            parent_ids=[tilt_stack.id, alignment.id],
+            shape=tracking_info.shape,
+            dtype=tracking_info.dtype,
+            axis_order=AxisOrder.TYX,
+            pixel_spacing_angstrom=raw_pixel_spacing * pre_binning,
+            binning=pre_binning,
+            parameters={
+                "purpose": "fiducial_tracking",
+                "tilt_series_id": manifest.tilt_series_id,
+                "included_z_values": [
+                    manifest.images[index].z_value for index in included_indices
+                ],
+                "excluded_z_values": alignment_result.excluded_z_values,
+                "order": "tilt_angle_ascending",
+                "prealign_transform_path": str(paths.prealign_transform),
+                "tilt_file_path": str(paths.tilt_file),
+                "tilt_axis_angle_deg": alignment_result.tilt_axis_angle_deg,
+                "raw_pixel_spacing_angstrom": raw_pixel_spacing,
+            },
+            software_versions={"imod": "external"},
+            storage_role=StorageRole.CACHE,
+            retention_policy=RetentionPolicy.RECOMPUTE,
+            can_recompute=True,
+            size_bytes=paths.tracking_stack.stat().st_size,
+        )
+        seed_artifact = Artifact(
+            id=f"{manifest.tilt_series_id}:fiducial_seed",
+            kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
+            path=paths.grid,
+            parent_ids=[tracking_stack_artifact.id],
+            parameters={
+                "backend": self.name,
+                "tilt_series_id": manifest.tilt_series_id,
+                **grid,
+            },
+            software_versions={"imod": "external"},
+            storage_role=StorageRole.CANONICAL,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=paths.grid.stat().st_size,
+        )
+        report_artifact = Artifact(
+            id=f"{manifest.tilt_series_id}:qc:fiducial_seed",
+            kind=ArtifactKind.QC,
+            path=paths.report,
+            parent_ids=[seed_artifact.id],
+            parameters={
+                "qc_type": "fiducial_seed",
+                "tilt_series_id": manifest.tilt_series_id,
+                "status": report.status.value,
+            },
+            software_versions={"imod": "external"},
+            storage_role=StorageRole.QC,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=paths.report.stat().st_size,
+        )
+        return [tracking_stack_artifact, seed_artifact, report_artifact]
+
+
+class ImodPatchTrackingBackend:
+    """Track a patch grid through a tilt series with IMOD Tiltxcorr."""
+
+    name = "imod_tiltxcorr_patch"
+
+    def __init__(self, command_runner: CommandRunner | None = None) -> None:
+        self._command_runner = command_runner or run_command
+
+    def track(
+        self,
+        tracking_stack: Artifact,
+        seed_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Correlate a patch grid across tilts and report coverage QC."""
+
+        metadata, grid = _validate_patch_tracking_inputs(
+            tracking_stack,
+            seed_model,
+            manifest,
+        )
+        filter_sigma1 = _positive_float_parameter(
+            context,
+            "filter_sigma1",
+            default=0.03,
+        )
+        filter_radius2 = _positive_float_parameter(
+            context,
+            "filter_radius2",
+            default=0.25,
+        )
+        filter_sigma2 = _positive_float_parameter(
+            context,
+            "filter_sigma2",
+            default=0.05,
+        )
+        min_tracked_fiducials = _positive_int_parameter(
+            context,
+            "min_tracked_fiducials",
+            default=10,
+        )
+        coverage_warning = _fraction_parameter(
+            context,
+            "coverage_warning",
+            default=0.8,
+        )
+        coverage_failure = _fraction_parameter(
+            context,
+            "coverage_failure",
+            default=0.5,
+        )
+        if coverage_failure > coverage_warning:
+            raise ValueError(
+                "coverage_failure must be less than or equal to coverage_warning"
+            )
+        overwrite = _bool_parameter(context, "overwrite", default=False)
+        paths = _tracking_paths(context.output_dir, manifest)
+        _require_available_paths(paths.outputs, overwrite=overwrite)
+        paths.output_dir.mkdir(parents=True, exist_ok=True)
+
+        tiltxcorr = resolve_imod_executable("tiltxcorr", context)
+        imodinfo = resolve_imod_executable("imodinfo", context)
+        with tempfile.TemporaryDirectory(
+            prefix=f".{manifest.tilt_series_id}-patchtrack-",
+            dir=paths.output_dir.resolve(),
+        ) as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            output_model = temporary_root / f"{manifest.tilt_series_id}.fid"
+            command = _tiltxcorr_patch_command(
+                tiltxcorr=tiltxcorr,
+                image_file=tracking_stack.path,
+                output_model=output_model,
+                prealign_transform=metadata.prealign_transform,
+                tilt_file=metadata.tilt_file,
+                tracking_binning=metadata.tracking_binning,
+                tilt_axis_angle_deg=metadata.tilt_axis_angle_deg,
+                filter_sigma1=filter_sigma1,
+                filter_radius2=filter_radius2,
+                filter_sigma2=filter_sigma2,
+                grid=grid,
+            )
+            result = self._command_runner(
+                command,
+                cwd=temporary_root,
+                env=imod_environment(tiltxcorr, context),
+            )
+            _write_command_log(paths.beadtrack_log, command, result)
+            _require_success(
+                result,
+                program="IMOD tiltxcorr (patch tracking)",
+                log_path=paths.beadtrack_log,
+            )
+            if not output_model.is_file():
+                raise RuntimeError(
+                    "IMOD tiltxcorr did not write a patch-tracking model: "
+                    f"{output_model}"
+                )
+
+            summary = _inspect_imod_model(
+                output_model,
+                imodinfo=imodinfo,
+                context=context,
+                command_runner=self._command_runner,
+                log_path=paths.imodinfo_log,
+                cwd=temporary_root,
+            )
+            report = _tracked_fiducial_qc(
+                tilt_series_id=manifest.tilt_series_id,
+                backend=self.name,
+                model_id=f"{manifest.tilt_series_id}:fiducial_model",
+                summary=summary,
+                image_count=metadata.image_count,
+                minimum_fiducials=min_tracked_fiducials,
+                coverage_warning=coverage_warning,
+                coverage_failure=coverage_failure,
+            )
+            _replace_file(output_model, paths.fiducial_model)
+
+        paths.track_command.write_text(
+            "#!/bin/sh\n"
+            + shlex.join(
+                _tiltxcorr_patch_command(
+                    tiltxcorr=tiltxcorr,
+                    image_file=tracking_stack.path,
+                    output_model=paths.fiducial_model,
+                    prealign_transform=metadata.prealign_transform,
+                    tilt_file=metadata.tilt_file,
+                    tracking_binning=metadata.tracking_binning,
+                    tilt_axis_angle_deg=metadata.tilt_axis_angle_deg,
+                    filter_sigma1=filter_sigma1,
+                    filter_radius2=filter_radius2,
+                    filter_sigma2=filter_sigma2,
+                    grid=grid,
+                )
+            )
+            + "\n"
+        )
+        _write_json(paths.report, report.model_dump(mode="json"))
+
+        model_artifact = Artifact(
+            id=f"{manifest.tilt_series_id}:fiducial_model",
+            kind=ArtifactKind.FIDUCIAL_MODEL,
+            path=paths.fiducial_model,
+            parent_ids=[tracking_stack.id, seed_model.id],
+            parameters={
+                "backend": self.name,
+                "tilt_series_id": manifest.tilt_series_id,
+                "num_fiducials": summary.num_fiducials,
+                "num_points": summary.num_points,
+                "coverage_fraction": summary.coverage_fraction(
+                    metadata.image_count
+                ),
+                "tracking_binning": metadata.tracking_binning,
+                "num_patches_x": grid.num_patches_x,
+                "num_patches_y": grid.num_patches_y,
+                "patch_size_x_px": grid.patch_size_x_px,
+                "patch_size_y_px": grid.patch_size_y_px,
+                "patch_margin_px": grid.patch_margin_px,
+                "track_command_path": str(paths.track_command),
+                "tiltxcorr_log_path": str(paths.beadtrack_log),
+                "imodinfo_log_path": str(paths.imodinfo_log),
+            },
+            software_versions={"imod": "external"},
+            storage_role=StorageRole.CANONICAL,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=_paths_size_bytes(
+                paths.fiducial_model,
+                paths.track_command,
+                paths.beadtrack_log,
+                paths.imodinfo_log,
+            ),
+        )
+        report_artifact = Artifact(
+            id=f"{manifest.tilt_series_id}:qc:fiducial_tracking",
+            kind=ArtifactKind.QC,
+            path=paths.report,
+            parent_ids=[model_artifact.id],
+            parameters={
+                "qc_type": "fiducial_tracking",
+                "tilt_series_id": manifest.tilt_series_id,
+                "status": report.status.value,
+            },
+            software_versions={"imod": "external"},
+            storage_role=StorageRole.QC,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=paths.report.stat().st_size,
+        )
+        return [model_artifact, report_artifact]
+
+
+@dataclass(frozen=True)
+class _PatchSeedPaths:
+    output_dir: Path
+    tracking_stack: Path
+    prealign_transform: Path
+    tilt_file: Path
+    grid: Path
+    report: Path
+
+    @property
+    def outputs(self) -> tuple[Path, ...]:
+        return (
+            self.tracking_stack,
+            self.prealign_transform,
+            self.tilt_file,
+            self.grid,
+            self.report,
+        )
+
+
+def _patch_seed_paths(
+    output_root: Path,
+    manifest: TiltSeriesManifest,
+    *,
+    pre_binning: int,
+) -> _PatchSeedPaths:
+    output_dir = output_root / "fiducials" / manifest.tilt_series_id
+    prefix = manifest.tilt_series_id
+    return _PatchSeedPaths(
+        output_dir=output_dir,
+        tracking_stack=output_dir / f"{prefix}_patch_bin{pre_binning}_preali.mrc",
+        prealign_transform=output_dir / f"{prefix}_patch.prexg",
+        tilt_file=output_dir / f"{prefix}_patch.rawtlt",
+        grid=output_dir / f"{prefix}_patch_grid.json",
+        report=output_dir / f"{prefix}_patch_seed_qc.json",
+    )
+
+
+@dataclass(frozen=True)
+class _PatchTrackingGrid:
+    num_patches_x: int
+    num_patches_y: int
+    patch_size_x_px: int
+    patch_size_y_px: int
+    patch_margin_px: int
+
+
+def _validate_patch_tracking_inputs(
+    tracking_stack: Artifact,
+    seed_model: Artifact,
+    manifest: TiltSeriesManifest,
+) -> tuple[_TrackingMetadata, _PatchTrackingGrid]:
+    if tracking_stack.kind is not ArtifactKind.ALIGNED_TILT_STACK:
+        raise ValueError(
+            f"expected aligned tilt stack artifact, got {tracking_stack.kind}"
+        )
+    if tracking_stack.parameters.get("purpose") != "fiducial_tracking":
+        raise ValueError("aligned stack is not a fiducial-tracking stack")
+    if not tracking_stack.path.is_file():
+        raise FileNotFoundError(
+            f"fiducial tracking stack not found: {tracking_stack.path}"
+        )
+    if seed_model.kind is not ArtifactKind.FIDUCIAL_SEED_MODEL:
+        raise ValueError(
+            f"expected fiducial seed model artifact, got {seed_model.kind}"
+        )
+    if not seed_model.path.is_file():
+        raise FileNotFoundError(f"fiducial seed model not found: {seed_model.path}")
+    if seed_model.parent_ids != [tracking_stack.id]:
+        raise ValueError("fiducial seed model does not belong to tracking stack")
+    if seed_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+        raise ValueError("fiducial seed model is for a different tilt series")
+
+    included_z_values = tracking_stack.parameters.get("included_z_values")
+    if not isinstance(included_z_values, list) or not all(
+        isinstance(value, int) for value in included_z_values
+    ):
+        raise ValueError("tracking stack must record included_z_values")
+    if tracking_stack.shape is None or tracking_stack.shape[0] != len(
+        included_z_values
+    ):
+        raise ValueError("tracking stack shape does not match included_z_values")
+
+    prealign_transform = _path_parameter(tracking_stack, "prealign_transform_path")
+    tilt_file = _path_parameter(tracking_stack, "tilt_file_path")
+    tracking_binning = tracking_stack.binning
+    if tracking_binning is None or tracking_binning < 1:
+        raise ValueError("tracking stack must record a positive binning")
+    tilt_axis_angle_deg = _numeric_artifact_parameter(
+        tracking_stack,
+        "tilt_axis_angle_deg",
+    )
+    raw_pixel_spacing = _numeric_artifact_parameter(
+        tracking_stack,
+        "raw_pixel_spacing_angstrom",
+    )
+    metadata = _TrackingMetadata(
+        prealign_transform=prealign_transform,
+        tilt_file=tilt_file,
+        tracking_binning=tracking_binning,
+        tilt_axis_angle_deg=tilt_axis_angle_deg,
+        raw_pixel_spacing_angstrom=raw_pixel_spacing,
+        fiducial_diameter_unbinned_px=0.0,
+        beadtrack_box_size_unbinned_px=0,
+        image_count=len(included_z_values),
+    )
+    grid = _PatchTrackingGrid(
+        num_patches_x=_artifact_int_parameter(seed_model, "num_patches_x", minimum=1),
+        num_patches_y=_artifact_int_parameter(seed_model, "num_patches_y", minimum=1),
+        patch_size_x_px=_artifact_int_parameter(
+            seed_model,
+            "patch_size_x_px",
+            minimum=32,
+        ),
+        patch_size_y_px=_artifact_int_parameter(
+            seed_model,
+            "patch_size_y_px",
+            minimum=32,
+        ),
+        patch_margin_px=_artifact_int_parameter(
+            seed_model,
+            "patch_margin_px",
+            minimum=0,
+        ),
+    )
+    return metadata, grid
+
+
+def _tiltxcorr_patch_command(
+    *,
+    tiltxcorr: Path,
+    image_file: Path,
+    output_model: Path,
+    prealign_transform: Path,
+    tilt_file: Path,
+    tracking_binning: int,
+    tilt_axis_angle_deg: float,
+    filter_sigma1: float,
+    filter_radius2: float,
+    filter_sigma2: float,
+    grid: _PatchTrackingGrid,
+) -> list[str]:
+    return [
+        str(tiltxcorr),
+        "-input",
+        str(image_file.resolve()),
+        "-output",
+        str(output_model),
+        "-tiltfile",
+        str(tilt_file.resolve()),
+        "-rotation",
+        f"{tilt_axis_angle_deg:.6f}",
+        "-sigma1",
+        f"{filter_sigma1:.6f}",
+        "-radius2",
+        f"{filter_radius2:.6f}",
+        "-sigma2",
+        f"{filter_sigma2:.6f}",
+        "-prexf",
+        str(prealign_transform.resolve()),
+        "-imagebinned",
+        str(tracking_binning),
+        "-size",
+        f"{grid.patch_size_x_px},{grid.patch_size_y_px}",
+        "-number",
+        f"{grid.num_patches_x},{grid.num_patches_y}",
+        "-border",
+        f"{grid.patch_margin_px},{grid.patch_margin_px}",
+        "-verbose",
+        "1",
+    ]
+
+
+def _artifact_int_parameter(
+    artifact: Artifact,
+    key: str,
+    *,
+    minimum: int,
+) -> int:
+    value = artifact.parameters.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"artifact parameter {key!r} must be an int")
+    if value < minimum:
+        raise ValueError(f"artifact parameter {key!r} must be at least {minimum}")
+    return value
+
+
+def _nonnegative_int_parameter(
+    context: BackendContext,
+    key: str,
+    *,
+    default: int,
+) -> int:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value < 0:
+        raise ValueError(f"context parameter {key!r} must not be negative")
+    return value
+
+
 def generate_seed_and_register(
     backend: FiducialSeedBackend,
     tilt_stack: Artifact,
@@ -1250,6 +1878,21 @@ def _fraction_parameter(
     if value > 1.0:
         raise ValueError(f"context parameter {key!r} must not exceed 1")
     return value
+
+
+def _overlap_fraction_parameter(
+    context: BackendContext,
+    key: str,
+    *,
+    default: float,
+) -> float:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {key!r} must be numeric")
+    normalized = float(value)
+    if not np.isfinite(normalized) or not (0.0 <= normalized < 1.0):
+        raise ValueError(f"context parameter {key!r} must be in [0.0, 1.0)")
+    return normalized
 
 
 def _bool_parameter(context: BackendContext, key: str, *, default: bool) -> bool:

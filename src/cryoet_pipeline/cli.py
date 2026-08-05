@@ -25,6 +25,8 @@ from cryoet_pipeline.backends.defocus_hint import (
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
+    ImodPatchTrackingBackend,
+    ImodPatchTrackingSeedBackend,
     generate_seed_and_register,
     track_fiducials_and_register,
 )
@@ -642,6 +644,44 @@ def generate_fiducial_seed(
         int,
         typer.Option(min=1, help="Minimum seed count required for QC pass."),
     ] = 10,
+    pre_binning: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Binning used for patch tracking (imod-patch-seed backend only).",
+        ),
+    ] = 8,
+    num_patches_x: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Patch grid columns (imod-patch-seed backend only).",
+        ),
+    ] = 5,
+    num_patches_y: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Patch grid rows (imod-patch-seed backend only).",
+        ),
+    ] = 5,
+    patch_overlap: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Fractional overlap between neighboring patches "
+            "(imod-patch-seed backend only).",
+        ),
+    ] = 0.33,
+    patch_margin_px: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Unused border on each side of the binned image, in pixels "
+            "(imod-patch-seed backend only).",
+        ),
+    ] = 100,
     raw_pixel_spacing: Annotated[
         float | None,
         typer.Option(
@@ -684,6 +724,11 @@ def generate_fiducial_seed(
         "fiducial_diameter_nm": fiducial_diameter_nm,
         "target_beads": target_beads,
         "min_seed_fiducials": min_seed_fiducials,
+        "pre_binning": pre_binning,
+        "num_patches_x": num_patches_x,
+        "num_patches_y": num_patches_y,
+        "patch_overlap": patch_overlap,
+        "patch_margin_px": patch_margin_px,
     }
     if raw_pixel_spacing is not None:
         parameters["raw_pixel_spacing_angstrom"] = raw_pixel_spacing
@@ -1837,9 +1882,12 @@ def _fiducial_seed_backend(name: str) -> FiducialSeedBackend:
     normalized = name.lower()
     if normalized == "imod-autofidseed":
         return ImodAutofidseedBackend()
+    if normalized == "imod-patch-seed":
+        return ImodPatchTrackingSeedBackend()
 
     raise typer.BadParameter(
-        f"unsupported fiducial seed backend {name!r}; expected: imod-autofidseed",
+        f"unsupported fiducial seed backend {name!r}; "
+        "expected: imod-autofidseed, imod-patch-seed",
         param_hint="backend",
     )
 
@@ -1848,9 +1896,12 @@ def _fiducial_tracking_backend(name: str) -> FiducialTrackingBackend:
     normalized = name.lower()
     if normalized == "imod-beadtrack":
         return ImodBeadtrackBackend()
+    if normalized == "imod-tiltxcorr-patch":
+        return ImodPatchTrackingBackend()
 
     raise typer.BadParameter(
-        f"unsupported fiducial tracking backend {name!r}; expected: imod-beadtrack",
+        f"unsupported fiducial tracking backend {name!r}; "
+        "expected: imod-beadtrack, imod-tiltxcorr-patch",
         param_hint="backend",
     )
 

@@ -14,6 +14,9 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
+    ImodPatchTrackingBackend,
+    ImodPatchTrackingSeedBackend,
+    _compute_patch_size_px,
     generate_seed_and_register,
     parse_imod_model_ascii,
     track_fiducials_and_register,
@@ -317,6 +320,155 @@ def test_parse_imod_model_ascii_rejects_missing_dimensions() -> None:
         parse_imod_model_ascii("imod 1\ncontour 0 0 1 0\n")
 
 
+def test_compute_patch_size_px_matches_user_formula() -> None:
+    assert (
+        _compute_patch_size_px(1000, 5, margin_px=100, overlap_fraction=0.33) == 217
+    )
+    assert _compute_patch_size_px(500, 1, margin_px=50, overlap_fraction=0.5) == 400
+
+
+def test_compute_patch_size_px_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        _compute_patch_size_px(1000, 0, margin_px=100, overlap_fraction=0.33)
+    with pytest.raises(ValueError, match="not be negative"):
+        _compute_patch_size_px(1000, 5, margin_px=-1, overlap_fraction=0.33)
+    with pytest.raises(ValueError, match=r"\[0\.0, 1\.0\)"):
+        _compute_patch_size_px(1000, 5, margin_px=100, overlap_fraction=1.0)
+    with pytest.raises(ValueError, match="no usable area"):
+        _compute_patch_size_px(100, 5, margin_px=60, overlap_fraction=0.33)
+    with pytest.raises(ValueError, match="too small"):
+        _compute_patch_size_px(100, 10, margin_px=40, overlap_fraction=0.0)
+
+
+def test_imod_patch_tracking_backends_generate_and_track_models(
+    tmp_path: Path,
+) -> None:
+    stack_data = np.arange(4 * 96 * 96, dtype=np.float32).reshape(4, 96, 96)
+    stack = _stack_artifact(tmp_path, stack_data)
+    alignment = _alignment_artifact(tmp_path, stack)
+    manifest = _manifest()
+    registry = ArtifactRegistry.empty()
+    registry.extend([stack, alignment])
+    imod_dir = _fake_imod_dir(tmp_path)
+
+    seed_context = _context(
+        tmp_path,
+        imod_dir,
+        {
+            "pre_binning": 1,
+            "num_patches_x": 2,
+            "num_patches_y": 2,
+            "patch_overlap": 0.0,
+            "patch_margin_px": 0,
+        },
+    )
+    seed_artifacts = generate_seed_and_register(
+        ImodPatchTrackingSeedBackend(),
+        stack,
+        alignment,
+        manifest,
+        seed_context,
+        registry,
+    )
+
+    tracking_stack, seed_model, seed_qc_artifact = seed_artifacts
+    assert tracking_stack.kind == ArtifactKind.ALIGNED_TILT_STACK
+    assert tracking_stack.parameters["purpose"] == "fiducial_tracking"
+    assert tracking_stack.shape == (3, 96, 96)
+    assert tracking_stack.parameters["included_z_values"] == [3, 2, 0]
+    assert tracking_stack.parameters["excluded_z_values"] == [1]
+    with mrcfile.open(tracking_stack.path, permissive=True) as binned:
+        np.testing.assert_allclose(binned.data, stack_data[[3, 2, 0]])
+    transform_path = Path(tracking_stack.parameters["prealign_transform_path"])
+    assert transform_path.read_text().splitlines()[0].endswith("-4.000 6.000")
+
+    assert seed_model.kind == ArtifactKind.FIDUCIAL_SEED_MODEL
+    assert seed_model.parent_ids == [tracking_stack.id]
+    assert seed_model.parameters["num_patches_x"] == 2
+    assert seed_model.parameters["num_patches_y"] == 2
+    assert seed_model.parameters["patch_size_x_px"] == 48
+    assert seed_model.parameters["patch_size_y_px"] == 48
+    seed_qc = FiducialModelQc.model_validate_json(
+        seed_qc_artifact.path.read_text()
+    )
+    assert seed_qc.stage == "seed"
+    assert seed_qc.status == QcStatus.PASS
+    assert seed_qc.num_fiducials == 0
+
+    commands: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd
+        assert env["IMOD_DIR"] == str(imod_dir)
+        commands.append(list(command))
+        program = Path(command[0]).name
+        if program == "tiltxcorr":
+            assert "-overlap" not in command
+            assert "-length" not in command
+            assert command[command.index("-size") + 1] == "48,48"
+            assert command[command.index("-number") + 1] == "2,2"
+            assert command[command.index("-border") + 1] == "0,0"
+            assert command[command.index("-imagebinned") + 1] == "1"
+            Path(command[command.index("-output") + 1]).write_bytes(b"patchmodel")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="tracked patches",
+                stderr="",
+            )
+        if program == "imodinfo":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "imod 1\nmax 4 4 3\n"
+                    "contour 0 0 3 0\ncontour 1 0 3 0\n"
+                    "contour 2 0 3 0\ncontour 3 0 3 0\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    tracking_context = _context(
+        tmp_path,
+        imod_dir,
+        {
+            "min_tracked_fiducials": 2,
+            "coverage_warning": 0.8,
+            "coverage_failure": 0.5,
+        },
+    )
+    tracking_artifacts = track_fiducials_and_register(
+        ImodPatchTrackingBackend(fake_runner),
+        tracking_stack,
+        seed_model,
+        manifest,
+        tracking_context,
+        registry,
+    )
+
+    fiducial_model, tracking_qc_artifact = tracking_artifacts
+    assert fiducial_model.kind == ArtifactKind.FIDUCIAL_MODEL
+    assert fiducial_model.parent_ids == [tracking_stack.id, seed_model.id]
+    assert fiducial_model.parameters["num_fiducials"] == 4
+    assert fiducial_model.parameters["coverage_fraction"] == pytest.approx(1.0)
+    tracking_qc = FiducialModelQc.model_validate_json(
+        tracking_qc_artifact.path.read_text()
+    )
+    assert tracking_qc.stage == "tracked"
+    assert tracking_qc.status == QcStatus.PASS
+    assert registry.get(fiducial_model.id) == fiducial_model
+    assert [Path(command[0]).name for command in commands] == [
+        "tiltxcorr",
+        "imodinfo",
+    ]
+
+
 def _stack_artifact(tmp_path: Path, data: np.ndarray) -> Artifact:
     path = tmp_path / "TS_TEST.zarr"
     zarr.save(path, data)
@@ -445,7 +597,7 @@ def _fake_imod_dir(tmp_path: Path) -> Path:
     imod_dir = tmp_path / "imod"
     bin_dir = imod_dir / "bin"
     bin_dir.mkdir(parents=True)
-    for name in ("newstack", "autofidseed", "beadtrack", "imodinfo"):
+    for name in ("newstack", "autofidseed", "beadtrack", "tiltxcorr", "imodinfo"):
         (bin_dir / name).touch()
     return imod_dir
 
