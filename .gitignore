@@ -22,8 +22,19 @@ outputs/
 *.zarr/
 *.log*
 *.com
+*.tar
 
 
 # EMPIAR download layouts are per-user/exploratory; keep only the example.
 configs/empiar-layouts/*
 !configs/empiar-layouts/example.yaml
+
+# membrain-pick output
+mesh_data/
+predict_output/
+*.h5
+*.obj
+*.npz
+
+# CTFFIND scratch
+.Ctffind.dff

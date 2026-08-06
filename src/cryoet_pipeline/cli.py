@@ -101,6 +101,10 @@ from cryoet_pipeline.backends.template import (
     prepare_template_and_register,
 )
 from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
+from cryoet_pipeline.bypass_external_inputs import (
+    import_external_picks_for_extraction,
+    import_external_tomogram_for_extraction,
+)
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DEFAULT_EMPIAR_ID,
@@ -2796,6 +2800,21 @@ def extract_particles(
         float | None,
         typer.Option(help="Drop picks with rlnLCCmax below this value."),
     ] = None,
+    tomogram_mrc: Annotated[
+        Path | None,
+        typer.Option(
+            help="BYPASS (temporary): use this external MRC tomogram instead of looking "
+            "one up in the registry. For testing against tomograms reconstructed "
+            "outside this pipeline."
+        ),
+    ] = None,
+    picks_star: Annotated[
+        Path | None,
+        typer.Option(
+            help="BYPASS (temporary): use this external pytom-match-pick STAR file "
+            "instead of looking one up in the registry."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -2817,16 +2836,43 @@ def extract_particles(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    # The picks are found by label; the tomogram comes from what the picks
-    # themselves recorded rather than from a second lookup on the same label.
-    # One `--variant` cannot select both: picks made by a parameter sweep carry
-    # the sweep's label while the tomogram they were found in keeps the lane's,
-    # so asking for one label found the picks and lost the tomogram. Following
-    # the recorded lineage cannot mismatch them, and needs no extra flag.
-    picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
-    tomogram = _tomogram_from_picks(
-        artifact_registry, picks, tilt_series_manifest, variant=variant
-    )
+    if tomogram_mrc is None and picks_star is None:
+        # The picks are found by label; the tomogram comes from what the picks
+        # themselves recorded rather than from a second lookup on the same label.
+        # One `--variant` cannot select both: picks made by a parameter sweep carry
+        # the sweep's label while the tomogram they were found in keeps the lane's,
+        # so asking for one label found the picks and lost the tomogram. Following
+        # the recorded lineage cannot mismatch them, and needs no extra flag.
+        picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+        tomogram = _tomogram_from_picks(
+            artifact_registry, picks, tilt_series_manifest, variant=variant
+        )
+    else:
+        # BYPASS: an external input is resolved tomogram-first, because external
+        # picks are told which tomogram they refer to rather than read from it.
+        if tomogram_mrc is not None:
+            tomogram = import_external_tomogram_for_extraction(
+                mrc_path=tomogram_mrc,
+                tilt_series_id=tilt_series_manifest.tilt_series_id,
+                out=out,
+            )
+            artifact_registry.add(tomogram, replace=overwrite)
+        else:
+            tomogram = _tomogram_artifact(
+                artifact_registry, tilt_series_manifest, variant=variant
+            )
+        if picks_star is not None:
+            picks = import_external_picks_for_extraction(
+                star_path=picks_star,
+                tomogram=tomogram,
+                tilt_series_id=tilt_series_manifest.tilt_series_id,
+            )
+            artifact_registry.add(picks, replace=overwrite)
+        else:
+            picks = _picks_artifact(
+                artifact_registry, tilt_series_manifest, variant=variant
+            )
+            
     selected_backend = _particle_extraction_backend(backend)
     parameters: dict[str, object] = {
         "variant": variant,
