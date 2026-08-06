@@ -232,6 +232,37 @@ class PickingBackend(Protocol):
         ...
 
 
+class ParticleExtractionBackend(Protocol):
+    """Replaceable backend for cropping subvolumes from a tomogram at pick locations."""
+
+    name: str
+
+    def extract(
+        self,
+        tomogram: Artifact,
+        picks: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a particle-stack artifact and its QC artifact."""
+        ...
+
+
+class SubtomogramAveragingBackend(Protocol):
+    """Replaceable backend for iterative subtomogram alignment and averaging."""
+
+    name: str
+
+    def average(
+        self,
+        particles: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return an average map, a refined per-particle alignment table, and a QC artifact."""
+        ...
+
+
 class DatasetExportBackend(Protocol):
     """Replaceable backend for exporting project data to external dataset formats."""
 

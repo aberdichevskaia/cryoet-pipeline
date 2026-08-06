@@ -18,6 +18,7 @@ class AxisOrder(StrEnum):
     ZYX = "zyx"
     TYX = "tyx"
     FYX = "fyx"
+    NZYX = "nzyx"
 
 
 class ArtifactKind(StrEnum):
@@ -37,6 +38,8 @@ class ArtifactKind(StrEnum):
     DENOISED_TOMOGRAM = "denoised_tomogram"
     SEGMENTATION = "segmentation"
     PICKS = "picks"
+    PARTICLE_STACK = "particle_stack"
+    SUBTOMOGRAM_AVERAGE = "subtomogram_average"
     DATASET_EXPORT = "dataset_export"
     QC = "qc"
 
@@ -571,6 +574,78 @@ class PicksQc(BaseModel):
             raise ValueError("picks QC score statistics must be finite")
         if self.particle_count == 0 and score_values:
             raise ValueError("picks QC cannot report score statistics with zero particles")
+        return self
+
+
+class ParticleExtractionQc(BaseModel):
+    """Machine-readable statistics for a subvolume-extraction result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    input_tomogram_id: str
+    picks_id: str
+    particle_stack_id: str
+    box_size_px: int = Field(gt=0)
+    requested_particle_count: int = Field(ge=0)
+    extracted_particle_count: int = Field(ge=0)
+    dropped_edge_count: int = Field(ge=0)
+    dropped_score_count: int = Field(ge=0)
+    minimum_score_threshold: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> ParticleExtractionQc:
+        accounted = (
+            self.extracted_particle_count + self.dropped_edge_count + self.dropped_score_count
+        )
+        if accounted != self.requested_particle_count:
+            raise ValueError(
+                "extracted + dropped_edge + dropped_score must equal requested_particle_count"
+            )
+        return self
+
+
+class SubtomogramAveragingQc(BaseModel):
+    """Machine-readable statistics for an iterative subtomogram-averaging result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    particle_stack_id: str
+    average_id: str
+    particle_count: int = Field(ge=0)
+    iterations_run: int = Field(ge=0)
+    mean_final_correlation: float | None = None
+    minimum_final_correlation: float | None = None
+    initial_reference_correlation_mean: float | None = None
+    initial_reference_correlation_fraction_above_threshold: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> SubtomogramAveragingQc:
+        correlation_values = [
+            value
+            for value in (
+                self.mean_final_correlation,
+                self.minimum_final_correlation,
+                self.initial_reference_correlation_mean,
+            )
+            if value is not None
+        ]
+        if not all(isfinite(value) for value in correlation_values):
+            raise ValueError("subtomogram averaging QC correlations must be finite")
+        fraction = self.initial_reference_correlation_fraction_above_threshold
+        if fraction is not None and not (0.0 <= fraction <= 1.0):
+            raise ValueError(
+                "initial_reference_correlation_fraction_above_threshold must be in [0, 1]"
+            )
         return self
 
 

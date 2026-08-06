@@ -59,9 +59,11 @@ from cryoet_pipeline.backends.protocols import (
     FinalAlignedStackBackend,
     FineAlignmentBackend,
     MotionCorrectionBackend,
+    ParticleExtractionBackend,
     PickingBackend,
     ReconstructionBackend,
     SegmentationBackend,
+    SubtomogramAveragingBackend,
     TiltAlignmentBackend,
 )
 from cryoet_pipeline.backends.reconstruction import (
@@ -77,6 +79,12 @@ from cryoet_pipeline.backends.segmentation import (
     segment_and_register,
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
+from cryoet_pipeline.backends.subtomogram import (
+    CubicCropExtractionBackend,
+    FftRefinementAveragingBackend,
+    average_and_register,
+    extract_and_register,
+)
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DEFAULT_EMPIAR_ID,
@@ -1778,6 +1786,170 @@ def pick_particles(
     typer.echo(f"updated {registry}")
 
 
+@app.command("extract-particles")
+def extract_particles(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for extracted particles.")],
+    box_size_px: Annotated[
+        int,
+        typer.Option(min=1, help="Cubic subvolume side length, in tomogram voxels."),
+    ],
+    backend: Annotated[
+        str,
+        typer.Option(help="Particle extraction backend to use."),
+    ] = "cubic-crop",
+    minimum_score: Annotated[
+        float | None,
+        typer.Option(help="Drop picks with rlnLCCmax below this value."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite the particle stack, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Crop cubic subvolumes from a tomogram at picked particle locations."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    picks = _picks_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _particle_extraction_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "box_size_px": box_size_px,
+    }
+    if minimum_score is not None:
+        parameters["minimum_score"] = minimum_score
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = extract_and_register(
+        selected_backend,
+        tomogram,
+        picks,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    particle_stack, qc_report = artifacts
+    typer.echo(f"wrote particle stack: {particle_stack.path}")
+    typer.echo(f"wrote extraction QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("average-particles")
+def average_particles(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for the average map.")],
+    backend: Annotated[
+        str,
+        typer.Option(help="Subtomogram averaging backend to use."),
+    ] = "fft-refinement",
+    num_iterations: Annotated[
+        int,
+        typer.Option(min=1, help="Number of coarse-to-fine refinement iterations."),
+    ] = 5,
+    initial_angular_step_deg: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="First-iteration local rotation search step, in degrees (halves each "
+            "iteration).",
+        ),
+    ] = 6.0,
+    initial_shift_step_px: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="First-iteration local shift search step, in pixels (halves each iteration).",
+        ),
+    ] = 2.0,
+    initial_reference: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional starting reference map (e.g. the picking template); also "
+            "enables a rot/tilt/psi convention self-check reported in QC."
+        ),
+    ] = None,
+    initial_reference_correlation_threshold: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            max=1.0,
+            help="Self-check threshold: particles are expected to correlate with the "
+            "initial reference above this value before any refinement.",
+        ),
+    ] = 0.3,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite the average map, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Iteratively refine per-particle orientation/shift and average subtomograms."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    particle_stack = _particle_stack_artifact(artifact_registry, tilt_series_manifest)
+    selected_backend = _subtomogram_averaging_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "num_iterations": num_iterations,
+        "initial_angular_step_deg": initial_angular_step_deg,
+        "initial_shift_step_px": initial_shift_step_px,
+        "initial_reference_correlation_threshold": initial_reference_correlation_threshold,
+    }
+    if initial_reference is not None:
+        parameters["initial_reference_path"] = initial_reference
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = average_and_register(
+        selected_backend,
+        particle_stack,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    average_map, qc_report = artifacts
+    typer.echo(f"wrote subtomogram average: {average_map.path}")
+    typer.echo(f"wrote averaging QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
@@ -1994,6 +2166,28 @@ def _picking_backend(name: str) -> PickingBackend:
     )
 
 
+def _particle_extraction_backend(name: str) -> ParticleExtractionBackend:
+    normalized = name.lower()
+    if normalized == "cubic-crop":
+        return CubicCropExtractionBackend()
+
+    raise typer.BadParameter(
+        f"unsupported particle extraction backend {name!r}; expected: cubic-crop",
+        param_hint="backend",
+    )
+
+
+def _subtomogram_averaging_backend(name: str) -> SubtomogramAveragingBackend:
+    normalized = name.lower()
+    if normalized == "fft-refinement":
+        return FftRefinementAveragingBackend()
+
+    raise typer.BadParameter(
+        f"unsupported subtomogram averaging backend {name!r}; expected: fft-refinement",
+        param_hint="backend",
+    )
+
+
 def _optional_segmentation_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
@@ -2042,6 +2236,42 @@ def _tomogram_artifact(
     if len(matches) != 1:
         raise typer.BadParameter(
             f"expected exactly one full tomogram for {manifest.tilt_series_id}, "
+            f"found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _picks_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.PICKS)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one picks artifact for {manifest.tilt_series_id}, "
+            f"found {len(matches)}",
+            param_hint="registry",
+        )
+    return matches[0]
+
+
+def _particle_stack_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> Artifact:
+    matches = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.PARTICLE_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if len(matches) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one particle stack for {manifest.tilt_series_id}, "
             f"found {len(matches)}",
             param_hint="registry",
         )
