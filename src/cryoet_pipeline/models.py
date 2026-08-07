@@ -649,6 +649,35 @@ class SubtomogramAveragingQc(BaseModel):
         return self
 
 
+class FscQc(BaseModel):
+    """Machine-readable Fourier shell correlation report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    mode: str
+    box_size_px: int = Field(gt=0)
+    pixel_spacing_angstrom: float = Field(gt=0)
+    threshold: float
+    crossing_resolution_angstrom: float | None = None
+    resolution_angstrom: list[float]
+    correlation: list[float]
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_curve(self) -> FscQc:
+        if len(self.resolution_angstrom) != len(self.correlation):
+            raise ValueError("resolution_angstrom and correlation must be the same length")
+        if not self.resolution_angstrom:
+            raise ValueError("FSC curve must have at least one shell")
+        if self.crossing_resolution_angstrom is not None and not isfinite(
+            self.crossing_resolution_angstrom
+        ):
+            raise ValueError("crossing_resolution_angstrom must be finite")
+        return self
+
+
 class Artifact(BaseModel):
     """Serializable record for any artifact written by the pipeline."""
 

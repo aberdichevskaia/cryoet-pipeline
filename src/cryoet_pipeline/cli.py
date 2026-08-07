@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Annotated
 
@@ -84,6 +85,7 @@ from cryoet_pipeline.backends.subtomogram import (
     FftRefinementAveragingBackend,
     average_and_register,
     extract_and_register,
+    torch_device_for_preference,
 )
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
@@ -94,6 +96,12 @@ from cryoet_pipeline.empiar import (
     load_dataset_layout,
 )
 from cryoet_pipeline.external_stack import import_external_tilt_stack
+from cryoet_pipeline.fsc import (
+    build_half_set_average,
+    compute_and_write_fsc_report,
+    load_mrc_volume,
+    plot_fsc_curve,
+)
 from cryoet_pipeline.models import Artifact, ArtifactKind, ProjectConfig, TiltSeriesManifest
 from cryoet_pipeline.project import initialize_project
 from cryoet_pipeline.runtime import normalize_device, resolve_device
@@ -1948,6 +1956,132 @@ def average_particles(
     typer.echo(f"wrote averaging QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
     typer.echo(f"updated {registry}")
+
+
+@app.command("compute-fsc")
+def compute_fsc_command(
+    mode: Annotated[
+        str,
+        typer.Option(help="FSC mode: half-set or map-to-model."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output path for the FSC report JSON.")],
+    threshold: Annotated[
+        float | None,
+        typer.Option(
+            help="Correlation threshold for the resolution crossing (default: 0.143 for "
+            "half-set, 0.5 for map-to-model)."
+        ),
+    ] = None,
+    particle_stack: Annotated[
+        Path | None,
+        typer.Option(help="[half-set] Particle stack Zarr from extract-particles."),
+    ] = None,
+    metadata: Annotated[
+        Path | None,
+        typer.Option(help="[half-set] Refined particle metadata STAR from average-particles."),
+    ] = None,
+    pixel_spacing_angstrom: Annotated[
+        float | None,
+        typer.Option(help="[half-set] Pixel spacing, angstrom."),
+    ] = None,
+    average_map: Annotated[
+        Path | None,
+        typer.Option(help="[map-to-model] Final average map MRC."),
+    ] = None,
+    model_map: Annotated[
+        Path | None,
+        typer.Option(help="[map-to-model] Reference/template map MRC to compare against."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    plot: Annotated[
+        Path | None,
+        typer.Option(help="Optional PNG path: FSC (y) vs spatial frequency, 1/A (x)."),
+    ] = None,
+) -> None:
+    """Compute a Fourier shell correlation curve: half-set or map-to-model."""
+
+    normalized_mode = mode.lower()
+    torch_device = torch_device_for_preference(resolve_device(device))
+
+    if normalized_mode == "half-set":
+        if particle_stack is None or metadata is None or pixel_spacing_angstrom is None:
+            raise typer.BadParameter(
+                "half-set mode requires --particle-stack, --metadata, and "
+                "--pixel-spacing-angstrom",
+                param_hint="mode",
+            )
+        volume_a = build_half_set_average(
+            particle_stack_path=particle_stack,
+            metadata_path=metadata,
+            random_subset=1,
+            device=torch_device,
+        )
+        volume_b = build_half_set_average(
+            particle_stack_path=particle_stack,
+            metadata_path=metadata,
+            random_subset=2,
+            device=torch_device,
+        )
+        resolved_pixel_spacing = pixel_spacing_angstrom
+        resolved_threshold = threshold if threshold is not None else 0.143
+    elif normalized_mode == "map-to-model":
+        if average_map is None or model_map is None:
+            raise typer.BadParameter(
+                "map-to-model mode requires --average-map and --model-map",
+                param_hint="mode",
+            )
+        volume_a, voxel_size_a = load_mrc_volume(average_map)
+        volume_b, voxel_size_b = load_mrc_volume(model_map)
+        if not math.isclose(voxel_size_a, voxel_size_b, rel_tol=1e-3):
+            raise typer.BadParameter(
+                f"--average-map voxel size {voxel_size_a:.4f} does not match --model-map "
+                f"voxel size {voxel_size_b:.4f}",
+                param_hint="model_map",
+            )
+        volume_a = volume_a.to(torch_device)
+        volume_b = volume_b.to(torch_device)
+        resolved_pixel_spacing = (
+            pixel_spacing_angstrom if pixel_spacing_angstrom is not None else voxel_size_a
+        )
+        resolved_threshold = threshold if threshold is not None else 0.5
+    else:
+        raise typer.BadParameter(
+            f"unsupported FSC mode {mode!r}; expected: half-set, map-to-model",
+            param_hint="mode",
+        )
+
+    report = compute_and_write_fsc_report(
+        volume_a,
+        volume_b,
+        mode=normalized_mode,
+        pixel_spacing_angstrom=resolved_pixel_spacing,
+        threshold=resolved_threshold,
+        out=out,
+    )
+
+    if plot is not None:
+        plot_fsc_curve(
+            report.resolution_angstrom,
+            report.correlation,
+            threshold=report.threshold,
+            crossing_resolution_angstrom=report.crossing_resolution_angstrom,
+            out=plot,
+            title=f"FSC ({normalized_mode})",
+        )
+        typer.echo(f"wrote FSC plot: {plot}")
+
+    typer.echo(f"wrote FSC report: {out}")
+    if report.crossing_resolution_angstrom is not None:
+        typer.echo(
+            f"resolution at threshold {resolved_threshold:.3f}: "
+            f"{report.crossing_resolution_angstrom:.2f} A"
+        )
+    else:
+        typer.echo(f"correlation never dropped below threshold {resolved_threshold:.3f}")
+    typer.echo(f"QC status: {report.status.value}")
 
 
 @app.command()

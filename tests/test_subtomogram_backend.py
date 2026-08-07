@@ -14,9 +14,9 @@ from cryoet_pipeline.backends.protocols import BackendContext
 from cryoet_pipeline.backends.subtomogram import (
     CubicCropExtractionBackend,
     FftRefinementAveragingBackend,
-    _read_particle_star,
     average_and_register,
     extract_and_register,
+    read_particle_star,
 )
 from cryoet_pipeline.models import (
     Artifact,
@@ -132,7 +132,7 @@ def test_cubic_crop_extraction_writes_particle_stack_and_drops_bad_rows(
     tomogram_data = zarr.open(tomogram.path, mode="r")[:]
     np.testing.assert_allclose(stack[0], tomogram_data[7:13, 7:13, 7:13])
 
-    records = _read_particle_star(Path(particle_stack.parameters["metadata_path"]))
+    records = read_particle_star(Path(particle_stack.parameters["metadata_path"]))
     assert len(records) == 1
     assert records[0].rot_deg == pytest.approx(10.0)
     assert records[0].tilt_deg == pytest.approx(20.0)
@@ -233,7 +233,7 @@ def _particle_stack_artifact(
     for index, volume in enumerate(volumes):
         stack[index] = volume.numpy()
 
-    from cryoet_pipeline.backends.subtomogram import ParticleRecord, _write_particle_star
+    from cryoet_pipeline.backends.subtomogram import ParticleRecord, write_particle_star
 
     records = [
         ParticleRecord(
@@ -254,7 +254,7 @@ def _particle_stack_artifact(
         for index, angles in enumerate(picked_angles)
     ]
     metadata_path = tmp_path / "particles.star"
-    _write_particle_star(metadata_path, records)
+    write_particle_star(metadata_path, records)
 
     artifact = Artifact(
         id="TS_TEST:particle_stack:cubic_crop",
@@ -320,7 +320,7 @@ def test_fft_refinement_averaging_recovers_known_orientations(tmp_path: Path) ->
     assert report["initial_reference_correlation_mean"] > 0.5
     assert report["mean_final_correlation"] > report["initial_reference_correlation_mean"]
 
-    records = _read_particle_star(Path(average_artifact.parameters["metadata_path"]))
+    records = read_particle_star(Path(average_artifact.parameters["metadata_path"]))
     for record, true in zip(records, true_angles, strict=True):
         recovered = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
         expected = relion_euler_to_matrix(*true)
@@ -341,9 +341,9 @@ def test_fft_refinement_averaging_requires_nonempty_stack(tmp_path: Path) -> Non
         dtype=np.float32,
     )
     metadata_path = tmp_path / "empty.star"
-    from cryoet_pipeline.backends.subtomogram import _write_particle_star
+    from cryoet_pipeline.backends.subtomogram import write_particle_star
 
-    _write_particle_star(metadata_path, [])
+    write_particle_star(metadata_path, [])
     particle_stack = Artifact(
         id="TS_TEST:particle_stack:cubic_crop",
         kind=ArtifactKind.PARTICLE_STACK,

@@ -148,7 +148,7 @@ class CubicCropExtractionBackend:
                     random_subset=1 + (output_index % 2),
                 )
             )
-        _write_particle_star(paths.particle_metadata, records)
+        write_particle_star(paths.particle_metadata, records)
 
         warnings: list[str] = []
         status = QcStatus.PASS
@@ -257,7 +257,7 @@ class FftRefinementAveragingBackend:
             context, "initial_reference_correlation_threshold", default=0.3
         )
         overwrite = _bool_parameter(context, "overwrite", default=False)
-        device = _torch_device(context.device)
+        device = torch_device_for_preference(context.device)
 
         paths = _averaging_paths(context.output_dir, manifest, backend_name=self.name)
         _require_available_paths(paths.outputs, overwrite=overwrite)
@@ -270,7 +270,7 @@ class FftRefinementAveragingBackend:
             raise ValueError("particle stack has no particles to average")
         box_size = int(particle_stack.shape[1])
         metadata_path = Path(cast(str, particles.parameters["metadata_path"]))
-        records = _read_particle_star(metadata_path)
+        records = read_particle_star(metadata_path)
 
         raw_volumes = [
             torch.as_tensor(np.asarray(particle_stack[index]), device=device)
@@ -341,7 +341,7 @@ class FftRefinementAveragingBackend:
             aligned = new_aligned
             reference = aligned.mean(dim=0)
 
-        _write_particle_star(paths.particle_metadata, records)
+        write_particle_star(paths.particle_metadata, records)
         _write_average_mrc(
             paths.average_map,
             reference.detach().cpu().numpy(),
@@ -578,7 +578,7 @@ def _write_average_mrc(
             mrc.voxel_size = pixel_spacing_angstrom
 
 
-def _torch_device(preference: DevicePreference) -> torch.device:
+def torch_device_for_preference(preference: DevicePreference) -> torch.device:
     if preference is DevicePreference.CUDA:
         return torch.device("cuda")
     if preference is DevicePreference.MPS:
@@ -725,7 +725,7 @@ _PARTICLE_STAR_COLUMNS = (
 )
 
 
-def _write_particle_star(path: Path, records: list[ParticleRecord]) -> None:
+def write_particle_star(path: Path, records: list[ParticleRecord]) -> None:
     lines = ["data_particles", "", "loop_"]
     lines.extend(f"_{name} #{position}" for position, name in enumerate(_PARTICLE_STAR_COLUMNS, 1))
     for record in records:
@@ -752,7 +752,7 @@ def _write_particle_star(path: Path, records: list[ParticleRecord]) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
-def _read_particle_star(path: Path) -> list[ParticleRecord]:
+def read_particle_star(path: Path) -> list[ParticleRecord]:
     columns, rows = _read_star_loop(path)
     missing = [name for name in _PARTICLE_STAR_COLUMNS if name not in columns]
     if missing:

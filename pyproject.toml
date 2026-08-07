@@ -26,6 +26,10 @@ io = [
 ]
 gpu = [
   "torch>=2.2",
+  "torch-fourier-shell-correlation>=0.5",
+]
+viz = [
+  "matplotlib>=3.8",
 ]
 dev = [
   "pytest>=8.2",
