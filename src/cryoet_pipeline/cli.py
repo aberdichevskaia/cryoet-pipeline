@@ -99,6 +99,7 @@ from cryoet_pipeline.external_stack import import_external_tilt_stack
 from cryoet_pipeline.fsc import (
     build_half_set_average,
     compute_and_write_fsc_report,
+    load_mask,
     load_mrc_volume,
     plot_fsc_curve,
 )
@@ -2000,6 +2001,13 @@ def compute_fsc_command(
         Path | None,
         typer.Option(help="Optional PNG path: FSC (y) vs spatial frequency, 1/A (x)."),
     ] = None,
+    mask: Annotated[
+        Path | None,
+        typer.Option(
+            help="Optional real-space mask MRC (same box size), applied to both volumes "
+            "before computing FSC, so background noise isn't counted."
+        ),
+    ] = None,
 ) -> None:
     """Compute a Fourier shell correlation curve: half-set or map-to-model."""
 
@@ -2052,6 +2060,11 @@ def compute_fsc_command(
             f"unsupported FSC mode {mode!r}; expected: half-set, map-to-model",
             param_hint="mode",
         )
+
+    if mask is not None:
+        mask_tensor = load_mask(mask, expected_shape=tuple(volume_a.shape)).to(torch_device)
+        volume_a = volume_a * mask_tensor
+        volume_b = volume_b * mask_tensor
 
     report = compute_and_write_fsc_report(
         volume_a,

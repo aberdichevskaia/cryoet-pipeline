@@ -12,6 +12,7 @@ from cryoet_pipeline.backends.subtomogram import ParticleRecord, write_particle_
 from cryoet_pipeline.fsc import (
     build_half_set_average,
     compute_fsc_curve,
+    load_mask,
     load_mrc_volume,
     plot_fsc_curve,
 )
@@ -197,3 +198,50 @@ def test_plot_fsc_curve_writes_a_png(tmp_path: Path) -> None:
 
     assert out.is_file()
     assert out.stat().st_size > 0
+
+
+def _sphere_mask(size: int, *, radius: float) -> torch.Tensor:
+    axis = torch.arange(size, dtype=torch.float32) - (size - 1) / 2.0
+    z_grid, y_grid, x_grid = torch.meshgrid(axis, axis, axis, indexing="ij")
+    squared_radius = x_grid**2 + y_grid**2 + z_grid**2
+    return (squared_radius <= radius**2).to(torch.float32)
+
+
+def test_load_mask_rejects_shape_mismatch(tmp_path: Path) -> None:
+    path = tmp_path / "mask.mrc"
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(np.ones((6, 6, 6), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="does not match volume shape"):
+        load_mask(path, expected_shape=(8, 8, 8))
+
+
+def test_load_mask_round_trips(tmp_path: Path) -> None:
+    mask_data = _sphere_mask(8, radius=3.0).numpy()
+    path = tmp_path / "mask.mrc"
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(mask_data)
+
+    loaded = load_mask(path, expected_shape=(8, 8, 8))
+
+    np.testing.assert_allclose(loaded.numpy(), mask_data)
+
+
+def test_masking_removes_background_noise_from_fsc() -> None:
+    size = 16
+    torch.manual_seed(0)
+    shared_particle = _smooth_blob(size, seed=0)
+    mask = _sphere_mask(size, radius=4.0)
+
+    noise_a = torch.randn(size, size, size)
+    noise_b = torch.randn(size, size, size)
+    volume_a = shared_particle * mask + noise_a * (1 - mask)
+    volume_b = shared_particle * mask + noise_b * (1 - mask)
+
+    unmasked = compute_fsc_curve(volume_a, volume_b, pixel_spacing_angstrom=2.0, threshold=0.5)
+    masked = compute_fsc_curve(
+        volume_a * mask, volume_b * mask, pixel_spacing_angstrom=2.0, threshold=0.5
+    )
+
+    assert min(masked.correlation) > min(unmasked.correlation)
+    assert all(value > 0.9 for value in masked.correlation)

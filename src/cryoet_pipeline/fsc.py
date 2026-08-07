@@ -177,6 +177,18 @@ def plot_fsc_curve(
     plt.close(figure)
 
 
+def load_mask(path: Path, *, expected_shape: tuple[int, ...]) -> torch.Tensor:
+    """Load a real-space mask MRC and validate it matches the volume shape."""
+
+    with mrcfile.open(path, permissive=True) as mrc:
+        data = np.array(mrc.data, dtype=np.float32)
+    if data.shape != expected_shape:
+        raise ValueError(
+            f"mask shape {data.shape} does not match volume shape {expected_shape}: {path}"
+        )
+    return torch.as_tensor(data)
+
+
 def load_mrc_volume(path: Path) -> tuple[torch.Tensor, float]:
     """Load an MRC volume and its voxel size (angstrom, assumed isotropic)."""
 
