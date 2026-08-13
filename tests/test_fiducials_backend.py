@@ -14,8 +14,8 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
-    ImodPatchTrackingBackend,
-    ImodPatchTrackingSeedBackend,
+    ImodPatchSeedBackend,
+    ImodPatchTrackBackend,
     _compute_patch_size_px,
     generate_seed_and_register,
     parse_imod_model_ascii,
@@ -363,7 +363,7 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
         },
     )
     seed_artifacts = generate_seed_and_register(
-        ImodPatchTrackingSeedBackend(),
+        ImodPatchSeedBackend(),
         stack,
         alignment,
         manifest,
@@ -444,7 +444,7 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
         },
     )
     tracking_artifacts = track_fiducials_and_register(
-        ImodPatchTrackingBackend(fake_runner),
+        ImodPatchTrackBackend(fake_runner),
         tracking_stack,
         seed_model,
         manifest,

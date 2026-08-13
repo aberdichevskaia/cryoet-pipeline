@@ -15,21 +15,30 @@ from multiframe MRC files plus SerialEM `.mdoc` metadata to visual/QC-ready tomo
 
 ## Current status
 
-The current implementation covers a deterministic fiducial-based baseline from
-multiframe MRC movies through a positioned, visual-QC-ready tomogram:
+The pipeline runs deterministically from multiframe MRC movies through to a
+subtomogram average with a resolution estimate:
 
 ```text
-ingest -> selectable motion correction -> tilt stack -> coarse IMOD alignment
-       -> aligned preview/QC -> automatic fiducial seed -> bead tracking
-       -> fine alignment -> final aligned stack -> positioned reconstruction
+ingest -> motion correction -> tilt stack -> coarse alignment -> QC preview
+       -> fiducial seed -> tracking -> fine alignment -> final aligned stack
+       -> CTF estimation -> CTF correction -> reconstruction
+       -> [restoration] -> [segmentation]
+       -> template preparation -> picking -> extraction
+       -> refinement/classification -> FSC
 ```
 
-Motion correction currently supports the `average` debug baseline,
-`phase-corr` Python baseline, and a `motioncor3` external-tool adapter.
+Every stage is a replaceable backend chosen with `--backend`; see
+[docs/backends.md](docs/backends.md) for what is available at each stage and how
+to choose. Stages in brackets are optional.
+
 The canonical tomogram is stored as Zarr in `ZYX` order. IMOD `.xf`, `.st`, and
 `.rec` files are retained as compatibility and visual-QC outputs. The coarse
 aligned stack is diagnostic only and cannot be selected by the reconstruction
-command. CTF estimation and correction remain later stages.
+command. Every stage writes a machine-readable QC report with a `pass`,
+`warning`, or `fail` status.
+
+Planned work, and the design decisions already settled for it, are in
+[docs/roadmap.md](docs/roadmap.md).
 
 ## Development
 
@@ -106,6 +115,24 @@ cryoet init \
   --device auto
 ```
 
+### Depositions without raw frames
+
+Some depositions ship one already-assembled stack per tilt-series rather than
+individual movies. There is nothing to motion-correct, so `init` and
+`prepare-tilt-series` do not apply; import the stack directly and continue from
+`align-tilt-series`:
+
+```bash
+cryoet import-tilt-stack \
+  --mdoc data/empiar-11538/data/mdoc_files/TS_0002.mrc.mdoc \
+  --stack data/empiar-11538/data/Untreated_dataset/TS_0002.mrc \
+  --tilt-series-id TS_0002 \
+  --out outputs/dev
+```
+
+Per-tilt metadata comes from the `.mdoc`; pixel spacing is read from the stack's
+own MRC header.
+
 Run the current baseline stages:
 
 ```bash
@@ -163,6 +190,21 @@ cryoet build-final-aligned-stack \
   --imod-dir /Applications/IMOD \
   --device cpu
 
+cryoet estimate-ctf \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --ctf-voltage-kv 300 \
+  --ctf-spherical-aberration-mm 2.7 \
+  --device cpu
+
+cryoet correct-ctf \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --imod-dir /Applications/IMOD \
+  --device cpu
+
 cryoet reconstruct-tomogram \
   --manifest outputs/dev/manifests/TS_01.json \
   --registry outputs/dev/artifacts.json \
@@ -180,12 +222,112 @@ cryoet segment-tomogram \
   --device cuda
 ```
 
+`estimate-ctf` defaults to CTFFIND5 and writes an IMOD-format `.defocus` model
+plus the diagnostic power-spectrum image. `correct-ctf` phase-flips with that
+model, taking voltage and spherical aberration from it rather than from its own
+flags so the two cannot disagree. `reconstruct-tomogram` then prefers the
+CTF-corrected stack automatically. Both stages are optional; skipping them
+reconstructs from the plain aligned stack.
+
 `segment-tomogram` consumes the reconstructed canonical Zarr tomogram directly;
 IsoNet2 restoration is not required. The MemBrain-seg adapter exports a
 temporary MRC with voxel size metadata, runs the external `membrain segment`
 command, and canonicalizes the selected segmentation output back to Zarr. Use
 `--membrain-output-name` if MemBrain-seg writes multiple `.mrc`/`.rec` outputs
 and the adapter cannot infer the intended segmentation volume.
+
+### Optional and standalone stages
+
+```bash
+# Motion-correct without assembling a stack. prepare-tilt-series does both;
+# this is for inspecting corrected projections on their own.
+cryoet correct-motion --manifest ... --registry ... --out outputs/dev
+
+# Fit one near-zero-tilt image first. estimate-ctf picks the result up
+# automatically and skips its own first pass.
+cryoet estimate-defocus-hint --manifest ... --registry ... --out outputs/dev \
+  --ctf-voltage-kv 300 --ctf-spherical-aberration-mm 2.7
+
+# Denoise/restore a reconstructed tomogram. Needs a trained IsoNet2 model.
+cryoet restore-tomogram --manifest ... --registry ... --out outputs/dev \
+  --isonet2-model /path/to/model
+```
+
+## Particle picking and subtomogram averaging
+
+Fetch a reference map from EMDB and build a matching template and mask, pick
+against it, then check the result in ChimeraX before committing to averaging:
+
+```bash
+cryoet prepare-template \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --emdb-id EMD-2638 \
+  --template-particle-diameter-angstrom 250
+
+cryoet pick-particles \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --pytom-particle-diameter 250 \
+  --device cuda
+
+cryoet export-picks \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev
+# then: chimerax <the printed .cxc file>
+```
+
+`prepare-template` caches the downloaded map under `<out>/emdb-cache`, resamples
+it to the tomogram's voxel size, and registers the template and mask so
+`pick-particles` finds them without explicit paths. Pass `--source-map` instead
+of `--emdb-id` to use a local map. Contrast inversion is on by default, since
+EMDB maps are bright and tomogram particles are dark; the QC report warns if the
+produced template does not look inverted as requested.
+
+Then extract subvolumes, refine and classify them, and estimate resolution:
+
+```bash
+cryoet extract-particles \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --box-size-px 96
+
+cryoet average-particles \
+  --manifest outputs/dev/manifests/TS_01.json \
+  --registry outputs/dev/artifacts.json \
+  --out outputs/dev \
+  --num-classes 1 \
+  --cone-range-deg 12 --cone-sampling-deg 6 \
+  --particle-diameter-angstrom 250 \
+  --device cuda
+
+cryoet compute-fsc \
+  --mode half-set \
+  --particle-stack outputs/dev/particles/TS_01/TS_01_cubic-crop_particles.zarr \
+  --metadata outputs/dev/averages/TS_01/TS_01_cone-search_particles.star \
+  --pixel-spacing-angstrom 9.504 \
+  --out outputs/dev/qc/TS_01/fsc_half_set.json \
+  --plot outputs/dev/qc/TS_01/fsc_half_set.png \
+  --device cuda
+```
+
+`average-particles` defaults to the `cone-search` backend, which searches
+orientations on a cone, finds shifts from the cross-correlation peak, and
+refines several references at once when `--num-classes` is above one. Angular
+sampling shrinks each iteration but stops at the Crowther increment for the
+given particle diameter and target resolution; see
+[docs/backends.md](docs/backends.md) for the details and for the alternative
+`fft-refinement` baseline.
+
+`compute-fsc` also runs in `--mode map-to-model` to compare the average against
+the template. Both modes accept `--mask` so background noise outside the
+particle is not counted. Note that the half-set FSC is currently optimistic:
+both halves are refined against a shared reference, so it is not yet a true
+gold-standard estimate — see [docs/roadmap.md](docs/roadmap.md).
 
 On a Linux/NVIDIA processing host where MotionCor3 is already managed by the
 user or cluster, replace only the motion backend:
@@ -215,6 +357,16 @@ reconstruction values for controlled experiments. Pixel spacing can likewise
 be overridden during fiducial seeding when acquisition metadata needs
 calibration.
 
+For specimens without gold beads, switch both fiducial steps to patch tracking:
+
+```bash
+cryoet generate-fiducial-seed ... --backend imod-patch-seed
+cryoet track-fiducials       ... --backend imod-patch-track
+```
+
+Patch size is derived from the image size, the requested patch count, and the
+margin rather than entered directly.
+
 The default device is `auto`: CUDA is preferred on Linux GPU machines, Apple
 Silicon MPS is used when available, and CPU is the fallback. On M4 Macs this is
 intended for ingest, QC, small tests, and backends that support PyTorch MPS;
@@ -225,3 +377,19 @@ For GPU work on Linux, install the CUDA-compatible PyTorch build separately if n
 ```bash
 python -m pip install -e ".[gpu,io,dev]"
 ```
+
+FSC plots need matplotlib, which lives in its own extra so it does not pull in
+the GPU stack:
+
+```bash
+python -m pip install -e ".[viz]"
+```
+
+## Documentation
+
+- [docs/backends.md](docs/backends.md) — every stage's backends and how to choose
+- [docs/roadmap.md](docs/roadmap.md) — planned work and settled design decisions
+- [docs/motioncor3_backend.md](docs/motioncor3_backend.md) — MotionCor3 adapter
+- [docs/architecture_decisions.md](docs/architecture_decisions.md),
+  [docs/storage_policy.md](docs/storage_policy.md),
+  [docs/qc_strategy.md](docs/qc_strategy.md) — design background

@@ -30,8 +30,8 @@ from cryoet_pipeline.backends.defocus_hint import (
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
-    ImodPatchTrackingBackend,
-    ImodPatchTrackingSeedBackend,
+    ImodPatchSeedBackend,
+    ImodPatchTrackBackend,
     generate_seed_and_register,
     track_fiducials_and_register,
 )
@@ -2677,7 +2677,7 @@ def _fiducial_seed_backend(name: str) -> FiducialSeedBackend:
     if normalized == "imod-autofidseed":
         return ImodAutofidseedBackend()
     if normalized == "imod-patch-seed":
-        return ImodPatchTrackingSeedBackend()
+        return ImodPatchSeedBackend()
 
     raise typer.BadParameter(
         f"unsupported fiducial seed backend {name!r}; "
@@ -2690,12 +2690,12 @@ def _fiducial_tracking_backend(name: str) -> FiducialTrackingBackend:
     normalized = name.lower()
     if normalized == "imod-beadtrack":
         return ImodBeadtrackBackend()
-    if normalized == "imod-tiltxcorr-patch":
-        return ImodPatchTrackingBackend()
+    if normalized == "imod-patch-track":
+        return ImodPatchTrackBackend()
 
     raise typer.BadParameter(
         f"unsupported fiducial tracking backend {name!r}; "
-        "expected: imod-beadtrack, imod-tiltxcorr-patch",
+        "expected: imod-beadtrack, imod-patch-track",
         param_hint="backend",
     )
 

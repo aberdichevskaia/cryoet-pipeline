@@ -606,7 +606,7 @@ def _compute_patch_size_px(
     return patch_size_px
 
 
-class ImodPatchTrackingSeedBackend:
+class ImodPatchSeedBackend:
     """Bin a tracking stack and size a patch grid for IMOD Tiltxcorr."""
 
     name = "imod_patch_seed"
@@ -802,10 +802,10 @@ class ImodPatchTrackingSeedBackend:
         return [tracking_stack_artifact, seed_artifact, report_artifact]
 
 
-class ImodPatchTrackingBackend:
+class ImodPatchTrackBackend:
     """Track a patch grid through a tilt series with IMOD Tiltxcorr."""
 
-    name = "imod_tiltxcorr_patch"
+    name = "imod_patch_track"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
