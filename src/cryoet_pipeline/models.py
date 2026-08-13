@@ -471,7 +471,54 @@ class DefocusHintQc(BaseModel):
 
 
 class CtfEstimationQc(BaseModel):
-    """Machine-readable statistics for tilt-series CTF estimation and correction."""
+    """Machine-readable statistics for tilt-series CTF estimation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 2
+    tilt_series_id: str
+    backend: str
+    input_stack_id: str
+    ctf_model_id: str
+    num_tilts: int = Field(ge=1)
+    voltage_kv: float = Field(gt=0.0)
+    spherical_aberration_mm: float = Field(gt=0.0)
+    amplitude_contrast: float = Field(ge=0.0, le=1.0)
+    pixel_spacing_angstrom: float = Field(gt=0.0)
+    nyquist_angstrom: float = Field(gt=0.0)
+    max_resolution_angstrom: float = Field(gt=0.0)
+    axis_angle_deg: float | None = None
+    hint_defocus_um: float | None = None
+    mean_defocus_um: float
+    minimum_defocus_um: float
+    maximum_defocus_um: float
+    mean_astigmatism_um: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> CtfEstimationQc:
+        values = [
+            self.mean_defocus_um,
+            self.minimum_defocus_um,
+            self.maximum_defocus_um,
+        ]
+        if self.axis_angle_deg is not None:
+            values.append(self.axis_angle_deg)
+        if not all(isfinite(value) for value in values):
+            raise ValueError("CTF estimation QC statistics must be finite")
+        if not (self.minimum_defocus_um <= self.mean_defocus_um <= self.maximum_defocus_um):
+            raise ValueError("CTF defocus statistics are inconsistent")
+        if self.max_resolution_angstrom < self.nyquist_angstrom:
+            raise ValueError(
+                "max_resolution_angstrom cannot be finer than the Nyquist limit; "
+                "it must be clamped before building the QC report"
+            )
+        return self
+
+
+class CtfCorrectionQc(BaseModel):
+    """Machine-readable statistics for tilt-series CTF phase-flip correction."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -485,6 +532,7 @@ class CtfEstimationQc(BaseModel):
     voltage_kv: float = Field(gt=0.0)
     spherical_aberration_mm: float = Field(gt=0.0)
     amplitude_contrast: float = Field(ge=0.0, le=1.0)
+    pixel_spacing_angstrom: float = Field(gt=0.0)
     axis_angle_deg: float
     mean_defocus_um: float
     minimum_defocus_um: float
@@ -493,7 +541,7 @@ class CtfEstimationQc(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_statistics(self) -> CtfEstimationQc:
+    def validate_statistics(self) -> CtfCorrectionQc:
         values = (
             self.axis_angle_deg,
             self.mean_defocus_um,
@@ -501,7 +549,7 @@ class CtfEstimationQc(BaseModel):
             self.maximum_defocus_um,
         )
         if not all(isfinite(value) for value in values):
-            raise ValueError("CTF estimation QC statistics must be finite")
+            raise ValueError("CTF correction QC statistics must be finite")
         if not (self.minimum_defocus_um <= self.mean_defocus_um <= self.maximum_defocus_um):
             raise ValueError("CTF defocus statistics are inconsistent")
         return self

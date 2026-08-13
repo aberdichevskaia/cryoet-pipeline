@@ -153,19 +153,40 @@ class DefocusEstimationBackend(Protocol):
         ...
 
 
-class CtfCorrectionBackend(Protocol):
-    """Replaceable backend for tilt-series CTF estimation and phase correction."""
+class CtfEstimationBackend(Protocol):
+    """Replaceable backend for per-tilt CTF estimation.
+
+    Implementations differ in the fitting program (IMOD ctfplotter, CTFFIND5,
+    ...) but all emit the same `CTF_MODEL` artifact: an IMOD-format `.defocus`
+    file, so any estimation backend can feed any correction backend.
+    """
 
     name: str
 
-    def correct(
+    def estimate(
         self,
         tilt_stack: Artifact,
         alignment: Artifact,
         manifest: TiltSeriesManifest,
         context: BackendContext,
     ) -> list[Artifact]:
-        """Return a CTF model, a CTF-corrected aligned stack, and a QC artifact."""
+        """Return a CTF model artifact and its QC artifact."""
+        ...
+
+
+class CtfCorrectionBackend(Protocol):
+    """Replaceable backend for tilt-series CTF phase correction."""
+
+    name: str
+
+    def correct(
+        self,
+        tilt_stack: Artifact,
+        ctf_model: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a CTF-corrected aligned stack and its QC artifact."""
         ...
 
 

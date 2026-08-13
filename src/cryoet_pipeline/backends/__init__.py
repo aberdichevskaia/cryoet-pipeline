@@ -8,8 +8,11 @@ from cryoet_pipeline.backends.alignment_qc import (
     evaluate_coarse_alignment_and_register,
 )
 from cryoet_pipeline.backends.ctf import (
-    ImodCtfPlotterBackend,
+    Ctffind5CtfEstimationBackend,
+    ImodCtfPhaseFlipBackend,
+    ImodCtfPlotterEstimationBackend,
     correct_ctf_and_register,
+    estimate_ctf_and_register,
 )
 from cryoet_pipeline.backends.defocus_hint import (
     Ctffind5DefocusHintBackend,
@@ -44,6 +47,7 @@ from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CoarseAlignmentQcBackend,
     CtfCorrectionBackend,
+    CtfEstimationBackend,
     DatasetExportBackend,
     DefocusEstimationBackend,
     DenoisingBackend,
@@ -83,6 +87,8 @@ __all__ = [
     "BackendContext",
     "CoarseAlignmentQcBackend",
     "CtfCorrectionBackend",
+    "CtfEstimationBackend",
+    "Ctffind5CtfEstimationBackend",
     "Ctffind5DefocusHintBackend",
     "DatasetExportBackend",
     "DefocusEstimationBackend",
@@ -93,7 +99,8 @@ __all__ = [
     "FinalAlignedStackBackend",
     "ImodAutofidseedBackend",
     "ImodBeadtrackBackend",
-    "ImodCtfPlotterBackend",
+    "ImodCtfPhaseFlipBackend",
+    "ImodCtfPlotterEstimationBackend",
     "ImodFinalAlignedStackBackend",
     "ImodTiltalignBackend",
     "ImodTiltXcorrAlignmentBackend",
@@ -114,6 +121,7 @@ __all__ = [
     "build_final_stack_and_register",
     "correct_and_register",
     "correct_ctf_and_register",
+    "estimate_ctf_and_register",
     "estimate_defocus_hint_and_register",
     "evaluate_coarse_alignment_and_register",
     "fine_align_and_register",

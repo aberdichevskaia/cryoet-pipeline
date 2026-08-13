@@ -66,6 +66,7 @@ to attach a future copilot or web cockpit without rewriting processing code.
 
 ## Supporting docs
 
+- [roadmap.md](roadmap.md)
 - [architecture_decisions.md](architecture_decisions.md)
 - [project_scope.md](project_scope.md)
 - [agent_readiness.md](agent_readiness.md)
