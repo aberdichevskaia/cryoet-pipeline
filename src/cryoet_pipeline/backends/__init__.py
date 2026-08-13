@@ -59,6 +59,7 @@ from cryoet_pipeline.backends.protocols import (
     PickingBackend,
     ReconstructionBackend,
     SegmentationBackend,
+    TemplatePreparationBackend,
     TiltAlignmentBackend,
     TiltStackBackend,
 )
@@ -78,6 +79,10 @@ from cryoet_pipeline.backends.stack import (
     SimpleTiltStackBackend,
     build_stack_and_register,
     write_tilt_angles,
+)
+from cryoet_pipeline.backends.template import (
+    PytomTemplateBackend,
+    prepare_template_and_register,
 )
 
 __all__ = [
@@ -111,9 +116,11 @@ __all__ = [
     "MotionCorrectionBackend",
     "PickingBackend",
     "PytomMatchPickBackend",
+    "PytomTemplateBackend",
     "ReconstructionBackend",
     "SegmentationBackend",
     "SimpleTiltStackBackend",
+    "TemplatePreparationBackend",
     "TiltAlignmentBackend",
     "TiltStackBackend",
     "align_and_register",
@@ -129,6 +136,7 @@ __all__ = [
     "parse_imod_xf",
     "parse_tiltalign_log",
     "pick_and_register",
+    "prepare_template_and_register",
     "reconstruct_and_register",
     "restore_and_register",
     "segment_and_register",

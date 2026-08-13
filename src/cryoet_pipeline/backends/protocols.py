@@ -237,6 +237,26 @@ class SegmentationBackend(Protocol):
         ...
 
 
+class TemplatePreparationBackend(Protocol):
+    """Replaceable backend for turning a reference density map into a template.
+
+    The target voxel size is taken from the tomogram that will be searched, so
+    a template cannot silently be prepared at the wrong scale.
+    """
+
+    name: str
+
+    def prepare(
+        self,
+        source_map: Path,
+        tomogram: Artifact,
+        manifest: TiltSeriesManifest,
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return a template, a template mask, and a QC artifact."""
+        ...
+
+
 class PickingBackend(Protocol):
     """Replaceable backend for particle or object picking."""
 

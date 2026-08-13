@@ -6,6 +6,7 @@ from typing import Annotated
 
 import typer
 
+from cryoet_pipeline.artiax_export import export_picks_for_artiax
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import (
     ImodTiltXcorrAlignmentBackend,
@@ -69,6 +70,7 @@ from cryoet_pipeline.backends.protocols import (
     ReconstructionBackend,
     SegmentationBackend,
     SubtomogramAveragingBackend,
+    TemplatePreparationBackend,
     TiltAlignmentBackend,
 )
 from cryoet_pipeline.backends.reconstruction import (
@@ -91,6 +93,11 @@ from cryoet_pipeline.backends.subtomogram import (
     extract_and_register,
     torch_device_for_preference,
 )
+from cryoet_pipeline.backends.template import (
+    PytomTemplateBackend,
+    prepare_template_and_register,
+)
+from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DEFAULT_EMPIAR_ID,
@@ -1824,6 +1831,166 @@ def segment_tomogram(
     typer.echo(f"updated {registry}")
 
 
+@app.command("prepare-template")
+def prepare_template(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for template artifacts.")],
+    emdb_id: Annotated[
+        str | None,
+        typer.Option(help="EMDB accession to fetch, e.g. EMD-2638. Cached between runs."),
+    ] = None,
+    source_map: Annotated[
+        Path | None,
+        typer.Option(help="Local reference map MRC/CCP4, instead of fetching from EMDB."),
+    ] = None,
+    backend: Annotated[
+        str,
+        typer.Option(help="Template preparation backend to use."),
+    ] = "pytom",
+    template_particle_diameter_angstrom: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Particle diameter, A; sizes the spherical mask."),
+    ] = None,
+    template_mask_radius_px: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Mask radius in template pixels, overriding the diameter."),
+    ] = None,
+    template_mask_sigma_px: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Gaussian falloff at the mask edge, pixels."),
+    ] = None,
+    template_box_size_px: Annotated[
+        int | None,
+        typer.Option(min=1, help="Template box size; defaults to what the resampling yields."),
+    ] = None,
+    template_low_pass_angstrom: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Low-pass filter the template to this resolution, A."),
+    ] = None,
+    template_invert: Annotated[
+        bool,
+        typer.Option(
+            help="Multiply the template by -1. Needed when the tomogram has dark "
+            "particles and the reference map has bright density, which is the usual "
+            "cryo-ET case."
+        ),
+    ] = True,
+    template_center: Annotated[
+        bool,
+        typer.Option(help="Center the density in the box before resampling."),
+    ] = False,
+    template_mirror: Annotated[
+        bool,
+        typer.Option(help="Mirror the template, for the opposite handedness."),
+    ] = False,
+    template_input_voxel_size_angstrom: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Override the reference map's own voxel size, A."),
+    ] = None,
+    emdb_cache_dir: Annotated[
+        Path | None,
+        typer.Option(help="Where to cache downloaded EMDB maps (default: <out>/emdb-cache)."),
+    ] = None,
+    pytom_create_template_executable: Annotated[
+        Path | None,
+        typer.Option(help="pytom_create_template.py path when it is not on PATH."),
+    ] = None,
+    pytom_create_mask_executable: Annotated[
+        Path | None,
+        typer.Option(help="pytom_create_mask.py path when it is not on PATH."),
+    ] = None,
+    device: Annotated[
+        str,
+        typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
+    ] = "auto",
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite template, mask, QC, and registry entries."),
+    ] = False,
+) -> None:
+    """Fetch a reference map and build a matching template plus mask."""
+
+    if (emdb_id is None) == (source_map is None):
+        raise typer.BadParameter(
+            "pass exactly one of --emdb-id or --source-map",
+            param_hint="emdb_id",
+        )
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+
+    if emdb_id is not None:
+        cache_dir = emdb_cache_dir if emdb_cache_dir is not None else out / "emdb-cache"
+        resolved_map = fetch_emdb_map(
+            emdb_id,
+            cache_dir=cache_dir,
+            progress=typer.echo,
+        )
+    else:
+        assert source_map is not None
+        resolved_map = source_map
+
+    selected_backend = _template_preparation_backend(backend)
+    parameters: dict[str, object] = {
+        "overwrite": overwrite,
+        "template_invert": template_invert,
+        "template_center": template_center,
+        "template_mirror": template_mirror,
+    }
+    if emdb_id is not None:
+        parameters["template_emdb_id"] = normalize_emdb_id(emdb_id)
+    if template_particle_diameter_angstrom is not None:
+        parameters["template_particle_diameter_angstrom"] = (
+            template_particle_diameter_angstrom
+        )
+    if template_mask_radius_px is not None:
+        parameters["template_mask_radius_px"] = template_mask_radius_px
+    if template_mask_sigma_px is not None:
+        parameters["template_mask_sigma_px"] = template_mask_sigma_px
+    if template_box_size_px is not None:
+        parameters["template_box_size_px"] = template_box_size_px
+    if template_low_pass_angstrom is not None:
+        parameters["template_low_pass_angstrom"] = template_low_pass_angstrom
+    if template_input_voxel_size_angstrom is not None:
+        parameters["template_input_voxel_size_angstrom"] = template_input_voxel_size_angstrom
+    if pytom_create_template_executable is not None:
+        parameters["pytom_create_template_executable"] = pytom_create_template_executable
+    if pytom_create_mask_executable is not None:
+        parameters["pytom_create_mask_executable"] = pytom_create_mask_executable
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device(device),
+        parameters=parameters,
+    )
+    artifacts = prepare_template_and_register(
+        selected_backend,
+        resolved_map,
+        tomogram,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
+    artifact_registry.write(registry)
+
+    template, mask, qc_report = artifacts
+    typer.echo(f"wrote template: {template.path}")
+    typer.echo(f"wrote template mask: {mask.path}")
+    typer.echo(f"box size: {template.parameters['box_size_px']} px")
+    typer.echo(f"voxel size: {template.pixel_spacing_angstrom} A")
+    typer.echo(f"wrote template QC: {qc_report.path}")
+    typer.echo(f"QC status: {qc_report.parameters['status']}")
+    typer.echo(f"updated {registry}")
+
+
 @app.command("pick-particles")
 def pick_particles(
     manifest: Annotated[
@@ -1836,13 +2003,19 @@ def pick_particles(
     ],
     out: Annotated[Path, typer.Option(help="Output directory for picks.")],
     pytom_template: Annotated[
-        Path,
-        typer.Option(help="Template density map (MRC), resampled to the tomogram pixel size."),
-    ],
+        Path | None,
+        typer.Option(
+            help="Template density map (MRC). Defaults to the template registered by "
+            "prepare-template."
+        ),
+    ] = None,
     pytom_template_mask: Annotated[
-        Path,
-        typer.Option(help="Template mask (MRC), same box size as the template."),
-    ],
+        Path | None,
+        typer.Option(
+            help="Template mask (MRC), same box size as the template. Defaults to the "
+            "registered one."
+        ),
+    ] = None,
     backend: Annotated[
         str,
         typer.Option(help="Particle picking backend to use."),
@@ -1921,6 +2094,20 @@ def pick_particles(
         segmentation = _optional_segmentation_artifact(artifact_registry, tilt_series_manifest)
         if segmentation is not None:
             supporting_artifacts.append(segmentation)
+    registered_template = _template_artifacts(artifact_registry, tilt_series_manifest)
+    if pytom_template is None or pytom_template_mask is None:
+        if registered_template is None:
+            raise typer.BadParameter(
+                "no template registered for this tilt series; run prepare-template first, "
+                "or pass --pytom-template and --pytom-template-mask explicitly",
+                param_hint="pytom_template",
+            )
+        template_artifact, mask_artifact = registered_template
+        if pytom_template is None:
+            pytom_template = template_artifact.path
+        if pytom_template_mask is None:
+            pytom_template_mask = mask_artifact.path
+        supporting_artifacts.extend([template_artifact, mask_artifact])
     parameters: dict[str, object] = {
         "overwrite": overwrite,
         "pytom_template": pytom_template,
@@ -1966,6 +2153,42 @@ def pick_particles(
     typer.echo(f"wrote picking QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
     typer.echo(f"updated {registry}")
+
+
+@app.command("export-picks")
+def export_picks(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to read."),
+    ],
+    out: Annotated[Path, typer.Option(help="Output directory for the export.")],
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite an existing export."),
+    ] = False,
+) -> None:
+    """Export a tomogram and its picks for inspection in ChimeraX with ArtiaX."""
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    picks = _picks_artifact(artifact_registry, tilt_series_manifest)
+
+    export = export_picks_for_artiax(
+        tomogram=tomogram,
+        picks=picks,
+        out=out,
+        overwrite=overwrite,
+    )
+
+    typer.echo(f"wrote tomogram: {export.tomogram_path}")
+    typer.echo(f"wrote picks: {export.picks_path}")
+    typer.echo(f"wrote ChimeraX script: {export.script_path}")
+    typer.echo(f"open with: chimerax {export.script_path}")
 
 
 @app.command("extract-particles")
@@ -2533,6 +2756,50 @@ def _picking_backend(name: str) -> PickingBackend:
         f"unsupported picking backend {name!r}; expected: pytom-match-pick",
         param_hint="backend",
     )
+
+
+def _template_preparation_backend(name: str) -> TemplatePreparationBackend:
+    normalized = name.lower()
+    if normalized == "pytom":
+        return PytomTemplateBackend()
+
+    raise typer.BadParameter(
+        f"unsupported template preparation backend {name!r}; expected: pytom",
+        param_hint="backend",
+    )
+
+
+def _template_artifacts(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+) -> tuple[Artifact, Artifact] | None:
+    """Return the registered template and its mask, if a pair is present."""
+
+    templates = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.TEMPLATE)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+    ]
+    if not templates:
+        return None
+    if len(templates) > 1:
+        raise typer.BadParameter(
+            f"expected at most one template for {manifest.tilt_series_id}, "
+            f"found {len(templates)}",
+            param_hint="registry",
+        )
+    template = templates[0]
+    masks = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.TEMPLATE_MASK)
+        if artifact.parameters.get("template_id") == template.id
+    ]
+    if len(masks) != 1:
+        raise typer.BadParameter(
+            f"expected exactly one template mask for {template.id}, found {len(masks)}",
+            param_hint="registry",
+        )
+    return template, masks[0]
 
 
 def _particle_extraction_backend(name: str) -> ParticleExtractionBackend:

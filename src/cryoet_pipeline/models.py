@@ -37,6 +37,8 @@ class ArtifactKind(StrEnum):
     TOMOGRAM = "tomogram"
     DENOISED_TOMOGRAM = "denoised_tomogram"
     SEGMENTATION = "segmentation"
+    TEMPLATE = "template"
+    TEMPLATE_MASK = "template_mask"
     PICKS = "picks"
     PARTICLE_STACK = "particle_stack"
     SUBTOMOGRAM_AVERAGE = "subtomogram_average"
@@ -622,6 +624,43 @@ class PicksQc(BaseModel):
             raise ValueError("picks QC score statistics must be finite")
         if self.particle_count == 0 and score_values:
             raise ValueError("picks QC cannot report score statistics with zero particles")
+        return self
+
+
+class TemplatePreparationQc(BaseModel):
+    """Machine-readable statistics for a prepared matching template and mask."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    source_map_path: str
+    emdb_id: str | None = None
+    template_id: str
+    template_mask_id: str
+    input_voxel_size_angstrom: float = Field(gt=0)
+    output_voxel_size_angstrom: float = Field(gt=0)
+    box_size_px: int = Field(gt=0)
+    inverted: bool
+    low_pass_angstrom: float | None = None
+    mask_radius_px: float = Field(gt=0)
+    mask_sigma_px: float | None = None
+    template_minimum: float
+    template_maximum: float
+    template_median: float
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_statistics(self) -> TemplatePreparationQc:
+        values = (self.template_minimum, self.template_maximum, self.template_median)
+        if not all(isfinite(value) for value in values):
+            raise ValueError("template statistics must be finite")
+        if self.template_minimum > self.template_maximum:
+            raise ValueError("template minimum cannot exceed its maximum")
+        if self.mask_radius_px * 2.0 > self.box_size_px:
+            raise ValueError("mask diameter cannot exceed the template box size")
         return self
 
 

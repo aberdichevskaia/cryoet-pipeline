@@ -31,39 +31,39 @@ Still open: running both estimation backends produces two CTF-corrected stacks,
 and `reconstruct-tomogram` then reports that it cannot choose between them.
 Resolving that properly is section 5.
 
-## 2. Template preparation from EMDB
+## 2. Template preparation from EMDB — done
 
-`pick-particles` currently requires `--pytom-template` and
-`--pytom-template-mask` as already-prepared MRC files. Preparing them is a
-manual, error-prone step that belongs in the pipeline.
+`prepare-template` fetches a map by accession (cached under `<out>/emdb-cache`)
+or takes a local one, then wraps `pytom_create_template.py` and
+`pytom_create_mask.py` to produce `TEMPLATE` and `TEMPLATE_MASK` artifacts.
+`pick-particles` resolves both from the registry, with the explicit path options
+kept as overrides.
 
-- Fetch by accession: `https://ftp.ebi.ac.uk/pub/databases/emdb/structures/EMD-<n>/map/emd_<n>.map.gz`
-  (verified to resolve). Cache locally and skip the download when the file is
-  already present.
-- Wrap `pytom_create_template.py` (resample to the tomogram voxel size, optional
-  low-pass, box size, centering) and `pytom_create_mask.py` (radius, sigma) as a
-  `prepare-template` stage producing `TEMPLATE` and `TEMPLATE_MASK` artifacts.
-- Teach `pick-particles` to resolve those from the registry, keeping the explicit
-  path options as overrides.
+Notes worth keeping:
 
-**Contrast inversion is the sharp edge here.** EMDB maps have bright (positive)
-density; particles in a tomogram are dark. `pytom_create_template.py --invert`
-multiplies the template by -1 to match, and its own help warns it is "not needed
-if ctf with defocus is already applied". Newer pytom-match-pick also has CTF
-options (`--ctf-correction`, `--flip-phase`, `--defocus`) that produce the right
-contrast without `--invert`, and `--flip-phase` specifically matches a
-phase-flipped tomogram — which is what this pipeline's `correct-ctf` produces.
-Getting this wrong does not error, it silently finds nothing. So: expose the
-choice explicitly, record it in the artifact parameters, and verify the
-installed pytom version's actual flags rather than assuming.
+- The target voxel size comes from the tomogram artifact, not a flag, so a
+  template cannot be built at the wrong scale.
+- The mask is built at the template's *actual* box size after resampling, and a
+  disagreement between the two is a hard error — pytom fails obscurely otherwise.
+- Contrast: `pytom_create_template.py` in the current release has **no** CTF
+  options, only `--invert` (verified against the source; a tutorial mentioning
+  `--ctf-correction`/`--flip-phase` does not match the shipped tool). EMDB maps
+  are bright, tomogram particles are dark, so `--invert` defaults to on. QC
+  compares the produced template's excursion around its median against the
+  requested inversion and warns on a mismatch, because getting this wrong finds
+  nothing rather than erroring.
 
-## 3. Inspect picks in ChimeraX + ArtiaX
+## 3. Inspect picks in ChimeraX + ArtiaX — done
 
-Checking picks visually currently means hand-converting Zarr to MRC and pairing
-it with the right STAR file. Add an export that writes a matched tomogram MRC
-plus particle STAR, and a ChimeraX `.cxc` script that opens both with the
-correct pixel size, so verification is one command. Confirm ArtiaX's expected
-STAR flavour against a real file before committing to a format.
+`export-picks` writes a matched tomogram MRC plus picks STAR and a `.cxc`
+script, so checking a result is one command.
+
+The trap here: ArtiaX registers **two** readers for `.star` — "RELION STAR file"
+(RELION 3.1 conventions, `rlnCoordinateX/Y/Z` in pixels, which is what
+pytom-match-pick writes) and "RELION5 STAR file" (centered coordinates in
+Angstrom). Both claim the suffix and both answer to the nickname `star`, so the
+generated script pins `format relion` explicitly rather than letting ChimeraX
+choose.
 
 ## 4. Refinement and classification
 
