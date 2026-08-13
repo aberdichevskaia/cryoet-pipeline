@@ -87,6 +87,7 @@ from cryoet_pipeline.backends.segmentation import (
 )
 from cryoet_pipeline.backends.stack import SimpleTiltStackBackend, build_stack_and_register
 from cryoet_pipeline.backends.subtomogram import (
+    ConeSearchRefinementBackend,
     CubicCropExtractionBackend,
     FftRefinementAveragingBackend,
     average_and_register,
@@ -2272,8 +2273,71 @@ def average_particles(
     out: Annotated[Path, typer.Option(help="Output directory for the average map.")],
     backend: Annotated[
         str,
-        typer.Option(help="Subtomogram averaging backend to use."),
-    ] = "fft-refinement",
+        typer.Option(
+            help="Subtomogram averaging backend: cone-search (cone orientation search, "
+            "multi-reference classification) or fft-refinement (simple baseline)."
+        ),
+    ] = "cone-search",
+    num_classes: Annotated[
+        int,
+        typer.Option(min=1, help="[cone-search] Number of references to refine simultaneously."),
+    ] = 1,
+    cone_range_deg: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Full aperture of the orientation cone searched in the first "
+            "iteration. Start near the angular step used for template matching.",
+        ),
+    ] = 30.0,
+    cone_sampling_deg: Annotated[
+        float,
+        typer.Option(min=0.0, help="[cone-search] Step within the cone, first iteration."),
+    ] = 10.0,
+    inplane_range_deg: Annotated[
+        float,
+        typer.Option(min=0.0, help="[cone-search] In-plane search range, first iteration."),
+    ] = 30.0,
+    inplane_sampling_deg: Annotated[
+        float,
+        typer.Option(min=0.0, help="[cone-search] In-plane step, first iteration."),
+    ] = 10.0,
+    shift_range_px: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Shift search half-width in pixels; never closes below 1 px, "
+            "since the correlation peak is located at whole-pixel accuracy.",
+        ),
+    ] = 2.0,
+    refine_factor: Annotated[
+        float,
+        typer.Option(
+            min=1.0,
+            help="[cone-search] Divisor applied to every range and step each iteration. "
+            "Two to three is the usual choice.",
+        ),
+    ] = 2.0,
+    particle_diameter_angstrom: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Particle diameter in A, used for the Crowther angular "
+            "increment degrees(resolution / diameter). Defaults to the full box.",
+        ),
+    ] = None,
+    target_resolution_angstrom: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Target resolution in A for that increment. Defaults to the "
+            "Nyquist limit of the particle pixel size.",
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option(help="[cone-search] Seed for the initial random class partition."),
+    ] = 0,
     num_iterations: Annotated[
         int,
         typer.Option(min=1, help="Number of coarse-to-fine refinement iterations."),
@@ -2330,7 +2394,19 @@ def average_particles(
         "initial_angular_step_deg": initial_angular_step_deg,
         "initial_shift_step_px": initial_shift_step_px,
         "initial_reference_correlation_threshold": initial_reference_correlation_threshold,
+        "num_classes": num_classes,
+        "cone_range_deg": cone_range_deg,
+        "cone_sampling_deg": cone_sampling_deg,
+        "inplane_range_deg": inplane_range_deg,
+        "inplane_sampling_deg": inplane_sampling_deg,
+        "shift_range_px": shift_range_px,
+        "refine_factor": refine_factor,
+        "seed": seed,
     }
+    if particle_diameter_angstrom is not None:
+        parameters["particle_diameter_angstrom"] = particle_diameter_angstrom
+    if target_resolution_angstrom is not None:
+        parameters["target_resolution_angstrom"] = target_resolution_angstrom
     if initial_reference is not None:
         parameters["initial_reference_path"] = initial_reference
     context = BackendContext(
@@ -2348,8 +2424,11 @@ def average_particles(
     )
     artifact_registry.write(registry)
 
-    average_map, qc_report = artifacts
-    typer.echo(f"wrote subtomogram average: {average_map.path}")
+    *average_maps, qc_report = artifacts
+    for average_map in average_maps:
+        class_number = average_map.parameters.get("class_number")
+        label = f" (class {class_number})" if class_number is not None else ""
+        typer.echo(f"wrote subtomogram average{label}: {average_map.path}")
     typer.echo(f"wrote averaging QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
     typer.echo(f"updated {registry}")
@@ -2817,9 +2896,12 @@ def _subtomogram_averaging_backend(name: str) -> SubtomogramAveragingBackend:
     normalized = name.lower()
     if normalized == "fft-refinement":
         return FftRefinementAveragingBackend()
+    if normalized == "cone-search":
+        return ConeSearchRefinementBackend()
 
     raise typer.BadParameter(
-        f"unsupported subtomogram averaging backend {name!r}; expected: fft-refinement",
+        f"unsupported subtomogram averaging backend {name!r}; "
+        "expected: cone-search, fft-refinement",
         param_hint="backend",
     )
 

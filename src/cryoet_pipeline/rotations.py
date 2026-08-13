@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import torch
 
@@ -34,6 +36,77 @@ def relion_euler_to_matrix(rot_deg: float, tilt_deg: float, psi_deg: float) -> n
     ]
     row2 = [sc, ss, cos_tilt]
     return np.array([row0, row1, row2], dtype=np.float64)
+
+
+def matrix_to_relion_euler(matrix: np.ndarray) -> tuple[float, float, float]:
+    """Recover `(rot, tilt, psi)` in degrees from a RELION rotation matrix.
+
+    Inverse of `relion_euler_to_matrix`. At `tilt = 0` or `tilt = 180` only the
+    sum (or difference) of `rot` and `psi` is defined; `rot` is then reported as
+    zero and the whole in-plane rotation is folded into `psi`.
+    """
+
+    if matrix.shape != (3, 3):
+        raise ValueError(f"expected a 3x3 rotation matrix, got shape {matrix.shape}")
+
+    sin_tilt = math.hypot(float(matrix[2, 0]), float(matrix[2, 1]))
+    cos_tilt = float(np.clip(matrix[2, 2], -1.0, 1.0))
+    if sin_tilt < 1e-8:
+        if cos_tilt >= 0.0:
+            tilt = 0.0
+            psi = math.atan2(float(matrix[0, 1]), float(matrix[0, 0]))
+        else:
+            tilt = math.pi
+            psi = math.atan2(float(matrix[0, 1]), -float(matrix[0, 0]))
+        return 0.0, math.degrees(tilt), math.degrees(psi)
+
+    tilt = math.atan2(sin_tilt, cos_tilt)
+    rot = math.atan2(float(matrix[2, 1]), float(matrix[2, 0]))
+    psi = math.atan2(float(matrix[1, 2]), -float(matrix[0, 2]))
+    return math.degrees(rot), math.degrees(tilt), math.degrees(psi)
+
+
+def cone_offsets(
+    cone_range_deg: float,
+    cone_sampling_deg: float,
+) -> list[tuple[float, float]]:
+    """Sample orientations on a cone, as `(polar_deg, azimuth_deg)` pairs.
+
+    Covers a spherical cap of half-angle `cone_range_deg / 2` at roughly even
+    arc spacing: rings are spaced by `cone_sampling_deg`, and each ring carries
+    as many azimuths as its circumference supports, so samples do not bunch up
+    near the pole the way an independent sweep of Euler angles does.
+    """
+
+    if cone_range_deg < 0.0:
+        raise ValueError("cone_range_deg must not be negative")
+    if cone_sampling_deg <= 0.0:
+        raise ValueError("cone_sampling_deg must be greater than zero")
+
+    half_angle = cone_range_deg / 2.0
+    offsets: list[tuple[float, float]] = [(0.0, 0.0)]
+    if half_angle <= 0.0:
+        return offsets
+
+    ring_count = int(math.floor(half_angle / cone_sampling_deg + 1e-9))
+    for ring in range(1, ring_count + 1):
+        polar = ring * cone_sampling_deg
+        circumference_deg = 360.0 * math.sin(math.radians(polar))
+        azimuth_count = max(1, int(math.ceil(circumference_deg / cone_sampling_deg)))
+        for index in range(azimuth_count):
+            offsets.append((polar, index * 360.0 / azimuth_count))
+    return offsets
+
+
+def perturbation_matrix(polar_deg: float, azimuth_deg: float, in_plane_deg: float) -> np.ndarray:
+    """Build a perturbation whose reference z-axis tilts by `polar_deg`.
+
+    In this convention `psi` carries the azimuth of the tilted axis and `rot`
+    the rotation about it, so a perturbation's polar deviation is exactly
+    `polar_deg` regardless of the other two angles.
+    """
+
+    return relion_euler_to_matrix(in_plane_deg, polar_deg, azimuth_deg)
 
 
 def resample_volume_zyx(

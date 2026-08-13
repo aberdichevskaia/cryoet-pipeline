@@ -65,22 +65,41 @@ Angstrom). Both claim the suffix and both answer to the nickname `star`, so the
 generated script pins `format relion` explicitly rather than letting ChimeraX
 choose.
 
-## 4. Refinement and classification
+## 4. Refinement and classification — partly done
 
-`FftRefinementAveragingBackend` already covers DYNAMO-style 3D cropping plus 3D
-alignment, behind the `SubtomogramAveragingBackend` protocol, so a RELION5-style
-alternative can be added later without disturbing it. Outstanding work inside
-that seam:
+`average-particles --backend cone-search` implements DYNAMO's approach natively
+in torch (no MATLAB, no DYNAMO install; the tool-named backends elsewhere are
+adapters, this one is not). `fft-refinement` remains as the trivial baseline,
+and a RELION5-style backend can be added behind the same
+`SubtomogramAveragingBackend` protocol.
 
-- Multi-class classification. `rlnClassNumber` is already carried per particle
-  and averaging is structured as "average the particles assigned to class k",
-  currently always called with a single class.
+What it does:
+
+- Orientations are searched on a cone plus an in-plane sweep rather than by
+  nudging each Euler angle independently, which samples orientation space
+  evenly and does not degenerate near zero tilt.
+- Shifts come from the cross-correlation peak, so the whole allowed range costs
+  one FFT rather than a grid of resamplings.
+- Several references are refined at once with hard per-particle assignment,
+  which is what makes it classification. Classes are seeded from a deterministic
+  random partition; the reassignment fraction per iteration is the convergence
+  signal reported in QC.
+- Ranges and their sampling shrink together each iteration (`refine_factor`,
+  two to three), but sampling stops at the **Crowther increment**,
+  `dtheta = 180 / (pi * r_max * D) = degrees(d_res / D)` with `D` the particle
+  diameter. Below that, adjacent orientations are not independent. Note RELION's
+  initial-sampling heuristic `arctan(2 * d_res / D)` is about twice this;
+  the implementation uses the Crowther value. Shift search never closes below
+  one pixel, since the peak is located at whole-pixel accuracy.
+
+Still outstanding:
+
 - Independent half-set refinement, so half-set FSC becomes a real resolution
   estimate rather than an optimistic one. Target design: keep the *initial*
   reference common, then run the alignment and reference-update loop fully
   independently per half.
-- Missing-wedge and CTF weighting in the alignment correlation, deliberately
-  absent from the baseline.
+- Missing-wedge and CTF weighting in the alignment correlation.
+- Symmetry.
 
 ## 5. Run any part of the pipeline, and compare backends side by side
 

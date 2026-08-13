@@ -736,6 +736,64 @@ class SubtomogramAveragingQc(BaseModel):
         return self
 
 
+class ClassAverageSummary(BaseModel):
+    """One reference produced by multi-reference alignment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    class_number: int = Field(ge=1)
+    average_id: str
+    particle_count: int = Field(ge=0)
+    mean_correlation: float | None = None
+
+
+class SubtomogramClassificationQc(BaseModel):
+    """Machine-readable statistics for multi-reference subtomogram refinement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    particle_stack_id: str
+    particle_count: int = Field(ge=1)
+    num_classes: int = Field(ge=1)
+    iterations_run: int = Field(ge=0)
+    cone_range_deg: float = Field(ge=0.0)
+    cone_sampling_deg: float = Field(gt=0.0)
+    inplane_range_deg: float = Field(ge=0.0)
+    inplane_sampling_deg: float = Field(gt=0.0)
+    shift_range_px: float = Field(ge=0.0)
+    particle_diameter_angstrom: float = Field(gt=0.0)
+    target_resolution_angstrom: float = Field(gt=0.0)
+    crowther_increment_deg: float = Field(gt=0.0)
+    final_cone_sampling_deg: float = Field(gt=0.0)
+    classes: list[ClassAverageSummary]
+    mean_final_correlation: float | None = None
+    minimum_final_correlation: float | None = None
+    reassignment_fraction_last_iteration: float | None = None
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_classes(self) -> SubtomogramClassificationQc:
+        if len(self.classes) != self.num_classes:
+            raise ValueError("classes must have one entry per class")
+        if sum(entry.particle_count for entry in self.classes) != self.particle_count:
+            raise ValueError("class particle counts must sum to particle_count")
+        correlations = [
+            value
+            for value in (self.mean_final_correlation, self.minimum_final_correlation)
+            if value is not None
+        ]
+        if not all(isfinite(value) for value in correlations):
+            raise ValueError("classification QC correlations must be finite")
+        fraction = self.reassignment_fraction_last_iteration
+        if fraction is not None and not (0.0 <= fraction <= 1.0):
+            raise ValueError("reassignment_fraction_last_iteration must be in [0, 1]")
+        return self
+
+
 class FscQc(BaseModel):
     """Machine-readable Fourier shell correlation report."""
 

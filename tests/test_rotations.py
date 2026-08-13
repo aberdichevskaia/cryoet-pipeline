@@ -4,7 +4,13 @@ import numpy as np
 import pytest
 import torch
 
-from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
+from cryoet_pipeline.rotations import (
+    cone_offsets,
+    matrix_to_relion_euler,
+    perturbation_matrix,
+    relion_euler_to_matrix,
+    resample_volume_zyx,
+)
 
 
 def test_relion_euler_to_matrix_zero_angles_is_identity() -> None:
@@ -121,3 +127,90 @@ def test_resample_volume_forward_then_inverse_round_trips() -> None:
         volume.numpy()[core, core, core],
         atol=0.08,
     )
+
+
+@pytest.mark.parametrize(
+    "rot,tilt,psi",
+    [
+        (0.0, 0.0, 0.0),
+        (37.0, 12.0, -84.0),
+        (180.0, 90.0, 45.0),
+        (-63.0, 155.0, 170.0),
+        (12.5, 179.4, -3.0),
+    ],
+)
+def test_matrix_to_relion_euler_round_trips_through_the_matrix(
+    rot: float, tilt: float, psi: float
+) -> None:
+    matrix = relion_euler_to_matrix(rot, tilt, psi)
+    recovered = relion_euler_to_matrix(*matrix_to_relion_euler(matrix))
+    # Euler triples are not unique, so compare the matrices they produce.
+    np.testing.assert_allclose(recovered, matrix, atol=1e-9)
+
+
+def test_matrix_to_relion_euler_folds_gimbal_lock_into_psi() -> None:
+    matrix = relion_euler_to_matrix(40.0, 0.0, 15.0)
+    recovered_rot, recovered_tilt, recovered_psi = matrix_to_relion_euler(matrix)
+
+    assert recovered_rot == pytest.approx(0.0)
+    assert recovered_tilt == pytest.approx(0.0)
+    # At tilt=0 only rot+psi is defined, so it all lands in psi.
+    assert recovered_psi == pytest.approx(55.0)
+
+
+def test_matrix_to_relion_euler_rejects_wrong_shape() -> None:
+    with pytest.raises(ValueError, match="expected a 3x3 rotation matrix"):
+        matrix_to_relion_euler(np.eye(4))
+
+
+def test_cone_offsets_cover_the_cap_without_bunching_at_the_pole() -> None:
+    offsets = cone_offsets(60.0, 15.0)
+
+    polars = sorted({polar for polar, _ in offsets})
+    assert polars == [0.0, 15.0, 30.0]
+    # One sample at the pole, then rings that grow with their circumference.
+    counts = {polar: sum(1 for p, _ in offsets if p == polar) for polar in polars}
+    assert counts[0.0] == 1
+    assert counts[15.0] < counts[30.0]
+    assert all(0.0 <= azimuth < 360.0 for _, azimuth in offsets)
+
+
+def test_cone_offsets_degenerate_to_a_single_sample() -> None:
+    assert cone_offsets(0.0, 10.0) == [(0.0, 0.0)]
+    # A range finer than one step still yields only the pole.
+    assert cone_offsets(5.0, 10.0) == [(0.0, 0.0)]
+
+
+def test_cone_offsets_reject_bad_sampling() -> None:
+    with pytest.raises(ValueError, match="cone_sampling_deg"):
+        cone_offsets(30.0, 0.0)
+    with pytest.raises(ValueError, match="cone_range_deg"):
+        cone_offsets(-1.0, 10.0)
+
+
+@pytest.mark.parametrize("polar", [0.0, 7.5, 15.0, 45.0])
+@pytest.mark.parametrize("azimuth", [0.0, 90.0, 213.0])
+@pytest.mark.parametrize("in_plane", [0.0, -30.0, 120.0])
+def test_perturbation_polar_deviation_equals_the_requested_angle(
+    polar: float, azimuth: float, in_plane: float
+) -> None:
+    matrix = perturbation_matrix(polar, azimuth, in_plane)
+    tilted_axis = matrix @ np.array([0.0, 0.0, 1.0])
+    deviation = np.degrees(np.arccos(np.clip(tilted_axis[2], -1.0, 1.0)))
+
+    # This is the property the cone search relies on: the in-plane angle and the
+    # azimuth must not change how far the axis has moved.
+    assert deviation == pytest.approx(polar, abs=1e-9)
+
+
+def test_cone_search_composes_onto_an_existing_orientation() -> None:
+    current = relion_euler_to_matrix(31.0, 64.0, -12.0)
+    candidate = current @ perturbation_matrix(10.0, 45.0, 0.0)
+
+    current_axis = current @ np.array([0.0, 0.0, 1.0])
+    candidate_axis = candidate @ np.array([0.0, 0.0, 1.0])
+    separation = np.degrees(
+        np.arccos(np.clip(float(np.dot(current_axis, candidate_axis)), -1.0, 1.0))
+    )
+
+    assert separation == pytest.approx(10.0, abs=1e-9)
