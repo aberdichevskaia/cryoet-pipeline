@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,39 @@ class BackendContext:
     output_dir: Path
     device: DevicePreference
     parameters: Mapping[str, Any] = field(default_factory=dict)
+
+
+_VARIANT_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def variant_label(context: BackendContext) -> str | None:
+    """Return the run's variant label, if one was requested.
+
+    A variant names a parallel run of the same stage that should coexist with
+    the others rather than replace them: a different backend, a different
+    binning, a different parameter sweep. Artifact ids carry it, so two runs
+    that differ in something the id would not otherwise capture stay
+    distinguishable in one registry.
+    """
+
+    value = context.parameters.get("variant")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("context parameter 'variant' must be a string")
+    if not _VARIANT_PATTERN.fullmatch(value):
+        raise ValueError(
+            f"invalid variant {value!r}; use letters, digits, dot, dash, or underscore, "
+            "starting with a letter or digit"
+        )
+    return value
+
+
+def variant_suffix(context: BackendContext) -> str:
+    """Return the id suffix for the run's variant, or an empty string."""
+
+    label = variant_label(context)
+    return f":{label}" if label is not None else ""
 
 
 class MotionCorrectionBackend(Protocol):

@@ -731,6 +731,14 @@ def generate_fiducial_seed(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -749,6 +757,7 @@ def generate_fiducial_seed(
     selected_backend = _fiducial_seed_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
+        "variant": variant,
         "tracking_binning": tracking_binning,
         "fiducial_diameter_nm": fiducial_diameter_nm,
         "target_beads": target_beads,
@@ -824,6 +833,14 @@ def track_fiducials(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -840,14 +857,17 @@ def track_fiducials(
     tracking_stack = _fiducial_tracking_stack_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     seed_model = _fiducial_seed_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     selected_backend = _fiducial_tracking_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
+        "variant": variant,
         "rounds": rounds,
         "min_tracked_fiducials": min_tracked_fiducials,
         "coverage_warning": coverage_warning,
@@ -946,6 +966,14 @@ def fine_align_tilt_series(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -962,14 +990,17 @@ def fine_align_tilt_series(
     tracking_stack = _fiducial_tracking_stack_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     fiducial_model = _fiducial_model_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     selected_backend = _fine_alignment_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
+        "variant": variant,
         "residual_warning_nm": residual_warning_nm,
         "residual_failure_nm": residual_failure_nm,
         "residual_max_warning_tracking_px": residual_max_warning_px,
@@ -1029,6 +1060,14 @@ def build_final_aligned_stack(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -1046,10 +1085,12 @@ def build_final_aligned_stack(
     fine_alignment = _fine_alignment_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     selected_backend = _final_aligned_stack_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
+        "variant": variant,
         "output_binning": output_binning,
     }
     if imod_dir is not None:
@@ -1547,6 +1588,14 @@ def reconstruct_tomogram(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -1563,14 +1612,17 @@ def reconstruct_tomogram(
     aligned_stack = _reconstruction_input_stack_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     alignment = _fine_alignment_artifact(
         artifact_registry,
         tilt_series_manifest,
+        variant=variant,
     )
     selected_backend = _reconstruction_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
+        "variant": variant,
         "radial_cutoff": radial_cutoff,
         "radial_falloff": radial_falloff,
     }
@@ -2941,6 +2993,38 @@ def _tilt_stack_artifact(
     return matches[0]
 
 
+def _select_variant(
+    matches: list[Artifact],
+    *,
+    what: str,
+    tilt_series_id: str,
+    variant: str | None,
+) -> Artifact:
+    """Narrow a lookup to one artifact, using the variant label when given.
+
+    Runs that should coexist rather than replace each other are distinguished by
+    a `--variant` label baked into the artifact id. When several candidates
+    remain, the error lists them so the caller can see what to pass.
+    """
+
+    if variant is not None:
+        matches = [artifact for artifact in matches if artifact.id.endswith(f":{variant}")]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise typer.BadParameter(
+            f"no {what} for {tilt_series_id}"
+            + (f" with variant {variant!r}" if variant else ""),
+            param_hint="registry",
+        )
+    available = ", ".join(sorted(artifact.id for artifact in matches))
+    raise typer.BadParameter(
+        f"found {len(matches)} candidates for {what} of {tilt_series_id}; "
+        f"pass --variant to choose one of: {available}",
+        param_hint="registry",
+    )
+
+
 def _tomogram_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
@@ -2999,6 +3083,8 @@ def _particle_stack_artifact(
 def _final_aligned_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -3006,18 +3092,19 @@ def _final_aligned_stack_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("purpose") == "final_alignment"
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one final aligned stack for "
-            f"{manifest.tilt_series_id}, found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="final aligned stack",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _reconstruction_input_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     """Prefer a CTF-corrected stack over the plain final aligned stack, if present."""
 
@@ -3027,15 +3114,14 @@ def _reconstruction_input_stack_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("purpose") == "ctf_corrected"
     ]
-    if len(corrected_matches) > 1:
-        raise typer.BadParameter(
-            f"expected at most one CTF-corrected stack for "
-            f"{manifest.tilt_series_id}, found {len(corrected_matches)}",
-            param_hint="registry",
+    if corrected_matches:
+        return _select_variant(
+            corrected_matches,
+            what="CTF-corrected stack",
+            tilt_series_id=manifest.tilt_series_id,
+            variant=variant,
         )
-    if len(corrected_matches) == 1:
-        return corrected_matches[0]
-    return _final_aligned_stack_artifact(registry, manifest)
+    return _final_aligned_stack_artifact(registry, manifest, variant=variant)
 
 
 def _zero_tilt_corrected_projection_artifact(
@@ -3087,6 +3173,8 @@ def _optional_defocus_hint_artifact(
 def _fiducial_tracking_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -3094,54 +3182,57 @@ def _fiducial_tracking_stack_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("purpose") == "fiducial_tracking"
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one fiducial tracking stack for "
-            f"{manifest.tilt_series_id}, found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="fiducial tracking stack",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _fiducial_seed_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one fiducial seed model for "
-            f"{manifest.tilt_series_id}, found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="fiducial seed model",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _fiducial_model_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_MODEL)
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one tracked fiducial model for "
-            f"{manifest.tilt_series_id}, found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="tracked fiducial model",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _fine_alignment_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -3149,13 +3240,12 @@ def _fine_alignment_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("stage") == "fine"
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one fine alignment for "
-            f"{manifest.tilt_series_id}, found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="fine alignment",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _alignment_artifact(

@@ -20,7 +20,11 @@ from cryoet_pipeline.backends.alignment import (
     resolve_imod_executable,
     run_command,
 )
-from cryoet_pipeline.backends.protocols import BackendContext, FineAlignmentBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    FineAlignmentBackend,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     AlignmentTransform,
     Artifact,
@@ -536,6 +540,7 @@ class ImodTiltalignBackend:
                 excluded_z_values=metadata.excluded_z_values,
             )
             report = _fine_alignment_qc(
+                variant=variant_suffix(context),
                 manifest=manifest,
                 summary=log_summary,
                 raw_pixel_spacing_angstrom=metadata.raw_pixel_spacing_angstrom,
@@ -563,7 +568,7 @@ class ImodTiltalignBackend:
         _write_json(paths.canonical, alignment.model_dump(mode="json"))
         _write_json(paths.report, report.model_dump(mode="json"))
         alignment_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:alignment:fine",
+            id=f"{manifest.tilt_series_id}:alignment:fine{variant_suffix(context)}",
             kind=ArtifactKind.ALIGNMENT,
             path=paths.canonical,
             parent_ids=[tracking_stack.id, fiducial_model.id],
@@ -624,7 +629,7 @@ class ImodTiltalignBackend:
             ),
         )
         report_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:alignment:fine",
+            id=f"{manifest.tilt_series_id}:qc:alignment:fine{variant_suffix(context)}",
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[alignment_artifact.id],
@@ -973,6 +978,7 @@ def _validate_inputs(
 
 def _fine_alignment_qc(
     *,
+    variant: str,
     manifest: TiltSeriesManifest,
     summary: TiltalignLogSummary,
     raw_pixel_spacing_angstrom: float,
@@ -1041,7 +1047,7 @@ def _fine_alignment_qc(
     return FineAlignmentQc(
         tilt_series_id=manifest.tilt_series_id,
         backend="imod_tiltalign",
-        alignment_id=f"{manifest.tilt_series_id}:alignment:fine",
+        alignment_id=f"{manifest.tilt_series_id}:alignment:fine{variant}",
         image_count=summary.image_count,
         fiducial_count=summary.fiducial_count,
         projection_point_count=summary.projection_point_count,

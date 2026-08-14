@@ -104,6 +104,38 @@ located at whole-pixel accuracy.
 Despite the name, `cone-search` is a native torch implementation modelled on
 DYNAMO's approach. It does not call DYNAMO or MATLAB.
 
+## Comparing runs side by side
+
+Artifact ids do not encode every choice that changes a result, so two runs of
+one stage would otherwise share an id: the second either fails as a duplicate,
+or replaces the first when `--overwrite` is given. That is why re-running
+`build-final-aligned-stack` at a different `--output-binning` loses the previous
+entry — `--overwrite` cannot tell "redo this" from "make a different variant".
+
+`--variant LABEL` resolves it. The label is appended to the ids that run
+produces, and selects inputs carrying the same label, so a whole lane runs in
+parallel with another:
+
+```bash
+cryoet generate-fiducial-seed ... --backend imod-autofidseed --variant bead
+cryoet track-fiducials        ... --backend imod-beadtrack   --variant bead
+cryoet fine-align-tilt-series ...                            --variant bead
+
+cryoet generate-fiducial-seed ... --backend imod-patch-seed  --variant patch
+cryoet track-fiducials        ... --backend imod-patch-track --variant patch
+cryoet fine-align-tilt-series ...                            --variant patch
+```
+
+Both lanes then coexist in one registry and their QC reports can be compared
+directly. The flag is available on `generate-fiducial-seed`, `track-fiducials`,
+`fine-align-tilt-series`, `build-final-aligned-stack`, and
+`reconstruct-tomogram`. It is also the way to keep two binnings:
+`--output-binning 8 --variant bin8` alongside `--output-binning 4 --variant bin4`.
+
+Omitting `--variant` keeps the previous ids exactly, so existing registries are
+unaffected. When a lookup finds several candidates it lists them and tells you
+to pass `--variant`, rather than guessing.
+
 ## Contrast conventions
 
 Two places silently produce nothing rather than failing when the convention is

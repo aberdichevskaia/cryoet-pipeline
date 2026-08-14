@@ -23,7 +23,11 @@ from cryoet_pipeline.backends.alignment import (
     run_command,
     write_tilt_angles_file,
 )
-from cryoet_pipeline.backends.protocols import BackendContext, ReconstructionBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    ReconstructionBackend,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -188,7 +192,7 @@ class ImodTiltReconstructionBackend:
             )
 
             ctf_corrected = tilt_stack.parameters.get("purpose") == "ctf_corrected"
-            tomogram_id = f"{manifest.tilt_series_id}:tomogram:fine"
+            tomogram_id = f"{manifest.tilt_series_id}:tomogram:fine{variant_suffix(context)}"
             warnings = [] if ctf_corrected else ["CTF correction was not applied"]
             qc_status = QcStatus.PASS if ctf_corrected else QcStatus.WARNING
             report = TomogramQc(
@@ -225,7 +229,7 @@ class ImodTiltReconstructionBackend:
             _replace_output(temporary_report, paths.report)
 
         tomogram_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:tomogram:fine",
+            id=f"{manifest.tilt_series_id}:tomogram:fine{variant_suffix(context)}",
             kind=ArtifactKind.TOMOGRAM,
             path=paths.canonical_zarr,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -268,7 +272,7 @@ class ImodTiltReconstructionBackend:
             ),
         )
         qc_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:reconstruction:fine",
+            id=f"{manifest.tilt_series_id}:qc:reconstruction:fine{variant_suffix(context)}",
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[tomogram_artifact.id],

@@ -116,32 +116,28 @@ supported, tested route. A related snag: every command requires `--manifest`
 even where only `tilt_series_id` is used from it, which forces a manifest to
 exist for data that never entered through `init`.
 
-**Compare backends in parallel.** This is currently blocked by artifact
-identity, and the blocker is already real rather than hypothetical. Some
-artifact ids encode the backend and can coexist:
+**Compare backends in parallel — mostly done.** `--variant LABEL` labels a run's
+artifacts and selects inputs with the same label, so two lanes coexist in one
+registry. It covers the alignment-to-reconstruction chain, which is where the
+competing backends are: `generate-fiducial-seed`, `track-fiducials`,
+`fine-align-tilt-series`, `build-final-aligned-stack`, `reconstruct-tomogram`.
+Ambiguous lookups now list the candidates and name the flag instead of failing
+with a bare count. Omitting the flag reproduces the previous ids exactly, so
+existing registries keep working.
 
-    {ts}:picks:{branch}:{backend}
-    {ts}:particle_stack:{backend}
-    {ts}:subtomogram_average:{backend}
+Worth correcting an earlier note here: the registry never replaced silently.
+`add()` raises on a duplicate id unless `replace=True`, which only `--overwrite`
+sets. The real defect was that ids do not encode what makes a result different,
+so `--overwrite` conflated "redo this step" with "produce another variant".
 
-but many do not, and re-running with a different backend or binning silently
-replaces the previous entry instead of adding a second one:
+Still outstanding:
 
-    {ts}:alignment:coarse          {ts}:alignment:fine
-    {ts}:fiducial_seed             {ts}:fiducial_model
-    {ts}:aligned_tilt_stack:final  {ts}:tomogram:fine
-    {ts}:corrected_projection:{z}
-
-Concretely, the IMOD bead-tracking and patch-tracking backends write identical
-ids, so their results cannot coexist in one registry — the two things most worth
-comparing are the two that collide. `{ts}:aligned_tilt_stack:final` omitting
-binning has already caused a silently replaced entry once.
-
-Needed:
-
-1. Artifact ids that carry the distinguishing parameters (backend, binning,
-   variant label).
-2. Registry lookups that can disambiguate. Ten call sites currently raise on
-   "expected exactly one ...", which is what enforces the single-variant world.
+1. Stages outside that chain — motion correction (`{ts}:corrected_projection:{z}`
+   across three backends), coarse alignment, and the picking-to-averaging tail —
+   do not take `--variant` yet.
+2. Content-defining parameters are still not intrinsic to ids. Binning belongs in
+   `{ts}:aligned_tilt_stack:final` and `{ts}:tomogram:fine` whether or not a
+   label was given; making it so would change existing ids, so it needs a
+   deliberate migration rather than a silent change.
 3. A comparison report over variants, reusing the per-stage QC models that
    already exist.

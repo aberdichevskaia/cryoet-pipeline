@@ -15,7 +15,11 @@ from cryoet_pipeline.backends.alignment import (
     write_binned_mrc_stack,
     write_tilt_angles_file,
 )
-from cryoet_pipeline.backends.protocols import BackendContext, FinalAlignedStackBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    FinalAlignedStackBackend,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     AlignmentTransform,
     Artifact,
@@ -170,7 +174,7 @@ class ImodFinalAlignedStackBackend:
                 f"expected {expected_shape}"
             )
         return Artifact(
-            id=f"{manifest.tilt_series_id}:aligned_tilt_stack:final",
+            id=f"{manifest.tilt_series_id}:aligned_tilt_stack:final{variant_suffix(context)}",
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.stack,
             parent_ids=[tilt_stack.id, fine_alignment.id],
