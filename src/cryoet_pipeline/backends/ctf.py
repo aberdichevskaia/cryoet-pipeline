@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
@@ -47,16 +47,22 @@ DEFAULT_DEFOCUS_SEARCH_WINDOW_ANGSTROM = 1000.0
 
 
 class Ctffind5CtfEstimationBackend:
-    """Estimate per-tilt CTF with CTFFIND5, emitting an IMOD `.defocus` file.
+    """Estimate per-tilt CTF with CTFFIND, emitting an IMOD `.defocus` file.
 
-    CTFFIND treats a multi-slice MRC that is not declared a movie as a series
-    of independent micrographs, so the whole aligned stack is fitted in one
-    call and the summary table carries one row per view.
+    Input goes through `--old-school-input-ctffind4`, a fixed six-line stdin
+    format kept for backwards compatibility. The interactive prompt sequence
+    was tried first and proved unusable: it differs between CTFFIND builds, so
+    a hardcoded list of answers silently lands on the wrong questions. The
+    old-school format is documented and stable across ctffind3/4/5.
+
+    That format takes exactly one 2D image per call and rejects a multi-slice
+    stack unless it is declared a movie, in which case it averages frames
+    rather than fitting each. So every view is extracted and fitted separately.
 
     Fitting runs in two passes, which is markedly more robust than one wide
     search: the view nearest zero tilt is fitted first over a wide defocus
-    range to get a hint, then the full stack is fitted over a narrow window
-    around it. Pass one is skipped when an expected defocus is supplied.
+    range to get a hint, then every view is fitted over a narrow window around
+    it. Pass one is skipped when an expected defocus is supplied.
     """
 
     name = "ctffind5"
@@ -122,25 +128,46 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus = max(hint_defocus_angstrom - window, 1.0)
             maximum_defocus = hint_defocus_angstrom + window
 
-            summary_path, diagnostic_path = self._run_ctffind(
-                input_path=tilt_stack.path.resolve(),
-                output_stem=temporary_root / f"{manifest.tilt_series_id}_ctffind",
-                executable=executable,
-                temporary_root=temporary_root,
-                pixel_spacing_angstrom=pixel_spacing_angstrom,
-                optics=optics,
-                settings=settings,
-                minimum_defocus_angstrom=minimum_defocus,
-                maximum_defocus_angstrom=maximum_defocus,
-                command_log=command_log,
-            )
-
-            rows = parse_ctffind_summary(summary_path)
-            if len(rows) != stack_shape[0]:
-                raise RuntimeError(
-                    f"CTFFIND5 fitted {len(rows)} views but the aligned stack has "
-                    f"{stack_shape[0]}; check that the stack was not treated as a movie"
+            # Old-school input takes one 2D image per call, so every view is
+            # extracted and fitted on its own.
+            rows = []
+            summary_path = temporary_root / f"{manifest.tilt_series_id}_ctffind.txt"
+            diagnostic_dir = temporary_root / "diagnostics"
+            diagnostic_dir.mkdir(exist_ok=True)
+            summary_lines: list[str] = []
+            for view_index in range(stack_shape[0]):
+                view_path = self._extract_view(
+                    tilt_stack,
+                    view_index,
+                    context=context,
+                    temporary_root=temporary_root,
+                    command_log=command_log,
                 )
+                view_summary, _ = self._run_ctffind(
+                    input_path=view_path,
+                    output_stem=diagnostic_dir / f"view_{view_index + 1:03d}",
+                    executable=executable,
+                    temporary_root=temporary_root,
+                    pixel_spacing_angstrom=pixel_spacing_angstrom,
+                    optics=optics,
+                    settings=settings,
+                    minimum_defocus_angstrom=minimum_defocus,
+                    maximum_defocus_angstrom=maximum_defocus,
+                    command_log=command_log,
+                )
+                view_rows = parse_ctffind_summary(view_summary)
+                if len(view_rows) != 1:
+                    raise RuntimeError(
+                        f"CTFFIND returned {len(view_rows)} fits for view "
+                        f"{view_index + 1}, expected one"
+                    )
+                rows.append(replace(view_rows[0], view=view_index + 1))
+                summary_lines.extend(
+                    line
+                    for line in view_summary.read_text().splitlines()
+                    if line.strip() and not line.startswith("#")
+                )
+            summary_path.write_text("\n".join(summary_lines) + "\n")
 
             temporary_defocus = temporary_root / f"{manifest.tilt_series_id}.defocus"
             write_imod_defocus_file(
@@ -154,10 +181,13 @@ class Ctffind5CtfEstimationBackend:
             _write_command_log(paths.log, command_log)
             _replace_output(temporary_defocus, paths.defocus)
             _replace_output(summary_path, paths.summary)
-            if diagnostic_path.is_file():
-                _replace_output(diagnostic_path, paths.diagnostic)
-            for extra in temporary_root.glob("*_avrot.txt"):
-                _replace_output(extra, paths.rotational_average)
+            zero_index = min(
+                range(len(tilt_angles_deg)),
+                key=lambda index: abs(tilt_angles_deg[index]),
+            )
+            zero_tilt_diagnostic = diagnostic_dir / f"view_{zero_index + 1:03d}.mrc"
+            if zero_tilt_diagnostic.is_file():
+                _replace_output(zero_tilt_diagnostic, paths.diagnostic)
 
         defocus_um = [row.mean_defocus_angstrom / 10000.0 for row in rows]
         astigmatism_um = [row.astigmatism_angstrom / 10000.0 for row in rows]
@@ -247,31 +277,15 @@ class Ctffind5CtfEstimationBackend:
             range(len(tilt_angles_deg)),
             key=lambda index: abs(tilt_angles_deg[index]),
         )
-        newstack = resolve_imod_executable("newstack", context)
-        slice_path = temporary_root / "zero_tilt.mrc"
-        command = [
-            str(newstack),
-            "-secs",
-            str(zero_index),
-            str(tilt_stack.path.resolve()),
-            str(slice_path),
-        ]
-        result = self._command_runner(
-            command,
-            cwd=temporary_root,
-            env=imod_environment(newstack, context),
+        view_path = self._extract_view(
+            tilt_stack,
+            zero_index,
+            context=context,
+            temporary_root=temporary_root,
+            command_log=command_log,
         )
-        command_log.append((command, result))
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"IMOD newstack failed to extract view {zero_index} with exit code "
-                f"{result.returncode}"
-            )
-        if not slice_path.is_file():
-            raise RuntimeError(f"IMOD newstack did not write {slice_path}")
-
         summary_path, _ = self._run_ctffind(
-            input_path=slice_path,
+            input_path=view_path,
             output_stem=temporary_root / "zero_tilt_ctffind",
             executable=executable,
             temporary_root=temporary_root,
@@ -282,8 +296,44 @@ class Ctffind5CtfEstimationBackend:
             maximum_defocus_angstrom=settings.wide_maximum_defocus_angstrom,
             command_log=command_log,
         )
-        rows = parse_ctffind_summary(summary_path)
-        return rows[0].mean_defocus_angstrom
+        return parse_ctffind_summary(summary_path)[0].mean_defocus_angstrom
+
+    def _extract_view(
+        self,
+        tilt_stack: Artifact,
+        view_index: int,
+        *,
+        context: BackendContext,
+        temporary_root: Path,
+        command_log: list[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
+    ) -> Path:
+        """Write one view of the stack as a standalone 2D MRC."""
+
+        view_path = temporary_root / f"view_{view_index + 1:03d}.mrc"
+        if view_path.is_file():
+            return view_path
+        newstack = resolve_imod_executable("newstack", context)
+        command = [
+            str(newstack),
+            "-secs",
+            str(view_index),
+            str(tilt_stack.path.resolve()),
+            str(view_path),
+        ]
+        result = self._command_runner(
+            command,
+            cwd=temporary_root,
+            env=imod_environment(newstack, context),
+        )
+        command_log.append((command, result))
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"IMOD newstack failed to extract view {view_index} with exit code "
+                f"{result.returncode}"
+            )
+        if not view_path.is_file():
+            raise RuntimeError(f"IMOD newstack did not write {view_path}")
+        return view_path
 
     def _run_ctffind(
         self,
@@ -301,7 +351,7 @@ class Ctffind5CtfEstimationBackend:
     ) -> tuple[Path, Path]:
         diagnostic_path = output_stem.with_suffix(".mrc")
         summary_path = output_stem.with_suffix(".txt")
-        stdin_text = _ctffind_stdin(
+        stdin_text = _old_school_stdin(
             input_path=input_path,
             diagnostic_path=diagnostic_path,
             pixel_spacing_angstrom=pixel_spacing_angstrom,
@@ -310,7 +360,7 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus_angstrom=minimum_defocus_angstrom,
             maximum_defocus_angstrom=maximum_defocus_angstrom,
         )
-        command = [str(executable)]
+        command = [str(executable), "--old-school-input-ctffind4"]
         result = self._command_runner(
             command,
             cwd=temporary_root,
@@ -320,9 +370,9 @@ class Ctffind5CtfEstimationBackend:
         command_log.append(([*command, f"<<stdin>>\n{stdin_text}"], result))
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "no process output").strip()
-            raise RuntimeError(f"CTFFIND5 failed with exit code {result.returncode}: {detail}")
+            raise RuntimeError(f"CTFFIND failed with exit code {result.returncode}: {detail}")
         if not summary_path.is_file():
-            raise RuntimeError(f"CTFFIND5 did not write a summary file: {summary_path}")
+            raise RuntimeError(f"CTFFIND did not write a summary file: {summary_path}")
         return summary_path, diagnostic_path
 
 
@@ -714,8 +764,7 @@ class _CtffindSettings:
     wide_minimum_defocus_angstrom: float
     wide_maximum_defocus_angstrom: float
     include_astigmatism: bool
-    exhaustive_search: bool
-    restrain_astigmatism_angstrom: float | None
+    astigmatism_tolerance_angstrom: float
     search_phase_shift: bool
     minimum_phase_shift_rad: float
     maximum_phase_shift_rad: float
@@ -864,11 +913,8 @@ def _ctffind_settings(
         include_astigmatism=_bool_parameter(
             context, "ctffind_include_astigmatism", default=True
         ),
-        exhaustive_search=_bool_parameter(
-            context, "ctffind_exhaustive_search", default=False
-        ),
-        restrain_astigmatism_angstrom=_optional_positive_float_parameter(
-            context, "ctffind_restrain_astigmatism_angstrom"
+        astigmatism_tolerance_angstrom=_nonnegative_float_parameter(
+            context, "ctffind_astigmatism_tolerance_angstrom", default=0.0
         ),
         search_phase_shift=_bool_parameter(context, "ctffind_search_phase_shift", default=False),
         minimum_phase_shift_rad=_float_parameter(
@@ -884,7 +930,7 @@ def _ctffind_settings(
     )
 
 
-def _ctffind_stdin(
+def _old_school_stdin(
     *,
     input_path: Path,
     diagnostic_path: Path,
@@ -894,45 +940,51 @@ def _ctffind_stdin(
     minimum_defocus_angstrom: float,
     maximum_defocus_angstrom: float,
 ) -> str:
-    """Build CTFFIND5's interactive answer sequence.
+    """Build the six-line `--old-school-input-ctffind4` stdin block.
 
-    A multi-slice input is declared not-a-movie so CTFFIND fits every slice as
-    an independent micrograph and reports one summary row per view.
+    Line 3 encodes the pixel size as magnification and detector step, where
+    CTFFIND computes `pixel_size = DStep * 10000 / XMAG`. Fixing XMAG at 10000
+    makes DStep the pixel size in angstrom directly.
+
+    An astigmatism tolerance of zero means "no restraint" to CTFFIND, matching
+    the ctffind3 behaviour it documents for that value.
     """
 
-    answers = [
+    lines = [
         str(input_path),
-        "no",  # is this a movie stack of frames
         str(diagnostic_path),
-        f"{pixel_spacing_angstrom:.6f}",
-        f"{optics.voltage_kv:.6f}",
-        f"{optics.spherical_aberration_mm:.6f}",
-        f"{optics.amplitude_contrast:.6f}",
-        str(settings.box_size),
-        f"{settings.min_resolution_angstrom:.6f}",
-        f"{settings.max_resolution_angstrom:.6f}",
-        f"{minimum_defocus_angstrom:.6f}",
-        f"{maximum_defocus_angstrom:.6f}",
-        f"{settings.defocus_step_angstrom:.6f}",
-        "no",  # do you know the astigmatism ahead of time
-        "yes" if settings.exhaustive_search else "no",
+        ",".join(
+            [
+                f"{optics.spherical_aberration_mm:.6f}",
+                f"{optics.voltage_kv:.6f}",
+                f"{optics.amplitude_contrast:.6f}",
+                "10000.0",
+                f"{pixel_spacing_angstrom:.6f}",
+            ]
+        ),
+        ",".join(
+            [
+                str(settings.box_size),
+                f"{settings.min_resolution_angstrom:.6f}",
+                f"{settings.max_resolution_angstrom:.6f}",
+                f"{minimum_defocus_angstrom:.6f}",
+                f"{maximum_defocus_angstrom:.6f}",
+                f"{settings.defocus_step_angstrom:.6f}",
+                f"{settings.astigmatism_tolerance_angstrom:.6f}",
+            ]
+        ),
+        # One 2D image per call, so never movie processing.
+        "0,1",
+        ",".join(
+            [
+                "1" if settings.search_phase_shift else "0",
+                f"{settings.minimum_phase_shift_rad:.6f}",
+                f"{settings.maximum_phase_shift_rad:.6f}",
+                f"{settings.phase_shift_step_rad:.6f}",
+            ]
+        ),
     ]
-    if settings.restrain_astigmatism_angstrom is not None:
-        answers.append("yes")
-        answers.append(f"{settings.restrain_astigmatism_angstrom:.6f}")
-    else:
-        answers.append("no")
-    if settings.search_phase_shift:
-        answers.append("yes")
-        answers.append(f"{settings.minimum_phase_shift_rad:.6f}")
-        answers.append(f"{settings.maximum_phase_shift_rad:.6f}")
-        answers.append(f"{settings.phase_shift_step_rad:.6f}")
-    else:
-        answers.append("no")
-    answers.append("no")  # determine sample tilt
-    answers.append("no")  # determine sample thickness
-    answers.append("no")  # set expert options
-    return "\n".join(answers) + "\n"
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -1193,6 +1245,18 @@ def _positive_int_parameter(context: BackendContext, key: str, *, default: int) 
     if value < 1:
         raise ValueError(f"context parameter {key!r} must be at least 1")
     return value
+
+
+def _nonnegative_float_parameter(
+    context: BackendContext, key: str, *, default: float
+) -> float:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {key!r} must be numeric")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"context parameter {key!r} must be finite and not negative")
+    return normalized
 
 
 def _positive_float_parameter(context: BackendContext, key: str, *, default: float) -> float:

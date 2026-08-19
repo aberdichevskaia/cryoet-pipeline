@@ -245,3 +245,37 @@ def test_masking_removes_background_noise_from_fsc() -> None:
 
     assert min(masked.correlation) > min(unmasked.correlation)
     assert all(value > 0.9 for value in masked.correlation)
+
+
+def test_cli_imports_without_the_optional_fsc_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package only `compute-fsc` needs must not break unrelated commands.
+
+    The CLI imports every module up front, so a module-scope import of an
+    optional dependency makes `estimate-ctf` (and everything else) fail with a
+    ModuleNotFoundError that has nothing to do with what was asked.
+    """
+
+    import importlib
+    import sys
+
+    # Blocking a name with None makes `import name` raise ImportError.
+    monkeypatch.setitem(sys.modules, "torch_fourier_shell_correlation", None)
+    for name in [n for n in list(sys.modules) if n.startswith("cryoet_pipeline")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    module = importlib.import_module("cryoet_pipeline.cli")
+    assert module.app is not None
+
+
+def test_compute_fsc_curve_reports_the_missing_package_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "torch_fourier_shell_correlation", None)
+    volume = _smooth_blob(8, seed=0)
+
+    with pytest.raises(ImportError, match="torch-fourier-shell-correlation"):
+        compute_fsc_curve(volume, volume, pixel_spacing_angstrom=2.0, threshold=0.5)

@@ -90,114 +90,156 @@ def test_ctfplotter_estimation_writes_model_and_qc(tmp_path: Path) -> None:
     assert report.maximum_defocus_um == pytest.approx(3.0)
 
 
-def test_ctffind5_estimation_runs_two_passes_and_writes_defocus(tmp_path: Path) -> None:
-    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
-    registry = ArtifactRegistry.empty()
-    registry.extend([source_stack, alignment, aligned_stack])
-    ctffind = _fake_executable(tmp_path / "ctffind5")
-    imod_dir = _fake_imod_dir(tmp_path)
-    stdins: list[str] = []
-    newstack_commands: list[list[str]] = []
+def _ctffind_runner(
+    *,
+    stdins: list[str] | None = None,
+    newstack_commands: list[list[str]] | None = None,
+    defocus_angstrom: float = 30000.0,
+    rows_per_call: int = 1,
+):
+    """Fake CTFFIND and newstack.
 
-    def fake_runner(
-        command: Sequence[str],
+    CTFFIND is driven through --old-school-input-ctffind4, whose second stdin
+    line is the diagnostic path; the summary sits beside it with a .txt suffix.
+    """
+
+    def runner(
+        command,
         *,
         cwd: Path,
-        env: Mapping[str, str],
+        env,
         stdin: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
         command_list = list(command)
         if "newstack" in command_list[0]:
-            newstack_commands.append(command_list)
+            if newstack_commands is not None:
+                newstack_commands.append(command_list)
             Path(command_list[-1]).write_bytes(b"")
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-        assert stdin is not None
-        stdins.append(stdin)
-        answers = stdin.splitlines()
-        diagnostic = Path(answers[2])
-        summary = diagnostic.with_suffix(".txt")
-        # A single-view first pass, then one row per view for the full stack.
-        rows = 1 if "zero_tilt" in diagnostic.name else 2
-        summary.write_text(
+        assert stdin is not None, "CTFFIND must be driven through stdin"
+        if stdins is not None:
+            stdins.append(stdin)
+        lines = stdin.splitlines()
+        diagnostic = Path(lines[1])
+        diagnostic.parent.mkdir(parents=True, exist_ok=True)
+        diagnostic.write_bytes(b"diagnostic")
+        diagnostic.with_suffix(".txt").write_text(
             "# CTFFIND fake output\n"
             + "".join(
-                f"{index + 1}.0 {30000.0 + index * 500} {29500.0 + index * 500} "
+                f"{index + 1}.0 {defocus_angstrom} {defocus_angstrom - 500.0} "
                 f"-43.2 0.0 0.10 18.5\n"
-                for index in range(rows)
+                for index in range(rows_per_call)
             )
         )
-        diagnostic.write_bytes(b"diagnostic")
         return subprocess.CompletedProcess(command, 0, stdout="fitted", stderr="")
 
+    return runner
+
+
+def test_ctffind5_estimation_uses_old_school_input_one_view_at_a_time(
+    tmp_path: Path,
+) -> None:
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack])
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    stdins: list[str] = []
+    newstack_commands: list[list[str]] = []
+
     artifacts = estimate_ctf_and_register(
-        Ctffind5CtfEstimationBackend(fake_runner),
+        Ctffind5CtfEstimationBackend(
+            _ctffind_runner(stdins=stdins, newstack_commands=newstack_commands)
+        ),
         aligned_stack,
         alignment,
         _manifest(),
-        _context(tmp_path, {"imod_dir": imod_dir, "ctffind_executable": ctffind}),
+        _context(tmp_path, {"imod_dir": _fake_imod_dir(tmp_path), "ctffind_executable": ctffind}),
         registry,
-        replace_existing=False,
     )
 
     ctf_model, qc_artifact = artifacts
     assert ctf_model.id == "TS_TEST:ctf_model:ctffind5"
-    assert ctf_model.parameters["astigmatism_frame"] == "aligned_stack"
 
-    # Pass one extracts the view nearest zero tilt; angles are [-3.1, 0.1].
-    assert len(newstack_commands) == 1
-    assert newstack_commands[0][newstack_commands[0].index("-secs") + 1] == "1"
-    assert len(stdins) == 2
+    # One hint pass on the zero-tilt view, then one call per view.
+    assert len(stdins) == 1 + 2
+    # The zero-tilt view is extracted once and reused for the hint.
+    assert {command[command.index("-secs") + 1] for command in newstack_commands} == {"0", "1"}
 
-    # Pass two searches a narrow window around the hint of 29750 A.
-    second = stdins[1].splitlines()
-    assert float(second[10]) == pytest.approx(28750.0)
-    assert float(second[11]) == pytest.approx(30750.0)
-    assert second[1] == "no"  # not a movie, so each slice is fitted separately
+    first = stdins[0].splitlines()
+    assert len(first) == 6, "old-school ctffind4 input is exactly six lines"
+    optics = first[2].split(",")
+    assert len(optics) == 5
+    assert float(optics[0]) == pytest.approx(2.7)  # Cs, mm
+    assert float(optics[1]) == pytest.approx(300.0)  # voltage, kV
+    # CTFFIND derives pixel size as DStep * 10000 / XMAG, so fixing XMAG at
+    # 10000 makes DStep the pixel size in angstrom.
+    assert float(optics[3]) == pytest.approx(10000.0)
+    assert float(optics[4]) == pytest.approx(2.7)
+
+    search = first[3].split(",")
+    assert len(search) == 7
+    assert int(search[0]) == 512  # box size
+    assert float(search[2]) == pytest.approx(5.4)  # max resolution, at Nyquist
+
+    assert first[4] == "0,1", "a single 2D image is never movie input"
+    assert first[5].split(",")[0] == "0"  # no phase-shift search
 
     entries = read_imod_defocus_file(ctf_model.path)
     assert len(entries) == 2
     assert entries[0].angle_start_deg == pytest.approx(-3.1)
     assert entries[1].angle_start_deg == pytest.approx(0.1)
-    assert entries[0].defocus_nm == pytest.approx(3000.0)
-    assert entries[0].second_defocus_nm == pytest.approx(2950.0)
-    assert Path(ctf_model.parameters["diagnostic_path"]).is_file()
 
     report = CtfEstimationQc.model_validate_json(qc_artifact.path.read_text())
-    assert report.hint_defocus_um == pytest.approx(2.975)
+    assert report.num_tilts == 2
     assert report.nyquist_angstrom == pytest.approx(5.4)
-    assert report.mean_defocus_um == pytest.approx(3.0)
 
 
-def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) -> None:
+def test_ctffind5_estimation_passes_old_school_flag(tmp_path: Path) -> None:
     _, alignment, aligned_stack = _input_artifacts(tmp_path)
-    ctffind = _fake_executable(tmp_path / "ctffind5")
-    stdins: list[str] = []
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    commands: list[list[str]] = []
 
-    def fake_runner(
-        command: Sequence[str],
-        *,
-        cwd: Path,
-        env: Mapping[str, str],
-        stdin: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        del cwd, env
-        assert stdin is not None
-        stdins.append(stdin)
-        diagnostic = Path(stdin.splitlines()[2])
-        diagnostic.with_suffix(".txt").write_text(
-            "1.0 30000.0 29500.0 -43.2 0.0 0.10 18.5\n2.0 30000.0 29500.0 -43.2 0.0 0.1 18.5\n"
-        )
-        return subprocess.CompletedProcess(list(command), 0, stdout="", stderr="")
+    inner = _ctffind_runner()
 
-    artifacts = Ctffind5CtfEstimationBackend(fake_runner).estimate(
+    def recording_runner(command, *, cwd: Path, env, stdin: str | None = None):
+        commands.append(list(command))
+        return inner(command, cwd=cwd, env=env, stdin=stdin)
+
+    Ctffind5CtfEstimationBackend(recording_runner).estimate(
         aligned_stack,
         alignment,
         _manifest(),
         _context(
             tmp_path,
             {
+                "imod_dir": _fake_imod_dir(tmp_path),
+                "ctffind_executable": ctffind,
+                "ctf_expected_defocus_um": 3.0,
+            },
+        ),
+    )
+
+    ctffind_calls = [c for c in commands if "ctffind" in c[0] and "newstack" not in c[0]]
+    assert ctffind_calls, "expected CTFFIND to be invoked"
+    for call in ctffind_calls:
+        assert call[1] == "--old-school-input-ctffind4"
+
+
+def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) -> None:
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    stdins: list[str] = []
+
+    artifacts = Ctffind5CtfEstimationBackend(_ctffind_runner(stdins=stdins)).estimate(
+        aligned_stack,
+        alignment,
+        _manifest(),
+        _context(
+            tmp_path,
+            {
+                "imod_dir": _fake_imod_dir(tmp_path),
                 "ctffind_executable": ctffind,
                 "ctf_expected_defocus_um": 3.0,
                 "ctffind_max_resolution_angstrom": 3.0,
@@ -206,7 +248,7 @@ def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) ->
     )
 
     # 2.7 A/pixel gives a 5.4 A Nyquist limit, so a 3 A request is not physical.
-    assert float(stdins[0].splitlines()[9]) == pytest.approx(5.4)
+    assert float(stdins[0].splitlines()[3].split(",")[2]) == pytest.approx(5.4)
     report = CtfEstimationQc.model_validate_json(artifacts[1].path.read_text())
     assert report.max_resolution_angstrom == pytest.approx(5.4)
     assert any("Nyquist" in warning for warning in report.warnings)
@@ -214,61 +256,48 @@ def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) ->
 
 def test_ctffind5_estimation_skips_first_pass_with_explicit_defocus(tmp_path: Path) -> None:
     _, alignment, aligned_stack = _input_artifacts(tmp_path)
-    ctffind = _fake_executable(tmp_path / "ctffind5")
-    calls: list[str] = []
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    stdins: list[str] = []
 
-    def fake_runner(
-        command: Sequence[str],
-        *,
-        cwd: Path,
-        env: Mapping[str, str],
-        stdin: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        del cwd, env
-        assert stdin is not None
-        calls.append(stdin)
-        diagnostic = Path(stdin.splitlines()[2])
-        diagnostic.with_suffix(".txt").write_text(
-            "1.0 30000.0 29500.0 -43.2 0.0 0.1 18.5\n2.0 30000.0 29500.0 -43.2 0.0 0.1 18.5\n"
-        )
-        return subprocess.CompletedProcess(list(command), 0, stdout="", stderr="")
-
-    Ctffind5CtfEstimationBackend(fake_runner).estimate(
+    Ctffind5CtfEstimationBackend(_ctffind_runner(stdins=stdins)).estimate(
         aligned_stack,
         alignment,
         _manifest(),
-        _context(tmp_path, {"ctffind_executable": ctffind, "ctf_expected_defocus_um": 4.0}),
+        _context(
+            tmp_path,
+            {
+                "imod_dir": _fake_imod_dir(tmp_path),
+                "ctffind_executable": ctffind,
+                "ctf_expected_defocus_um": 4.0,
+            },
+        ),
     )
 
-    assert len(calls) == 1
-    answers = calls[0].splitlines()
-    assert float(answers[10]) == pytest.approx(39000.0)
-    assert float(answers[11]) == pytest.approx(41000.0)
+    # No hint pass, so exactly one call per view, all in the narrow window.
+    assert len(stdins) == 2
+    for stdin in stdins:
+        search = stdin.splitlines()[3].split(",")
+        assert float(search[3]) == pytest.approx(39000.0)
+        assert float(search[4]) == pytest.approx(41000.0)
 
 
-def test_ctffind5_estimation_rejects_view_count_mismatch(tmp_path: Path) -> None:
+def test_ctffind5_estimation_rejects_multiple_fits_for_one_view(tmp_path: Path) -> None:
     _, alignment, aligned_stack = _input_artifacts(tmp_path)
-    ctffind = _fake_executable(tmp_path / "ctffind5")
+    ctffind = _fake_executable(tmp_path / "ctffind")
 
-    def fake_runner(
-        command: Sequence[str],
-        *,
-        cwd: Path,
-        env: Mapping[str, str],
-        stdin: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        del cwd, env
-        assert stdin is not None
-        diagnostic = Path(stdin.splitlines()[2])
-        diagnostic.with_suffix(".txt").write_text("1.0 30000.0 29500.0 -43.2 0.0 0.1 18.5\n")
-        return subprocess.CompletedProcess(list(command), 0, stdout="", stderr="")
-
-    with pytest.raises(RuntimeError, match="fitted 1 views but the aligned stack has 2"):
-        Ctffind5CtfEstimationBackend(fake_runner).estimate(
+    with pytest.raises(RuntimeError, match="returned 2 fits for view"):
+        Ctffind5CtfEstimationBackend(_ctffind_runner(rows_per_call=2)).estimate(
             aligned_stack,
             alignment,
             _manifest(),
-            _context(tmp_path, {"ctffind_executable": ctffind, "ctf_expected_defocus_um": 3.0}),
+            _context(
+                tmp_path,
+                {
+                    "imod_dir": _fake_imod_dir(tmp_path),
+                    "ctffind_executable": ctffind,
+                    "ctf_expected_defocus_um": 3.0,
+                },
+            ),
         )
 
 

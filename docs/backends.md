@@ -27,7 +27,7 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `fine-align-tilt-series` | `imod-tiltalign` | ✓ | IMOD | Solves the alignment and positions the specimen. |
 | `build-final-aligned-stack` | `imod-newstack` | ✓ | IMOD | Applies the solved transforms at a chosen binning. |
 | `estimate-defocus-hint` | `ctffind5` | ✓ | CTFFIND5 | One near-zero-tilt image, to seed a full estimation. |
-| `estimate-ctf` | `ctffind5` | ✓ | CTFFIND5 | Two-pass, whole stack in one call. See below. |
+| `estimate-ctf` | `ctffind5` | ✓ | CTFFIND, IMOD | Two-pass, one call per view. See below. |
 | | `imod-ctfplotter` | | IMOD | Tilt-aware fitting in IMOD's own framework. |
 | `correct-ctf` | `imod-ctfphaseflip` | ✓ | IMOD | Consumes any `CTF_MODEL`, whichever backend fitted it. |
 | `reconstruct-tomogram` | `imod-tilt` | ✓ | IMOD | Weighted back-projection. |
@@ -57,11 +57,21 @@ patch count, and the margin rather than entered directly.
 Both estimators write the same IMOD `.defocus` file, so the choice is about
 fitting, not about what follows.
 
-- `ctffind5` fits the aligned stack in one call (CTFFIND treats a multi-slice
-  MRC that is not declared a movie as independent micrographs). It runs two
-  passes: the view nearest zero tilt over a wide defocus range for a hint, then
-  the full stack over a narrow window around it. Supplying
-  `--ctf-expected-defocus-um` skips the first pass.
+- `ctffind5` drives CTFFIND through `--old-school-input-ctffind4`, a fixed
+  six-line stdin format kept for backwards compatibility. The interactive
+  prompt sequence was tried first and does not work: it differs between CTFFIND
+  builds, so a hardcoded list of answers lands on the wrong questions. That
+  format takes one 2D image per call and rejects a stack unless it is declared
+  a movie (which averages frames instead of fitting each), so every view is
+  extracted with `newstack` and fitted separately. Fitting runs in two passes:
+  the view nearest zero tilt over a wide defocus range for a hint, then every
+  view over a narrow window around it. Supplying `--ctf-expected-defocus-um`
+  skips the first pass.
+
+  Old-school input does not expose CTFFIND5's tilt and thickness estimation, or
+  a separate exhaustive-search toggle; astigmatism restraint is the tolerance
+  value in `--ctffind-astigmatism-tolerance-angstrom`, where zero means no
+  restraint.
 - `imod-ctfplotter` stays inside IMOD and fits with explicit tilt-axis geometry.
 
 The high-resolution fit limit defaults to the Nyquist limit of the stack's own

@@ -9,11 +9,29 @@ import mrcfile  # type: ignore[import-untyped]
 import numpy as np
 import torch
 import zarr
-from torch_fourier_shell_correlation import fourier_shell_correlation
 
 from cryoet_pipeline.backends.subtomogram import read_particle_star
 from cryoet_pipeline.models import FscQc, QcStatus
 from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
+
+
+def _fourier_shell_correlation(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Call torch-fourier-shell-correlation, imported only when actually used.
+
+    The CLI imports every module up front, so a package needed by one command
+    must not be imported at module scope: otherwise a missing optional
+    dependency breaks unrelated commands.
+    """
+
+    try:
+        from torch_fourier_shell_correlation import fourier_shell_correlation
+    except ImportError as exc:  # pragma: no cover - exercised only without the package
+        raise ImportError(
+            "compute-fsc needs the torch-fourier-shell-correlation package; "
+            'install it with: pip install -e ".[gpu]"'
+        ) from exc
+    result: torch.Tensor = fourier_shell_correlation(a, b)
+    return result
 
 
 @dataclass(frozen=True)
@@ -47,7 +65,7 @@ def compute_fsc_curve(
         raise ValueError(f"expected 3D volumes, got shape {tuple(a.shape)}")
 
     box_size = a.shape[0]
-    curve = fourier_shell_correlation(a.to(torch.float32), b.to(torch.float32))
+    curve = _fourier_shell_correlation(a.to(torch.float32), b.to(torch.float32))
     all_shells = [float(value) for value in curve.detach().cpu().numpy()]
     if len(all_shells) < 2:
         raise ValueError(f"expected at least one non-DC shell, got box size {box_size}")
