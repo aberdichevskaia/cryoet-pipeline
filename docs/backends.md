@@ -27,7 +27,7 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `fine-align-tilt-series` | `imod-tiltalign` | ✓ | IMOD | Solves the alignment and positions the specimen. |
 | `build-final-aligned-stack` | `imod-newstack` | ✓ | IMOD | Applies the solved transforms at a chosen binning. |
 | `estimate-defocus-hint` | `ctffind5` | ✓ | CTFFIND5 | One near-zero-tilt image, to seed a full estimation. |
-| `estimate-ctf` | `ctffind5` | ✓ | CTFFIND, IMOD | Two-pass, one call per view. See below. |
+| `estimate-ctf` | `ctffind5` | ✓ | CTFFIND, IMOD | Two-pass, whole stack in one call. See below. |
 | | `imod-ctfplotter` | | IMOD | Tilt-aware fitting in IMOD's own framework. |
 | `correct-ctf` | `imod-ctfphaseflip` | ✓ | IMOD | Consumes any `CTF_MODEL`, whichever backend fitted it. |
 | `reconstruct-tomogram` | `imod-tilt` | ✓ | IMOD | Weighted back-projection. |
@@ -57,21 +57,25 @@ patch count, and the margin rather than entered directly.
 Both estimators write the same IMOD `.defocus` file, so the choice is about
 fitting, not about what follows.
 
-- `ctffind5` drives CTFFIND through `--old-school-input-ctffind4`, a fixed
-  six-line stdin format kept for backwards compatibility. The interactive
-  prompt sequence was tried first and does not work: it differs between CTFFIND
-  builds, so a hardcoded list of answers lands on the wrong questions. That
-  format takes one 2D image per call and rejects a stack unless it is declared
-  a movie (which averages frames instead of fitting each), so every view is
-  extracted with `newstack` and fitted separately. Fitting runs in two passes:
-  the view nearest zero tilt over a wide defocus range for a hint, then every
-  view over a narrow window around it. Supplying `--ctf-expected-defocus-um`
-  skips the first pass.
+- `ctffind5` drives CTFFIND interactively: the program has no command-line
+  parameters, it asks questions and reads answers from stdin, positionally.
+  Interactive mode treats each slice of a stack as its own micrograph, so one
+  call covers the series. Fitting runs in two passes: the view nearest zero tilt
+  over a wide defocus range for a hint, then the stack over a narrow window
+  around it. Supplying `--ctf-expected-defocus-um` skips the first pass.
 
-  Old-school input does not expose CTFFIND5's tilt and thickness estimation, or
-  a separate exhaustive-search toggle; astigmatism restraint is the tolerance
-  value in `--ctffind-astigmatism-tolerance-angstrom`, where zero means no
-  restraint.
+  A positional answer list is build-specific, and getting it wrong is quiet
+  rather than loud, because an answer meant for one question is often valid for
+  its neighbour. The adapter therefore checks CTFFIND's echo of each prompt
+  against what was sent and fails with the mismatch. `CTFFIND_PROMPTS` records
+  the order of CTFFIND 5.0.2, captured from a real run; older builds ask an
+  extra "is this a movie" question at position two.
+
+  `--old-school-input-ctffind4` offers a stable record format and looks like the
+  obvious answer, but it is unusable here: the same view fits in about two
+  seconds interactively and had not finished after two minutes in old-school
+  mode, single-threaded, on identical parameters. That mode also forces one
+  thread and accepts only one 2D image per call.
 - `imod-ctfplotter` stays inside IMOD and fits with explicit tilt-axis geometry.
 
 The high-resolution fit limit defaults to the Nyquist limit of the stack's own

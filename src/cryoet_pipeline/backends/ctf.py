@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
@@ -49,20 +51,22 @@ DEFAULT_DEFOCUS_SEARCH_WINDOW_ANGSTROM = 1000.0
 class Ctffind5CtfEstimationBackend:
     """Estimate per-tilt CTF with CTFFIND, emitting an IMOD `.defocus` file.
 
-    Input goes through `--old-school-input-ctffind4`, a fixed six-line stdin
-    format kept for backwards compatibility. The interactive prompt sequence
-    was tried first and proved unusable: it differs between CTFFIND builds, so
-    a hardcoded list of answers silently lands on the wrong questions. The
-    old-school format is documented and stable across ctffind3/4/5.
+    CTFFIND has no command-line parameters: it asks questions and reads answers
+    from stdin, positionally. That makes the answer list build-specific, and
+    getting it wrong is not loud — an answer meant for one question is often a
+    valid value for its neighbour. `_verify_prompts` therefore checks CTFFIND's
+    echo of each prompt against what was sent.
 
-    That format takes exactly one 2D image per call and rejects a multi-slice
-    stack unless it is declared a movie, in which case it averages frames
-    rather than fitting each. So every view is extracted and fitted separately.
+    `--old-school-input-ctffind4` offers a stable record format instead and was
+    tried, but it is pathologically slow here: the same view fits in about two
+    seconds interactively and had not finished after two minutes in old-school
+    mode, single-threaded, on identical parameters.
 
-    Fitting runs in two passes, which is markedly more robust than one wide
-    search: the view nearest zero tilt is fitted first over a wide defocus
-    range to get a hint, then every view is fitted over a narrow window around
-    it. Pass one is skipped when an expected defocus is supplied.
+    Interactive mode treats each slice of a stack as its own micrograph, so one
+    call covers the series. Fitting runs in two passes, which is markedly more
+    robust than one wide search: the view nearest zero tilt is fitted first over
+    a wide defocus range to get a hint, then the stack is fitted over a narrow
+    window around it. Pass one is skipped when an expected defocus is supplied.
     """
 
     name = "ctffind5"
@@ -133,46 +137,26 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus = max(hint_defocus_angstrom - window, 1.0)
             maximum_defocus = hint_defocus_angstrom + window
 
-            # Old-school input takes one 2D image per call, so every view is
-            # extracted and fitted on its own.
-            rows = []
-            summary_path = temporary_root / f"{manifest.tilt_series_id}_ctffind.txt"
-            diagnostic_dir = temporary_root / "diagnostics"
-            diagnostic_dir.mkdir(exist_ok=True)
-            summary_lines: list[str] = []
-            for view_index in range(stack_shape[0]):
-                view_path = self._extract_view(
-                    tilt_stack,
-                    view_index,
-                    context=context,
-                    temporary_root=temporary_root,
-                    command_log=command_log,
+            # Interactive mode treats each slice of the stack as its own
+            # micrograph, so the whole series is fitted in one call.
+            summary_path, diagnostic_path = self._run_ctffind(
+                input_path=tilt_stack.path.resolve(),
+                output_stem=temporary_root / f"{manifest.tilt_series_id}_ctffind",
+                executable=executable,
+                temporary_root=temporary_root,
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+                optics=optics,
+                settings=settings,
+                minimum_defocus_angstrom=minimum_defocus,
+                maximum_defocus_angstrom=maximum_defocus,
+                command_log=command_log,
+            )
+            rows = parse_ctffind_summary(summary_path)
+            if len(rows) != stack_shape[0]:
+                raise RuntimeError(
+                    f"CTFFIND fitted {len(rows)} views but the aligned stack has "
+                    f"{stack_shape[0]}"
                 )
-                view_summary, _ = self._run_ctffind(
-                    input_path=view_path,
-                    output_stem=diagnostic_dir / f"view_{view_index + 1:03d}",
-                    executable=executable,
-                    temporary_root=temporary_root,
-                    pixel_spacing_angstrom=pixel_spacing_angstrom,
-                    optics=optics,
-                    settings=settings,
-                    minimum_defocus_angstrom=minimum_defocus,
-                    maximum_defocus_angstrom=maximum_defocus,
-                    command_log=command_log,
-                )
-                view_rows = parse_ctffind_summary(view_summary)
-                if len(view_rows) != 1:
-                    raise RuntimeError(
-                        f"CTFFIND returned {len(view_rows)} fits for view "
-                        f"{view_index + 1}, expected one"
-                    )
-                rows.append(replace(view_rows[0], view=view_index + 1))
-                summary_lines.extend(
-                    line
-                    for line in view_summary.read_text().splitlines()
-                    if line.strip() and not line.startswith("#")
-                )
-            summary_path.write_text("\n".join(summary_lines) + "\n")
 
             temporary_defocus = temporary_root / f"{manifest.tilt_series_id}.defocus"
             write_imod_defocus_file(
@@ -185,13 +169,10 @@ class Ctffind5CtfEstimationBackend:
 
             _replace_output(temporary_defocus, paths.defocus)
             _replace_output(summary_path, paths.summary)
-            zero_index = min(
-                range(len(tilt_angles_deg)),
-                key=lambda index: abs(tilt_angles_deg[index]),
-            )
-            zero_tilt_diagnostic = diagnostic_dir / f"view_{zero_index + 1:03d}.mrc"
-            if zero_tilt_diagnostic.is_file():
-                _replace_output(zero_tilt_diagnostic, paths.diagnostic)
+            if diagnostic_path.is_file():
+                _replace_output(diagnostic_path, paths.diagnostic)
+            for extra in temporary_root.glob("*_avrot.txt"):
+                _replace_output(extra, paths.rotational_average)
             succeeded = True
         finally:
             _write_command_log(paths.log, command_log)
@@ -360,7 +341,7 @@ class Ctffind5CtfEstimationBackend:
     ) -> tuple[Path, Path]:
         diagnostic_path = output_stem.with_suffix(".mrc")
         summary_path = output_stem.with_suffix(".txt")
-        stdin_text = _old_school_stdin(
+        stdin_text = _ctffind_stdin(
             input_path=input_path,
             diagnostic_path=diagnostic_path,
             pixel_spacing_angstrom=pixel_spacing_angstrom,
@@ -369,17 +350,18 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus_angstrom=minimum_defocus_angstrom,
             maximum_defocus_angstrom=maximum_defocus_angstrom,
         )
-        command = [str(executable), "--old-school-input-ctffind4"]
+        command = [str(executable)]
         result = self._command_runner(
             command,
             cwd=temporary_root,
-            env={},
+            env=os.environ.copy(),
             stdin=stdin_text,
         )
         command_log.append(([*command, f"<<stdin>>\n{stdin_text}"], result))
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "no process output").strip()
             raise RuntimeError(f"CTFFIND failed with exit code {result.returncode}: {detail}")
+        _verify_prompts(result.stdout or "", stdin_text)
         if not summary_path.is_file():
             raise RuntimeError(f"CTFFIND did not write a summary file: {summary_path}")
         return summary_path, diagnostic_path
@@ -773,7 +755,8 @@ class _CtffindSettings:
     wide_minimum_defocus_angstrom: float
     wide_maximum_defocus_angstrom: float
     include_astigmatism: bool
-    astigmatism_tolerance_angstrom: float
+    exhaustive_search: bool
+    restrain_astigmatism_angstrom: float | None
     search_phase_shift: bool
     minimum_phase_shift_rad: float
     maximum_phase_shift_rad: float
@@ -922,8 +905,11 @@ def _ctffind_settings(
         include_astigmatism=_bool_parameter(
             context, "ctffind_include_astigmatism", default=True
         ),
-        astigmatism_tolerance_angstrom=_nonnegative_float_parameter(
-            context, "ctffind_astigmatism_tolerance_angstrom", default=0.0
+        exhaustive_search=_bool_parameter(
+            context, "ctffind_exhaustive_search", default=False
+        ),
+        restrain_astigmatism_angstrom=_optional_positive_float_parameter(
+            context, "ctffind_restrain_astigmatism_angstrom"
         ),
         search_phase_shift=_bool_parameter(context, "ctffind_search_phase_shift", default=False),
         minimum_phase_shift_rad=_float_parameter(
@@ -939,7 +925,28 @@ def _ctffind_settings(
     )
 
 
-def _old_school_stdin(
+# The question order of CTFFIND 5.0.2, captured from a real interactive run.
+# It is build-specific: the `--old-school-input-ctffind4` format is stable but
+# unusably slow on tilt-series data, and older builds ask an extra "is this a
+# movie" question here. `_verify_prompts` checks the answers actually landed
+# where intended rather than trusting this list.
+CTFFIND_PROMPTS: tuple[str, ...] = (
+    "Input image file name",
+    "Output diagnostic image file name",
+    "Pixel size",
+    "Acceleration voltage",
+    "Spherical aberration",
+    "Amplitude contrast",
+    "Size of amplitude spectrum to compute",
+    "Minimum resolution",
+    "Maximum resolution",
+    "Minimum defocus",
+    "Maximum defocus",
+    "Defocus search step",
+)
+
+
+def _ctffind_stdin(
     *,
     input_path: Path,
     diagnostic_path: Path,
@@ -949,51 +956,75 @@ def _old_school_stdin(
     minimum_defocus_angstrom: float,
     maximum_defocus_angstrom: float,
 ) -> str:
-    """Build the six-line `--old-school-input-ctffind4` stdin block.
+    """Build CTFFIND's interactive answer sequence."""
 
-    Line 3 encodes the pixel size as magnification and detector step, where
-    CTFFIND computes `pixel_size = DStep * 10000 / XMAG`. Fixing XMAG at 10000
-    makes DStep the pixel size in angstrom directly.
-
-    An astigmatism tolerance of zero means "no restraint" to CTFFIND, matching
-    the ctffind3 behaviour it documents for that value.
-    """
-
-    lines = [
+    answers = [
         str(input_path),
         str(diagnostic_path),
-        ",".join(
-            [
-                f"{optics.spherical_aberration_mm:.6f}",
-                f"{optics.voltage_kv:.6f}",
-                f"{optics.amplitude_contrast:.6f}",
-                "10000.0",
-                f"{pixel_spacing_angstrom:.6f}",
-            ]
-        ),
-        ",".join(
-            [
-                str(settings.box_size),
-                f"{settings.min_resolution_angstrom:.6f}",
-                f"{settings.max_resolution_angstrom:.6f}",
-                f"{minimum_defocus_angstrom:.6f}",
-                f"{maximum_defocus_angstrom:.6f}",
-                f"{settings.defocus_step_angstrom:.6f}",
-                f"{settings.astigmatism_tolerance_angstrom:.6f}",
-            ]
-        ),
-        # One 2D image per call, so never movie processing.
-        "0,1",
-        ",".join(
-            [
-                "1" if settings.search_phase_shift else "0",
-                f"{settings.minimum_phase_shift_rad:.6f}",
-                f"{settings.maximum_phase_shift_rad:.6f}",
-                f"{settings.phase_shift_step_rad:.6f}",
-            ]
-        ),
+        f"{pixel_spacing_angstrom:.6f}",
+        f"{optics.voltage_kv:.6f}",
+        f"{optics.spherical_aberration_mm:.6f}",
+        f"{optics.amplitude_contrast:.6f}",
+        str(settings.box_size),
+        f"{settings.min_resolution_angstrom:.6f}",
+        f"{settings.max_resolution_angstrom:.6f}",
+        f"{minimum_defocus_angstrom:.6f}",
+        f"{maximum_defocus_angstrom:.6f}",
+        f"{settings.defocus_step_angstrom:.6f}",
+        "no",  # do you know what astigmatism is present
+        "yes" if settings.exhaustive_search else "no",  # slower, exhaustive search
     ]
-    return "\n".join(lines) + "\n"
+    if settings.restrain_astigmatism_angstrom is not None:
+        answers.append("yes")
+        answers.append(f"{settings.restrain_astigmatism_angstrom:.6f}")
+    else:
+        answers.append("no")
+    if settings.search_phase_shift:
+        answers.append("yes")
+        answers.append(f"{settings.minimum_phase_shift_rad:.6f}")
+        answers.append(f"{settings.maximum_phase_shift_rad:.6f}")
+        answers.append(f"{settings.phase_shift_step_rad:.6f}")
+    else:
+        answers.append("no")
+    answers.append("no")  # determine sample tilt
+    answers.append("no")  # determine sample thickness
+    answers.append("no")  # set expert options
+    return "\n".join(answers) + "\n"
+
+
+def _verify_prompts(output: str, stdin_text: str) -> None:
+    """Fail loudly when an answer landed on the wrong question.
+
+    CTFFIND echoes every prompt with the answer it received, so a shifted
+    sequence is detectable instead of silently producing a plausible but wrong
+    fit. This is the failure that a hardcoded answer list invites.
+    """
+
+    answers = stdin_text.splitlines()
+    for index, prompt in enumerate(CTFFIND_PROMPTS):
+        if index >= len(answers):
+            return
+        match = re.search(
+            rf"^{re.escape(prompt)}\s*(?:\[[^\]]*\])?\s*:\s*(\S+)\s*$",
+            output,
+            re.MULTILINE,
+        )
+        if match is None:
+            continue
+        received, intended = match.group(1), answers[index].strip()
+        if received != intended and not _numerically_equal(received, intended):
+            raise RuntimeError(
+                f"CTFFIND received {received!r} for {prompt!r} but was sent "
+                f"{intended!r}: the question order of this build differs from "
+                "the one this adapter expects"
+            )
+
+
+def _numerically_equal(left: str, right: str) -> bool:
+    try:
+        return math.isclose(float(left), float(right), rel_tol=1e-6, abs_tol=1e-9)
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
