@@ -560,3 +560,47 @@ def _fake_imod_dir(tmp_path: Path) -> Path:
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.touch()
     return imod_dir
+
+
+def test_ctffind5_estimation_keeps_evidence_when_a_view_fails(tmp_path: Path) -> None:
+    """A failed run must leave the extracted view and the exact stdin behind.
+
+    Cleaning up on failure destroys the only two things worth looking at.
+    """
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+
+    def failing_runner(command, *, cwd: Path, env, stdin: str | None = None):
+        command_list = list(command)
+        if "newstack" in command_list[0]:
+            Path(command_list[-1]).write_bytes(b"extracted view")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="Error: answer is not recognized"
+        )
+
+    out = tmp_path / "outputs"
+    with pytest.raises(RuntimeError, match="CTFFIND failed with exit code 1"):
+        Ctffind5CtfEstimationBackend(failing_runner).estimate(
+            aligned_stack,
+            alignment,
+            _manifest(),
+            _context(
+                tmp_path,
+                {
+                    "imod_dir": _fake_imod_dir(tmp_path),
+                    "ctffind_executable": ctffind,
+                    "ctf_expected_defocus_um": 3.0,
+                },
+            ),
+        )
+
+    leftovers = list((out / "ctf" / "TS_TEST").glob(".TS_TEST-ctffind-*"))
+    assert leftovers, "the working directory must survive a failure"
+    assert list(leftovers[0].glob("view_*.mrc")), "the extracted view must survive"
+
+    log = (out / "ctf" / "TS_TEST" / "TS_TEST_ctffind5.log").read_text()
+    assert "--old-school-input-ctffind4" in log
+    assert "<<stdin>>" in log, "the exact stdin belongs in the log"
+    assert "answer is not recognized" in log

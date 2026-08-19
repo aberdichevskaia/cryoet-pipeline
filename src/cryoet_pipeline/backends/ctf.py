@@ -100,12 +100,17 @@ class Ctffind5CtfEstimationBackend:
         executable = _resolve_ctffind_executable(context)
 
         command_log: list[tuple[Sequence[str], subprocess.CompletedProcess[str]]] = []
-        with tempfile.TemporaryDirectory(
-            prefix=f".{manifest.tilt_series_id}-ctffind-",
-            dir=paths.output_dir.resolve(),
-        ) as temporary_directory:
-            temporary_root = Path(temporary_directory)
-
+        # Not a TemporaryDirectory: on failure the extracted view and the exact
+        # stdin that produced it are the only evidence, and cleaning them up
+        # leaves nothing to diagnose.
+        temporary_root = Path(
+            tempfile.mkdtemp(
+                prefix=f".{manifest.tilt_series_id}-ctffind-",
+                dir=paths.output_dir.resolve(),
+            )
+        )
+        succeeded = False
+        try:
             hint_defocus_angstrom = _explicit_expected_defocus_angstrom(context)
             if hint_defocus_angstrom is None:
                 hint_defocus_angstrom = self._fit_zero_tilt_hint(
@@ -178,7 +183,6 @@ class Ctffind5CtfEstimationBackend:
                 include_phase_shift=settings.search_phase_shift,
             )
 
-            _write_command_log(paths.log, command_log)
             _replace_output(temporary_defocus, paths.defocus)
             _replace_output(summary_path, paths.summary)
             zero_index = min(
@@ -188,6 +192,11 @@ class Ctffind5CtfEstimationBackend:
             zero_tilt_diagnostic = diagnostic_dir / f"view_{zero_index + 1:03d}.mrc"
             if zero_tilt_diagnostic.is_file():
                 _replace_output(zero_tilt_diagnostic, paths.diagnostic)
+            succeeded = True
+        finally:
+            _write_command_log(paths.log, command_log)
+            if succeeded:
+                shutil.rmtree(temporary_root, ignore_errors=True)
 
         defocus_um = [row.mean_defocus_angstrom / 10000.0 for row in rows]
         astigmatism_um = [row.astigmatism_angstrom / 10000.0 for row in rows]
