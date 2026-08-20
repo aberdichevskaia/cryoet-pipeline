@@ -42,7 +42,7 @@ from cryoet_pipeline.models import (
     TiltAlignment,
     TiltSeriesManifest,
 )
-from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.mrc_validation import inspect_mrc_file, validate_complete_mrc
 
 DEFAULT_DEFOCUS_SEARCH_WINDOW_ANGSTROM = 1000.0
 """Half-width of the narrow second-pass defocus search around the hint."""
@@ -52,21 +52,24 @@ class Ctffind5CtfEstimationBackend:
     """Estimate per-tilt CTF with CTFFIND, emitting an IMOD `.defocus` file.
 
     CTFFIND has no command-line parameters: it asks questions and reads answers
-    from stdin, positionally. That makes the answer list build-specific, and
-    getting it wrong is not loud — an answer meant for one question is often a
-    valid value for its neighbour. `_verify_prompts` therefore checks CTFFIND's
-    echo of each prompt against what was sent.
+    from stdin, positionally, so the adapter has to know the exact question
+    sequence. The sequence depends on the input: CTFFIND opens the file before
+    asking anything and asks its movie question only when the file holds more
+    than one slice, so a tilt series draws one question more than a single
+    extracted view. `_ctffind_dialogue` builds questions and answers together and
+    `_verify_dialogue` checks them against CTFFIND's own echo, because landing an
+    answer on the wrong question is usually quiet rather than loud.
 
-    `--old-school-input-ctffind4` offers a stable record format instead and was
+    `--old-school-input-ctffind4` offers a fixed record format instead and was
     tried, but it is pathologically slow here: the same view fits in about two
     seconds interactively and had not finished after two minutes in old-school
-    mode, single-threaded, on identical parameters.
+    mode, on identical parameters. That mode also pins itself to one thread.
 
-    Interactive mode treats each slice of a stack as its own micrograph, so one
-    call covers the series. Fitting runs in two passes, which is markedly more
-    robust than one wide search: the view nearest zero tilt is fitted first over
-    a wide defocus range to get a hint, then the stack is fitted over a narrow
-    window around it. Pass one is skipped when an expected defocus is supplied.
+    Answering no to the movie question makes CTFFIND fit each slice separately,
+    so one call covers the series. Fitting runs in two passes, which is markedly
+    more robust than one wide search: the view nearest zero tilt is fitted first
+    over a wide defocus range to get a hint, then the stack is fitted over a
+    narrow window around it. Pass one is skipped when a defocus is supplied.
     """
 
     name = "ctffind5"
@@ -341,8 +344,9 @@ class Ctffind5CtfEstimationBackend:
     ) -> tuple[Path, Path]:
         diagnostic_path = output_stem.with_suffix(".mrc")
         summary_path = output_stem.with_suffix(".txt")
-        stdin_text = _ctffind_stdin(
+        dialogue = _ctffind_dialogue(
             input_path=input_path,
+            input_is_a_stack=_ctffind_asks_about_movies(input_path),
             diagnostic_path=diagnostic_path,
             pixel_spacing_angstrom=pixel_spacing_angstrom,
             optics=optics,
@@ -350,6 +354,7 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus_angstrom=minimum_defocus_angstrom,
             maximum_defocus_angstrom=maximum_defocus_angstrom,
         )
+        stdin_text = _ctffind_stdin(dialogue)
         command = [str(executable)]
         result = self._command_runner(
             command,
@@ -358,10 +363,13 @@ class Ctffind5CtfEstimationBackend:
             stdin=stdin_text,
         )
         command_log.append(([*command, f"<<stdin>>\n{stdin_text}"], result))
+        # Before the exit code, because a misaligned answer list aborts CTFFIND
+        # with a generic "answer is not recognized" and the mismatch it echoed
+        # just above is the part worth reporting.
+        _verify_dialogue(result.stdout or "", dialogue)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "no process output").strip()
             raise RuntimeError(f"CTFFIND failed with exit code {result.returncode}: {detail}")
-        _verify_prompts(result.stdout or "", stdin_text)
         if not summary_path.is_file():
             raise RuntimeError(f"CTFFIND did not write a summary file: {summary_path}")
         return summary_path, diagnostic_path
@@ -925,98 +933,192 @@ def _ctffind_settings(
     )
 
 
-# The question order of CTFFIND 5.0.2, captured from a real interactive run.
-# It is build-specific: the `--old-school-input-ctffind4` format is stable but
-# unusably slow on tilt-series data, and older builds ask an extra "is this a
-# movie" question here. `_verify_prompts` checks the answers actually landed
-# where intended rather than trusting this list.
-CTFFIND_PROMPTS: tuple[str, ...] = (
-    "Input image file name",
-    "Output diagnostic image file name",
-    "Pixel size",
-    "Acceleration voltage",
-    "Spherical aberration",
-    "Amplitude contrast",
-    "Size of amplitude spectrum to compute",
-    "Minimum resolution",
-    "Maximum resolution",
-    "Minimum defocus",
-    "Maximum defocus",
-    "Defocus search step",
+# Every question CTFFIND can ask interactively, taken from
+# `DoInteractiveUserInput` in ctffind.cpp. Used only to tell prompt echoes apart
+# from the rest of CTFFIND's output, so banner lines such as "Version : 5.0.2"
+# are not mistaken for questions. "samnple" is CTFFIND's spelling, not a typo.
+CTFFIND_QUESTIONS: frozenset[str] = frozenset(
+    {
+        "Input image file name",
+        "Input is a movie (stack of frames)",
+        "Number of frames to average together",
+        "Output diagnostic image file name",
+        "Pixel size",
+        "Acceleration voltage",
+        "Spherical aberration",
+        "Amplitude contrast",
+        "Size of amplitude spectrum to compute",
+        "Minimum resolution",
+        "Maximum resolution",
+        "Minimum defocus",
+        "Maximum defocus",
+        "Defocus search step",
+        "Do you know what astigmatism is present?",
+        "Slower, more exhaustive search?",
+        "Known astigmatism",
+        "Known astigmatism angle",
+        "Use a restraint on astigmatism?",
+        "Expected (tolerated) astigmatism",
+        "Find additional phase shift?",
+        "Minimum phase shift (rad)",
+        "Maximum phase shift (rad)",
+        "Phase shift search step",
+        "Determine sample tilt?",
+        "Determine samnple thickness?",
+        "Use brute force 1D search?",
+        "Use 2D refinement?",
+        "Low resolution limit for nodes",
+        "High resolution limit for nodes",
+        "Use rounded square for nodes?",
+        "Downweight nodes?",
+        "Do you want to set expert options?",
+        "Resample micrograph if pixel size too small?",
+        "Target pixel size after resampling",
+        "Movie is dark-subtracted?",
+        "Dark image filename",
+        "Movie is gain-corrected?",
+        "Gain image filename",
+        "Correct Movie Mag. Distortion?",
+        "Mag. distortion angle",
+        "Mag. distortion major scale",
+        "Mag. distortion minor scale",
+        "Number of EER frames per image",
+        "EER super resolution factor",
+        "Do you already know the defocus?",
+        "Known defocus 1",
+        "Known defocus 2",
+        "Known phase shift (radians)",
+        "Desired number of parallel threads",
+    }
 )
 
 
-def _ctffind_stdin(
+def _ctffind_asks_about_movies(input_path: Path) -> bool:
+    """Whether CTFFIND will ask its movie question for this input.
+
+    It asks only when the file holds more than one slice, mirroring
+    `input_file.ReturnZSize() > 1` in `DoInteractiveUserInput`. The answer
+    changes the question sequence, so it is read from the file rather than
+    assumed from which pass is running.
+    """
+
+    if input_path.suffix.lower() == ".eer":
+        raise ValueError(
+            f"CTFFIND treats EER input as a movie and asks a different set of "
+            f"questions than this adapter answers: {input_path}"
+        )
+    return len(inspect_mrc_file(input_path).shape) == 3
+
+
+def _ctffind_dialogue(
     *,
     input_path: Path,
+    input_is_a_stack: bool,
     diagnostic_path: Path,
     pixel_spacing_angstrom: float,
     optics: _Optics,
     settings: _CtffindSettings,
     minimum_defocus_angstrom: float,
     maximum_defocus_angstrom: float,
-) -> str:
-    """Build CTFFIND's interactive answer sequence."""
+) -> tuple[tuple[str, str], ...]:
+    """Pair every question CTFFIND will ask with the answer to send it.
 
-    answers = [
-        str(input_path),
-        str(diagnostic_path),
-        f"{pixel_spacing_angstrom:.6f}",
-        f"{optics.voltage_kv:.6f}",
-        f"{optics.spherical_aberration_mm:.6f}",
-        f"{optics.amplitude_contrast:.6f}",
-        str(settings.box_size),
-        f"{settings.min_resolution_angstrom:.6f}",
-        f"{settings.max_resolution_angstrom:.6f}",
-        f"{minimum_defocus_angstrom:.6f}",
-        f"{maximum_defocus_angstrom:.6f}",
-        f"{settings.defocus_step_angstrom:.6f}",
-        "no",  # do you know what astigmatism is present
-        "yes" if settings.exhaustive_search else "no",  # slower, exhaustive search
-    ]
-    if settings.restrain_astigmatism_angstrom is not None:
-        answers.append("yes")
-        answers.append(f"{settings.restrain_astigmatism_angstrom:.6f}")
-    else:
-        answers.append("no")
-    if settings.search_phase_shift:
-        answers.append("yes")
-        answers.append(f"{settings.minimum_phase_shift_rad:.6f}")
-        answers.append(f"{settings.maximum_phase_shift_rad:.6f}")
-        answers.append(f"{settings.phase_shift_step_rad:.6f}")
-    else:
-        answers.append("no")
-    answers.append("no")  # determine sample tilt
-    answers.append("no")  # determine sample thickness
-    answers.append("no")  # set expert options
-    return "\n".join(answers) + "\n"
-
-
-def _verify_prompts(output: str, stdin_text: str) -> None:
-    """Fail loudly when an answer landed on the wrong question.
-
-    CTFFIND echoes every prompt with the answer it received, so a shifted
-    sequence is detectable instead of silently producing a plausible but wrong
-    fit. This is the failure that a hardcoded answer list invites.
+    Questions and answers are built together so the verification list cannot
+    drift from the answer list. Each branch mirrors a conditional in
+    `DoInteractiveUserInput`.
     """
 
-    answers = stdin_text.splitlines()
-    for index, prompt in enumerate(CTFFIND_PROMPTS):
-        if index >= len(answers):
-            return
-        match = re.search(
-            rf"^{re.escape(prompt)}\s*(?:\[[^\]]*\])?\s*:\s*(\S+)\s*$",
-            output,
-            re.MULTILINE,
+    dialogue: list[tuple[str, str]] = [("Input image file name", str(input_path))]
+    if input_is_a_stack:
+        # No means "process each slice separately", which is what a tilt series
+        # needs. Yes would average the views together into one micrograph.
+        dialogue.append(("Input is a movie (stack of frames)", "no"))
+    dialogue += [
+        ("Output diagnostic image file name", str(diagnostic_path)),
+        ("Pixel size", f"{pixel_spacing_angstrom:.6f}"),
+        ("Acceleration voltage", f"{optics.voltage_kv:.6f}"),
+        ("Spherical aberration", f"{optics.spherical_aberration_mm:.6f}"),
+        ("Amplitude contrast", f"{optics.amplitude_contrast:.6f}"),
+        ("Size of amplitude spectrum to compute", str(settings.box_size)),
+        ("Minimum resolution", f"{settings.min_resolution_angstrom:.6f}"),
+        ("Maximum resolution", f"{settings.max_resolution_angstrom:.6f}"),
+        ("Minimum defocus", f"{minimum_defocus_angstrom:.6f}"),
+        ("Maximum defocus", f"{maximum_defocus_angstrom:.6f}"),
+        ("Defocus search step", f"{settings.defocus_step_angstrom:.6f}"),
+        ("Do you know what astigmatism is present?", "no"),
+        ("Slower, more exhaustive search?", "yes" if settings.exhaustive_search else "no"),
+    ]
+    if settings.restrain_astigmatism_angstrom is not None:
+        dialogue.append(("Use a restraint on astigmatism?", "yes"))
+        dialogue.append(
+            (
+                "Expected (tolerated) astigmatism",
+                f"{settings.restrain_astigmatism_angstrom:.6f}",
+            )
         )
-        if match is None:
-            continue
-        received, intended = match.group(1), answers[index].strip()
-        if received != intended and not _numerically_equal(received, intended):
+    else:
+        dialogue.append(("Use a restraint on astigmatism?", "no"))
+    if settings.search_phase_shift:
+        dialogue += [
+            ("Find additional phase shift?", "yes"),
+            ("Minimum phase shift (rad)", f"{settings.minimum_phase_shift_rad:.6f}"),
+            ("Maximum phase shift (rad)", f"{settings.maximum_phase_shift_rad:.6f}"),
+            ("Phase shift search step", f"{settings.phase_shift_step_rad:.6f}"),
+        ]
+    else:
+        dialogue.append(("Find additional phase shift?", "no"))
+        # Tilt determination is offered only without an additional phase shift.
+        dialogue.append(("Determine sample tilt?", "no"))
+    dialogue.append(("Determine samnple thickness?", "no"))
+    dialogue.append(("Do you want to set expert options?", "no"))
+    return tuple(dialogue)
+
+
+def _ctffind_stdin(dialogue: Sequence[tuple[str, str]]) -> str:
+    """Render a dialogue as the answer-per-line text CTFFIND reads from stdin."""
+
+    return "".join(f"{answer}\n" for _, answer in dialogue)
+
+
+_PROMPT_ECHO = re.compile(r"^(?P<label>\S.*?)\s{2,}:[ \t]*(?P<value>.*?)\s*$", re.MULTILINE)
+_PROMPT_DEFAULT = re.compile(r"\s*\[[^\]]*\]\s*$")
+
+
+def _questions_asked(output: str) -> list[tuple[str, str]]:
+    """Return the questions CTFFIND echoed, in order, with the values it read."""
+
+    asked: list[tuple[str, str]] = []
+    for match in _PROMPT_ECHO.finditer(output):
+        prompt = _PROMPT_DEFAULT.sub("", match.group("label")).strip()
+        if prompt in CTFFIND_QUESTIONS:
+            asked.append((prompt, match.group("value")))
+    return asked
+
+
+def _verify_dialogue(output: str, dialogue: Sequence[tuple[str, str]]) -> None:
+    """Fail with the mismatch when the questions asked are not the ones answered.
+
+    A positional answer list is only as good as its picture of the question
+    sequence, and getting that wrong is usually quiet: an answer meant for one
+    question is often a valid value for its neighbour. CTFFIND echoes each
+    question as it reads the answer, so the divergence is recoverable.
+    """
+
+    asked = _questions_asked(output)
+    for index, (expected, intended) in enumerate(dialogue):
+        if index >= len(asked):
+            return
+        prompt, received = asked[index]
+        if prompt != expected:
             raise RuntimeError(
-                f"CTFFIND received {received!r} for {prompt!r} but was sent "
-                f"{intended!r}: the question order of this build differs from "
-                "the one this adapter expects"
+                f"CTFFIND asked {prompt!r} as question {index + 1} and got "
+                f"{intended!r}, which this adapter meant for {expected!r}: the "
+                "question sequence differs from the expected one, so every "
+                "later answer is displaced too"
+            )
+        if received and received != intended and not _numerically_equal(received, intended):
+            raise RuntimeError(
+                f"CTFFIND read {received!r} for {expected!r} but was sent {intended!r}"
             )
 
 

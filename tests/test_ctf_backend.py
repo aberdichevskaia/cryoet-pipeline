@@ -13,6 +13,8 @@ from cryoet_pipeline.backends.ctf import (
     Ctffind5CtfEstimationBackend,
     ImodCtfPhaseFlipBackend,
     ImodCtfPlotterEstimationBackend,
+    _questions_asked,
+    _verify_dialogue,
     correct_ctf_and_register,
     estimate_ctf_and_register,
 )
@@ -90,6 +92,57 @@ def test_ctfplotter_estimation_writes_model_and_qc(tmp_path: Path) -> None:
     assert report.maximum_defocus_um == pytest.approx(3.0)
 
 
+# The questions CTFFIND asks for a multi-slice input with the answers this
+# adapter sends, spelled out here rather than imported so that a change to the
+# adapter's sequence has to be acknowledged in the test too. A single-image input
+# draws the same list without the movie question, which is the whole difficulty:
+# the hint pass and the full pass answer different sequences.
+_STACK_QUESTIONS: tuple[str, ...] = (
+    "Input image file name",
+    "Input is a movie (stack of frames)",
+    "Output diagnostic image file name",
+    "Pixel size",
+    "Acceleration voltage",
+    "Spherical aberration",
+    "Amplitude contrast",
+    "Size of amplitude spectrum to compute",
+    "Minimum resolution",
+    "Maximum resolution",
+    "Minimum defocus",
+    "Maximum defocus",
+    "Defocus search step",
+    "Do you know what astigmatism is present?",
+    "Slower, more exhaustive search?",
+    "Use a restraint on astigmatism?",
+    "Find additional phase shift?",
+    "Determine sample tilt?",
+    "Determine samnple thickness?",
+    "Do you want to set expert options?",
+)
+_SINGLE_IMAGE_QUESTIONS: tuple[str, ...] = tuple(
+    question for question in _STACK_QUESTIONS if question != "Input is a movie (stack of frames)"
+)
+_YES_NO_QUESTIONS = frozenset(
+    {
+        "Input is a movie (stack of frames)",
+        "Do you know what astigmatism is present?",
+        "Slower, more exhaustive search?",
+        "Use a restraint on astigmatism?",
+        "Find additional phase shift?",
+        "Determine sample tilt?",
+        "Determine samnple thickness?",
+        "Do you want to set expert options?",
+    }
+)
+
+
+def _answer_to(question: str, stdin: str, *, single_image: bool = False) -> str:
+    """The answer CTFFIND would read for one question, by its position."""
+
+    questions = _SINGLE_IMAGE_QUESTIONS if single_image else _STACK_QUESTIONS
+    return stdin.splitlines()[questions.index(question)]
+
+
 def _ctffind_runner(
     *,
     stdins: list[str] | None = None,
@@ -98,12 +151,16 @@ def _ctffind_runner(
     rows: int | None = None,
     echo_prompts: bool = True,
     prompt_shift: int = 0,
+    always_ask_about_movies: bool = False,
 ):
     """Fake CTFFIND driven interactively, plus newstack.
 
-    The real program echoes every prompt with the answer it received;
-    `prompt_shift` reproduces a build whose question order differs, which is the
-    failure this adapter has to catch.
+    The real program opens the input file, then asks a question, echoes it with
+    the answer it read, and moves on, aborting as soon as an answer does not fit
+    the question. Two ways of getting out of step are reproduced here:
+    `always_ask_about_movies` asks a question the adapter did not expect, as the
+    real one does for a stack, and `prompt_shift` keeps the questions but reads
+    the answers displaced.
     """
 
     def runner(
@@ -118,19 +175,40 @@ def _ctffind_runner(
         if "newstack" in command_list[0]:
             if newstack_commands is not None:
                 newstack_commands.append(command_list)
-            Path(command_list[-1]).write_bytes(b"")
+            with mrcfile.new(Path(command_list[-1]), overwrite=True) as view:
+                view.set_data(_CORRECTED_DATA[0])
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
         assert stdin is not None, "CTFFIND must be driven through stdin"
         if stdins is not None:
             stdins.append(stdin)
         answers = stdin.splitlines()
-        diagnostic = Path(answers[1])
+
+        # Exactly as CTFFIND does it: open the input, then decide what to ask.
+        with mrcfile.open(Path(answers[0]), header_only=True, permissive=True) as image:
+            input_is_a_stack = int(image.header.nz) > 1
+        asks_about_movies = input_is_a_stack or always_ask_about_movies
+        questions = _STACK_QUESTIONS if asks_about_movies else _SINGLE_IMAGE_QUESTIONS
+
+        echo = ["**   Welcome to Ctffind   **", "            Version : 5.0.2"]
+        for index, question in enumerate(questions):
+            source = index + prompt_shift
+            answer = answers[source] if 0 <= source < len(answers) else ""
+            if question in _YES_NO_QUESTIONS and answer.lower() not in {"yes", "no"}:
+                # The real abort: the question is echoed without a value.
+                echo.append(f"{question:<50} : ")
+                echo.append(" Error: Running as script, and answer is not recognized...")
+                return subprocess.CompletedProcess(
+                    command, 255, stdout="\n".join(echo), stderr=""
+                )
+            echo.append(f"{question:<50} : {answer}")
+
+        diagnostic = Path(answers[questions.index("Output diagnostic image file name")])
         diagnostic.parent.mkdir(parents=True, exist_ok=True)
         diagnostic.write_bytes(b"diagnostic")
 
-        # A single extracted view yields one fit; the whole stack yields one per slice.
-        row_count = rows if rows is not None else (1 if "view_" in answers[0] else 2)
+        fitted = _CORRECTED_DATA.shape[0] if input_is_a_stack else 1
+        row_count = rows if rows is not None else fitted
         diagnostic.with_suffix(".txt").write_text(
             "# CTFFIND fake output\n"
             + "".join(
@@ -139,18 +217,9 @@ def _ctffind_runner(
                 for index in range(row_count)
             )
         )
-
-        stdout = ""
-        if echo_prompts:
-            from cryoet_pipeline.backends.ctf import CTFFIND_PROMPTS
-
-            lines = []
-            for index, prompt in enumerate(CTFFIND_PROMPTS):
-                source = index + prompt_shift
-                if 0 <= source < len(answers):
-                    lines.append(f"{prompt} [x] : {answers[source]}")
-            stdout = "\n".join(lines)
-        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout="\n".join(echo) if echo_prompts else "", stderr=""
+        )
 
     return runner
 
@@ -182,19 +251,24 @@ def test_ctffind5_estimation_fits_the_whole_stack_in_one_call(tmp_path: Path) ->
     assert len(newstack_commands) == 1
     assert newstack_commands[0][newstack_commands[0].index("-secs") + 1] == "1"
 
-    hint, full = (line.splitlines() for line in stdins)
-    assert "view_" in hint[0], "the hint pass fits a single extracted view"
-    assert full[0] == str(aligned_stack.path.resolve()), "the second pass fits the stack"
+    hint, full = stdins
+    assert "view_" in hint.splitlines()[0], "the hint pass fits a single extracted view"
+    assert full.splitlines()[0] == str(aligned_stack.path.resolve()), "then the whole stack"
 
-    # The interactive sequence, in the order CTFFIND 5.0.2 asks for it.
-    assert float(full[2]) == pytest.approx(2.7)  # pixel size
-    assert float(full[3]) == pytest.approx(300.0)  # voltage
-    assert float(full[4]) == pytest.approx(2.7)  # Cs
-    assert int(full[6]) == 512  # box size
-    assert float(full[8]) == pytest.approx(5.4)  # max resolution, clamped to Nyquist
-    assert full[12] == "no"  # astigmatism known
-    assert full[-1] == "no"  # expert options
-    assert len(full) == 19
+    # The hint pass answers one question fewer, because a single extracted view
+    # is not a stack and CTFFIND does not ask about movies.
+    assert len(hint.splitlines()) == len(_SINGLE_IMAGE_QUESTIONS)
+    assert len(full.splitlines()) == len(_STACK_QUESTIONS)
+
+    assert _answer_to("Input is a movie (stack of frames)", full) == "no"
+    assert float(_answer_to("Pixel size", full)) == pytest.approx(2.7)
+    assert float(_answer_to("Acceleration voltage", full)) == pytest.approx(300.0)
+    assert float(_answer_to("Spherical aberration", full)) == pytest.approx(2.7)
+    assert int(_answer_to("Size of amplitude spectrum to compute", full)) == 512
+    # Clamped to the Nyquist limit of the stack's own 2.7 A pixel.
+    assert float(_answer_to("Maximum resolution", full)) == pytest.approx(5.4)
+    assert _answer_to("Do you know what astigmatism is present?", full) == "no"
+    assert _answer_to("Do you want to set expert options?", full) == "no"
 
     entries = read_imod_defocus_file(ctf_model.path)
     assert len(entries) == 2
@@ -204,13 +278,42 @@ def test_ctffind5_estimation_fits_the_whole_stack_in_one_call(tmp_path: Path) ->
     assert report.num_tilts == 2
 
 
-def test_ctffind5_estimation_detects_a_shifted_question_order(tmp_path: Path) -> None:
-    """The failure that a positional answer list invites must be caught."""
+def test_ctffind5_estimation_detects_an_unexpected_question(tmp_path: Path) -> None:
+    """The failure this adapter actually hit, reported as itself.
+
+    A CTFFIND that asks one question more than the answer list allows for
+    consumes every later answer in the wrong slot. The exit code says only
+    "answer is not recognized", so the useful diagnosis has to come from
+    comparing the questions echoed against the ones answered.
+    """
 
     _, alignment, aligned_stack = _input_artifacts(tmp_path)
     ctffind = _fake_executable(tmp_path / "ctffind")
 
-    with pytest.raises(RuntimeError, match="question order of this build differs"):
+    with pytest.raises(RuntimeError, match="question sequence differs"):
+        Ctffind5CtfEstimationBackend(
+            _ctffind_runner(always_ask_about_movies=True)
+        ).estimate(
+            aligned_stack,
+            alignment,
+            _manifest(),
+            _context(
+                tmp_path,
+                {
+                    "imod_dir": _fake_imod_dir(tmp_path),
+                    "ctffind_executable": ctffind,
+                },
+            ),
+        )
+
+
+def test_ctffind5_estimation_detects_a_displaced_answer(tmp_path: Path) -> None:
+    """Right questions, wrong answers: caught by the values CTFFIND echoes."""
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+
+    with pytest.raises(RuntimeError, match="but was sent"):
         Ctffind5CtfEstimationBackend(_ctffind_runner(prompt_shift=1)).estimate(
             aligned_stack,
             alignment,
@@ -224,6 +327,50 @@ def test_ctffind5_estimation_detects_a_shifted_question_order(tmp_path: Path) ->
                 },
             ),
         )
+
+
+# Captured from CTFFIND 5.0.2 refusing the sequence this adapter used to send,
+# so the parsing is checked against the program's real output and not only
+# against the fake above.
+_REAL_CTFFIND_ABORT = """**   Welcome to Ctffind   **
+
+            Version : 5.0.2
+           Compiled : Mar 28 2024
+    Library Version : 2.0.0-alpha-295-b21db55-dirty
+        From Branch : ctffind5_merge
+               Mode : Scripted
+
+Input image file name                              : /data/TS_01/TS_01_final_bin4.st
+Input is a movie (stack of frames)                 :
+ Error: Running as script, and answer is not recognized...
+"""
+
+
+def test_questions_asked_ignores_the_banner() -> None:
+    asked = _questions_asked(_REAL_CTFFIND_ABORT)
+
+    # "Version : 5.0.2" and friends read like prompts but are not questions.
+    assert asked == [
+        ("Input image file name", "/data/TS_01/TS_01_final_bin4.st"),
+        ("Input is a movie (stack of frames)", ""),
+    ]
+
+
+def test_verify_dialogue_names_both_questions_on_a_mismatch() -> None:
+    """The message has to say which question was asked and which was answered."""
+
+    stale = (
+        ("Input image file name", "/data/TS_01/TS_01_final_bin4.st"),
+        ("Output diagnostic image file name", "/tmp/diagnostic.mrc"),
+        ("Pixel size", "2.700000"),
+    )
+
+    with pytest.raises(RuntimeError) as failure:
+        _verify_dialogue(_REAL_CTFFIND_ABORT, stale)
+
+    message = str(failure.value)
+    assert "Input is a movie (stack of frames)" in message
+    assert "Output diagnostic image file name" in message
 
 
 def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) -> None:
@@ -247,7 +394,7 @@ def test_ctffind5_estimation_clamps_resolution_beyond_nyquist(tmp_path: Path) ->
     )
 
     # 2.7 A/pixel gives a 5.4 A Nyquist limit, so a 3 A request is not physical.
-    assert float(stdins[0].splitlines()[8]) == pytest.approx(5.4)
+    assert float(_answer_to("Maximum resolution", stdins[0])) == pytest.approx(5.4)
     report = CtfEstimationQc.model_validate_json(artifacts[1].path.read_text())
     assert report.max_resolution_angstrom == pytest.approx(5.4)
     assert any("Nyquist" in warning for warning in report.warnings)
@@ -273,9 +420,8 @@ def test_ctffind5_estimation_skips_first_pass_with_explicit_defocus(tmp_path: Pa
     )
 
     assert len(stdins) == 1, "no hint pass when the defocus is supplied"
-    answers = stdins[0].splitlines()
-    assert float(answers[9]) == pytest.approx(39000.0)
-    assert float(answers[10]) == pytest.approx(41000.0)
+    assert float(_answer_to("Minimum defocus", stdins[0])) == pytest.approx(39000.0)
+    assert float(_answer_to("Maximum defocus", stdins[0])) == pytest.approx(41000.0)
 
 
 def test_ctffind5_estimation_rejects_view_count_mismatch(tmp_path: Path) -> None:

@@ -59,23 +59,26 @@ fitting, not about what follows.
 
 - `ctffind5` drives CTFFIND interactively: the program has no command-line
   parameters, it asks questions and reads answers from stdin, positionally.
-  Interactive mode treats each slice of a stack as its own micrograph, so one
-  call covers the series. Fitting runs in two passes: the view nearest zero tilt
-  over a wide defocus range for a hint, then the stack over a narrow window
-  around it. Supplying `--ctf-expected-defocus-um` skips the first pass.
+  Answering no to its movie question makes it fit each slice of the stack
+  separately, so one call covers the series. Fitting runs in two passes: the view
+  nearest zero tilt over a wide defocus range for a hint, then the stack over a
+  narrow window around it. `--ctf-expected-defocus-um` skips the first pass.
 
-  A positional answer list is build-specific, and getting it wrong is quiet
-  rather than loud, because an answer meant for one question is often valid for
-  its neighbour. The adapter therefore checks CTFFIND's echo of each prompt
-  against what was sent and fails with the mismatch. `CTFFIND_PROMPTS` records
-  the order of CTFFIND 5.0.2, captured from a real run; older builds ask an
-  extra "is this a movie" question at position two.
+  The question sequence is not fixed. CTFFIND opens the input file before asking
+  anything and asks about movies only when the file holds more than one slice, so
+  the hint pass and the full pass answer **different** sequences — that one extra
+  question is enough to displace every answer after it. `_ctffind_dialogue`
+  builds questions and answers together, mirroring the conditionals in
+  `DoInteractiveUserInput`, and `_verify_dialogue` compares them against
+  CTFFIND's own echo, because landing an answer on the wrong question is usually
+  quiet rather than loud: an answer meant for one question is often a valid value
+  for its neighbour.
 
-  `--old-school-input-ctffind4` offers a stable record format and looks like the
-  obvious answer, but it is unusable here: the same view fits in about two
+  `--old-school-input-ctffind4` offers a fixed record format and looks like the
+  obvious way out, but it is unusable here: the same view fits in about two
   seconds interactively and had not finished after two minutes in old-school
-  mode, single-threaded, on identical parameters. That mode also forces one
-  thread and accepts only one 2D image per call.
+  mode, on identical parameters. That mode also pins itself to one thread and
+  refuses stacks unless it is doing movie processing.
 - `imod-ctfplotter` stays inside IMOD and fits with explicit tilt-axis geometry.
 
 The high-resolution fit limit defaults to the Nyquist limit of the stack's own
