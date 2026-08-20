@@ -191,6 +191,8 @@ def test_imod_fiducial_backends_generate_and_track_models(tmp_path: Path) -> Non
     assert tracking_qc.status == QcStatus.PASS
     assert tracking_qc.num_points == 6
     assert registry.get(fiducial_model.id) == fiducial_model
+    assert fiducial_model.id == "TS_TEST:fiducial_model:imod-beadtrack"
+    assert fiducial_model.path.name == "TS_TEST_imod-beadtrack.fid"
     assert [Path(command[0]).name for command in commands] == [
         "newstack",
         "autofidseed",
@@ -470,6 +472,8 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
     assert tracking_qc.stage == "tracked"
     assert tracking_qc.status == QcStatus.PASS
     assert registry.get(fiducial_model.id) == fiducial_model
+    assert fiducial_model.id == "TS_TEST:fiducial_model:imod-patch-track"
+    assert fiducial_model.path.name == "TS_TEST_imod-patch-track.fid"
     assert [Path(command[0]).name for command in commands] == [
         "tiltxcorr",
         "imodinfo",

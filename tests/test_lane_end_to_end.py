@@ -189,6 +189,96 @@ def test_reconstruction_can_be_redone_after_ctf_appears_upstream(
     ArtifactRegistry.model_validate(registry.model_dump())
 
 
+def test_reconstruction_without_ctf_stays_reachable_after_correction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Comparing with and without CTF needs the uncorrected route to stay open.
+
+    `auto` prefers the corrected stack, and used to be the only behaviour, so a
+    registered corrected stack made the uncorrected reconstruction impossible to
+    ask for. The label is what keeps the two results side by side.
+    """
+
+    paths = _seed_project(tmp_path)
+    _install_fake_externals(monkeypatch, tmp_path)
+    run = _command_runner_for(paths, tmp_path)
+
+    run("build-final-aligned-stack", "--output-binning", "4")
+    run(
+        "estimate-ctf",
+        "--ctf-voltage-kv",
+        "300",
+        "--ctf-spherical-aberration-mm",
+        "2.7",
+        "--ctf-expected-defocus-um",
+        "3.0",
+    )
+    run("correct-ctf")
+    run("reconstruct-tomogram")
+    run("reconstruct-tomogram", "--from-stack", "aligned", "--variant", "noctf")
+
+    registry = ArtifactRegistry.load(paths["registry"])
+    with_ctf = registry.get("TS_TEST:tomogram:fine")
+    without = registry.get("TS_TEST:tomogram:fine:noctf")
+    assert with_ctf.parameters["ctf_corrected"] is True
+    assert without.parameters["ctf_corrected"] is False
+    assert with_ctf.path != without.path
+    assert registry.descends_from(
+        without.id, "TS_TEST:aligned_tilt_stack:final"
+    ) and not registry.descends_from(
+        without.id, "TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip"
+    )
+
+
+def test_requiring_a_ctf_corrected_stack_says_what_to_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    paths = _seed_project(tmp_path)
+    _install_fake_externals(monkeypatch, tmp_path)
+    run = _command_runner_for(paths, tmp_path)
+    run("build-final-aligned-stack", "--output-binning", "4")
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "reconstruct-tomogram",
+            "--manifest",
+            str(paths["manifest"]),
+            "--registry",
+            str(paths["registry"]),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--from-stack",
+            "ctf-corrected",
+        ],
+    )
+
+    assert result.exit_code != 0
+    # Typer draws the error in a box, so borders and wrapping come out too.
+    collapsed = " ".join(result.output.replace("\u2502", " ").split())
+    assert "run correct-ctf" in collapsed
+    assert "--from-stack aligned" in collapsed
+
+
+def test_two_lanes_at_one_binning_do_not_share_a_stack_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Binning alone does not separate lanes, so the label is in the filename too."""
+
+    paths = _seed_project(tmp_path)
+    _install_fake_externals(monkeypatch, tmp_path)
+    run = _command_runner_for(paths, tmp_path)
+
+    run("build-final-aligned-stack", "--output-binning", "4")
+    run("build-final-aligned-stack", "--output-binning", "4", "--variant", "second")
+
+    registry = ArtifactRegistry.load(paths["registry"])
+    first = registry.get("TS_TEST:aligned_tilt_stack:final")
+    second = registry.get("TS_TEST:aligned_tilt_stack:final:second")
+    assert first.path != second.path
+    assert first.path.is_file() and second.path.is_file()
+
+
 def _command_runner_for(paths: dict[str, Path], tmp_path: Path):
     """Invoke one CLI command against this project, failing loudly on a bad exit."""
 

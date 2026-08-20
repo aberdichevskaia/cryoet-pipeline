@@ -1613,6 +1613,14 @@ def reconstruct_tomogram(
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
     ] = None,
+    from_stack: Annotated[
+        str,
+        typer.Option(
+            help="Which stack to reconstruct from: auto prefers a CTF-corrected "
+            "stack when one exists, ctf-corrected requires one, aligned ignores "
+            "it. Pair with --variant to keep both reconstructions."
+        ),
+    ] = "auto",
     variant: Annotated[
         str | None,
         typer.Option(
@@ -1632,12 +1640,20 @@ def reconstruct_tomogram(
 ) -> None:
     """Reconstruct a positioned tomogram from the final fine-aligned stack."""
 
+    if from_stack not in {"auto", "ctf-corrected", "aligned"}:
+        raise typer.BadParameter(
+            f"unsupported stack choice {from_stack!r}; expected: auto, "
+            "ctf-corrected, aligned",
+            param_hint="from-stack",
+        )
+
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
     aligned_stack = _reconstruction_input_stack_artifact(
         artifact_registry,
         tilt_series_manifest,
         variant=variant,
+        from_stack=from_stack,
     )
     alignment = _fine_alignment_artifact(
         artifact_registry,
@@ -3161,8 +3177,16 @@ def _reconstruction_input_stack_artifact(
     manifest: TiltSeriesManifest,
     *,
     variant: str | None = None,
+    from_stack: str = "auto",
 ) -> Artifact:
-    """Prefer a CTF-corrected stack over the plain final aligned stack, if present."""
+    """Choose which stack to reconstruct from.
+
+    `auto` prefers a CTF-corrected stack when one exists, which is almost always
+    what is wanted and was the only behaviour available. It could not be
+    overridden, so once a corrected stack was registered there was no way to
+    reconstruct without CTF — not even to compare the two. `aligned` and
+    `ctf-corrected` name the route outright and fail rather than substitute.
+    """
 
     corrected_matches = [
         artifact
@@ -3170,6 +3194,14 @@ def _reconstruction_input_stack_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("purpose") == "ctf_corrected"
     ]
+    if from_stack == "aligned":
+        return _final_aligned_stack_artifact(registry, manifest, variant=variant)
+    if from_stack == "ctf-corrected" and not corrected_matches:
+        raise typer.BadParameter(
+            f"no CTF-corrected stack for {manifest.tilt_series_id}; run correct-ctf "
+            "first, or pass --from-stack aligned to reconstruct without CTF correction",
+            param_hint="from-stack",
+        )
     if corrected_matches:
         return _select_variant(
             corrected_matches,

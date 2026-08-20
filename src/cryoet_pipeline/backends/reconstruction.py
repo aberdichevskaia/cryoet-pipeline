@@ -96,6 +96,7 @@ class ImodTiltReconstructionBackend:
             manifest,
             alignment_stage=alignment_result.stage,
             output_binning=output_binning,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         executable = resolve_imod_executable("tilt", context)
@@ -394,10 +395,13 @@ def _reconstruction_paths(
     *,
     alignment_stage: str,
     output_binning: int,
+    label: str | None = None,
 ) -> _ReconstructionPaths:
     tomogram_dir = output_root / "tomograms" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "reconstruction"
-    prefix = f"{manifest.tilt_series_id}_{alignment_stage}_bin{output_binning}"
+    prefix = f"{manifest.tilt_series_id}_{alignment_stage}_bin{output_binning}" + (
+        f"_{label}" if label else ""
+    )
     return _ReconstructionPaths(
         tomogram_dir=tomogram_dir,
         qc_dir=qc_dir,

@@ -134,6 +134,7 @@ class ImodAutofidseedBackend:
             context.output_dir,
             manifest,
             tracking_binning=tracking_binning,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
@@ -460,7 +461,12 @@ class ImodBeadtrackBackend:
                 "coverage_failure must be less than or equal to coverage_warning"
             )
         overwrite = _bool_parameter(context, "overwrite", default=False)
-        paths = _tracking_paths(context.output_dir, manifest)
+        paths = _tracking_paths(
+            context.output_dir,
+            manifest,
+            backend_name=self.name,
+            label=variant_label(context),
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -698,6 +704,7 @@ class ImodPatchSeedBackend:
             context.output_dir,
             manifest,
             pre_binning=pre_binning,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
@@ -910,7 +917,12 @@ class ImodPatchTrackBackend:
                 "coverage_failure must be less than or equal to coverage_warning"
             )
         overwrite = _bool_parameter(context, "overwrite", default=False)
-        paths = _tracking_paths(context.output_dir, manifest)
+        paths = _tracking_paths(
+            context.output_dir,
+            manifest,
+            backend_name=self.name,
+            label=variant_label(context),
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1084,9 +1096,10 @@ def _patch_seed_paths(
     manifest: TiltSeriesManifest,
     *,
     pre_binning: int,
+    label: str | None = None,
 ) -> _PatchSeedPaths:
     output_dir = output_root / "fiducials" / manifest.tilt_series_id
-    prefix = manifest.tilt_series_id
+    prefix = manifest.tilt_series_id + (f"_{label}" if label else "")
     return _PatchSeedPaths(
         output_dir=output_dir,
         tracking_stack=output_dir / f"{prefix}_patch_bin{pre_binning}_preali.mrc",
@@ -1392,9 +1405,10 @@ def _seed_paths(
     manifest: TiltSeriesManifest,
     *,
     tracking_binning: int,
+    label: str | None = None,
 ) -> _SeedPaths:
     output_dir = output_root / "fiducials" / manifest.tilt_series_id
-    prefix = manifest.tilt_series_id
+    prefix = manifest.tilt_series_id + (f"_{label}" if label else "")
     return _SeedPaths(
         output_dir=output_dir,
         tracking_stack=output_dir
@@ -1414,9 +1428,15 @@ def _seed_paths(
 def _tracking_paths(
     output_root: Path,
     manifest: TiltSeriesManifest,
+    *,
+    backend_name: str,
+    label: str | None = None,
 ) -> _TrackingPaths:
     output_dir = output_root / "fiducials" / manifest.tilt_series_id
-    prefix = manifest.tilt_series_id
+    # Both tracking backends share this builder.
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _TrackingPaths(
         output_dir=output_dir,
         fiducial_model=output_dir / f"{prefix}.fid",

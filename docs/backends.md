@@ -196,10 +196,40 @@ goes into the filename as well as the id — otherwise the second lane would
 overwrite the first lane's defocus file while both registry entries still
 pointed at it.
 
-Stages that keep the backend name in their ids (`ctf_model`, the CTF-corrected
-stack) have one unlabelled id per backend rather than a single one; the lookup
-rebuilds those from the backend each artifact records, so the id stays the only
-place a label lives.
+The label is recorded on the artifact as a field, not only rendered into its id,
+so a lookup asks a question about the data rather than parsing strings. Same for
+the backend. Artifacts written before those fields existed carry the label only
+in their id; those are matched by the id suffix and otherwise counted as shared.
+
+Whatever tells two runs apart is also in the output filenames — the backend, the
+binning, the label. Omitting any of them aims the second run at the first run's
+files: it either refuses to start or overwrites them while both registry entries
+keep pointing at one path.
+
+## Reconstructing with and without CTF
+
+`reconstruct-tomogram --from-stack` names the route:
+
+| Value | Behaviour |
+| --- | --- |
+| `auto` (default) | Use a CTF-corrected stack when one is registered, otherwise the plain final aligned stack. |
+| `ctf-corrected` | Require a corrected stack; say what to run when there is none. |
+| `aligned` | Use the plain final aligned stack even when a corrected one exists. |
+
+`auto` was previously the only behaviour and could not be overridden, so once
+`correct-ctf` had run there was no way to ask for an uncorrected reconstruction —
+not even to see what the correction changed. Pair `--from-stack aligned` with
+`--variant` to keep both results:
+
+```bash
+cryoet reconstruct-tomogram ...
+cryoet reconstruct-tomogram ... --from-stack aligned --variant noctf
+```
+
+The route itself is not part of the id: the tomogram records it as
+`ctf_corrected`, and `--variant` is what makes two runs coexist. Adding a third
+mechanism for the same thing would only mean a second way to ask the same
+question.
 
 ## Contrast conventions
 

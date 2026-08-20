@@ -71,6 +71,7 @@ class ImodFinalAlignedStackBackend:
             context.output_dir,
             manifest,
             output_binning=output_binning,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
@@ -267,9 +268,14 @@ def _final_stack_paths(
     manifest: TiltSeriesManifest,
     *,
     output_binning: int,
+    label: str | None = None,
 ) -> _FinalStackPaths:
     output_dir = output_root / "aligned" / manifest.tilt_series_id
-    prefix = f"{manifest.tilt_series_id}_final_bin{output_binning}"
+    # Binning alone does not separate two lanes: a bead lane and a patch
+    # lane at the same binning would aim at one file.
+    prefix = f"{manifest.tilt_series_id}_final_bin{output_binning}" + (
+        f"_{label}" if label else ""
+    )
     return _FinalStackPaths(
         output_dir=output_dir,
         stack=output_dir / f"{prefix}.st",

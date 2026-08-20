@@ -192,7 +192,9 @@ class ImodTiltalignBackend:
             default=0.02,
         )
         overwrite = _bool_parameter(context, "overwrite", default=False)
-        paths = _fine_alignment_paths(context.output_dir, manifest)
+        paths = _fine_alignment_paths(
+            context.output_dir, manifest, label=variant_label(context)
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -901,9 +903,11 @@ class _FineAlignmentPaths:
 def _fine_alignment_paths(
     output_root: Path,
     manifest: TiltSeriesManifest,
+    *,
+    label: str | None = None,
 ) -> _FineAlignmentPaths:
     output_dir = output_root / "alignments" / manifest.tilt_series_id / "fine"
-    prefix = f"{manifest.tilt_series_id}_fine"
+    prefix = f"{manifest.tilt_series_id}_fine" + (f"_{label}" if label else "")
     return _FineAlignmentPaths(
         output_dir=output_dir,
         canonical=output_dir / f"{prefix}_alignment.json",
