@@ -153,6 +153,34 @@ Omitting `--variant` keeps the previous ids exactly, so existing registries are
 unaffected. When a lookup finds several candidates it lists them and tells you
 to pass `--variant`, rather than guessing.
 
+A label marks where a lane **parts** from the others, so at the parting point
+the inputs are still shared and carry no label yet: `build-final-aligned-stack
+--output-binning 8 --variant bin8` reads the same unlabelled fine alignment as
+every other lane. A lookup falls back to that shared artifact only, never to
+another lane's — asking for `--variant patch` when only a `bead` artifact exists
+is an error, not a silent substitution.
+
+`estimate-ctf` and `correct-ctf` take the label too, so a whole CTF lane runs
+beside another. A binning lane parts at the stack rebuild and carries the label
+from there on:
+
+```bash
+cryoet build-final-aligned-stack ... --output-binning 8 --variant bin8
+cryoet estimate-ctf              ...                    --variant bin8
+cryoet correct-ctf               ...                    --variant bin8
+cryoet reconstruct-tomogram      ...                    --variant bin8
+```
+
+The CTF stages write under a fixed per-backend filename prefix, so the label
+goes into the filename as well as the id — otherwise the second lane would
+overwrite the first lane's defocus file while both registry entries still
+pointed at it.
+
+Stages that keep the backend name in their ids (`ctf_model`, the CTF-corrected
+stack) have one unlabelled id per backend rather than a single one; the lookup
+rebuilds those from the backend each artifact records, so the id stays the only
+place a label lives.
+
 ## Contrast conventions
 
 Two places silently produce nothing rather than failing when the convention is

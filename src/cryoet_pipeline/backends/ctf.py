@@ -24,6 +24,8 @@ from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CtfCorrectionBackend,
     CtfEstimationBackend,
+    variant_label,
+    variant_suffix,
 )
 from cryoet_pipeline.imod_defocus import (
     parse_ctffind_summary,
@@ -100,7 +102,10 @@ class Ctffind5CtfEstimationBackend:
                 f"{stack_shape[0]} views"
             )
 
-        paths = _estimation_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _estimation_paths(
+            context.output_dir, manifest, backend_name=self.name,
+            label=variant_label(context),
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         paths.report.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +189,7 @@ class Ctffind5CtfEstimationBackend:
 
         defocus_um = [row.mean_defocus_angstrom / 10000.0 for row in rows]
         astigmatism_um = [row.astigmatism_angstrom / 10000.0 for row in rows]
-        ctf_model_id = f"{manifest.tilt_series_id}:ctf_model:{self.name}"
+        ctf_model_id = f"{manifest.tilt_series_id}:ctf_model:{self.name}{variant_suffix(context)}"
 
         warnings = list(settings.warnings)
         status = QcStatus.PASS
@@ -241,7 +246,10 @@ class Ctffind5CtfEstimationBackend:
             size_bytes=paths.defocus.stat().st_size,
         )
         qc_artifact = _qc_artifact(
-            artifact_id=f"{manifest.tilt_series_id}:qc:ctf_estimation:{self.name}",
+            artifact_id=(
+                f"{manifest.tilt_series_id}:qc:ctf_estimation:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
             path=paths.report,
             parent_id=ctf_model_artifact.id,
             qc_type="ctf_estimation",
@@ -413,7 +421,10 @@ class ImodCtfPlotterEstimationBackend:
         autofit_step_deg = _positive_float_parameter(context, "ctf_autofit_step_deg", default=2.0)
         ps_resolution = _positive_int_parameter(context, "ctf_ps_resolution", default=101)
 
-        paths = _estimation_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _estimation_paths(
+            context.output_dir, manifest, backend_name=self.name,
+            label=variant_label(context),
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         paths.report.parent.mkdir(parents=True, exist_ok=True)
@@ -485,7 +496,7 @@ class ImodCtfPlotterEstimationBackend:
             _replace_output(temporary_defocus, paths.defocus)
 
         defocus_um = [entry.mean_defocus_nm / 1000.0 for entry in entries]
-        ctf_model_id = f"{manifest.tilt_series_id}:ctf_model:{self.name}"
+        ctf_model_id = f"{manifest.tilt_series_id}:ctf_model:{self.name}{variant_suffix(context)}"
         nyquist_angstrom = 2.0 * pixel_spacing_angstrom
         report = CtfEstimationQc(
             tilt_series_id=manifest.tilt_series_id,
@@ -533,7 +544,10 @@ class ImodCtfPlotterEstimationBackend:
             size_bytes=paths.defocus.stat().st_size,
         )
         qc_artifact = _qc_artifact(
-            artifact_id=f"{manifest.tilt_series_id}:qc:ctf_estimation:{self.name}",
+            artifact_id=(
+                f"{manifest.tilt_series_id}:qc:ctf_estimation:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
             path=paths.report,
             parent_id=ctf_model_artifact.id,
             qc_type="ctf_estimation",
@@ -580,7 +594,10 @@ class ImodCtfPhaseFlipBackend:
                 f"{stack_shape[0]}"
             )
 
-        paths = _correction_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _correction_paths(
+            context.output_dir, manifest, backend_name=self.name,
+            label=variant_label(context),
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         paths.report.parent.mkdir(parents=True, exist_ok=True)
@@ -650,6 +667,7 @@ class ImodCtfPhaseFlipBackend:
         defocus_um = [entry.mean_defocus_nm / 1000.0 for entry in entries]
         corrected_stack_id = (
             f"{manifest.tilt_series_id}:aligned_tilt_stack:ctf_corrected:{self.name}"
+            f"{variant_suffix(context)}"
         )
         report = CtfCorrectionQc(
             tilt_series_id=manifest.tilt_series_id,
@@ -701,7 +719,10 @@ class ImodCtfPhaseFlipBackend:
             size_bytes=_paths_size_bytes(paths.corrected_stack, paths.tilt_angles, paths.log),
         )
         qc_artifact = _qc_artifact(
-            artifact_id=f"{manifest.tilt_series_id}:qc:ctf_correction:{self.name}",
+            artifact_id=(
+                f"{manifest.tilt_series_id}:qc:ctf_correction:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
             path=paths.report,
             parent_id=corrected_stack_artifact.id,
             qc_type="ctf_correction",
@@ -1149,10 +1170,11 @@ def _estimation_paths(
     manifest: TiltSeriesManifest,
     *,
     backend_name: str,
+    label: str | None = None,
 ) -> _EstimationPaths:
     ctf_dir = output_root / "ctf" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "ctf"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (f"_{label}" if label else "")
     return _EstimationPaths(
         output_dir=ctf_dir,
         defocus=ctf_dir / f"{prefix}.defocus",
@@ -1182,10 +1204,11 @@ def _correction_paths(
     manifest: TiltSeriesManifest,
     *,
     backend_name: str,
+    label: str | None = None,
 ) -> _CorrectionPaths:
     ctf_dir = output_root / "ctf" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "ctf"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (f"_{label}" if label else "")
     return _CorrectionPaths(
         output_dir=ctf_dir,
         corrected_stack=ctf_dir / f"{prefix}_ctf.st",

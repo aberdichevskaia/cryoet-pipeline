@@ -278,6 +278,49 @@ def test_ctffind5_estimation_fits_the_whole_stack_in_one_call(tmp_path: Path) ->
     assert report.num_tilts == 2
 
 
+def test_two_ctf_lanes_coexist_in_one_registry(tmp_path: Path) -> None:
+    """A labelled CTF run must not overwrite the unlabelled one, on disk or in the registry.
+
+    Estimation and correction write under a fixed per-backend prefix, so without
+    the label in the filename the second lane would silently replace the first
+    lane's defocus file while both registry entries pointed at it.
+    """
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack])
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    imod_dir = _fake_imod_dir(tmp_path)
+
+    def run(variant: str | None) -> list[Artifact]:
+        parameters: dict[str, object] = {
+            "imod_dir": imod_dir,
+            "ctffind_executable": ctffind,
+            "ctf_expected_defocus_um": 3.0,
+        }
+        if variant is not None:
+            parameters["variant"] = variant
+        return estimate_ctf_and_register(
+            Ctffind5CtfEstimationBackend(_ctffind_runner()),
+            aligned_stack,
+            alignment,
+            _manifest(),
+            _context(tmp_path, parameters),
+            registry,
+        )
+
+    plain_model, plain_qc = run(None)
+    labelled_model, labelled_qc = run("bin8")
+
+    assert plain_model.id == "TS_TEST:ctf_model:ctffind5"
+    assert labelled_model.id == "TS_TEST:ctf_model:ctffind5:bin8"
+    assert plain_qc.id != labelled_qc.id
+    assert plain_model.path != labelled_model.path, "the defocus files must not collide"
+    assert plain_model.path.is_file() and labelled_model.path.is_file()
+    assert registry.get(plain_model.id).path == plain_model.path
+    assert registry.get(labelled_model.id).path == labelled_model.path
+
+
 def test_ctffind5_estimation_detects_an_unexpected_question(tmp_path: Path) -> None:
     """The failure this adapter actually hit, reported as itself.
 
