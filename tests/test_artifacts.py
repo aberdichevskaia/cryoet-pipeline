@@ -81,6 +81,83 @@ def test_descends_from_walks_past_direct_parents(tmp_path: Path) -> None:
     assert not registry.descends_from("absent", "raw")
 
 
+def test_replacing_an_entry_moves_it_below_newly_inserted_parents(tmp_path: Path) -> None:
+    """Re-running a stage after a new stage appeared upstream must not be rejected.
+
+    The tomogram was registered before CTF correction existed. Rebuilding it
+    from the corrected stack gives it a parent that sits later in the registry,
+    so keeping its old position would break parents-before-children.
+    """
+
+    registry = ArtifactRegistry.empty()
+    aligned = Artifact(
+        id="aligned",
+        kind=ArtifactKind.ALIGNED_TILT_STACK,
+        path=tmp_path / "aligned.st",
+    )
+    tomogram = Artifact(
+        id="tomogram",
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "tomogram.zarr",
+        parent_ids=["aligned"],
+    )
+    tomogram_qc = Artifact(
+        id="tomogram-qc",
+        kind=ArtifactKind.QC,
+        path=tmp_path / "tomogram_qc.json",
+        parent_ids=["tomogram"],
+    )
+    corrected = Artifact(
+        id="corrected",
+        kind=ArtifactKind.ALIGNED_TILT_STACK,
+        path=tmp_path / "corrected.st",
+        parent_ids=["aligned"],
+    )
+    registry.extend([aligned, tomogram, tomogram_qc, corrected])
+
+    registry.add(tomogram.model_copy(update={"parent_ids": ["corrected"]}), replace=True)
+
+    order = [artifact.id for artifact in registry.artifacts]
+    assert order == ["aligned", "corrected", "tomogram", "tomogram-qc"]
+    # The invariant the registry enforces on load must still hold.
+    ArtifactRegistry.model_validate(registry.model_dump())
+
+
+def test_replacing_an_entry_leaves_a_valid_order_untouched(tmp_path: Path) -> None:
+    registry = ArtifactRegistry.empty()
+    first = Artifact(id="a", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "a.zarr")
+    second = Artifact(
+        id="b", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "b.zarr", parent_ids=["a"]
+    )
+    third = Artifact(id="c", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "c.zarr")
+    registry.extend([first, second, third])
+
+    registry.add(second.model_copy(update={"dtype": "float32"}), replace=True)
+
+    assert [artifact.id for artifact in registry.artifacts] == ["a", "b", "c"]
+
+
+def test_replacing_an_entry_rejects_an_unknown_parent(tmp_path: Path) -> None:
+    registry = ArtifactRegistry.empty()
+    tomogram = Artifact(id="tomogram", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "t.zarr")
+    registry.add(tomogram)
+
+    with pytest.raises(ValueError, match="parent artifacts must be registered first"):
+        registry.add(tomogram.model_copy(update={"parent_ids": ["absent"]}), replace=True)
+
+
+def test_replacing_an_entry_rejects_a_cycle(tmp_path: Path) -> None:
+    registry = ArtifactRegistry.empty()
+    parent = Artifact(id="parent", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "p.zarr")
+    child = Artifact(
+        id="child", kind=ArtifactKind.TOMOGRAM, path=tmp_path / "c.zarr", parent_ids=["parent"]
+    )
+    registry.extend([parent, child])
+
+    with pytest.raises(ValueError, match="cycle"):
+        registry.add(parent.model_copy(update={"parent_ids": ["child"]}), replace=True)
+
+
 def test_artifact_registry_roundtrips_json(tmp_path: Path) -> None:
     path = tmp_path / "artifacts.json"
     registry = ArtifactRegistry.empty()

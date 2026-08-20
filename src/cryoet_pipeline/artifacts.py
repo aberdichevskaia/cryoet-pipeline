@@ -59,9 +59,14 @@ class ArtifactRegistry(BaseModel):
             raise ValueError(f"duplicate artifact id: {artifact.id}")
 
         if existing_index is not None:
-            existing_ids = {entry.id for entry in self.artifacts[:existing_index]}
-            self._validate_parent_ids(artifact, existing_ids)
+            # Parents must exist, but not necessarily before the position the
+            # old entry held. Re-running a stage after a new stage was inserted
+            # upstream deepens its lineage — reconstructing from a stack that
+            # CTF correction produced is exactly that — and the entry has to
+            # move rather than be rejected for sitting where it used to belong.
+            self._validate_parent_ids(artifact, self.artifact_ids - {artifact.id})
             self.artifacts[existing_index] = artifact
+            self._restore_lineage_order()
             return
 
         existing_ids = self.artifact_ids
@@ -128,6 +133,34 @@ class ArtifactRegistry(BaseModel):
     @property
     def artifact_ids(self) -> set[str]:
         return {artifact.id for artifact in self.artifacts}
+
+    def _restore_lineage_order(self) -> None:
+        """Reorder so parents precede children again, moving as little as possible.
+
+        Repeatedly takes the earliest entry whose parents are all placed, so a
+        registry that already satisfies the invariant is left exactly as it was
+        and only the entries whose lineage changed actually move.
+        """
+
+        known_ids = self.artifact_ids
+        remaining = list(self.artifacts)
+        ordered: list[Artifact] = []
+        placed: set[str] = set()
+        while remaining:
+            for index, artifact in enumerate(remaining):
+                if all(
+                    parent_id in placed
+                    for parent_id in artifact.parent_ids
+                    if parent_id in known_ids
+                ):
+                    ordered.append(artifact)
+                    placed.add(artifact.id)
+                    del remaining[index]
+                    break
+            else:
+                unplaceable = ", ".join(sorted(artifact.id for artifact in remaining))
+                raise ValueError(f"artifact lineage contains a cycle among: {unplaceable}")
+        self.artifacts = ordered
 
     def _find_index(self, artifact_id: str) -> int | None:
         for index, artifact in enumerate(self.artifacts):
