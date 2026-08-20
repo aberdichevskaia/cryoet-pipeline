@@ -576,7 +576,7 @@ class ImodCtfPhaseFlipBackend:
         """Return a CTF-corrected aligned stack and its QC artifact."""
 
         stack_shape = _validate_final_aligned_stack(tilt_stack)
-        _validate_ctf_model(ctf_model, tilt_stack, manifest)
+        model_warnings = _validate_ctf_model(ctf_model, tilt_stack, manifest)
         pixel_spacing_angstrom = _voxel_spacing(tilt_stack)
         overwrite = _bool_parameter(context, "overwrite", default=False)
         optics = _consistent_optics(context, ctf_model)
@@ -593,6 +593,12 @@ class ImodCtfPhaseFlipBackend:
                 f"CTF model covers {len(entries)} views but the aligned stack has "
                 f"{stack_shape[0]}"
             )
+        _validate_model_tilt_angles(
+            ctf_model,
+            tilt_stack,
+            [entry.angle_start_deg for entry in entries],
+            require_tilt_file=bool(model_warnings),
+        )
 
         paths = _correction_paths(
             context.output_dir, manifest, backend_name=self.name,
@@ -684,7 +690,8 @@ class ImodCtfPhaseFlipBackend:
             mean_defocus_um=sum(defocus_um) / len(defocus_um),
             minimum_defocus_um=min(defocus_um),
             maximum_defocus_um=max(defocus_um),
-            status=QcStatus.PASS,
+            status=QcStatus.WARNING if model_warnings else QcStatus.PASS,
+            warnings=model_warnings,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
 
@@ -841,29 +848,100 @@ def _validate_ctf_model(
     ctf_model: Artifact,
     tilt_stack: Artifact,
     manifest: TiltSeriesManifest,
-) -> None:
+) -> list[str]:
+    """Check a CTF model may correct this stack, returning any caveats to record.
+
+    Defocus is a physical quantity, and the IMOD file records it against tilt
+    angles rather than pixels, so a model fitted on the same views at a
+    different binning transfers unchanged: what has to match the stack is the
+    pixel size handed to ctfphaseflip, and that is read from the stack itself.
+    Demanding the model come from this exact stack would force a re-fit at every
+    binning, and coarse binning is where fitting is least reliable — few Thon
+    rings fall below Nyquist. What must agree is the set of views, which
+    `_validate_model_tilt_angles` checks against the stack's own tilt angles.
+    """
+
     if ctf_model.kind is not ArtifactKind.CTF_MODEL:
         raise ValueError(f"expected CTF model artifact, got {ctf_model.kind}")
     if ctf_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
         raise ValueError("CTF model is for a different tilt series")
-    if ctf_model.parameters.get("input_stack_id") != tilt_stack.id:
-        raise ValueError(
-            f"CTF model was fitted on {ctf_model.parameters.get('input_stack_id')!r}, "
-            f"not on {tilt_stack.id!r}"
-        )
     if not ctf_model.path.is_file():
         raise FileNotFoundError(f"CTF model file not found: {ctf_model.path}")
+
+    fitted_stack_id = ctf_model.parameters.get("input_stack_id")
     recorded_spacing = ctf_model.parameters.get("pixel_spacing_angstrom")
     stack_spacing = tilt_stack.pixel_spacing_angstrom
-    if (
+    spacings_differ = (
         isinstance(recorded_spacing, (int, float))
         and stack_spacing is not None
         and not math.isclose(float(recorded_spacing), stack_spacing, rel_tol=1e-6)
-    ):
-        raise ValueError(
-            f"CTF model was fitted at {float(recorded_spacing)} angstrom/pixel but the stack "
-            f"is {stack_spacing} angstrom/pixel"
+    )
+    if fitted_stack_id == tilt_stack.id:
+        if spacings_differ:
+            # Same stack, two pixel sizes: one of the two records is wrong, and
+            # guessing which would put a wrong pixel size into the phase flip.
+            raise ValueError(
+                f"CTF model was fitted at {float(recorded_spacing)} angstrom/pixel but "  # type: ignore[arg-type]
+                f"{tilt_stack.id} is {stack_spacing} angstrom/pixel"
+            )
+        return []
+
+    warnings = [
+        f"CTF model was fitted on {fitted_stack_id!r}, not on {tilt_stack.id!r}; "
+        "defocus transfers between binnings but the fit was not made on this stack"
+    ]
+    if spacings_differ:
+        warnings.append(
+            f"fitted at {float(recorded_spacing)} angstrom/pixel and applied at "  # type: ignore[arg-type]
+            f"{stack_spacing} angstrom/pixel"
         )
+    return warnings
+
+
+def _validate_model_tilt_angles(
+    ctf_model: Artifact,
+    tilt_stack: Artifact,
+    model_angles_deg: Sequence[float],
+    *,
+    require_tilt_file: bool,
+) -> None:
+    """Require the model's per-view angles to be the stack's own.
+
+    The angle file handed to ctfphaseflip is built from the model, so a model
+    covering different views would silently phase-flip each image against the
+    wrong defocus. Angles are what ties the two together once the stacks are
+    allowed to differ, which is why a model from elsewhere may only be applied
+    to a stack whose own angles are on record: unverifiable is not the same as
+    fine.
+    """
+
+    value = tilt_stack.parameters.get("tilt_file_path")
+    path = Path(value) if isinstance(value, (str, Path)) else None
+    if path is None or not path.is_file():
+        if require_tilt_file:
+            raise ValueError(
+                f"{tilt_stack.id} records no readable tilt-angle file, so a CTF model "
+                f"fitted on {ctf_model.parameters.get('input_stack_id')!r} cannot be "
+                "checked against its views"
+            )
+        return
+    stack_angles = [
+        float(line) for line in path.read_text().splitlines() if line.strip()
+    ]
+    if len(stack_angles) != len(model_angles_deg):
+        raise ValueError(
+            f"CTF model covers {len(model_angles_deg)} views but {tilt_stack.id} has "
+            f"{len(stack_angles)}"
+        )
+    for index, (model_angle, stack_angle) in enumerate(
+        zip(model_angles_deg, stack_angles, strict=True)
+    ):
+        if not math.isclose(model_angle, stack_angle, abs_tol=1e-2):
+            raise ValueError(
+                f"CTF model and {tilt_stack.id} disagree on view {index + 1}: "
+                f"{model_angle:g} versus {stack_angle:g} degrees. The model covers "
+                "different views, so its defocus values do not line up with this stack"
+            )
 
 
 def _ctffind_settings(

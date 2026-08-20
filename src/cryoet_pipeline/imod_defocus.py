@@ -126,9 +126,15 @@ def parse_ctffind_summary(path: Path) -> list[CtffindRow]:
         if not all(math.isfinite(value) for value in (defocus1, defocus2, azimuth, phase_shift)):
             raise ValueError(f"{path}:{line_number}: non-finite CTF parameter")
         if defocus1 <= 0.0 or defocus2 <= 0.0:
+            # A negative axis means the unrestrained astigmatism search diverged
+            # on this view, which happens on low-signal high-tilt views and on
+            # coarsely binned stacks where few Thon rings fall inside the fit
+            # range. Naming the remedy saves re-deriving it from the numbers.
             raise ValueError(
-                f"{path}:{line_number}: expected positive underfocus values, "
-                f"got {defocus1:g} and {defocus2:g} angstrom"
+                f"{path}:{line_number}: view {view} has a non-physical fit: defocus axes "
+                f"{defocus1:g} and {defocus2:g} angstrom, but both must be positive "
+                "underfocus. The astigmatism search diverged; re-run with "
+                "--ctffind-restrain-astigmatism-angstrom to bound it"
             )
 
         rows.append(

@@ -564,17 +564,105 @@ def test_ctfphaseflip_rejects_optics_conflicting_with_the_model(tmp_path: Path) 
         )
 
 
-def test_ctfphaseflip_rejects_a_model_from_another_stack(tmp_path: Path) -> None:
-    _, _, aligned_stack = _input_artifacts(tmp_path)
+def test_ctfphaseflip_applies_a_model_fitted_at_another_binning(tmp_path: Path) -> None:
+    """Defocus is physical, so a fit from a finer stack corrects a coarser one.
+
+    Coarse binning is where CTF fitting is least reliable — few Thon rings fall
+    below Nyquist — so being able to fit once at the finest binning and apply the
+    result elsewhere is the point. The transfer is recorded as a warning, not
+    silently accepted, and ctfphaseflip still gets this stack's pixel size.
+    """
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
     ctf_model = _ctf_model_artifact(tmp_path, aligned_stack)
-    foreign = ctf_model.model_copy(
-        update={"parameters": {**ctf_model.parameters, "input_stack_id": "TS_TEST:other"}}
+    finer = ctf_model.model_copy(
+        update={
+            "parameters": {
+                **ctf_model.parameters,
+                "input_stack_id": "TS_TEST:aligned_tilt_stack:final",
+                "pixel_spacing_angstrom": 1.35,
+            }
+        }
+    )
+    coarse = aligned_stack.model_copy(update={"id": "TS_TEST:aligned_tilt_stack:final:bin8"})
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack, coarse, finer])
+    captured: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, stdin
+        command_list = list(command)
+        captured.append(command_list)
+        with mrcfile.new(
+            Path(command_list[command_list.index("-OutputFileName") + 1]), overwrite=True
+        ) as output:
+            output.set_data(_CORRECTED_DATA)
+        return subprocess.CompletedProcess(command, 0, stdout="flipped", stderr="")
+
+    _, qc_artifact = correct_ctf_and_register(
+        ImodCtfPhaseFlipBackend(fake_runner),
+        coarse,
+        finer,
+        _manifest(),
+        _context(tmp_path, {"imod_dir": _fake_imod_dir(tmp_path)}),
+        registry,
     )
 
-    with pytest.raises(ValueError, match="was fitted on"):
+    # The stack's own pixel size, not the one the model was fitted at.
+    assert captured[0][captured[0].index("-PixelSize") + 1] == "0.270000"
+
+    report = CtfCorrectionQc.model_validate_json(qc_artifact.path.read_text())
+    assert report.status == QcStatus.WARNING
+    assert any("not on" in warning for warning in report.warnings)
+    assert any("1.35 angstrom/pixel" in warning for warning in report.warnings)
+
+
+def test_ctfphaseflip_rejects_a_model_covering_different_views(tmp_path: Path) -> None:
+    """Angles are what ties model to stack once the stacks may differ."""
+
+    _, _, aligned_stack = _input_artifacts(tmp_path)
+    ctf_model = _ctf_model_artifact(tmp_path, aligned_stack)
+    shifted = tmp_path / "shifted.defocus"
+    shifted.write_text(
+        "0 0 0.0 0.0 0.0 3\n"
+        "1 1 -30.000000 -30.000000 3000.000\n"
+        "2 2 0.100000 0.100000 2800.000\n"
+    )
+    foreign = ctf_model.model_copy(
+        update={
+            "path": shifted,
+            "parameters": {**ctf_model.parameters, "input_stack_id": "TS_TEST:other"},
+        }
+    )
+
+    with pytest.raises(ValueError, match="disagree on view 1"):
         ImodCtfPhaseFlipBackend().correct(
             aligned_stack,
             foreign,
+            _manifest(),
+            BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU),
+        )
+
+
+def test_ctfphaseflip_rejects_one_stack_with_two_pixel_sizes(tmp_path: Path) -> None:
+    """Claiming this stack but another pixel size means one record is wrong."""
+
+    _, _, aligned_stack = _input_artifacts(tmp_path)
+    ctf_model = _ctf_model_artifact(tmp_path, aligned_stack)
+    inconsistent = ctf_model.model_copy(
+        update={"parameters": {**ctf_model.parameters, "pixel_spacing_angstrom": 1.35}}
+    )
+
+    with pytest.raises(ValueError, match="angstrom/pixel"):
+        ImodCtfPhaseFlipBackend().correct(
+            aligned_stack,
+            inconsistent,
             _manifest(),
             BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU),
         )
@@ -691,6 +779,8 @@ def _input_artifacts(tmp_path: Path) -> tuple[Artifact, Artifact, Artifact]:
     with mrcfile.new(aligned_path, overwrite=True) as aligned:
         aligned.set_data(_CORRECTED_DATA)
         aligned.voxel_size = 2.7
+    solved_tilts = tmp_path / "final.tlt"
+    solved_tilts.write_text("".join(f"{angle}\n" for angle in _TILT_ANGLES))
     aligned_stack = Artifact(
         id="TS_TEST:aligned_tilt_stack:final",
         kind=ArtifactKind.ALIGNED_TILT_STACK,
@@ -708,6 +798,7 @@ def _input_artifacts(tmp_path: Path) -> tuple[Artifact, Artifact, Artifact]:
             "included_z_values": [2, 0],
             "excluded_z_values": [1],
             "order": "tilt_angle_ascending",
+            "tilt_file_path": str(solved_tilts),
         },
     )
     return source_stack, alignment, aligned_stack

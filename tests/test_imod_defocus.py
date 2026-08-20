@@ -182,8 +182,12 @@ def test_parse_ctffind_summary_rejects_bad_input(tmp_path: Path) -> None:
 
     negative = tmp_path / "negative.txt"
     negative.write_text("1.0 -100.0 39000.0 -43.2 0.0\n")
-    with pytest.raises(ValueError, match="positive underfocus"):
+    with pytest.raises(ValueError) as failure:
         parse_ctffind_summary(negative)
+    message = str(failure.value)
+    assert "view 1" in message, "the failing view is what the user has to act on"
+    assert "positive underfocus" in message
+    assert "--ctffind-restrain-astigmatism-angstrom" in message
 
     duplicate = tmp_path / "duplicate.txt"
     duplicate.write_text("1.0 40000.0 39000.0 -43.2 0.0\n1.0 40000.0 39000.0 -43.2 0.0\n")

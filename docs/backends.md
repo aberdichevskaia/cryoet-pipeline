@@ -90,6 +90,26 @@ the CTF model rather than its own flags, and rejects conflicting overrides, so
 a phase flip cannot disagree with the fit it came from. When several models are
 registered, pick one with `--ctf-model-backend`.
 
+### Reusing one fit across binnings
+
+Defocus is physical and the IMOD file records it against tilt angles, not
+pixels, so a model fitted on one stack corrects the same views at another
+binning: what has to match is the pixel size handed to ctfphaseflip, and that is
+read from the stack being corrected. This matters because coarse binning is
+where fitting is least reliable — at 5.4 Å/pixel the fit window closes at the
+10.8 Å Nyquist limit, leaving about six Thon rings for a 4 µm defocus against
+a couple of dozen at 2.7 Å/pixel. Fit once at the finest binning and apply the
+result to the rest.
+
+The transfer is checked rather than assumed. The model's per-view angles must be
+the stack's own, so a model covering different views is refused instead of
+phase-flipping each image against the wrong defocus; a stack that records no
+tilt-angle file is refused too, because unverifiable is not the same as fine.
+The QC report carries a warning naming the stack the fit came from and both
+pixel sizes. A model that claims *this* stack but a different pixel size stays a
+hard error: one of the two records is wrong and guessing which would put a wrong
+pixel size into the flip.
+
 ### Averaging: `cone-search` versus `fft-refinement`
 
 `cone-search` is the one to use. `fft-refinement` remains as a minimal baseline.
