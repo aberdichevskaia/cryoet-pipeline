@@ -18,6 +18,7 @@ from cryoet_pipeline.backends.alignment import (
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FinalAlignedStackBackend,
+    variant_label,
     variant_suffix,
 )
 from cryoet_pipeline.models import (
@@ -36,7 +37,7 @@ from cryoet_pipeline.mrc_validation import validate_complete_mrc
 class ImodFinalAlignedStackBackend:
     """Apply canonical fine transforms with IMOD Newstack."""
 
-    name = "imod_newstack_final"
+    name = "imod-newstack"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -175,6 +176,7 @@ class ImodFinalAlignedStackBackend:
             )
         return Artifact(
             id=f"{manifest.tilt_series_id}:aligned_tilt_stack:final{variant_suffix(context)}",
+            variant=variant_label(context),
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.stack,
             parent_ids=[tilt_stack.id, fine_alignment.id],

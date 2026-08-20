@@ -837,9 +837,30 @@ class Artifact(BaseModel):
     axis_order: AxisOrder | None = None
     pixel_spacing_angstrom: float | None = None
     binning: int | None = None
+    backend: str | None = None
+    """Which implementation produced this, when the stage has more than one."""
+    variant: str | None = None
+    """The lane label this run was given, when runs are meant to coexist."""
     parameters: dict[str, Any] = Field(default_factory=dict)
     software_versions: dict[str, str] = Field(default_factory=dict)
     storage_role: StorageRole = StorageRole.CACHE
     retention_policy: RetentionPolicy = RetentionPolicy.RECOMPUTE
     can_recompute: bool = True
     size_bytes: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def adopt_backend_from_parameters(self) -> Artifact:
+        """Fill the field from `parameters` when only the parameter was given.
+
+        Backends have long recorded which implementation ran as a parameter.
+        Promoting it to a field gives it one canonical home — the shape a
+        relational schema will want as a column — without rewriting the thirty
+        odd places that already set the parameter, and without the two homes
+        being able to disagree.
+        """
+
+        if self.backend is None:
+            recorded = self.parameters.get("backend")
+            if isinstance(recorded, str):
+                object.__setattr__(self, "backend", recorded)
+        return self

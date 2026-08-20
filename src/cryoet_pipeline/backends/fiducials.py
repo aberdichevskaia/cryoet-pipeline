@@ -25,6 +25,7 @@ from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FiducialSeedBackend,
     FiducialTrackingBackend,
+    variant_label,
     variant_suffix,
 )
 from cryoet_pipeline.models import (
@@ -66,7 +67,7 @@ class ImodModelSummary:
 class ImodAutofidseedBackend:
     """Generate a fiducial tracking stack and seed model with IMOD."""
 
-    name = "imod_autofidseed"
+    name = "imod-autofidseed"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -287,7 +288,10 @@ class ImodAutofidseedBackend:
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
                 stage="seed",
-                model_id=f"{manifest.tilt_series_id}:fiducial_seed{variant_suffix(context)}",
+                model_id=(
+                    f"{manifest.tilt_series_id}:fiducial_seed:{self.name}"
+                    f"{variant_suffix(context)}"
+                ),
                 summary=summary,
                 image_count=len(included_indices),
                 minimum_fiducials=min_seed_fiducials,
@@ -317,7 +321,12 @@ class ImodAutofidseedBackend:
         tracking_info = validate_complete_mrc(paths.tracking_stack)
 
         tracking_stack_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.tracking_stack,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -347,7 +356,12 @@ class ImodAutofidseedBackend:
             size_bytes=paths.tracking_stack.stat().st_size,
         )
         seed_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:fiducial_seed{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:fiducial_seed:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
             path=paths.seed_model,
             parent_ids=[tracking_stack_artifact.id],
@@ -380,7 +394,12 @@ class ImodAutofidseedBackend:
             ),
         )
         report_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:fiducial_seed{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:fiducial_seed:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[seed_artifact.id],
@@ -401,7 +420,7 @@ class ImodAutofidseedBackend:
 class ImodBeadtrackBackend:
     """Track a seed model through an aligned tilt series with IMOD Beadtrack."""
 
-    name = "imod_beadtrack"
+    name = "imod-beadtrack"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -494,7 +513,10 @@ class ImodBeadtrackBackend:
             report = _tracked_fiducial_qc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
-                model_id=f"{manifest.tilt_series_id}:fiducial_model{variant_suffix(context)}",
+                model_id=(
+                    f"{manifest.tilt_series_id}:fiducial_model:{self.name}"
+                    f"{variant_suffix(context)}"
+                ),
                 summary=summary,
                 image_count=metadata.image_count,
                 minimum_fiducials=min_tracked_fiducials,
@@ -521,7 +543,12 @@ class ImodBeadtrackBackend:
         _write_json(paths.report, report.model_dump(mode="json"))
 
         model_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:fiducial_model{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:fiducial_model:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.FIDUCIAL_MODEL,
             path=paths.fiducial_model,
             parent_ids=[tracking_stack.id, seed_model.id],
@@ -551,7 +578,12 @@ class ImodBeadtrackBackend:
             ),
         )
         report_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:fiducial_tracking{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:fiducial_tracking:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[model_artifact.id],
@@ -610,7 +642,7 @@ def _compute_patch_size_px(
 class ImodPatchSeedBackend:
     """Bin a tracking stack and size a patch grid for IMOD Tiltxcorr."""
 
-    name = "imod_patch_seed"
+    name = "imod-patch-seed"
 
     def generate(
         self,
@@ -725,7 +757,10 @@ class ImodPatchSeedBackend:
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
             stage="seed",
-            model_id=f"{manifest.tilt_series_id}:fiducial_seed{variant_suffix(context)}",
+            model_id=(
+                f"{manifest.tilt_series_id}:fiducial_seed:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
             image_count=len(included_indices),
             num_fiducials=0,
             num_points=0,
@@ -740,7 +775,12 @@ class ImodPatchSeedBackend:
         tracking_info = validate_complete_mrc(paths.tracking_stack)
 
         tracking_stack_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.tracking_stack,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -769,7 +809,12 @@ class ImodPatchSeedBackend:
             size_bytes=paths.tracking_stack.stat().st_size,
         )
         seed_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:fiducial_seed{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:fiducial_seed:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
             path=paths.grid,
             parent_ids=[tracking_stack_artifact.id],
@@ -785,7 +830,12 @@ class ImodPatchSeedBackend:
             size_bytes=paths.grid.stat().st_size,
         )
         report_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:fiducial_seed{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:fiducial_seed:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[seed_artifact.id],
@@ -806,7 +856,7 @@ class ImodPatchSeedBackend:
 class ImodPatchTrackBackend:
     """Track a patch grid through a tilt series with IMOD Tiltxcorr."""
 
-    name = "imod_patch_track"
+    name = "imod-patch-track"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -913,7 +963,10 @@ class ImodPatchTrackBackend:
             report = _tracked_fiducial_qc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
-                model_id=f"{manifest.tilt_series_id}:fiducial_model{variant_suffix(context)}",
+                model_id=(
+                    f"{manifest.tilt_series_id}:fiducial_model:{self.name}"
+                    f"{variant_suffix(context)}"
+                ),
                 summary=summary,
                 image_count=metadata.image_count,
                 minimum_fiducials=min_tracked_fiducials,
@@ -944,7 +997,12 @@ class ImodPatchTrackBackend:
         _write_json(paths.report, report.model_dump(mode="json"))
 
         model_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:fiducial_model{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:fiducial_model:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.FIDUCIAL_MODEL,
             path=paths.fiducial_model,
             parent_ids=[tracking_stack.id, seed_model.id],
@@ -978,7 +1036,12 @@ class ImodPatchTrackBackend:
             ),
         )
         report_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:fiducial_tracking{variant_suffix(context)}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:fiducial_tracking:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            backend=self.name,
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[model_artifact.id],

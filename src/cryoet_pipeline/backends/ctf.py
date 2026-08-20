@@ -217,6 +217,7 @@ class Ctffind5CtfEstimationBackend:
 
         ctf_model_artifact = Artifact(
             id=ctf_model_id,
+            variant=variant_label(context),
             kind=ArtifactKind.CTF_MODEL,
             path=paths.defocus,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -256,6 +257,7 @@ class Ctffind5CtfEstimationBackend:
             backend=self.name,
             manifest=manifest,
             status=status,
+            variant=variant_label(context),
         )
         return [ctf_model_artifact, qc_artifact]
 
@@ -520,6 +522,7 @@ class ImodCtfPlotterEstimationBackend:
 
         ctf_model_artifact = Artifact(
             id=ctf_model_id,
+            variant=variant_label(context),
             kind=ArtifactKind.CTF_MODEL,
             path=paths.defocus,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -554,6 +557,7 @@ class ImodCtfPlotterEstimationBackend:
             backend=self.name,
             manifest=manifest,
             status=QcStatus.PASS,
+            variant=variant_label(context),
         )
         return [ctf_model_artifact, qc_artifact]
 
@@ -697,6 +701,7 @@ class ImodCtfPhaseFlipBackend:
 
         corrected_stack_artifact = Artifact(
             id=corrected_stack_id,
+            variant=variant_label(context),
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.corrected_stack,
             parent_ids=[tilt_stack.id, ctf_model.id],
@@ -736,6 +741,7 @@ class ImodCtfPhaseFlipBackend:
             backend=self.name,
             manifest=manifest,
             status=QcStatus.PASS,
+            variant=variant_label(context),
         )
         return [corrected_stack_artifact, qc_artifact]
 
@@ -1305,12 +1311,14 @@ def _qc_artifact(
     backend: str,
     manifest: TiltSeriesManifest,
     status: QcStatus,
+    variant: str | None = None,
 ) -> Artifact:
     return Artifact(
         id=artifact_id,
         kind=ArtifactKind.QC,
         path=path,
         parent_ids=[parent_id],
+        variant=variant,
         parameters={
             "qc_type": qc_type,
             "backend": backend,

@@ -42,13 +42,22 @@ def _manifest() -> TiltSeriesManifest:
 
 
 def _seed(variant: str | None) -> Artifact:
+    """A seed model as the backends now write one: the label is a field."""
+
     suffix = f":{variant}" if variant else ""
     return Artifact(
         id=f"TS_TEST:fiducial_seed{suffix}",
         kind=ArtifactKind.FIDUCIAL_SEED_MODEL,
         path=Path(f"seed{suffix}.mod"),
+        variant=variant,
         parameters={"tilt_series_id": "TS_TEST"},
     )
+
+
+def _legacy_seed(variant: str) -> Artifact:
+    """A seed model from before the field existed: the label is only in the id."""
+
+    return _seed(variant).model_copy(update={"variant": None})
 
 
 def test_absent_variant_leaves_ids_unchanged() -> None:
@@ -151,6 +160,7 @@ def _corrected_stack(variant: str | None) -> Artifact:
         id=f"TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip{suffix}",
         kind=ArtifactKind.ALIGNED_TILT_STACK,
         path=Path(f"corrected{suffix}.st"),
+        variant=variant,
         parameters={
             "tilt_series_id": "TS_TEST",
             "purpose": "ctf_corrected",
@@ -184,3 +194,23 @@ def test_select_variant_returns_the_only_match_without_a_label() -> None:
         )
         is only
     )
+
+
+def test_a_label_recorded_only_in_an_old_id_still_selects() -> None:
+    """Registries written before the field must keep working.
+
+    The label of such an artifact cannot be recovered as data — the canonical
+    form is unknown — so it is matched by its id suffix and otherwise counted as
+    shared. Asking for a label nothing carries then reports the ambiguity rather
+    than picking a lane, which is the honest degradation.
+    """
+
+    registry = ArtifactRegistry.empty()
+    registry.add(_seed(None))
+    registry.add(_legacy_seed("bin8"))
+
+    assert _fiducial_seed_artifact(registry, _manifest(), variant="bin8").id == (
+        "TS_TEST:fiducial_seed:bin8"
+    )
+    with pytest.raises(typer.BadParameter, match="found 2 candidates"):
+        _fiducial_seed_artifact(registry, _manifest(), variant="other")

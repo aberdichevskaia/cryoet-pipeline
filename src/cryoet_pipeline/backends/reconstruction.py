@@ -26,6 +26,7 @@ from cryoet_pipeline.backends.alignment import (
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     ReconstructionBackend,
+    variant_label,
     variant_suffix,
 )
 from cryoet_pipeline.models import (
@@ -46,7 +47,7 @@ from cryoet_pipeline.runtime import DevicePreference
 class ImodTiltReconstructionBackend:
     """Reconstruct a fine-aligned tomogram and canonicalize it to Zarr."""
 
-    name = "imod_tilt"
+    name = "imod-tilt"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -230,6 +231,7 @@ class ImodTiltReconstructionBackend:
 
         tomogram_artifact = Artifact(
             id=f"{manifest.tilt_series_id}:tomogram:fine{variant_suffix(context)}",
+            variant=variant_label(context),
             kind=ArtifactKind.TOMOGRAM,
             path=paths.canonical_zarr,
             parent_ids=[tilt_stack.id, alignment.id],
@@ -273,6 +275,7 @@ class ImodTiltReconstructionBackend:
         )
         qc_artifact = Artifact(
             id=f"{manifest.tilt_series_id}:qc:reconstruction:fine{variant_suffix(context)}",
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[tomogram_artifact.id],

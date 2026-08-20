@@ -19,6 +19,7 @@ from cryoet_pipeline.backends.motion import (
 )
 from cryoet_pipeline.backends.protocols import BackendContext
 from cryoet_pipeline.models import (
+    Artifact,
     ArtifactKind,
     AxisOrder,
     RetentionPolicy,
@@ -62,6 +63,9 @@ def test_average_motion_correction_writes_projection_and_registers_artifact(
     assert len(artifacts) == 1
     artifact = artifacts[0]
     assert registry.get(artifact.id) == artifact
+    # Three motion backends produce this kind, so the id has to say which.
+    assert artifact.id == "TS_TEST:corrected_projection:000:average"
+    assert artifact.backend == "average"
     assert artifact.kind == ArtifactKind.CORRECTED_PROJECTION
     assert artifact.path == tmp_path / "outputs/corrected/TS_TEST/TS_TEST_000_avg.mrc"
     assert artifact.shape == (2, 2)
@@ -80,6 +84,42 @@ def test_average_motion_correction_writes_projection_and_registers_artifact(
     with mrcfile.open(artifact.path, permissive=True) as corrected:
         np.testing.assert_allclose(corrected.data, movie_data.mean(axis=0))
         assert corrected.data.dtype == np.float32
+
+
+def test_two_motion_backends_coexist_for_one_movie(tmp_path: Path) -> None:
+    """Comparing two motion backends must not make one displace the other.
+
+    They write different files — the suffix differs — so registering both under
+    one id left the registry pointing at whichever ran last while the other's
+    output stayed on disk unreferenced.
+    """
+
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, np.arange(12, dtype=np.float32).reshape(3, 2, 2))
+    manifest = _manifest(movie_path, num_subframes=3)
+    registry = ArtifactRegistry.empty()
+
+    def run(backend) -> Artifact:
+        artifacts = correct_and_register(
+            backend,
+            manifest,
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CPU,
+                parameters={"overwrite": False},
+            ),
+            registry,
+        )
+        return artifacts[0]
+
+    averaged = run(AverageMotionCorrectionBackend())
+    aligned = run(PhaseCorrelationMotionCorrectionBackend())
+
+    assert averaged.id != aligned.id
+    assert averaged.path != aligned.path
+    assert {averaged.backend, aligned.backend} == {"average", "phase-corr"}
+    assert registry.get(averaged.id).path == averaged.path
+    assert registry.get(aligned.id).path == aligned.path
 
 
 def test_average_motion_correction_can_write_zarr_cache(tmp_path: Path) -> None:
@@ -619,7 +659,7 @@ def test_phase_correlation_backend_corrects_known_shift(tmp_path: Path) -> None:
     artifact = artifacts[0]
     assert artifact.kind == ArtifactKind.CORRECTED_PROJECTION
     assert artifact.path == tmp_path / "outputs/corrected/TS_TEST/TS_TEST_000_mc.mrc"
-    assert artifact.parameters["backend"] == "phase_corr"
+    assert artifact.parameters["backend"] == "phase-corr"
     assert artifact.parameters["method"] == "phase_correlation"
     assert "frame_correction_shifts_yx_px" in artifact.parameters
     assert len(artifact.parameters["frame_correction_shifts_yx_px"]) == 3

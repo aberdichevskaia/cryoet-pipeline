@@ -23,6 +23,7 @@ from cryoet_pipeline.backends.alignment import (
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FineAlignmentBackend,
+    variant_label,
     variant_suffix,
 )
 from cryoet_pipeline.models import (
@@ -123,7 +124,7 @@ class AppliedTomogramPositioning:
 class ImodTiltalignBackend:
     """Solve fiducial geometry with IMOD Tiltalign and compose final transforms."""
 
-    name = "imod_tiltalign"
+    name = "imod-tiltalign"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command
@@ -569,6 +570,7 @@ class ImodTiltalignBackend:
         _write_json(paths.report, report.model_dump(mode="json"))
         alignment_artifact = Artifact(
             id=f"{manifest.tilt_series_id}:alignment:fine{variant_suffix(context)}",
+            variant=variant_label(context),
             kind=ArtifactKind.ALIGNMENT,
             path=paths.canonical,
             parent_ids=[tracking_stack.id, fiducial_model.id],
@@ -630,6 +632,7 @@ class ImodTiltalignBackend:
         )
         report_artifact = Artifact(
             id=f"{manifest.tilt_series_id}:qc:alignment:fine{variant_suffix(context)}",
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[alignment_artifact.id],
@@ -1046,7 +1049,7 @@ def _fine_alignment_qc(
         )
     return FineAlignmentQc(
         tilt_series_id=manifest.tilt_series_id,
-        backend="imod_tiltalign",
+        backend="imod-tiltalign",
         alignment_id=f"{manifest.tilt_series_id}:alignment:fine{variant}",
         image_count=summary.image_count,
         fiducial_count=summary.fiducial_count,

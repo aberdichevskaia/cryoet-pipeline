@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Collection
 from pathlib import Path
 from typing import Annotated
 
@@ -2716,7 +2715,7 @@ def _motion_backend(name: str) -> MotionCorrectionBackend:
     normalized = name.lower()
     if normalized == "average":
         return AverageMotionCorrectionBackend()
-    if normalized in ("phase-corr", "phase_corr"):
+    if normalized in ("phase-corr", "phase-corr"):
         return PhaseCorrelationMotionCorrectionBackend()
     if normalized in ("motioncor3", "motioncor-3"):
         return MotionCor3MotionCorrectionBackend()
@@ -2849,11 +2848,8 @@ def _ctf_model_artifact(
         and (backend is None or artifact.parameters.get("backend") == backend)
     ]
     if variant is not None and matches:
-        labelled = [artifact for artifact in matches if artifact.id.endswith(f":{variant}")]
-        unlabelled_ids = _unlabelled_ids(matches, f"{manifest.tilt_series_id}:ctf_model")
-        matches = labelled or [
-            artifact for artifact in matches if artifact.id in unlabelled_ids
-        ]
+        labelled = [artifact for artifact in matches if _labelled(artifact, variant)]
+        matches = labelled or [artifact for artifact in matches if _label_of(artifact) is None]
     if not matches:
         available = sorted(
             str(artifact.parameters.get("backend"))
@@ -3026,35 +3022,49 @@ def _tilt_stack_artifact(
     return matches[0]
 
 
+def _label_of(artifact: Artifact) -> str | None:
+    """The lane label this artifact carries, if any.
+
+    New artifacts record it as a field. Ones written before the field existed
+    carry it only as the last segment of their id, which cannot be recovered
+    without knowing the canonical form — so for those, absence of the field is
+    read as "shared" and `_labelled` matches on the id instead.
+    """
+
+    return artifact.variant
+
+
+def _labelled(artifact: Artifact, variant: str) -> bool:
+    return artifact.variant == variant or (
+        artifact.variant is None and artifact.id.endswith(f":{variant}")
+    )
+
+
 def _select_variant(
     matches: list[Artifact],
     *,
     what: str,
     tilt_series_id: str,
     variant: str | None,
-    unlabelled_ids: Collection[str] | None = None,
 ) -> Artifact:
     """Narrow a lookup to one artifact, using the variant label when it applies.
 
-    Runs that should coexist rather than replace each other are distinguished by
-    a `--variant` label baked into the artifact id. When several candidates
-    remain, the error lists them so the caller can see what to pass.
+    Runs that should coexist rather than replace each other carry a `--variant`
+    label. When several candidates remain, the error lists them so the caller can
+    see what to pass.
 
     A label marks where one lane parts from another, so at the parting point the
     inputs are still the shared ones and carry no label yet: requiring them to
     carry it would make the divergence itself impossible to express — labelling
     a rebuild at a different binning would demand a labelled alignment that only
-    a labelled rebuild could have produced. Passing `unlabelled_id` lets the
-    lookup fall back to the one artifact every lane shares. It never falls back
-    to another lane's artifact, so lanes cannot be crossed by accident.
+    a labelled rebuild could have produced. So the lookup prefers a labelled
+    candidate and otherwise falls back to the unlabelled artifact every lane
+    shares. It never falls back to another lane's, so lanes cannot be crossed.
     """
 
     if variant is not None:
-        labelled = [artifact for artifact in matches if artifact.id.endswith(f":{variant}")]
-        if labelled or unlabelled_ids is None:
-            matches = labelled
-        else:
-            matches = [artifact for artifact in matches if artifact.id in unlabelled_ids]
+        labelled = [artifact for artifact in matches if _labelled(artifact, variant)]
+        matches = labelled or [artifact for artifact in matches if _label_of(artifact) is None]
     if len(matches) == 1:
         return matches[0]
     if not matches:
@@ -3143,7 +3153,6 @@ def _final_aligned_stack_artifact(
         what="final aligned stack",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
-        unlabelled_ids={f"{manifest.tilt_series_id}:aligned_tilt_stack:final"},
     )
 
 
@@ -3167,25 +3176,8 @@ def _reconstruction_input_stack_artifact(
             what="CTF-corrected stack",
             tilt_series_id=manifest.tilt_series_id,
             variant=variant,
-            unlabelled_ids=_unlabelled_ids(
-                corrected_matches,
-                f"{manifest.tilt_series_id}:aligned_tilt_stack:ctf_corrected",
-            ),
         )
     return _final_aligned_stack_artifact(registry, manifest, variant=variant)
-
-
-def _unlabelled_ids(matches: list[Artifact], canonical_prefix: str) -> set[str]:
-    """Rebuild the ids these artifacts would have without a variant label.
-
-    Some stages put the backend name in the id, so the unlabelled form is one id
-    per backend rather than a single string. Reconstructing it from the backend
-    each artifact records keeps the id the only place a label lives.
-    """
-
-    return {
-        f"{canonical_prefix}:{artifact.parameters.get('backend')}" for artifact in matches
-    }
 
 
 def _zero_tilt_corrected_projection_artifact(
@@ -3251,7 +3243,6 @@ def _fiducial_tracking_stack_artifact(
         what="fiducial tracking stack",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
-        unlabelled_ids={f"{manifest.tilt_series_id}:aligned_tilt_stack:fiducial"},
     )
 
 
@@ -3271,7 +3262,6 @@ def _fiducial_seed_artifact(
         what="fiducial seed model",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
-        unlabelled_ids={f"{manifest.tilt_series_id}:fiducial_seed"},
     )
 
 
@@ -3291,7 +3281,6 @@ def _fiducial_model_artifact(
         what="tracked fiducial model",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
-        unlabelled_ids={f"{manifest.tilt_series_id}:fiducial_model"},
     )
 
 
@@ -3312,7 +3301,6 @@ def _fine_alignment_artifact(
         what="fine alignment",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
-        unlabelled_ids={f"{manifest.tilt_series_id}:alignment:fine"},
     )
 
 

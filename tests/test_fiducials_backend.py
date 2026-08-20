@@ -148,6 +148,10 @@ def test_imod_fiducial_backends_generate_and_track_models(tmp_path: Path) -> Non
     assert tracking_stack.parameters["included_z_values"] == [3, 2, 0]
     assert tracking_stack.parameters["excluded_z_values"] == [1]
     assert seed_model.kind == ArtifactKind.FIDUCIAL_SEED_MODEL
+    # The bead and patch backends both produce a seed, so both ids name theirs.
+    assert seed_model.id == "TS_TEST:fiducial_seed:imod-autofidseed"
+    assert seed_model.backend == "imod-autofidseed"
+    assert tracking_stack.id == "TS_TEST:aligned_tilt_stack:fiducial:imod-autofidseed"
     assert seed_model.parent_ids == [tracking_stack.id]
     assert seed_model.parameters["num_fiducials"] == 2
     assert Path(seed_model.parameters["track_command_path"]).is_file()
@@ -383,6 +387,9 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
     assert transform_path.read_text().splitlines()[0].endswith("-4.000 6.000")
 
     assert seed_model.kind == ArtifactKind.FIDUCIAL_SEED_MODEL
+    assert seed_model.id == "TS_TEST:fiducial_seed:imod-patch-seed"
+    assert seed_model.backend == "imod-patch-seed"
+    assert tracking_stack.id == "TS_TEST:aligned_tilt_stack:fiducial:imod-patch-seed"
     assert seed_model.parent_ids == [tracking_stack.id]
     assert seed_model.parameters["num_patches_x"] == 2
     assert seed_model.parameters["num_patches_y"] == 2

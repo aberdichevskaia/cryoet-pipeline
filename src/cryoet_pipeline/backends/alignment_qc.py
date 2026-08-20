@@ -38,7 +38,7 @@ from cryoet_pipeline.mrc_validation import validate_complete_mrc
 class ImodCoarseAlignmentQcBackend:
     """Apply coarse transforms with IMOD and measure residual alignment shifts."""
 
-    name = "imod_coarse_alignment_qc"
+    name = "imod"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command

@@ -46,7 +46,7 @@ class CommandRunner(Protocol):
 class ImodTiltXcorrAlignmentBackend:
     """Run IMOD Tiltxcorr for coarse translational tilt-series alignment."""
 
-    name = "imod_tiltxcorr"
+    name = "imod-xcorr"
 
     def __init__(self, command_runner: CommandRunner | None = None) -> None:
         self._command_runner = command_runner or run_command

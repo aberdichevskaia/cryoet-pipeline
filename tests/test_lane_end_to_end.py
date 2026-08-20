@@ -99,6 +99,19 @@ def test_two_binning_lanes_reach_a_tomogram_without_colliding(
     assert binned.binning == 8
     assert binned.shape == (2, 4, 3)
 
+    # The label is data, not only a suffix on the id: a relational schema will
+    # want it as a column, and the lookup already reads the field rather than
+    # parsing strings.
+    for canonical in (
+        "TS_TEST:aligned_tilt_stack:final",
+        "TS_TEST:ctf_model:ctffind5",
+        "TS_TEST:tomogram:fine",
+    ):
+        assert registry.get(canonical).variant is None
+        assert registry.get(f"{canonical}:bin8").variant == "bin8"
+    assert registry.get("TS_TEST:ctf_model:ctffind5").backend == "ctffind5"
+    assert registry.get("TS_TEST:tomogram:fine").backend == "imod-tilt"
+
 
 def test_a_lane_can_reuse_the_other_lanes_ctf_fit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

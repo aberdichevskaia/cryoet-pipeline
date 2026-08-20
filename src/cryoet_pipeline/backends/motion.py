@@ -169,7 +169,11 @@ class MotionCor3MotionCorrectionBackend:
         software_versions = _software_versions()
         software_versions["MotionCor3"] = settings.software_version
         return Artifact(
-            id=f"{manifest.tilt_series_id}:corrected_projection:{image.z_value:03d}",
+            id=(
+                f"{manifest.tilt_series_id}:corrected_projection:"
+                f"{image.z_value:03d}:{self.name}"
+            ),
+            backend=self.name,
             kind=ArtifactKind.CORRECTED_PROJECTION,
             path=output_path,
             shape=tuple(int(axis_size) for axis_size in projection.shape),
@@ -221,7 +225,7 @@ class PhaseCorrelationMotionCorrectionBackend:
     using the Fourier shift theorem. Corrected frames are then averaged.
     """
 
-    name = "phase_corr"
+    name = "phase-corr"
 
     def correct(self, manifest: TiltSeriesManifest, context: BackendContext) -> list[Artifact]:
         """Correct every movie in the manifest and return projection artifacts."""
@@ -264,7 +268,11 @@ class PhaseCorrelationMotionCorrectionBackend:
         )
 
         return Artifact(
-            id=f"{manifest.tilt_series_id}:corrected_projection:{image.z_value:03d}",
+            id=(
+                f"{manifest.tilt_series_id}:corrected_projection:"
+                f"{image.z_value:03d}:{self.name}"
+            ),
+            backend=self.name,
             kind=ArtifactKind.CORRECTED_PROJECTION,
             path=output_path,
             shape=tuple(int(s) for s in projection.shape),
@@ -332,7 +340,11 @@ class AverageMotionCorrectionBackend:
         )
 
         return Artifact(
-            id=f"{manifest.tilt_series_id}:corrected_projection:{image.z_value:03d}",
+            id=(
+                f"{manifest.tilt_series_id}:corrected_projection:"
+                f"{image.z_value:03d}:{self.name}"
+            ),
+            backend=self.name,
             kind=ArtifactKind.CORRECTED_PROJECTION,
             path=output_path,
             shape=tuple(int(axis_size) for axis_size in projection.shape),

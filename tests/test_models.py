@@ -102,7 +102,7 @@ def test_tilt_alignment_rejects_relative_transforms() -> None:
     with pytest.raises(ValidationError, match="must be global"):
         TiltAlignment(
             tilt_series_id="TS_TEST",
-            backend="imod_tiltxcorr",
+            backend="imod-xcorr",
             stage="coarse",
             input_stack_id="TS_TEST:tilt_stack",
             input_binning=8,
