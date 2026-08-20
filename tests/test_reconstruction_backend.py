@@ -206,6 +206,86 @@ def test_imod_reconstruction_requires_positioned_fine_alignment(
         )
 
 
+def test_imod_reconstruction_accepts_a_ctf_corrected_stack(tmp_path: Path) -> None:
+    """CTF correction pushes the alignment from parent to grandparent.
+
+    Reconstruction already prefers a CTF-corrected stack when one is registered,
+    so a provenance test that only looked at direct parents rejected exactly the
+    stack it had just chosen.
+    """
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctf_model = Artifact(
+        id="TS_TEST:ctf_model:ctffind5",
+        kind=ArtifactKind.CTF_MODEL,
+        path=tmp_path / "TS_TEST.defocus",
+        parent_ids=[aligned_stack.id, alignment.id],
+        parameters={"tilt_series_id": "TS_TEST", "backend": "ctffind5"},
+    )
+    ctf_model.path.write_text("1 1 -3.1 -3.1 3000.0 2\n")
+    corrected_path = tmp_path / "corrected.st"
+    with mrcfile.new(corrected_path, overwrite=True) as corrected:
+        corrected.set_data(np.arange(48, dtype=np.float32).reshape(2, 4, 6))
+        corrected.voxel_size = 2.7
+    corrected_stack = aligned_stack.model_copy(
+        update={
+            "id": "TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip",
+            "path": corrected_path,
+            "parent_ids": [aligned_stack.id, ctf_model.id],
+            "parameters": {**aligned_stack.parameters, "purpose": "ctf_corrected"},
+        }
+    )
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack, ctf_model, corrected_stack])
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        with mrcfile.new(Path(command[command.index("-output") + 1]), overwrite=True) as rec:
+            rec.set_data(np.arange(48, dtype=np.float32).reshape(4, 2, 6))
+        return subprocess.CompletedProcess(command, 0, stdout="reconstructed", stderr="")
+
+    tomogram, qc_artifact = reconstruct_and_register(
+        ImodTiltReconstructionBackend(fake_runner),
+        corrected_stack,
+        alignment,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"imod_dir": _fake_imod_dir(tmp_path)},
+        ),
+        registry,
+    )
+
+    assert tomogram.parent_ids == [corrected_stack.id, alignment.id]
+    assert tomogram.parameters["ctf_corrected"] is True
+    report = TomogramQc.model_validate_json(qc_artifact.path.read_text())
+    assert report.ctf_corrected is True
+    assert "CTF correction was not applied" not in report.warnings
+
+
+def test_imod_reconstruction_rejects_a_stack_from_another_alignment(tmp_path: Path) -> None:
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    unrelated = alignment.model_copy(update={"id": "TS_TEST:alignment:fine:other"})
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack, unrelated])
+
+    with pytest.raises(ValueError, match="is not derived from"):
+        reconstruct_and_register(
+            ImodTiltReconstructionBackend(),
+            aligned_stack,
+            unrelated,
+            _manifest(),
+            BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU),
+            registry,
+        )
+
+
 def _input_artifacts(tmp_path: Path) -> tuple[Artifact, Artifact, Artifact]:
     source_stack = Artifact(
         id="TS_TEST:tilt_stack",

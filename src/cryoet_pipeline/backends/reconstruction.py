@@ -311,6 +311,12 @@ def reconstruct_and_register(
 ) -> list[Artifact]:
     """Reconstruct a tomogram and register tomogram then QC artifacts."""
 
+    # Provenance is a registry question, so it is asked here rather than inside
+    # the backend, which sees only the two artifacts handed to it. A CTF-
+    # corrected stack descends from the alignment through the plain aligned
+    # stack, so a direct-parent test would reject it.
+    if not registry.descends_from(tilt_stack.id, alignment.id):
+        raise ValueError(f"aligned stack {tilt_stack.id} is not derived from {alignment.id}")
     artifacts = backend.reconstruct(tilt_stack, alignment, manifest, context)
     registry.extend(artifacts, replace=replace_existing)
     return artifacts
@@ -433,8 +439,8 @@ def _load_alignment(
         raise ValueError(
             f"alignment is for {result.tilt_series_id}, expected {manifest.tilt_series_id}"
         )
-    if alignment.id not in tilt_stack.parent_ids:
-        raise ValueError(f"aligned stack {tilt_stack.id} is not derived from {alignment.id}")
+    # Whether the stack descends from this alignment is checked in
+    # `reconstruct_and_register`, which has the registry to walk.
     if result.stage != "fine" or alignment.parameters.get("stage") != "fine":
         raise ValueError("reconstruction requires fine alignment")
     return result

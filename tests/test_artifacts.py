@@ -45,6 +45,42 @@ def test_artifact_registry_adds_and_queries_lineage(tmp_path: Path) -> None:
     assert registry.size_bytes_by_storage_role[StorageRole.CACHE] == 1024
 
 
+def test_descends_from_walks_past_direct_parents(tmp_path: Path) -> None:
+    """Inserting a stage must not sever the lineage the later stage checks."""
+
+    registry = ArtifactRegistry.empty()
+    registry.extend(
+        [
+            Artifact(id="raw", kind=ArtifactKind.RAW_TILT_MOVIE, path=tmp_path / "raw.mrc"),
+            Artifact(
+                id="aligned",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tmp_path / "aligned.st",
+                parent_ids=["raw"],
+            ),
+            Artifact(
+                id="corrected",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tmp_path / "corrected.st",
+                parent_ids=["aligned"],
+            ),
+            Artifact(
+                id="sibling",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tmp_path / "sibling.st",
+                parent_ids=["raw"],
+            ),
+        ]
+    )
+
+    assert registry.descends_from("corrected", "raw")
+    assert registry.descends_from("corrected", "aligned")
+    assert not registry.descends_from("corrected", "sibling")
+    assert not registry.descends_from("raw", "corrected"), "lineage has a direction"
+    assert not registry.descends_from("corrected", "corrected"), "nothing descends from itself"
+    assert not registry.descends_from("absent", "raw")
+
+
 def test_artifact_registry_roundtrips_json(tmp_path: Path) -> None:
     path = tmp_path / "artifacts.json"
     registry = ArtifactRegistry.empty()

@@ -89,6 +89,31 @@ class ArtifactRegistry(BaseModel):
             artifact for artifact in self.artifacts if artifact_id in artifact.parent_ids
         ]
 
+    def descends_from(self, artifact_id: str, ancestor_id: str) -> bool:
+        """Whether one artifact was derived from another, at any depth.
+
+        Direct parentage is too strict a test for provenance: inserting a stage
+        between two others, as CTF correction sits between the final aligned
+        stack and reconstruction, pushes the earlier artifact from parent to
+        grandparent without changing what it contributed.
+        """
+
+        seen: set[str] = set()
+        pending = [artifact_id]
+        while pending:
+            current = pending.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            index = self._find_index(current)
+            if index is None:
+                continue
+            for parent_id in self.artifacts[index].parent_ids:
+                if parent_id == ancestor_id:
+                    return True
+                pending.append(parent_id)
+        return False
+
     @property
     def total_size_bytes(self) -> int:
         return sum(artifact.size_bytes or 0 for artifact in self.artifacts)
