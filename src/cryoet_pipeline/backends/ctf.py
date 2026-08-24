@@ -1429,7 +1429,10 @@ def _resolve_ctffind_executable(context: BackendContext) -> Path:
             raise TypeError("context parameter 'ctffind_executable' must be a path string")
         candidate = Path(configured).expanduser()
         if not candidate.is_file():
-            raise FileNotFoundError(f"CTFFIND executable not found: {candidate}")
+            raise FileNotFoundError(
+                f"CTFFIND executable not found: {candidate} "
+                "(from --ctffind-executable)"
+            )
         return candidate.resolve()
     for name in ("ctffind5", "ctffind"):
         resolved = shutil.which(name)

@@ -324,7 +324,10 @@ def _resolve_membrain_executable(context: BackendContext) -> Path:
             raise TypeError("context parameter 'membrain_executable' must be a path string")
         candidate = Path(configured).expanduser()
         if not candidate.is_file():
-            raise FileNotFoundError(f"MemBrain-seg executable not found: {candidate}")
+            raise FileNotFoundError(
+                f"MemBrain-seg executable not found: {candidate} "
+                "(from --membrain-executable)"
+            )
         return candidate.resolve()
     resolved = shutil.which("membrain")
     if resolved is not None:

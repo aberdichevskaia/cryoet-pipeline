@@ -482,7 +482,10 @@ def _resolve_pytom_executable(
             raise TypeError(f"context parameter {key!r} must be a path string")
         candidate = Path(configured).expanduser()
         if not candidate.is_file():
-            raise FileNotFoundError(f"pytom-match-pick executable not found: {candidate}")
+            raise FileNotFoundError(
+                f"pytom-match-pick executable not found: {candidate} "
+                f"(from --{key.replace('_', '-')})"
+            )
         return candidate.resolve()
     resolved = shutil.which(default_name)
     if resolved is not None:

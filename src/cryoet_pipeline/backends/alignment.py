@@ -585,9 +585,12 @@ def resolve_imod_executable(program: str, context: BackendContext) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
+    # Listing what was tried turns "not found" into something actionable: an
+    # unset shell variable shows up as a path missing its directory.
+    tried = ", ".join(str(candidate) for candidate in candidates) or "nothing"
     raise FileNotFoundError(
-        f"IMOD {program} executable not found; configure IMOD_DIR or "
-        f"{configured_key}"
+        f"IMOD {program} executable not found; tried {tried}. Set IMOD_DIR, or "
+        f"pass --imod-dir, or --{configured_key.replace('_', '-')}"
     )
 
 

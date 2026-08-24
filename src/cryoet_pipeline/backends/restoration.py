@@ -333,7 +333,10 @@ def _resolve_isonet2_executable(context: BackendContext) -> Path:
         if not isinstance(configured, Path):
             raise TypeError("context parameter 'isonet2_executable' must be a Path")
         if not configured.is_file():
-            raise FileNotFoundError(f"IsoNet2 executable not found: {configured}")
+            raise FileNotFoundError(
+                f"IsoNet2 executable not found: {configured} "
+                "(from --isonet2-executable)"
+            )
         return configured
     for name in ("isonet.py", "isonet2"):
         resolved = shutil.which(name)

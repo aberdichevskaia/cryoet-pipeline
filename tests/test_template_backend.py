@@ -117,6 +117,39 @@ def _runner_factory(
     return runner
 
 
+def test_missing_executable_names_the_option_it_came_from(tmp_path: Path) -> None:
+    """An unset shell variable expands to a path that looks almost right.
+
+    `$UNSET/pytom_create_template.py` arrives here as
+    `/pytom_create_template.py`, and a message that only repeats the path leaves
+    the reader hunting for which of two similar options carried it.
+    """
+
+    tomogram = _tomogram(tmp_path)
+    _, create_mask = _executables(tmp_path)
+
+    with pytest.raises(FileNotFoundError) as failure:
+        PytomTemplateBackend(_runner_factory(captured=[])).prepare(
+            _source_map(tmp_path),
+            tomogram,
+            _manifest(),
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CPU,
+                parameters={
+                    "pytom_create_template_executable": Path("/pytom_create_template.py"),
+                    "pytom_create_mask_executable": create_mask,
+                    "template_particle_diameter_angstrom": 150.0,
+                    "template_emdb_id": "2638",
+                },
+            ),
+        )
+
+    message = str(failure.value)
+    assert "/pytom_create_template.py" in message
+    assert "--pytom-create-template-executable" in message
+
+
 def test_prepare_template_labels_its_outputs_for_a_lane(tmp_path: Path) -> None:
     """A lane that reaches picking needs its own template, not the other lane's.
 
