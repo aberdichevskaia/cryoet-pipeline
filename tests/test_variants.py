@@ -11,6 +11,7 @@ from cryoet_pipeline.cli import (
     _fiducial_seed_artifact,
     _reconstruction_input_stack_artifact,
     _select_variant,
+    _tomogram_artifact,
 )
 from cryoet_pipeline.models import Artifact, ArtifactKind, TiltImage, TiltSeriesManifest
 from cryoet_pipeline.runtime import DevicePreference
@@ -184,6 +185,36 @@ def test_ctf_lanes_are_selectable_although_the_id_carries_a_backend_name() -> No
     ).id == "TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip", (
         "an unlabelled corrected stack is what a lane without its own CTF run shares"
     )
+
+
+def _tomogram(variant: str | None) -> Artifact:
+    suffix = f":{variant}" if variant else ""
+    return Artifact(
+        id=f"TS_TEST:tomogram:fine{suffix}",
+        kind=ArtifactKind.TOMOGRAM,
+        path=Path(f"tomogram{suffix}.zarr"),
+        variant=variant,
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+
+
+def test_stages_after_reconstruction_can_pick_a_lane() -> None:
+    """Two reconstructions must not block everything downstream of them.
+
+    Template preparation, picking, extraction and the rest all look the tomogram
+    up, and until they could name a lane a second reconstruction stopped the
+    pipeline dead with "expected exactly one full tomogram".
+    """
+
+    registry = ArtifactRegistry.empty()
+    registry.add(_tomogram(None))
+    registry.add(_tomogram("bin8"))
+
+    assert _tomogram_artifact(registry, _manifest(), variant="bin8").id == (
+        "TS_TEST:tomogram:fine:bin8"
+    )
+    with pytest.raises(typer.BadParameter, match="found 2 candidates"):
+        _tomogram_artifact(registry, _manifest())
 
 
 def test_select_variant_returns_the_only_match_without_a_label() -> None:

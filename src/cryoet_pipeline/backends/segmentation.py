@@ -18,7 +18,12 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
-from cryoet_pipeline.backends.protocols import BackendContext, SegmentationBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    SegmentationBackend,
+    variant_label,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -58,6 +63,7 @@ class MemBrainSegSegmentationBackend:
             manifest,
             backend_name=self.name,
             branch=branch,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         executable = _resolve_membrain_executable(context)
@@ -112,7 +118,10 @@ class MemBrainSegSegmentationBackend:
                 expected_shape=shape,
                 voxel_spacing_angstrom=voxel_spacing,
             )
-            segmentation_id = f"{manifest.tilt_series_id}:segmentation:{branch.value}:membrain-seg"
+            segmentation_id = (
+                f"{manifest.tilt_series_id}:segmentation:{branch.value}:membrain-seg"
+                f"{variant_suffix(context)}"
+            )
             report = {
                 "schema_version": 1,
                 "tilt_series_id": manifest.tilt_series_id,
@@ -141,7 +150,11 @@ class MemBrainSegSegmentationBackend:
             _replace_output(temporary_report, paths.report)
 
         return Artifact(
-            id=f"{manifest.tilt_series_id}:segmentation:{branch.value}:membrain-seg",
+            id=(
+                f"{manifest.tilt_series_id}:segmentation:{branch.value}:membrain-seg"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.SEGMENTATION,
             path=paths.segmentation_zarr,
             parent_ids=[tomogram.id],
@@ -188,7 +201,11 @@ def segment_and_register(
     if not isinstance(qc_path, str):
         raise ValueError("segmentation backend must record qc_path")
     qc = Artifact(
-        id=f"{manifest.tilt_series_id}:qc:segmentation:{segmentation.parameters['backend']}",
+        id=(
+            f"{manifest.tilt_series_id}:qc:segmentation:{segmentation.parameters['backend']}"
+            f"{variant_suffix(context)}"
+        ),
+        variant=variant_label(context),
         kind=ArtifactKind.QC,
         path=Path(qc_path),
         parent_ids=[segmentation.id],
@@ -247,10 +264,13 @@ def _segmentation_paths(
     *,
     backend_name: str,
     branch: TomogramBranch,
+    label: str | None = None,
 ) -> _SegmentationPaths:
     segmentation_dir = output_root / "segmentations" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "segmentation"
-    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _SegmentationPaths(
         segmentation_dir=segmentation_dir,
         qc_dir=qc_dir,

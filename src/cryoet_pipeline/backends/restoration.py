@@ -17,7 +17,12 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
-from cryoet_pipeline.backends.protocols import BackendContext, DenoisingBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    DenoisingBackend,
+    variant_label,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -56,6 +61,7 @@ class IsoNet2RestorationBackend:
             manifest,
             backend_name=self.name,
             branch=branch,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         executable = _resolve_isonet2_executable(context)
@@ -128,7 +134,10 @@ class IsoNet2RestorationBackend:
                 expected_shape=shape,
                 voxel_spacing_angstrom=voxel_spacing,
             )
-            restored_id = f"{manifest.tilt_series_id}:tomogram:{branch.value}:isonet2"
+            restored_id = (
+                f"{manifest.tilt_series_id}:tomogram:{branch.value}:isonet2"
+                f"{variant_suffix(context)}"
+            )
             report = TomogramRestorationQc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
@@ -153,7 +162,11 @@ class IsoNet2RestorationBackend:
             _replace_output(temporary_report, paths.report)
 
         return Artifact(
-            id=f"{manifest.tilt_series_id}:tomogram:{branch.value}:isonet2",
+            id=(
+                f"{manifest.tilt_series_id}:tomogram:{branch.value}:isonet2"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.DENOISED_TOMOGRAM,
             path=paths.restored_zarr,
             parent_ids=[tomogram.id],
@@ -201,7 +214,11 @@ def restore_and_register(
     if not isinstance(qc_path, str):
         raise ValueError("restoration backend must record qc_path")
     qc = Artifact(
-        id=f"{manifest.tilt_series_id}:qc:restoration:{restored.parameters['backend']}",
+        id=(
+            f"{manifest.tilt_series_id}:qc:restoration:{restored.parameters['backend']}"
+            f"{variant_suffix(context)}"
+        ),
+        variant=variant_label(context),
         kind=ArtifactKind.QC,
         path=Path(qc_path),
         parent_ids=[restored.id],
@@ -257,10 +274,13 @@ def _restoration_paths(
     *,
     backend_name: str,
     branch: TomogramBranch,
+    label: str | None = None,
 ) -> _RestorationPaths:
     restoration_dir = output_root / "tomograms" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "restoration"
-    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _RestorationPaths(
         restoration_dir=restoration_dir,
         qc_dir=qc_dir,

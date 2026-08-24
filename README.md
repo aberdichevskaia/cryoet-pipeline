@@ -389,6 +389,12 @@ python -m pip install -e ".[viz]"
 
 - [docs/backends.md](docs/backends.md) — every stage's backends and how to choose
 - [docs/roadmap.md](docs/roadmap.md) — planned work and settled design decisions
+- [docs/database_design.md](docs/database_design.md) — project state, provenance
+  graph, and the database decision
+- [docs/pipeline_engine.md](docs/pipeline_engine.md) — how a plan becomes cluster
+  jobs: controller, run states, execution backends
+- [docs/agent_architecture.md](docs/agent_architecture.md) — forward design for a
+  copilot: tool surface, gates, failure triage
 - [docs/motioncor3_backend.md](docs/motioncor3_backend.md) — MotionCor3 adapter
 - [docs/architecture_decisions.md](docs/architecture_decisions.md),
   [docs/storage_policy.md](docs/storage_policy.md),

@@ -24,6 +24,11 @@ untracked decision-maker inside numerical processing. It may eventually:
 The pipeline stages themselves should remain explicit, reproducible functions or
 commands with typed inputs, typed outputs, and recorded parameters.
 
+The concrete shape such a copilot would take — tool surface, gates, failure
+triage, and candidate applications — is worked out in
+[agent_architecture.md](agent_architecture.md). That document is forward design:
+none of it is MVP work, and the restrictions below remain in force in full.
+
 ## Design requirements today
 
 To keep future agent integration cheap, every stage should expose:

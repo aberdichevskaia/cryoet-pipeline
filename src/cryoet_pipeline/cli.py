@@ -1757,14 +1757,23 @@ def restore_tomogram(
         bool,
         typer.Option(help="Overwrite restored tomogram, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Restore a reconstructed tomogram and register a canonical Zarr result."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     selected_backend = _restoration_backend(backend)
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
     }
     if isonet2_executable is not None:
@@ -1875,14 +1884,23 @@ def segment_tomogram(
         bool,
         typer.Option(help="Overwrite segmentation, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Segment a reconstructed tomogram and register a canonical Zarr mask."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     selected_backend = _segmentation_backend(backend)
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
         "membrain_rescale_patches": membrain_rescale_patches,
         "membrain_out_pixel_size": membrain_out_pixel_size,
@@ -2008,6 +2026,14 @@ def prepare_template(
         bool,
         typer.Option(help="Overwrite template, mask, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Fetch a reference map and build a matching template plus mask."""
 
@@ -2019,7 +2045,7 @@ def prepare_template(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
 
     if emdb_id is not None:
         cache_dir = emdb_cache_dir if emdb_cache_dir is not None else out / "emdb-cache"
@@ -2034,6 +2060,7 @@ def prepare_template(
 
     selected_backend = _template_preparation_backend(backend)
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
         "template_invert": template_invert,
         "template_center": template_center,
@@ -2176,12 +2203,20 @@ def pick_particles(
         bool,
         typer.Option(help="Overwrite picks, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Pick particles from a reconstructed tomogram and register a canonical STAR result."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     selected_backend = _picking_backend(backend)
     supporting_artifacts: list[Artifact] = []
     if use_segmentation_mask:
@@ -2203,6 +2238,7 @@ def pick_particles(
             pytom_template_mask = mask_artifact.path
         supporting_artifacts.extend([template_artifact, mask_artifact])
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
         "pytom_template": pytom_template,
         "pytom_template_mask": pytom_template_mask,
@@ -2264,12 +2300,20 @@ def export_picks(
         bool,
         typer.Option(help="Overwrite an existing export."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Export a tomogram and its picks for inspection in ChimeraX with ArtiaX."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     picks = _picks_artifact(artifact_registry, tilt_series_manifest)
 
     export = export_picks_for_artiax(
@@ -2316,15 +2360,24 @@ def extract_particles(
         bool,
         typer.Option(help="Overwrite the particle stack, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Crop cubic subvolumes from a tomogram at picked particle locations."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest)
+    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     picks = _picks_artifact(artifact_registry, tilt_series_manifest)
     selected_backend = _particle_extraction_backend(backend)
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
         "box_size_px": box_size_px,
     }
@@ -3100,6 +3153,8 @@ def _select_variant(
 def _tomogram_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -3107,13 +3162,12 @@ def _tomogram_artifact(
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
         and artifact.parameters.get("tomogram_branch", "full") == "full"
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one full tomogram for {manifest.tilt_series_id}, "
-            f"found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="full tomogram",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _picks_artifact(

@@ -16,6 +16,8 @@ from cryoet_pipeline.backends.protocols import (
     BackendContext,
     ParticleExtractionBackend,
     SubtomogramAveragingBackend,
+    variant_label,
+    variant_suffix,
 )
 from cryoet_pipeline.models import (
     Artifact,
@@ -91,7 +93,17 @@ class CubicCropExtractionBackend:
         minimum_score = _optional_float_parameter(context, "minimum_score")
         overwrite = _bool_parameter(context, "overwrite", default=False)
 
-        paths = _extraction_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _extraction_paths(
+
+            context.output_dir,
+
+            manifest,
+
+            backend_name=self.name,
+
+            label=variant_label(context),
+
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.particles_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
@@ -171,7 +183,13 @@ class CubicCropExtractionBackend:
                 "the tomogram edge for the requested box size"
             )
 
-        particle_stack_id = f"{manifest.tilt_series_id}:particle_stack:{self.name}"
+        particle_stack_id = (
+
+            f"{manifest.tilt_series_id}:particle_stack:{self.name}"
+
+            f"{variant_suffix(context)}"
+
+        )
         report = ParticleExtractionQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
@@ -191,6 +209,7 @@ class CubicCropExtractionBackend:
 
         particle_stack_artifact = Artifact(
             id=particle_stack_id,
+            variant=variant_label(context),
             kind=ArtifactKind.PARTICLE_STACK,
             path=paths.particle_stack,
             parent_ids=[tomogram.id, picks.id],
@@ -216,7 +235,11 @@ class CubicCropExtractionBackend:
             + _path_size_bytes(paths.particle_metadata),
         )
         qc_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:particle_extraction:{self.name}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:particle_extraction:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[particle_stack_artifact.id],
@@ -268,7 +291,17 @@ class FftRefinementAveragingBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
-        paths = _averaging_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _averaging_paths(
+
+            context.output_dir,
+
+            manifest,
+
+            backend_name=self.name,
+
+            label=variant_label(context),
+
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
@@ -378,7 +411,13 @@ class FftRefinementAveragingBackend:
                 "rot/tilt/psi convention and initial reference box size/pixel spacing"
             )
 
-        average_id = f"{manifest.tilt_series_id}:subtomogram_average:{self.name}"
+        average_id = (
+
+            f"{manifest.tilt_series_id}:subtomogram_average:{self.name}"
+
+            f"{variant_suffix(context)}"
+
+        )
         report = SubtomogramAveragingQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
@@ -399,6 +438,7 @@ class FftRefinementAveragingBackend:
 
         average_artifact = Artifact(
             id=average_id,
+            variant=variant_label(context),
             kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
             path=paths.average_map,
             parent_ids=[particles.id],
@@ -423,7 +463,11 @@ class FftRefinementAveragingBackend:
             + _path_size_bytes(paths.particle_metadata),
         )
         qc_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:subtomogram_averaging:{self.name}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:subtomogram_averaging:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[average_artifact.id],
@@ -491,7 +535,17 @@ class ConeSearchRefinementBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
-        paths = _averaging_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _averaging_paths(
+
+            context.output_dir,
+
+            manifest,
+
+            backend_name=self.name,
+
+            label=variant_label(context),
+
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
@@ -640,6 +694,7 @@ class ConeSearchRefinementBackend:
             average_artifacts.append(
                 Artifact(
                     id=average_id,
+                    variant=variant_label(context),
                     kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
                     path=average_path,
                     parent_ids=[particles.id],
@@ -723,7 +778,11 @@ class ConeSearchRefinementBackend:
         _write_json(paths.report, report.model_dump(mode="json"))
 
         qc_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:subtomogram_classification:{self.name}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:subtomogram_classification:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[average_artifacts[0].id],
@@ -1344,11 +1403,17 @@ class _ExtractionPaths:
 
 
 def _extraction_paths(
-    output_root: Path, manifest: TiltSeriesManifest, *, backend_name: str
+    output_root: Path,
+    manifest: TiltSeriesManifest,
+    *,
+    backend_name: str,
+    label: str | None = None,
 ) -> _ExtractionPaths:
     particles_dir = output_root / "particles" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "particle_extraction"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _ExtractionPaths(
         particles_dir=particles_dir,
         qc_dir=qc_dir,
@@ -1372,11 +1437,17 @@ class _AveragingPaths:
 
 
 def _averaging_paths(
-    output_root: Path, manifest: TiltSeriesManifest, *, backend_name: str
+    output_root: Path,
+    manifest: TiltSeriesManifest,
+    *,
+    backend_name: str,
+    label: str | None = None,
 ) -> _AveragingPaths:
     average_dir = output_root / "averages" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "subtomogram_averaging"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _AveragingPaths(
         average_dir=average_dir,
         qc_dir=qc_dir,

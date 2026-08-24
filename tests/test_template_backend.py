@@ -117,6 +117,45 @@ def _runner_factory(
     return runner
 
 
+def test_prepare_template_labels_its_outputs_for_a_lane(tmp_path: Path) -> None:
+    """A lane that reaches picking needs its own template, not the other lane's.
+
+    Everything downstream of reconstruction registers one artifact per stage, so
+    without the label a second lane's template displaces the first while both
+    registry entries keep pointing at one file.
+    """
+
+    tomogram = _tomogram(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    create_template, create_mask = _executables(tmp_path)
+
+    template, mask, qc_artifact = prepare_template_and_register(
+        PytomTemplateBackend(_runner_factory(captured=[])),
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                "template_particle_diameter_angstrom": 150.0,
+                "template_emdb_id": "2638",
+                "variant": "bin8",
+            },
+        ),
+        registry,
+    )
+
+    assert template.id.endswith(":bin8")
+    assert mask.id.endswith(":bin8")
+    assert qc_artifact.id.endswith(":bin8")
+    assert template.variant == "bin8"
+    assert "bin8" in template.path.name, "two lanes must not share a template file"
+
+
 def test_prepare_template_writes_template_mask_and_qc(tmp_path: Path) -> None:
     tomogram = _tomogram(tmp_path)
     registry = ArtifactRegistry.empty()

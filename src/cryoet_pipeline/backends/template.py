@@ -16,7 +16,12 @@ import numpy as np
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
-from cryoet_pipeline.backends.protocols import BackendContext, TemplatePreparationBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    TemplatePreparationBackend,
+    variant_label,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -68,7 +73,17 @@ class PytomTemplateBackend:
         mask_sigma = _optional_positive_float_parameter(context, "template_mask_sigma_px")
         emdb_id = _optional_string_parameter(context, "template_emdb_id")
 
-        paths = _template_paths(context.output_dir, manifest, backend_name=self.name)
+        paths = _template_paths(
+
+            context.output_dir,
+
+            manifest,
+
+            backend_name=self.name,
+
+            label=variant_label(context),
+
+        )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
         paths.report.parent.mkdir(parents=True, exist_ok=True)
@@ -185,8 +200,17 @@ class PytomTemplateBackend:
                 "template matching quietly find nothing"
             )
 
-        template_id = f"{manifest.tilt_series_id}:template:{self.name}"
-        mask_id = f"{manifest.tilt_series_id}:template_mask:{self.name}"
+        template_id = (
+
+            f"{manifest.tilt_series_id}:template:{self.name}"
+
+            f"{variant_suffix(context)}"
+
+        )
+        mask_id = (
+            f"{manifest.tilt_series_id}:template_mask:{self.name}"
+            f"{variant_suffix(context)}"
+        )
         report = TemplatePreparationQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
@@ -226,6 +250,7 @@ class PytomTemplateBackend:
         }
         template_artifact = Artifact(
             id=template_id,
+            variant=variant_label(context),
             kind=ArtifactKind.TEMPLATE,
             path=paths.template,
             parent_ids=[tomogram.id],
@@ -247,6 +272,7 @@ class PytomTemplateBackend:
         )
         mask_artifact = Artifact(
             id=mask_id,
+            variant=variant_label(context),
             kind=ArtifactKind.TEMPLATE_MASK,
             path=paths.mask,
             parent_ids=[template_artifact.id],
@@ -267,7 +293,11 @@ class PytomTemplateBackend:
             size_bytes=paths.mask.stat().st_size,
         )
         qc_artifact = Artifact(
-            id=f"{manifest.tilt_series_id}:qc:template_preparation:{self.name}",
+            id=(
+                f"{manifest.tilt_series_id}:qc:template_preparation:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.QC,
             path=paths.report,
             parent_ids=[template_artifact.id],
@@ -405,10 +435,13 @@ def _template_paths(
     manifest: TiltSeriesManifest,
     *,
     backend_name: str,
+    label: str | None = None,
 ) -> _TemplatePaths:
     template_dir = output_root / "templates" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "template"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _TemplatePaths(
         output_dir=template_dir,
         template=template_dir / f"{prefix}_template.mrc",

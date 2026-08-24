@@ -141,3 +141,91 @@ Still outstanding:
    deliberate migration rather than a silent change.
 3. A comparison report over variants, reusing the per-stage QC models that
    already exist.
+
+## 6. Make external-tool logs uniform and addressable — do this soon
+
+Every adapter that shells out already captures the right material: argv, stdout,
+stderr, and the exit code, written by a private `_write_command_log`. The defect
+is that none of it is addressable from outside the adapter that wrote it.
+
+- **`_write_command_log` exists in twelve private copies**, one per backend
+  module (`alignment`, `alignment_qc`, `ctf`, `fiducials`, `final_stack`,
+  `fine_alignment`, `motion`, `picking`, `reconstruction`, `restoration`,
+  `segmentation`, `template`). There is no shared module. The bodies have drifted:
+  some take a single `CompletedProcess`, some take a list of them, one appends a
+  rendered `<<stdin>>` block because CTFFIND is driven through stdin.
+- **Log paths are recorded under about a dozen different keys** in untyped
+  `parameters` dicts: `command_log_path`, `command_log`, `log_path`,
+  `tiltxcorr_log_path`, `xftoxg_log_path`, `newstack_log_path`,
+  `autofidseed_log_path`, `imodinfo_log_path`, `tiltalign_log_path`,
+  `preposition_tiltalign_log_path`, `xfproduct_log_path`, `residual_log_path`.
+  Only `TomogramRestorationQc.command_log_path` is a typed field.
+- **One step legitimately owns several logs**, because it invokes several external
+  programs — fine alignment runs `tiltalign` more than once plus `xfproduct`, and
+  fiducial seeding runs `newstack`, `autofidseed`, and `imodinfo`. So the target
+  is not a single `log_path` but a list.
+
+The consequence is that there is no way to answer "show me the logs for this
+step" without knowing which backend ran and which private naming convention it
+used. That blocks anything generic that wants to read them — a QC roll-up, a
+future UI, a copilot asked why a step failed — and it is already awkward for a
+person working from the registry rather than from the output directory.
+
+The work:
+
+1. One shared runner for external processes, replacing the twelve copies. It
+   should record argv, the resolved executable path, stdin when used, stdout,
+   stderr, exit code, and wall time, and it should be the only place that decides
+   the log file's format.
+2. A typed list of log records per unit of work — program name, path, exit code —
+   instead of ad-hoc keys in `parameters`. This lands on the `run` entity
+   described in [database_design.md](database_design.md); until that exists it
+   belongs in a typed model rather than in a free-form dict.
+
+Both are plain hygiene and are worth doing independently of anything downstream.
+They also unblock deterministic failure classification: once logs are uniform, a
+`parse_failure(log, result) -> FailureSignature | None` can be added to the
+backend protocols, where the adapter that knows a tool's dialect is also the
+thing that recognizes its errors. That parser is a follow-on, not part of this
+item.
+
+## 7. Attribution — required in the first version of the run entity
+
+Not work to start now: the `run` entity described in
+[database_design.md](database_design.md) does not exist yet. This is a constraint
+on its first version, recorded here so it is not discovered late.
+
+Attribution cannot be backfilled. Every record written before these fields exist
+is permanently "unknown", and no amount of later reconstruction recovers who did
+what. The fields are free to add up front and impossible to add retroactively,
+which is the only reason this is worth pinning down before there is any consumer
+for it.
+
+A single `actor` field is not enough, because three different questions get asked
+of the same run:
+
+- **who caused it to exist** — a person, a copilot proposing a run, or the system
+  itself (the one automatic memory escalation is a system-caused run);
+- **who approved it**, when approval was required, or explicitly nobody;
+- **who performed it**, for interactive steps whose work is done by a person in
+  an external tool.
+
+So the minimum is `origin` (`human` / `agent` / `system`) for cheap filtering,
+plus `created_by` and `approved_by`, plus `performed_by` for interactive runs.
+Execution attribution is already covered separately by `host` and the scheduler
+job id.
+
+This subsumes a mechanism that would otherwise be built twice: recording that a
+parameter was suggested by a copilot and accepted by a person is not a separate
+feature, it is `created_by` and `approved_by` on the run that used those
+parameters. Nothing extra is needed to answer later whether such suggestions were
+any good.
+
+The artifact side has one field with the same unbackfillable property: a
+provenance class distinguishing `derived` (produced by a tracked run),
+`attested` (a human declares what was done outside the pipeline), and `imported`
+(entered mid-pipeline with no upstream). If an externally produced artifact is not
+marked as such when it enters, there is no way to tell afterwards, and every
+downstream fingerprint quietly overstates how reproducible the result is. The
+class must propagate downward: anything descended from an attested or imported
+artifact inherits that status.

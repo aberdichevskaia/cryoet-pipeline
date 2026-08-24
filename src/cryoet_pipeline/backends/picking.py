@@ -18,7 +18,12 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
-from cryoet_pipeline.backends.protocols import BackendContext, PickingBackend
+from cryoet_pipeline.backends.protocols import (
+    BackendContext,
+    PickingBackend,
+    variant_label,
+    variant_suffix,
+)
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -61,6 +66,7 @@ class PytomMatchPickBackend:
             manifest,
             backend_name=self.name,
             branch=branch,
+            label=variant_label(context),
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
 
@@ -158,7 +164,10 @@ class PytomMatchPickBackend:
 
             particles_star = _find_output_file(temporary_root, suffix="_particles.star")
             statistics = _read_star_statistics(particles_star)
-            picks_id = f"{manifest.tilt_series_id}:picks:{branch.value}:{self.name}"
+            picks_id = (
+                f"{manifest.tilt_series_id}:picks:{branch.value}:{self.name}"
+                f"{variant_suffix(context)}"
+            )
             report = PicksQc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
@@ -180,7 +189,11 @@ class PytomMatchPickBackend:
             _replace_output(temporary_report, paths.report)
 
         return Artifact(
-            id=f"{manifest.tilt_series_id}:picks:{branch.value}:{self.name}",
+            id=(
+                f"{manifest.tilt_series_id}:picks:{branch.value}:{self.name}"
+                f"{variant_suffix(context)}"
+            ),
+            variant=variant_label(context),
             kind=ArtifactKind.PICKS,
             path=paths.particles_star,
             parent_ids=[tomogram.id, *(artifact.id for artifact in supporting_artifacts)],
@@ -232,7 +245,11 @@ def pick_and_register(
     if not isinstance(qc_path, str):
         raise ValueError("picking backend must record qc_path")
     qc = Artifact(
-        id=f"{manifest.tilt_series_id}:qc:picking:{picks.parameters['backend']}",
+        id=(
+            f"{manifest.tilt_series_id}:qc:picking:{picks.parameters['backend']}"
+            f"{variant_suffix(context)}"
+        ),
+        variant=variant_label(context),
         kind=ArtifactKind.QC,
         path=Path(qc_path),
         parent_ids=[picks.id],
@@ -290,10 +307,13 @@ def _picking_paths(
     *,
     backend_name: str,
     branch: TomogramBranch,
+    label: str | None = None,
 ) -> _PickingPaths:
     picks_dir = output_root / "picks" / manifest.tilt_series_id
     qc_dir = output_root / "qc" / manifest.tilt_series_id / "picking"
-    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}"
+    prefix = f"{manifest.tilt_series_id}_{branch.value}_{backend_name}" + (
+        f"_{label}" if label else ""
+    )
     return _PickingPaths(
         picks_dir=picks_dir,
         qc_dir=qc_dir,
