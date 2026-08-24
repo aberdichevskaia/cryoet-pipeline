@@ -410,9 +410,15 @@ def _mask_radius_px(
             )
         radius = diameter / 2.0 / voxel_size_angstrom
     if radius * 2.0 > box_size:
+        # Without an explicit box the size comes from the deposited map's own
+        # extent after resampling, so the two numbers being far apart usually
+        # means the requested diameter does not describe this map.
         raise ValueError(
             f"mask diameter {radius * 2.0:.1f} px does not fit in the template box of "
-            f"{box_size} px; enlarge the box with template_box_size_px"
+            f"{box_size} px ({box_size * voxel_size_angstrom:.0f} angstrom at "
+            f"{voxel_size_angstrom:.2f} angstrom/pixel). Pass --template-box-size-px "
+            f"with at least {math.ceil(radius * 2.0)}, or check that the particle is "
+            "really that large"
         )
     return radius
 

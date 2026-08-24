@@ -318,7 +318,7 @@ def test_prepare_template_rejects_a_mask_larger_than_the_box(tmp_path: Path) -> 
     tomogram = _tomogram(tmp_path)
     create_template, create_mask = _executables(tmp_path)
 
-    with pytest.raises(ValueError, match="does not fit in the template box"):
+    with pytest.raises(ValueError) as failure:
         PytomTemplateBackend(_runner_factory()).prepare(
             _source_map(tmp_path),
             tomogram,
@@ -333,6 +333,12 @@ def test_prepare_template_rejects_a_mask_larger_than_the_box(tmp_path: Path) -> 
                 },
             ),
         )
+
+    # The number to pass and the size actually available are what the
+    # reader needs; the second also says whether the diameter is plausible.
+    message = str(failure.value)
+    assert "--template-box-size-px" in message
+    assert "angstrom/pixel" in message
 
 
 def test_prepare_template_rejects_a_tomogram_from_another_series(tmp_path: Path) -> None:
