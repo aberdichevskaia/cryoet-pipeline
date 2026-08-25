@@ -24,6 +24,7 @@ from cryoet_pipeline.backends.protocols import (
     variant_label,
     variant_suffix,
 )
+from cryoet_pipeline.imod_defocus import read_imod_defocus_file
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -104,17 +105,33 @@ class PytomMatchPickBackend:
             _write_tilt_angles(manifest, temporary_tilt_angles)
 
             temporary_mask: Path | None = None
+            mask_coverage: float | None = None
             if segmentation is not None:
                 temporary_mask = temporary_root / f"{manifest.tilt_series_id}_mask.mrc"
-                _write_zarr_to_mrc(
-                    segmentation.path,
+                mask_coverage = _write_tomogram_mask(
+                    segmentation,
                     temporary_mask,
+                    tomogram=tomogram,
                     voxel_spacing_angstrom=voxel_spacing,
+                    dilation_px=_optional_positive_int_parameter(
+                        context, "pytom_segmentation_dilation_px"
+                    ),
                 )
 
+            # Extraction options are checked here rather than where the extract
+            # command is built: that is after the GPU match, so a typo cost the
+            # whole run.
+            _validate_extraction_options(context)
+
+            defocus_path = _write_defocus_micrometres(
+                context,
+                temporary_root / f"{manifest.tilt_series_id}_defocus.txt",
+                expected_views=len(manifest.tilt_angles_deg),
+            )
             match_command = _match_template_command(
                 match_template_executable,
                 context,
+                defocus_path=defocus_path,
                 tomogram_path=temporary_tomogram,
                 template_path=template,
                 template_mask_path=template_mask,
@@ -208,6 +225,7 @@ class PytomMatchPickBackend:
                 "segmentation_id": segmentation.id if segmentation is not None else None,
                 "picking_method": "template_matching",
                 "pytom_template_path": str(template),
+                "tomogram_mask_coverage": mask_coverage,
                 "pytom_template_mask_path": str(template_mask),
                 "pytom_job_json_path": str(paths.job_json),
                 "command_log_path": str(paths.log),
@@ -443,6 +461,7 @@ def _match_template_command(
     destination_dir: Path,
     gpu_ids: Sequence[str],
     voxel_spacing_angstrom: float,
+    defocus_path: Path | None = None,
 ) -> list[str]:
     command = [
         str(executable),
@@ -474,6 +493,22 @@ def _match_template_command(
     z_axis_symmetry = _optional_positive_int_parameter(context, "pytom_z_axis_symmetry")
     if z_axis_symmetry is not None:
         command.extend(["--z-axis-rotational-symmetry", str(z_axis_symmetry)])
+    if _bool_parameter(context, "pytom_non_spherical_mask", default=False):
+        # pytom's fast path precomputes the mask's normalisation once, which is
+        # only valid while the mask is rotation-invariant. A mask that is not
+        # makes the scores depend on orientation rather than on fit.
+        command.append("--non-spherical-mask")
+    if _bool_parameter(context, "pytom_per_tilt_weighting", default=False):
+        command.append("--per-tilt-weighting")
+    command.extend(_ctf_weighting_arguments(context, defocus_path))
+    if _bool_parameter(context, "pytom_spectral_whitening", default=False):
+        command.append("--spectral-whitening")
+    rng_seed = _optional_positive_int_parameter(context, "pytom_rng_seed")
+    if rng_seed is not None:
+        command.extend(["--rng-seed", str(rng_seed)])
+    search_z = _optional_search_range(context, "pytom_search_z")
+    if search_z is not None:
+        command.extend(["--search-z", str(search_z[0]), str(search_z[1])])
     if tomogram_mask_path is not None:
         command.extend(["--tomogram-mask", str(tomogram_mask_path)])
     low_pass = _optional_positive_float_parameter(context, "pytom_low_pass")
@@ -494,26 +529,29 @@ def _extract_candidates_command(
     job_json_path: Path,
     tomogram_mask_path: Path | None,
 ) -> list[str]:
-    command = [str(executable), "-j", str(job_json_path)]
-    number_of_false_positives = _optional_positive_float_parameter(
-        context,
-        "pytom_number_of_false_positives",
-    )
+    _validate_extraction_options(context)
+    command = [
+        str(executable),
+        "-j",
+        str(job_json_path),
+        "-n",
+        str(_required_positive_int_parameter(context, "pytom_number_of_particles")),
+    ]
     cut_off = _optional_positive_float_parameter(context, "pytom_cut_off")
-    if number_of_false_positives is not None and cut_off is not None:
-        raise ValueError(
-            "at most one of 'pytom_number_of_false_positives' or 'pytom_cut_off' may be set"
-        )
     if cut_off is not None:
         command.extend(["-c", f"{cut_off:.6f}"])
     else:
         false_positives = (
-            number_of_false_positives if number_of_false_positives is not None else 1.0
+            _optional_positive_float_parameter(context, "pytom_number_of_false_positives")
+            or 1.0
         )
         command.extend(["--number-of-false-positives", f"{false_positives:.6f}"])
-    particle_diameter = _optional_positive_float_parameter(context, "pytom_particle_diameter")
-    if particle_diameter is not None:
-        command.extend(["--particle-diameter", f"{particle_diameter:.6f}"])
+    # Extraction uses the diameter to keep peaks apart: the exclusion distance is
+    # half of it. That is a different quantity from the one that sets the angular
+    # sampling, and for anything elongated the two differ.
+    extraction_diameter = _extraction_particle_diameter(context)
+    if extraction_diameter is not None:
+        command.extend(["--particle-diameter", f"{extraction_diameter:.6f}"])
     if tomogram_mask_path is not None:
         command.extend(["--tomogram-mask", str(tomogram_mask_path)])
     if _bool_parameter(context, "pytom_tophat_filter", default=False):
@@ -566,6 +604,65 @@ def _read_star_statistics(star_path: Path) -> _PicksStatistics:
         maximum_score=max(scores),
         mean_score=sum(scores) / len(scores),
     )
+
+
+def _write_tomogram_mask(
+    segmentation: Artifact,
+    output_path: Path,
+    *,
+    tomogram: Artifact,
+    voxel_spacing_angstrom: float,
+    dilation_px: int | None,
+) -> float:
+    """Write the search mask, grown if asked, and return the fraction it admits.
+
+    pytom zeroes the score at every voxel the mask does not cover, with no
+    tolerance and no warning, so a mask drawn on a surface admits only
+    candidates centred exactly on that surface. Anything lying a fixed distance
+    from it — a lattice under a membrane — is discarded silently unless the mask
+    is grown to reach it. That is what the margin is for, and it is also what
+    makes an approximate segmentation useful: it need only be roughly right
+    about where to look, not about what it found.
+    """
+
+    source = cast(Any, zarr.open(segmentation.path, mode="r"))
+    data = np.asarray(source[:], dtype=np.float32)
+    if not np.isfinite(data).all():
+        raise ValueError("segmentation contains nonfinite values")
+    expected = tuple(tomogram.shape) if tomogram.shape is not None else None
+    if expected is not None and tuple(data.shape) != expected:
+        raise ValueError(
+            f"segmentation {segmentation.id} has shape {tuple(data.shape)} but "
+            f"{tomogram.id} has {expected}; pytom requires them to match. Segment "
+            "the tomogram you are picking in, passing the same --variant"
+        )
+    mask = (data > 0.0).astype(np.float32)
+    if dilation_px:
+        mask = _dilate(mask, dilation_px)
+    coverage = float(mask.mean())
+    if coverage <= 0.0:
+        raise ValueError(
+            f"segmentation {segmentation.id} admits no voxels, so every candidate "
+            "would be discarded"
+        )
+    with mrcfile.new(output_path, overwrite=True) as mrc:
+        mrc.set_data(mask)
+        mrc.voxel_size = voxel_spacing_angstrom
+    return coverage
+
+
+def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Grow a mask by a box of the given radius, one axis at a time."""
+
+    grown = mask
+    for axis in range(grown.ndim):
+        padding = [
+            (radius, radius) if index == axis else (0, 0) for index in range(grown.ndim)
+        ]
+        padded = np.pad(grown, padding)
+        windows = np.lib.stride_tricks.sliding_window_view(padded, 2 * radius + 1, axis=axis)
+        grown = windows.max(axis=-1)
+    return grown
 
 
 def _write_zarr_to_mrc(
@@ -639,6 +736,153 @@ def _optional_positive_int_parameter(context: BackendContext, key: str) -> int |
     if value <= 0:
         raise ValueError(f"context parameter {key!r} must be greater than zero")
     return value
+
+
+def _write_defocus_micrometres(
+    context: BackendContext,
+    output_path: Path,
+    *,
+    expected_views: int,
+) -> Path | None:
+    """Restate the fitted defocus in the one form pytom cannot misread.
+
+    pytom accepts an IMOD `.defocus` file, but its version-3 reader averages
+    columns five and six as the two astigmatic axes. Our writer stamps version 3
+    whether or not astigmatism was fitted, so without it column six is either
+    absent — pytom raises — or the phase shift, which pytom averages with the
+    defocus and silently halves it. A plain list of micrometres, one per view,
+    has no columns to misinterpret.
+    """
+
+    source = context.parameters.get("pytom_ctf_defocus_path")
+    if source is None:
+        return None
+    if not isinstance(source, (str, Path)):
+        raise TypeError("context parameter 'pytom_ctf_defocus_path' must be a path")
+    entries = read_imod_defocus_file(Path(source))
+    if len(entries) != expected_views:
+        raise ValueError(
+            f"the CTF model covers {len(entries)} views but this tilt series has "
+            f"{expected_views}; the defocus would not line up with the tilt angles"
+        )
+    output_path.write_text(
+        "".join(f"{entry.mean_defocus_nm / 1000.0:.6f}\n" for entry in entries)
+    )
+    return output_path
+
+
+def _ctf_weighting_arguments(
+    context: BackendContext,
+    defocus_path: Path | None,
+) -> list[str]:
+    """CTF weighting for the template, or nothing.
+
+    pytom builds the weighting from a defocus source plus the three optical
+    constants and refuses a partial set. The check is repeated here so the
+    refusal happens before the GPU match rather than inside it.
+    """
+
+    if defocus_path is None:
+        return []
+    optics = {
+        "--voltage": _optional_positive_float_parameter(context, "pytom_ctf_voltage_kv"),
+        "--spherical-aberration": _optional_positive_float_parameter(
+            context, "pytom_ctf_spherical_aberration_mm"
+        ),
+        # A fraction, and zero is a legitimate value for it — unlike the two
+        # above, which are positive by nature.
+        "--amplitude-contrast": _optional_fraction_parameter(
+            context, "pytom_ctf_amplitude_contrast"
+        ),
+    }
+    missing = sorted(flag for flag, value in optics.items() if value is None)
+    if missing:
+        raise ValueError(
+            "CTF weighting needs the voltage, spherical aberration and amplitude "
+            f"contrast alongside the defocus; missing {', '.join(missing)}"
+        )
+    arguments = ["--defocus", str(defocus_path.resolve())]
+    for flag, value in optics.items():
+        arguments.extend([flag, f"{cast(float, value):.6f}"])
+    model = context.parameters.get("pytom_tomogram_ctf_model")
+    if model is not None:
+        if not isinstance(model, str):
+            raise TypeError("context parameter 'pytom_tomogram_ctf_model' must be a string")
+        arguments.extend(["--tomogram-ctf-model", model])
+    return arguments
+
+
+def _optional_fraction_parameter(context: BackendContext, key: str) -> float | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {key!r} must be numeric")
+    normalized = float(value)
+    if not math.isfinite(normalized) or not 0.0 <= normalized <= 1.0:
+        raise ValueError(f"context parameter {key!r} must be a fraction between 0 and 1")
+    return normalized
+
+
+def _optional_search_range(context: BackendContext, key: str) -> tuple[int, int] | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"context parameter {key!r} must be a 'min,max' string")
+    parts = value.split(",")
+    if len(parts) != 2:
+        raise ValueError(f"context parameter {key!r} must be 'min,max', got {value!r}")
+    try:
+        low, high = (int(part.strip()) for part in parts)
+    except ValueError as error:
+        raise ValueError(f"context parameter {key!r} must be two integers") from error
+    if low < 0 or high <= low:
+        raise ValueError(f"context parameter {key!r} must satisfy 0 <= min < max")
+    return low, high
+
+
+def _required_positive_int_parameter(context: BackendContext, key: str) -> int:
+    value = _optional_positive_int_parameter(context, key)
+    if value is None:
+        raise TypeError(f"context parameter {key!r} is required")
+    return value
+
+
+def _extraction_particle_diameter(context: BackendContext) -> float | None:
+    """The diameter extraction uses to keep peaks apart, in angstrom.
+
+    Extraction removes a region of half this size around each accepted peak, so
+    it is a minimum peak separation, not a statement about shape. Matching uses
+    a diameter for something else entirely — the angular sampling — and for an
+    elongated or extended reference the two numbers are different. They fall
+    back to one another so the ordinary case needs only one.
+    """
+
+    explicit = _optional_positive_float_parameter(context, "pytom_extract_particle_diameter")
+    if explicit is not None:
+        return explicit
+    return _optional_positive_float_parameter(context, "pytom_particle_diameter")
+
+
+def _validate_extraction_options(context: BackendContext) -> None:
+    """Fail before the GPU match on anything extraction will refuse afterwards."""
+
+    _required_positive_int_parameter(context, "pytom_number_of_particles")
+    if (
+        _optional_positive_float_parameter(context, "pytom_number_of_false_positives")
+        is not None
+        and _optional_positive_float_parameter(context, "pytom_cut_off") is not None
+    ):
+        raise ValueError(
+            "at most one of 'pytom_number_of_false_positives' or 'pytom_cut_off' may be set"
+        )
+    if _extraction_particle_diameter(context) is None:
+        raise TypeError(
+            "extraction needs a particle diameter to keep peaks apart; set "
+            "'pytom_extract_particle_diameter', or 'pytom_particle_diameter' if the "
+            "same value also drives the angular sampling"
+        )
 
 
 def _path_size_bytes(path: Path) -> int:

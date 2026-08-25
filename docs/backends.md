@@ -274,6 +274,55 @@ it from. `--pytom-z-axis-symmetry` divides the orientation search by the
 template's rotational symmetry about z, which is only correct when the box is
 centred on that axis — being centred on the density's centre of mass, as
 `--template-center` does, is not the same thing.
+
+An ellipsoidal mask also changes what pytom may assume. Its fast path
+precomputes the mask's normalisation once and reuses it for every orientation,
+which holds only while the mask is rotation-invariant; for anything else the
+score ends up ranking orientations rather than measuring fit. The mask records
+its own shape when `prepare-template` builds it, and `pick-particles` reads that
+to pass `--non-spherical-mask` on its own. `--pytom-non-spherical-mask`
+overrides the detection, which is what a mask from outside the pipeline needs.
+
+### Two different diameters
+
+pytom uses a diameter for two unrelated things, and for an extended reference
+they are different numbers:
+
+- matching, where it sets the angular sampling through the Crowther criterion —
+  `--pytom-particle-diameter`, or bypass it with `--pytom-angular-search`;
+- extraction, where half of it is the minimum distance kept between accepted
+  peaks — `--pytom-extract-particle-diameter`, defaulting to the matching one.
+
+A lattice makes the split necessary: matching wants the sampling that the
+template's longest axis implies, extraction wants peaks no closer than the
+lattice repeat. Driving matching with `--pytom-angular-search` leaves no
+diameter at all, and extraction requires one, so that combination must set the
+extraction diameter explicitly.
+
+### CTF weighting, and why the defocus is restated
+
+Phase flipping corrects the sign of the transfer function but not its amplitude,
+so a corrected tomogram still carries |CTF| while a deposited reference map does
+not. Correlating them is a mismatched filter. `pick-particles` therefore weights
+the template the same way, taking the values from the CTF model that actually
+corrected this tomogram — found through the artifact lineage, so they cannot
+disagree with the correction. `--no-pytom-ctf-weighting` turns it off; nothing is
+declared when nothing corrected the tomogram.
+
+The defocus is handed over as a plain list of micrometres, one per view, rather
+than as the IMOD `.defocus` file it came from. pytom accepts that file, but its
+version-3 reader averages columns five and six as the two astigmatic axes, and
+this pipeline stamps version 3 whether or not astigmatism was fitted. Without
+astigmatism column six is either absent — pytom raises — or the phase shift,
+which it averages with the defocus and so **halves** it silently. A list of
+micrometres has no columns to misinterpret.
+
+The number of defocus values must match the number of tilt angles, since the two
+reach pytom as parallel lists with nothing tying them together.
+
+`--pytom-number-of-particles` caps how many candidates extraction returns.
+pytom requires it. Everything extraction will refuse is checked before the GPU
+match starts rather than after it.
 - **STAR flavour in ChimeraX.** ArtiaX registers two readers for `.star`:
   RELION 3.1 (`rlnCoordinateX/Y/Z` in pixels, which is what pytom-match-pick
   writes) and RELION 5 (centered coordinates in Ångström). Both claim the suffix

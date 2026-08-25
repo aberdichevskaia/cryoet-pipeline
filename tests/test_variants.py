@@ -8,6 +8,7 @@ import typer
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.protocols import BackendContext, variant_label, variant_suffix
 from cryoet_pipeline.cli import (
+    _ctf_weighting_for_tomogram,
     _fiducial_seed_artifact,
     _reconstruction_input_stack_artifact,
     _select_variant,
@@ -245,3 +246,83 @@ def test_a_label_recorded_only_in_an_old_id_still_selects() -> None:
     )
     with pytest.raises(typer.BadParameter, match="found 2 candidates"):
         _fiducial_seed_artifact(registry, _manifest(), variant="other")
+
+
+def test_ctf_weighting_comes_from_the_model_that_corrected_this_tomogram(
+    tmp_path: Path,
+) -> None:
+    """Two lanes can hold two CTF models; the right one is a matter of lineage.
+
+    The corrected stack records which model corrected it, so the weighting uses
+    the same optics as the correction rather than a second set that could
+    disagree with it.
+    """
+
+    defocus = tmp_path / "TS_TEST.defocus"
+    defocus.write_text("1 0 0.0 0.0 0.0 3\n")
+    registry = ArtifactRegistry.empty()
+    registry.extend(
+        [
+            Artifact(
+                id="TS_TEST:aligned_tilt_stack:final",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tmp_path / "aligned.st",
+                parameters={"tilt_series_id": "TS_TEST", "purpose": "final_alignment"},
+            ),
+            Artifact(
+                id="TS_TEST:ctf_model:ctffind5",
+                kind=ArtifactKind.CTF_MODEL,
+                path=defocus,
+                parent_ids=["TS_TEST:aligned_tilt_stack:final"],
+                parameters={
+                    "tilt_series_id": "TS_TEST",
+                    "backend": "ctffind5",
+                    "voltage_kv": 300.0,
+                    "spherical_aberration_mm": 2.7,
+                    "amplitude_contrast": 0.07,
+                },
+            ),
+            Artifact(
+                id="TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip",
+                kind=ArtifactKind.ALIGNED_TILT_STACK,
+                path=tmp_path / "corrected.st",
+                parent_ids=[
+                    "TS_TEST:aligned_tilt_stack:final",
+                    "TS_TEST:ctf_model:ctffind5",
+                ],
+                parameters={
+                    "tilt_series_id": "TS_TEST",
+                    "purpose": "ctf_corrected",
+                    "backend": "imod-ctfphaseflip",
+                    "ctf_model_id": "TS_TEST:ctf_model:ctffind5",
+                },
+            ),
+        ]
+    )
+    corrected_tomogram = Artifact(
+        id="TS_TEST:tomogram:fine",
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "tomogram.zarr",
+        parent_ids=["TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip"],
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    plain_tomogram = Artifact(
+        id="TS_TEST:tomogram:fine:noctf",
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "tomogram_noctf.zarr",
+        parent_ids=["TS_TEST:aligned_tilt_stack:final"],
+        parameters={"tilt_series_id": "TS_TEST"},
+        variant="noctf",
+    )
+    registry.extend([corrected_tomogram, plain_tomogram])
+
+    weighting = _ctf_weighting_for_tomogram(registry, _manifest(), corrected_tomogram)
+    assert weighting is not None
+    assert weighting.defocus_path == defocus
+    assert weighting.voltage_kv == 300.0
+    assert weighting.spherical_aberration_mm == 2.7
+    assert weighting.amplitude_contrast == 0.07
+    assert weighting.model == "phase-flip"
+
+    # Nothing corrected this one, so there is no weighting to declare.
+    assert _ctf_weighting_for_tomogram(registry, _manifest(), plain_tomogram) is None

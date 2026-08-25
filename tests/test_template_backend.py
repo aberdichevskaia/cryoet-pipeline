@@ -191,6 +191,12 @@ def test_prepare_template_draws_a_slab_mask_for_an_extended_reference(
     assert mask_command[mask_command.index("--radius-minor1") + 1] == "12.000000"
     assert mask_command[mask_command.index("--radius-minor2") + 1] == "3.000000"
 
+    # Picking has to tell pytom that its rotation-invariant fast path does not
+    # apply, and it can only know that if the shape was written down.
+    mask = registry.get("TS_TEST:template_mask:pytom")
+    assert mask.parameters["mask_is_spherical"] is False
+    assert mask.parameters["mask_radius_z_px"] == pytest.approx(3.0)
+
 
 def test_prepare_template_keeps_a_sphere_when_only_one_radius_is_given(
     tmp_path: Path,
@@ -224,6 +230,7 @@ def test_prepare_template_keeps_a_sphere_when_only_one_radius_is_given(
     mask_command = next(c for c in captured if "pytom_create_mask" in c[0])
     assert "--radius-minor1" not in mask_command
     assert "--radius-minor2" not in mask_command
+    assert registry.get("TS_TEST:template_mask:pytom").parameters["mask_is_spherical"] is True
 
 
 def test_prepare_template_labels_its_outputs_for_a_lane(tmp_path: Path) -> None:

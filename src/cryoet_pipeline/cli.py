@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 
@@ -2188,6 +2189,78 @@ def pick_particles(
         float | None,
         typer.Option(min=0.0, help="Angular search in degrees (mutually exclusive with diameter)."),
     ] = None,
+    pytom_number_of_particles: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help="Cap on how many candidates extraction returns. Required by "
+            "pytom. For a lattice this is a sampling density, not a particle count.",
+        ),
+    ] = 1000,
+    pytom_extract_particle_diameter: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="Diameter, angstrom, that extraction uses to keep peaks apart: it "
+            "discards a region of half this size around each accepted peak. Defaults "
+            "to --pytom-particle-diameter. Set it separately when the size that keeps "
+            "peaks apart differs from the one that sets the angular sampling.",
+        ),
+    ] = None,
+    pytom_non_spherical_mask: Annotated[
+        bool | None,
+        typer.Option(
+            help="Tell pytom the template mask is not rotation-invariant. Detected "
+            "from the mask artifact when it was prepared here; set it explicitly for "
+            "a mask from elsewhere. Roughly doubles the run.",
+        ),
+    ] = None,
+    segmentation_mask_dilation_px: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Grow the segmentation by this many voxels before using it as a "
+            "search mask. pytom discards every candidate whose centre the mask "
+            "does not cover, with no tolerance, so a mask drawn on a membrane "
+            "admits nothing lying under it.",
+        ),
+    ] = None,
+    pytom_ctf_weighting: Annotated[
+        bool,
+        typer.Option(
+            help="Weight the template by the CTF the tomogram carries. Phase "
+            "flipping fixes the sign but not the amplitude, so a corrected "
+            "tomogram still carries |CTF| while a deposited reference map does "
+            "not. Values come from the CTF model that corrected this tomogram, "
+            "so they cannot disagree with it. Off when nothing corrected it."
+        ),
+    ] = True,
+    pytom_per_tilt_weighting: Annotated[
+        bool,
+        typer.Option(
+            help="Weight each tilt separately instead of a binary missing wedge. "
+            "Uses the tilt angles that are already passed.",
+        ),
+    ] = False,
+    pytom_spectral_whitening: Annotated[
+        bool,
+        typer.Option(help="Whiten the spectrum of both tomogram and template."),
+    ] = False,
+    pytom_rng_seed: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Seed for the random-phase noise map, so two runs differ only by "
+            "what you changed.",
+        ),
+    ] = None,
+    pytom_search_z: Annotated[
+        str | None,
+        typer.Option(
+            help="Restrict the search along z to 'min,max' in voxels, keeping the "
+            "reconstruction's own top and bottom edges out of the correlation.",
+        ),
+    ] = None,
     pytom_z_axis_symmetry: Annotated[
         int | None,
         typer.Option(
@@ -2246,10 +2319,14 @@ def pick_particles(
     selected_backend = _picking_backend(backend)
     supporting_artifacts: list[Artifact] = []
     if use_segmentation_mask:
-        segmentation = _optional_segmentation_artifact(artifact_registry, tilt_series_manifest)
+        segmentation = _optional_segmentation_artifact(
+            artifact_registry, tilt_series_manifest, variant=variant
+        )
         if segmentation is not None:
             supporting_artifacts.append(segmentation)
-    registered_template = _template_artifacts(artifact_registry, tilt_series_manifest)
+    registered_template = _template_artifacts(
+        artifact_registry, tilt_series_manifest, variant=variant
+    )
     if pytom_template is None or pytom_template_mask is None:
         if registered_template is None:
             raise typer.BadParameter(
@@ -2263,6 +2340,13 @@ def pick_particles(
         if pytom_template_mask is None:
             pytom_template_mask = mask_artifact.path
         supporting_artifacts.extend([template_artifact, mask_artifact])
+        if pytom_non_spherical_mask is None:
+            # The mask recorded its own shape when it was prepared, so whether
+            # pytom's rotation-invariant fast path is valid is a fact about the
+            # artifact rather than something to remember on the command line.
+            recorded = mask_artifact.parameters.get("mask_is_spherical")
+            if isinstance(recorded, bool):
+                pytom_non_spherical_mask = not recorded
     parameters: dict[str, object] = {
         "variant": variant,
         "overwrite": overwrite,
@@ -2280,6 +2364,30 @@ def pick_particles(
         parameters["pytom_particle_diameter"] = pytom_particle_diameter
     if pytom_angular_search is not None:
         parameters["pytom_angular_search"] = pytom_angular_search
+    weighting = (
+        _ctf_weighting_for_tomogram(artifact_registry, tilt_series_manifest, tomogram)
+        if pytom_ctf_weighting
+        else None
+    )
+    if weighting is not None:
+        parameters["pytom_ctf_defocus_path"] = weighting.defocus_path
+        parameters["pytom_ctf_voltage_kv"] = weighting.voltage_kv
+        parameters["pytom_ctf_spherical_aberration_mm"] = weighting.spherical_aberration_mm
+        parameters["pytom_ctf_amplitude_contrast"] = weighting.amplitude_contrast
+        parameters["pytom_tomogram_ctf_model"] = weighting.model
+    if segmentation_mask_dilation_px is not None:
+        parameters["pytom_segmentation_dilation_px"] = segmentation_mask_dilation_px
+    parameters["pytom_number_of_particles"] = pytom_number_of_particles
+    parameters["pytom_per_tilt_weighting"] = pytom_per_tilt_weighting
+    parameters["pytom_spectral_whitening"] = pytom_spectral_whitening
+    if pytom_extract_particle_diameter is not None:
+        parameters["pytom_extract_particle_diameter"] = pytom_extract_particle_diameter
+    if pytom_non_spherical_mask is not None:
+        parameters["pytom_non_spherical_mask"] = pytom_non_spherical_mask
+    if pytom_rng_seed is not None:
+        parameters["pytom_rng_seed"] = pytom_rng_seed
+    if pytom_search_z is not None:
+        parameters["pytom_search_z"] = pytom_search_z
     if pytom_z_axis_symmetry is not None:
         parameters["pytom_z_axis_symmetry"] = pytom_z_axis_symmetry
     if pytom_low_pass is not None:
@@ -2931,6 +3039,69 @@ def _ctf_correction_backend(name: str) -> CtfCorrectionBackend:
     )
 
 
+@dataclass(frozen=True)
+class _CtfWeighting:
+    """What pytom needs to weight a template like the tomogram it searches.
+
+    Phase flipping corrects the sign of the transfer function but not its
+    amplitude, so a corrected tomogram still carries |CTF| while a deposited
+    reference map does not. Correlating the two is a mismatched filter: the
+    template contributes frequencies the data never recorded. These values let
+    pytom apply the same weighting to the template.
+    """
+
+    defocus_path: Path
+    voltage_kv: float
+    spherical_aberration_mm: float
+    amplitude_contrast: float
+    model: str
+
+
+def _ctf_weighting_for_tomogram(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+    tomogram: Artifact,
+) -> _CtfWeighting | None:
+    """Derive the weighting from the tomogram's own lineage, or None.
+
+    The corrected stack records which CTF model corrected it, so the values used
+    here are the ones the correction actually used rather than a second set that
+    could disagree with it.
+    """
+
+    corrected = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and artifact.parameters.get("purpose") == "ctf_corrected"
+        and registry.descends_from(tomogram.id, artifact.id)
+    ]
+    if not corrected:
+        return None
+    model_id = corrected[0].parameters.get("ctf_model_id")
+    if not isinstance(model_id, str):
+        return None
+    try:
+        model = registry.get(model_id)
+    except KeyError:
+        return None
+    optics = {
+        key: model.parameters.get(key)
+        for key in ("voltage_kv", "spherical_aberration_mm", "amplitude_contrast")
+    }
+    if not all(isinstance(value, (int, float)) for value in optics.values()):
+        return None
+    if not model.path.is_file():
+        return None
+    return _CtfWeighting(
+        defocus_path=model.path,
+        voltage_kv=float(cast(float, optics["voltage_kv"])),
+        spherical_aberration_mm=float(cast(float, optics["spherical_aberration_mm"])),
+        amplitude_contrast=float(cast(float, optics["amplitude_contrast"])),
+        model="phase-flip",
+    )
+
+
 def _ctf_model_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
@@ -3029,6 +3200,8 @@ def _template_preparation_backend(name: str) -> TemplatePreparationBackend:
 def _template_artifacts(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> tuple[Artifact, Artifact] | None:
     """Return the registered template and its mask, if a pair is present."""
 
@@ -3039,13 +3212,12 @@ def _template_artifacts(
     ]
     if not templates:
         return None
-    if len(templates) > 1:
-        raise typer.BadParameter(
-            f"expected at most one template for {manifest.tilt_series_id}, "
-            f"found {len(templates)}",
-            param_hint="registry",
-        )
-    template = templates[0]
+    template = _select_variant(
+        templates,
+        what="template",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
     masks = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.TEMPLATE_MASK)
@@ -3087,19 +3259,22 @@ def _subtomogram_averaging_backend(name: str) -> SubtomogramAveragingBackend:
 def _optional_segmentation_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact | None:
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.SEGMENTATION)
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
     ]
-    if len(matches) > 1:
-        raise typer.BadParameter(
-            f"expected at most one segmentation for {manifest.tilt_series_id}, "
-            f"found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0] if matches else None
+    if not matches:
+        return None
+    return _select_variant(
+        matches,
+        what="segmentation",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _tilt_stack_artifact(
