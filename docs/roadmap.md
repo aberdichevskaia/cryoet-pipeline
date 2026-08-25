@@ -229,3 +229,55 @@ marked as such when it enters, there is no way to tell afterwards, and every
 downstream fingerprint quietly overstates how reproducible the result is. The
 class must propagate downward: anything descended from an attested or imported
 artifact inherits that status.
+
+## 8. `cryoet describe` — an interpreted view of a file or artifact
+
+A raw MRC header dump is unreadable, and worse, the questions actually asked of it
+are not answered by any single field. "What is the box size" requires deriving the
+voxel size, and then relating it to what the file will be used against.
+
+This is cheap: [`inspect_mrc_file`](../src/cryoet_pipeline/mrc_validation.py)
+already derives shape, dtype from the mode number, and pixel spacing through
+`mrcfile`'s `voxel_size` — which correctly uses `cella / mx` rather than
+`cella / nx`, a distinction that matters whenever the two differ. The work is
+extending `MrcFileInfo` with the fields that are currently invisible and printing
+the result.
+
+Three of the additions are correctness concerns rather than readability:
+
+- **Axis order as stored**, from `mapc`/`mapr`/`maps`, flagged when permuted. IMOD
+  writes `.rec` in `YZX`, as [storage_policy.md](storage_policy.md) records, so
+  `nx` is not reliably the X of the array as indexed.
+- **One effective origin**, reconciling the MRC2014 `origin` against
+  `nxstart`/`nystart`/`nzstart` and flagging disagreement. Different programs write
+  different ones, and a silent disagreement becomes a coordinate shift downstream.
+- **Content kind** — single image, image stack, or volume — inferred from `ispg`,
+  `mz`, and `nz` together rather than from `nz` alone. An MRC with `nz = 41` may be
+  a tilt stack or a volume, and the distinction changes how tools treat it: CTFFIND
+  reads a multi-slice MRC that is not declared a movie as independent micrographs,
+  which section 1 above relies on deliberately. The current
+  `shape = (nz, ny, nx) if nz > 1 else (ny, nx)` collapse does not express this.
+
+The readability additions: dtype by name, box size in both voxels and angstrom per
+axis, whether MRC2014 conformance is declared (`nversion`), and a contrast hint
+from `dmin`/`dmax`/`dmean` labelled as a hint — the reliable signal is excursion
+around the median, which template QC already checks.
+
+Two modes, because some answers need the registry:
+
+1. `cryoet describe <path>` — file only, pure interpretation, no project needed.
+2. `cryoet describe --artifact <id>` — adds the producing run, QC status, lineage,
+   and target-relative derivations: at the registered tomogram's voxel size this
+   box becomes *N* pixels, and whether that clears the particle-diameter rule
+   `TemplatePreparationQc` enforces. For a file not yet registered, an explicit
+   `--against <artifact-id>` supplies the target.
+
+Zarr artifacts should go through the same command — shape, dtype, chunking, axis
+order, and pixel spacing — even though our own stores are far less trap-laden than
+foreign MRC files, so that there is one way to ask what something is.
+
+No new dependency, and testable with tiny synthetic fixtures. The same
+interpretation is what an agent surface would expose later, as recorded in
+[agent_architecture.md](agent_architecture.md); building the human-facing half now
+is worthwhile on its own, since the wall of fields is equally unreadable whoever is
+looking at it.

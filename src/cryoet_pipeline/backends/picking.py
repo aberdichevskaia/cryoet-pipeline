@@ -471,6 +471,9 @@ def _match_template_command(
         command.extend(["--particle-diameter", f"{particle_diameter:.6f}"])
     if angular_search is not None:
         command.extend(["--angular-search", f"{angular_search:.6f}"])
+    z_axis_symmetry = _optional_positive_int_parameter(context, "pytom_z_axis_symmetry")
+    if z_axis_symmetry is not None:
+        command.extend(["--z-axis-rotational-symmetry", str(z_axis_symmetry)])
     if tomogram_mask_path is not None:
         command.extend(["--tomogram-mask", str(tomogram_mask_path)])
     low_pass = _optional_positive_float_parameter(context, "pytom_low_pass")
@@ -625,6 +628,17 @@ def _optional_positive_float_parameter(context: BackendContext, key: str) -> flo
     if not math.isfinite(normalized) or normalized <= 0.0:
         raise ValueError(f"context parameter {key!r} must be finite and greater than zero")
     return normalized
+
+
+def _optional_positive_int_parameter(context: BackendContext, key: str) -> int | None:
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an integer")
+    if value <= 0:
+        raise ValueError(f"context parameter {key!r} must be greater than zero")
+    return value
 
 
 def _path_size_bytes(path: Path) -> int:

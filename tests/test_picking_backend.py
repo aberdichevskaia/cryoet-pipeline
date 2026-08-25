@@ -94,6 +94,7 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
                 "pytom_template_mask": template_mask,
                 "pytom_gpu_ids": "0",
                 "pytom_particle_diameter": 100.0,
+                "pytom_z_axis_symmetry": 6,
             },
         ),
         registry,
@@ -115,6 +116,8 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
     assert match_command[:1] == [str(match_executable.resolve())]
     assert match_command[match_command.index("--particle-diameter") + 1] == "100.000000"
     assert match_command[match_command.index("-g") + 1] == "0"
+    # A symmetric template cuts the orientation search by its symmetry order.
+    assert match_command[match_command.index("--z-axis-rotational-symmetry") + 1] == "6"
 
     extract_command = captured_commands[1]
     assert extract_command[:1] == [str(extract_executable.resolve())]

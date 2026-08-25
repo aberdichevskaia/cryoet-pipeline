@@ -240,6 +240,40 @@ wrong, so both are explicit and checked:
   are dark. `prepare-template --template-invert` (on by default) multiplies the
   template by -1 to match. QC compares the produced template's excursion around
   its median against the requested inversion and warns on a mismatch.
+
+## Templates that are not compact particles
+
+`--template-particle-diameter-angstrom` describes a sphere, which fits a
+globular complex and nothing else. A lattice, a membrane patch, or a slice of a
+tube is extended in two directions and thin along the third; a sphere drawn
+around it takes in mostly background, and a diameter large enough to span it
+does not fit the box at all.
+
+Such a reference is masked with an ellipsoid instead. `pytom_create_mask.py`
+reads `-r` as the x semi-axis and takes y and z separately, so:
+
+```bash
+cryoet prepare-template ... \
+  --template-mask-radius-px 12 \
+  --template-mask-radius-y-px 12 \
+  --template-mask-radius-z-px 3
+```
+
+Radii are in **tomogram** pixels. Giving only `--template-mask-radius-px` keeps
+the sphere and adds no flags.
+
+Whether a deposited map is compact is worth checking before choosing: resample
+it to the tomogram's voxel size and look at whether the density falls away from
+the box walls. Density that holds a substantial fraction of its peak all the way
+to the edges in two directions and varies only along the third is a slab, not a
+particle — no diameter describes it.
+
+For picking, `--pytom-angular-search` replaces the Crowther sampling that
+`--pytom-particle-diameter` would compute, since there is no diameter to compute
+it from. `--pytom-z-axis-symmetry` divides the orientation search by the
+template's rotational symmetry about z, which is only correct when the box is
+centred on that axis — being centred on the density's centre of mass, as
+`--template-center` does, is not the same thing.
 - **STAR flavour in ChimeraX.** ArtiaX registers two readers for `.star`:
   RELION 3.1 (`rlnCoordinateX/Y/Z` in pixels, which is what pytom-match-pick
   writes) and RELION 5 (centered coordinates in Ångström). Both claim the suffix

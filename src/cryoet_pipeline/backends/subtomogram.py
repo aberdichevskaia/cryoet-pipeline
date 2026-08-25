@@ -94,15 +94,10 @@ class CubicCropExtractionBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
 
         paths = _extraction_paths(
-
             context.output_dir,
-
             manifest,
-
             backend_name=self.name,
-
             label=variant_label(context),
-
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.particles_dir.mkdir(parents=True, exist_ok=True)
@@ -184,9 +179,7 @@ class CubicCropExtractionBackend:
             )
 
         particle_stack_id = (
-
             f"{manifest.tilt_series_id}:particle_stack:{self.name}"
-
             f"{variant_suffix(context)}"
 
         )
@@ -292,15 +285,10 @@ class FftRefinementAveragingBackend:
         device = torch_device_for_preference(context.device)
 
         paths = _averaging_paths(
-
             context.output_dir,
-
             manifest,
-
             backend_name=self.name,
-
             label=variant_label(context),
-
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.average_dir.mkdir(parents=True, exist_ok=True)
@@ -412,9 +400,7 @@ class FftRefinementAveragingBackend:
             )
 
         average_id = (
-
             f"{manifest.tilt_series_id}:subtomogram_average:{self.name}"
-
             f"{variant_suffix(context)}"
 
         )
@@ -536,15 +522,10 @@ class ConeSearchRefinementBackend:
         device = torch_device_for_preference(context.device)
 
         paths = _averaging_paths(
-
             context.output_dir,
-
             manifest,
-
             backend_name=self.name,
-
             label=variant_label(context),
-
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.average_dir.mkdir(parents=True, exist_ok=True)

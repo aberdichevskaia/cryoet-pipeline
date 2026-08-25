@@ -106,6 +106,48 @@ only.** Language models write SQL well, the schema is documented and stable, and
 the alternative is endless proliferation of narrow read tools. Writes through SQL
 would discard every invariant at once.
 
+### `read_artifact` returns interpretation, not a header dump
+
+A raw MRC header dump is the wrong output, for a person and for an agent alike.
+The answer to a question as simple as "what is the box size" is not a field in the
+file:
+
+- **Voxel size is derived, not stored.** It is `cella / mx`, and `mx` is not
+  always `nx`; the naive `cella / nx` is silently wrong when they differ.
+  [`inspect_mrc_file`](../src/cryoet_pipeline/mrc_validation.py) already gets this
+  right by going through `mrcfile`'s `voxel_size`, and the interpreted view should
+  reuse it rather than re-derive it.
+- **Box size only means something against a target.** A template's physical extent
+  is fixed, so its box in pixels depends on the voxel size it will be resampled
+  to — which lives on the tomogram artifact, not in the map. The useful answer
+  joins the two and then checks the box against the particle diameter, which is
+  the rule `TemplatePreparationQc` already enforces. This is precisely why the
+  question belongs to the pipeline and not to a header utility.
+
+Fields a raw dump hides and an interpreted view must surface:
+
+- box in voxels and in angstrom, per axis, with the derived voxel size;
+- dtype by name, not by mode number;
+- **axis order as stored**, from `mapc`/`mapr`/`maps`, with a flag when permuted —
+  IMOD writes `.rec` in `YZX`, as [storage_policy.md](storage_policy.md) records,
+  so `nx` is not reliably the X of the array as indexed;
+- **one effective origin**, reconciling the MRC2014 `origin` against
+  `nxstart`/`nystart`/`nzstart`, and flagging disagreement between them — different
+  programs write different ones, and a silent disagreement becomes a coordinate
+  shift downstream;
+- whether the file declares MRC2014 conformance (`nversion`), since that bounds
+  which conventions can be trusted;
+- a contrast hint from `dmin`/`dmax`/`dmean`, labelled as a hint: excursion around
+  the *median* is the reliable signal, and that check already exists in template
+  QC;
+- file completeness, which `validate_complete_mrc` already provides.
+
+The same interpretation should be reachable two ways from one implementation: a
+`cryoet describe` command for a person, and this tool for an agent. The value is
+not agent-specific — the same wall of fields is unreadable for whoever is looking
+at it — so the human-facing half is worth having whether or not the agent surface
+is ever built.
+
 This depends on the hard queries existing as views, rather than on the model
 composing recursive CTEs correctly each time:
 

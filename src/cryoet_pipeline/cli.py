@@ -1974,6 +1974,19 @@ def prepare_template(
         float | None,
         typer.Option(min=0.0, help="Mask radius in template pixels, overriding the diameter."),
     ] = None,
+    template_mask_radius_y_px: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="Mask semi-axis along y, pixels. Give this and the z radius to draw "
+            "an ellipsoid instead of a sphere, for a reference that is not a compact "
+            "particle: a lattice or membrane patch is thin along one axis.",
+        ),
+    ] = None,
+    template_mask_radius_z_px: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Mask semi-axis along z, pixels. See the y radius."),
+    ] = None,
     template_mask_sigma_px: Annotated[
         float | None,
         typer.Option(min=0.0, help="Gaussian falloff at the mask edge, pixels."),
@@ -2074,6 +2087,10 @@ def prepare_template(
         )
     if template_mask_radius_px is not None:
         parameters["template_mask_radius_px"] = template_mask_radius_px
+    if template_mask_radius_y_px is not None:
+        parameters["template_mask_radius_y_px"] = template_mask_radius_y_px
+    if template_mask_radius_z_px is not None:
+        parameters["template_mask_radius_z_px"] = template_mask_radius_z_px
     if template_mask_sigma_px is not None:
         parameters["template_mask_sigma_px"] = template_mask_sigma_px
     if template_box_size_px is not None:
@@ -2171,6 +2188,15 @@ def pick_particles(
         float | None,
         typer.Option(min=0.0, help="Angular search in degrees (mutually exclusive with diameter)."),
     ] = None,
+    pytom_z_axis_symmetry: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Rotational symmetry of the template about its z axis. Cuts the "
+            "orientation search by this factor, so it is only correct when the box is "
+            "centred on the symmetry axis.",
+        ),
+    ] = None,
     pytom_low_pass: Annotated[
         float | None,
         typer.Option(min=0.0, help="Low-pass filter resolution in angstrom."),
@@ -2254,6 +2280,8 @@ def pick_particles(
         parameters["pytom_particle_diameter"] = pytom_particle_diameter
     if pytom_angular_search is not None:
         parameters["pytom_angular_search"] = pytom_angular_search
+    if pytom_z_axis_symmetry is not None:
+        parameters["pytom_z_axis_symmetry"] = pytom_z_axis_symmetry
     if pytom_low_pass is not None:
         parameters["pytom_low_pass"] = pytom_low_pass
     if pytom_high_pass is not None:

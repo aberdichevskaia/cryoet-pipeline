@@ -74,15 +74,10 @@ class PytomTemplateBackend:
         emdb_id = _optional_string_parameter(context, "template_emdb_id")
 
         paths = _template_paths(
-
             context.output_dir,
-
             manifest,
-
             backend_name=self.name,
-
             label=variant_label(context),
-
         )
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
@@ -147,7 +142,7 @@ class PytomTemplateBackend:
 
             template_statistics = _inspect_volume(temporary_template)
             actual_box_size = template_statistics.box_size
-            mask_radius = _mask_radius_px(
+            mask_radii = _mask_radii_px(
                 context,
                 voxel_size_angstrom=output_voxel_size,
                 box_size=actual_box_size,
@@ -160,10 +155,20 @@ class PytomTemplateBackend:
                 "-o",
                 str(temporary_mask),
                 "-r",
-                f"{mask_radius:.6f}",
+                f"{mask_radii.x:.6f}",
                 "--voxel-size",
                 f"{output_voxel_size:.6f}",
             ]
+            if not mask_radii.is_sphere:
+                # pytom reads -r as the x semi-axis and these as y and z.
+                mask_command.extend(
+                    [
+                        "--radius-minor1",
+                        f"{mask_radii.y:.6f}",
+                        "--radius-minor2",
+                        f"{mask_radii.z:.6f}",
+                    ]
+                )
             if mask_sigma is not None:
                 mask_command.extend(["-s", f"{mask_sigma:.6f}"])
 
@@ -201,9 +206,7 @@ class PytomTemplateBackend:
             )
 
         template_id = (
-
             f"{manifest.tilt_series_id}:template:{self.name}"
-
             f"{variant_suffix(context)}"
 
         )
@@ -227,7 +230,7 @@ class PytomTemplateBackend:
             box_size_px=actual_box_size,
             inverted=invert,
             low_pass_angstrom=low_pass,
-            mask_radius_px=mask_radius,
+            mask_radius_px=mask_radii.x,
             mask_sigma_px=mask_sigma,
             template_minimum=template_statistics.minimum,
             template_maximum=template_statistics.maximum,
@@ -283,7 +286,7 @@ class PytomTemplateBackend:
             parameters={
                 **shared_parameters,
                 "template_id": template_artifact.id,
-                "mask_radius_px": mask_radius,
+                "mask_radius_px": mask_radii.x,
                 "mask_sigma_px": mask_sigma,
             },
             software_versions={"pytom-match-pick": "external"},
@@ -390,12 +393,31 @@ def _source_voxel_size(path: Path) -> float:
     return voxel_size
 
 
-def _mask_radius_px(
+@dataclass(frozen=True)
+class _MaskRadii:
+    """Mask semi-axes in template pixels, along x, y and z.
+
+    A sphere covers a compact particle, but not every reference is one: a
+    lattice or a membrane patch is extended in two directions and thin along the
+    third, and a sphere drawn around it takes in mostly background. Leaving the
+    y and z radii unset keeps the sphere.
+    """
+
+    x: float
+    y: float
+    z: float
+
+    @property
+    def is_sphere(self) -> bool:
+        return self.x == self.y == self.z
+
+
+def _mask_radii_px(
     context: BackendContext,
     *,
     voxel_size_angstrom: float,
     box_size: int,
-) -> float:
+) -> _MaskRadii:
     explicit = _optional_positive_float_parameter(context, "template_mask_radius_px")
     if explicit is not None:
         radius = explicit
@@ -409,18 +431,25 @@ def _mask_radius_px(
                 "'template_particle_diameter_angstrom' to size the mask"
             )
         radius = diameter / 2.0 / voxel_size_angstrom
-    if radius * 2.0 > box_size:
+    radii = _MaskRadii(
+        x=radius,
+        y=_optional_positive_float_parameter(context, "template_mask_radius_y_px") or radius,
+        z=_optional_positive_float_parameter(context, "template_mask_radius_z_px") or radius,
+    )
+
+    longest = max(radii.x, radii.y, radii.z)
+    if longest * 2.0 > box_size:
         # Without an explicit box the size comes from the deposited map's own
         # extent after resampling, so the two numbers being far apart usually
         # means the requested diameter does not describe this map.
         raise ValueError(
-            f"mask diameter {radius * 2.0:.1f} px does not fit in the template box of "
+            f"mask diameter {longest * 2.0:.1f} px does not fit in the template box of "
             f"{box_size} px ({box_size * voxel_size_angstrom:.0f} angstrom at "
             f"{voxel_size_angstrom:.2f} angstrom/pixel). Pass --template-box-size-px "
-            f"with at least {math.ceil(radius * 2.0)}, or check that the particle is "
+            f"with at least {math.ceil(longest * 2.0)}, or check that the particle is "
             "really that large"
         )
-    return radius
+    return radii
 
 
 @dataclass(frozen=True)

@@ -150,6 +150,82 @@ def test_missing_executable_names_the_option_it_came_from(tmp_path: Path) -> Non
     assert "--pytom-create-template-executable" in message
 
 
+def test_prepare_template_draws_a_slab_mask_for_an_extended_reference(
+    tmp_path: Path,
+) -> None:
+    """A lattice or membrane patch is thin along one axis; a sphere around it is
+    mostly background.
+
+    pytom reads -r as the x semi-axis and takes y and z separately, so the
+    ellipsoid is expressed by giving the two extra radii.
+    """
+
+    tomogram = _tomogram(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    create_template, create_mask = _executables(tmp_path)
+    captured: list[list[str]] = []
+
+    prepare_template_and_register(
+        PytomTemplateBackend(_runner_factory(captured=captured)),
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                "template_mask_radius_px": 12.0,
+                "template_mask_radius_y_px": 12.0,
+                "template_mask_radius_z_px": 3.0,
+                "template_emdb_id": "2638",
+            },
+        ),
+        registry,
+    )
+
+    mask_command = next(c for c in captured if "pytom_create_mask" in c[0])
+    assert mask_command[mask_command.index("-r") + 1] == "12.000000"
+    assert mask_command[mask_command.index("--radius-minor1") + 1] == "12.000000"
+    assert mask_command[mask_command.index("--radius-minor2") + 1] == "3.000000"
+
+
+def test_prepare_template_keeps_a_sphere_when_only_one_radius_is_given(
+    tmp_path: Path,
+) -> None:
+    """The common case must not grow flags it does not need."""
+
+    tomogram = _tomogram(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    create_template, create_mask = _executables(tmp_path)
+    captured: list[list[str]] = []
+
+    prepare_template_and_register(
+        PytomTemplateBackend(_runner_factory(captured=captured)),
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                "template_mask_radius_px": 10.0,
+                "template_emdb_id": "2638",
+            },
+        ),
+        registry,
+    )
+
+    mask_command = next(c for c in captured if "pytom_create_mask" in c[0])
+    assert "--radius-minor1" not in mask_command
+    assert "--radius-minor2" not in mask_command
+
+
 def test_prepare_template_labels_its_outputs_for_a_lane(tmp_path: Path) -> None:
     """A lane that reaches picking needs its own template, not the other lane's.
 
