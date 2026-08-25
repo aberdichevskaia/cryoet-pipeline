@@ -2364,6 +2364,11 @@ def pick_particles(
         parameters["pytom_particle_diameter"] = pytom_particle_diameter
     if pytom_angular_search is not None:
         parameters["pytom_angular_search"] = pytom_angular_search
+    tilt_angles_path = _tilt_angles_for_tomogram(
+        artifact_registry, tilt_series_manifest, tomogram
+    )
+    if tilt_angles_path is not None:
+        parameters["pytom_tilt_angles_path"] = tilt_angles_path
     weighting = (
         _ctf_weighting_for_tomogram(artifact_registry, tilt_series_manifest, tomogram)
         if pytom_ctf_weighting
@@ -3055,6 +3060,33 @@ class _CtfWeighting:
     spherical_aberration_mm: float
     amplitude_contrast: float
     model: str
+
+
+def _tilt_angles_for_tomogram(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+    tomogram: Artifact,
+) -> Path | None:
+    """The solved tilt angles this tomogram was actually reconstructed from.
+
+    The manifest lists every image that was collected, but fine alignment
+    excludes some, so the manifest and the reconstruction disagree on how many
+    tilts there are. Template matching models the missing wedge from these
+    angles, so handing it the collected set would describe a tilt the data never
+    contributed.
+    """
+
+    stacks = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
+        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        and registry.descends_from(tomogram.id, artifact.id)
+    ]
+    for stack in stacks:
+        value = stack.parameters.get("tilt_file_path")
+        if isinstance(value, (str, Path)) and Path(value).is_file():
+            return Path(value)
+    return None
 
 
 def _ctf_weighting_for_tomogram(

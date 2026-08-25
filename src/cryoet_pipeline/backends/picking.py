@@ -102,7 +102,7 @@ class PytomMatchPickBackend:
                 temporary_tomogram,
                 voxel_spacing_angstrom=voxel_spacing,
             )
-            _write_tilt_angles(manifest, temporary_tilt_angles)
+            view_count = _write_tilt_angles(manifest, context, temporary_tilt_angles)
 
             temporary_mask: Path | None = None
             mask_coverage: float | None = None
@@ -126,7 +126,7 @@ class PytomMatchPickBackend:
             defocus_path = _write_defocus_micrometres(
                 context,
                 temporary_root / f"{manifest.tilt_series_id}_defocus.txt",
-                expected_views=len(manifest.tilt_angles_deg),
+                expected_views=view_count,
             )
             match_command = _match_template_command(
                 match_template_executable,
@@ -443,10 +443,31 @@ def _gpu_ids_parameter(context: BackendContext) -> list[str]:
     return gpu_ids
 
 
-def _write_tilt_angles(manifest: TiltSeriesManifest, output_path: Path) -> None:
-    output_path.write_text(
-        "".join(f"{tilt_angle:.6f}\n" for tilt_angle in manifest.tilt_angles_deg)
-    )
+def _write_tilt_angles(
+    manifest: TiltSeriesManifest,
+    context: BackendContext,
+    output_path: Path,
+) -> int:
+    """Write the tilt angles pytom should model the missing wedge from.
+
+    The manifest lists everything that was collected; fine alignment drops some
+    views, so the reconstruction has fewer tilts than the manifest has images.
+    Template matching weights frequencies by these angles, so the set has to be
+    the one the tomogram was built from. The solved angles are used when the
+    caller can point at them, and the manifest only when nothing else is known.
+    """
+
+    solved = context.parameters.get("pytom_tilt_angles_path")
+    if solved is not None:
+        if not isinstance(solved, (str, Path)):
+            raise TypeError("context parameter 'pytom_tilt_angles_path' must be a path")
+        angles = [
+            float(line) for line in Path(solved).read_text().splitlines() if line.strip()
+        ]
+    else:
+        angles = list(manifest.tilt_angles_deg)
+    output_path.write_text("".join(f"{angle:.6f}\n" for angle in angles))
+    return len(angles)
 
 
 def _match_template_command(
@@ -762,8 +783,9 @@ def _write_defocus_micrometres(
     entries = read_imod_defocus_file(Path(source))
     if len(entries) != expected_views:
         raise ValueError(
-            f"the CTF model covers {len(entries)} views but this tilt series has "
-            f"{expected_views}; the defocus would not line up with the tilt angles"
+            f"the CTF model covers {len(entries)} views but the tomogram was "
+            f"reconstructed from {expected_views}; pytom pairs defocus with tilt "
+            "angles by position, so the two must describe the same views"
         )
     output_path.write_text(
         "".join(f"{entry.mean_defocus_nm / 1000.0:.6f}\n" for entry in entries)

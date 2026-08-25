@@ -481,6 +481,69 @@ def test_pytom_match_pick_weights_the_template_by_the_tomogram_ctf(
     assert command[command.index("--tomogram-ctf-model") + 1] == "phase-flip"
 
 
+def test_pytom_gets_the_tilt_angles_the_tomogram_was_built_from(tmp_path: Path) -> None:
+    """Fine alignment drops views, so the manifest and the reconstruction differ.
+
+    pytom models the missing wedge from these angles. Handed the collected set it
+    would describe a tilt the data never contributed, and nothing downstream
+    would notice.
+    """
+
+    tomogram = _tomogram_artifact(tmp_path)
+    template = tmp_path / "template.mrc"
+    template.touch()
+    template_mask = tmp_path / "template_mask.mrc"
+    template_mask.touch()
+    executable = tmp_path / "pytom_match_template.py"
+    executable.touch()
+    # One view fewer than the manifest, as an alignment that excluded one leaves.
+    solved = tmp_path / "TS_TEST_final.tlt"
+    solved.write_text("-3.100000\n")
+    # A defocus for those same views. Checked against the manifest instead, this
+    # one view against the manifest's two would be wrongly rejected.
+    defocus = tmp_path / "TS_TEST.defocus"
+    defocus.write_text("12 0 0.0 0.0 0.0 3\n1 1 0.000000 0.000000 3000.000 0.500000\n")
+    handed: list[list[float]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        angles = Path(command[command.index("-a") + 1])
+        handed.append([float(line) for line in angles.read_text().split()])
+        raise RuntimeError("stop after the angles are written")
+
+    with pytest.raises(RuntimeError, match="stop after"):
+        PytomMatchPickBackend(fake_runner).pick(
+            tomogram,
+            _manifest(),
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CUDA,
+                parameters={
+                    "pytom_match_template_executable": executable,
+                    "pytom_extract_candidates_executable": executable,
+                    "pytom_template": template,
+                    "pytom_template_mask": template_mask,
+                    "pytom_gpu_ids": "0",
+                    "pytom_particle_diameter": 100.0,
+                    "pytom_number_of_particles": 100,
+                    "pytom_tilt_angles_path": solved,
+                    "pytom_ctf_defocus_path": defocus,
+                    "pytom_ctf_voltage_kv": 300.0,
+                    "pytom_ctf_spherical_aberration_mm": 2.7,
+                    "pytom_ctf_amplitude_contrast": 0.07,
+                },
+            ),
+        )
+
+    collected = _manifest().tilt_angles_deg
+    assert len(collected) == 2, "the manifest still lists every collected image"
+    assert handed[0] == pytest.approx([-3.1]), "the solved angles, not the collected ones"
+
+
 def test_pytom_match_pick_refuses_a_defocus_covering_other_views(tmp_path: Path) -> None:
     """Defocus and tilt angles are handed to pytom as two parallel lists.
 
@@ -507,7 +570,7 @@ def test_pytom_match_pick_refuses_a_defocus_covering_other_views(tmp_path: Path)
     ) -> subprocess.CompletedProcess[str]:
         raise AssertionError("the match must not run on a mismatched defocus")
 
-    with pytest.raises(ValueError, match="would not line up with the tilt angles"):
+    with pytest.raises(ValueError, match="must describe the same views"):
         PytomMatchPickBackend(fake_runner).pick(
             tomogram,
             _manifest(),
