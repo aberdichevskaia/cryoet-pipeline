@@ -2457,7 +2457,14 @@ def export_picks(
     tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     picks = _picks_artifact(artifact_registry, tilt_series_manifest)
 
+    registered_template = _template_artifacts(
+        artifact_registry, tilt_series_manifest, variant=variant
+    )
     export = export_picks_for_artiax(
+        template=registered_template[0] if registered_template else None,
+        segmentation=_optional_segmentation_artifact(
+            artifact_registry, tilt_series_manifest, variant=variant
+        ),
         tomogram=tomogram,
         picks=picks,
         out=out,
@@ -2466,6 +2473,10 @@ def export_picks(
 
     typer.echo(f"wrote tomogram: {export.tomogram_path}")
     typer.echo(f"wrote picks: {export.picks_path}")
+    if export.template_path is not None:
+        typer.echo(f"wrote template: {export.template_path}")
+    if export.segmentation_path is not None:
+        typer.echo(f"wrote segmentation: {export.segmentation_path}")
     typer.echo(f"wrote ChimeraX script: {export.script_path}")
     typer.echo(f"open with: chimerax {export.script_path}")
 

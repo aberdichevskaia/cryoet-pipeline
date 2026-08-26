@@ -3,6 +3,79 @@
 Planned work beyond the MVP slice in [mvp_plan.md](mvp_plan.md). Ordered roughly
 by dependency, not strictly by priority.
 
+## Current order of work
+
+The next milestone is subtomogram averaging over particles from several
+tomograms. The decision recorded here is to reach it through a thin slice of the
+data model rather than by building the database first.
+
+Three facts set the order.
+
+**Processing many tilt-series is not blocked, it is inconvenient.** A shell loop
+over series works today for everything through picking.
+
+**Cross-tilt-series averaging is blocked structurally.** `average-particles` takes
+a single `--manifest`, `_particle_stack_artifact` filters on
+`parameters["tilt_series_id"]` and fails unless exactly one artifact matches, and
+`SubtomogramAveragingQc.tilt_series_id` is a single string. Particles from ten
+tomograms cannot be averaged together at all.
+
+**Parallel runs are unsafe at any scale.** `ArtifactRegistry` does
+read-modify-write of one JSON document with no locking, so two series finishing
+at the same time lose one another's entries. This bites at five series, not at
+five hundred.
+
+The database is not first because its design needs the scale-up as input. Several
+of the open questions in [database_design.md](database_design.md) — the
+`content_params`/`execution_params` split per step, run granularity, whether
+`selection` is the right abstraction, where the relational/columnar boundary sits
+for particles — are answered honestly only by running at scale and varying
+parameters in anger. Building first means encoding guesses and then migrating a
+schema we wrote ourselves.
+
+The interim state is on the database's path rather than a detour: per-series
+registries, or per-run JSON records plus a merge, are the file-first shape the
+database will later index.
+
+Order:
+
+1. **Sections 6 and 8** — uniform logs and `cryoet describe`. Days, no
+   dependencies. Worth doing before the scale-up rather than during it, since
+   both exist to make fifty times more output readable.
+2. **Scope as a relation instead of a parameter.** The minimal slice of
+   `artifact_scope` without the database: tilt-series scope as a list on the
+   artifact rather than a key in `parameters`, lookups that accept a set, a
+   particle-set concept that references several tomograms, and QC models carrying
+   a list. This is what unblocks cross-tilt-series averaging.
+3. **Per-series registries or per-run records**, so parallel runs stop clobbering
+   each other.
+4. **Run at scale** — on the order of fifty series through to a cross-series
+   average. This produces the inputs the database design is missing: per-step
+   durations for later resource profiles, real failure modes, the natural run
+   granularity, and which parameters were actually varied.
+5. **The database**, informed by step 4.
+
+**Trigger for step 5.** The current registry holds 58 artifacts per series at
+bin8, 41 of them individual corrected projections, and every command pays full
+pydantic validation twice — once to load, once to write. That gives roughly 2,900
+artifacts at 50 series, 29,000 at 500, and 116,000 at 2,000, where the validation
+cost alone is seconds per command invocation. The JSON registry is comfortable
+into the tens of series, unpleasant around three hundred, and unusable near a
+thousand. Collapsing the per-projection artifacts into one stacked artifact with a
+`T` axis buys roughly five times the headroom and is worth doing anyway, since
+hundreds of thousands of small files is its own problem on a parallel filesystem.
+
+**Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
+the CLI, or any scheduling logic will be replaced by the controller in
+[pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
+is the right amount of effort, and it should look disposable.
+
+**Independent half-set refinement (section 4) belongs with step 2**, not after it.
+Once particles come from five to ten tomograms, resolution claims start carrying
+weight, and the current half-set FSC is optimistic because the halves are not
+refined independently. The deferred comparison of backends is measured by final
+resolution, so an optimistic estimate undermines the comparison machinery as well.
+
 ## 1. Split CTF estimation from CTF correction — done
 
 `estimate-ctf` (backends `ctffind5`, `imod-ctfplotter`) writes a `CTF_MODEL`,

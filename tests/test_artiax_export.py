@@ -55,11 +55,81 @@ def test_export_writes_paired_files_and_a_chimerax_script(tmp_path: Path) -> Non
         assert float(mrc.voxel_size.x) == pytest.approx(_VOXEL_SIZE, abs=1e-3)
 
     script = export.script_path.read_text()
-    assert f"open {export.tomogram_path.name}" in script
+    # Through ArtiaX, not as a plain volume: otherwise the tomogram is not under
+    # its control and never appears in the Tomograms list.
+    assert f"artiax open tomo {export.tomogram_path.name}" in script
     # ArtiaX registers both a RELION 3.1 and a RELION5 reader for .star, so the
     # format has to be pinned or ChimeraX may pick the wrong coordinate convention.
     assert f"open {export.picks_path.name} format relion\n" in script
     assert "format relion5" not in script
+    # Coordinates are in tomogram voxels and ArtiaX scales them by a factor that
+    # defaults to one, so without this the picks collapse into a corner.
+    assert f"originScaleFactor {_VOXEL_SIZE:.6f}" in script
+
+
+def test_export_carries_the_template_and_segmentation(tmp_path: Path) -> None:
+    """Points alone answer little; the template shows orientation, the
+    segmentation shows whether the picks sit on anything.
+
+    Both live as Zarr in the pipeline and ChimeraX reads MRC, so the conversion
+    has to happen here or the files are unopenable.
+    """
+
+    tomogram = _tomogram(tmp_path)
+    picks = _picks(tmp_path, tomogram)
+    template_path = tmp_path / "template.zarr"
+    zarr.save(template_path, np.ones((2, 3, 4), dtype=np.float32))
+    template = Artifact(
+        id="TS_TEST:template:pytom",
+        kind=ArtifactKind.TEMPLATE,
+        path=template_path,
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    segmentation_path = tmp_path / "segmentation.zarr"
+    zarr.save(segmentation_path, np.zeros((2, 3, 4), dtype=np.float32))
+    segmentation = Artifact(
+        id="TS_TEST:segmentation:full:membrain-seg",
+        kind=ArtifactKind.SEGMENTATION,
+        path=segmentation_path,
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+
+    export = export_picks_for_artiax(
+        tomogram=tomogram,
+        picks=picks,
+        out=tmp_path / "outputs",
+        template=template,
+        segmentation=segmentation,
+    )
+
+    assert export.template_path is not None and export.template_path.is_file()
+    assert export.segmentation_path is not None and export.segmentation_path.is_file()
+    with mrcfile.open(export.template_path, permissive=True) as mrc:
+        assert float(mrc.voxel_size.x) == pytest.approx(_VOXEL_SIZE, abs=1e-3)
+
+    script = export.script_path.read_text()
+    assert "artiax attach #2 toParticleList #1.2.1" in script
+    # The template is inverted to match dark particles, so a positive level
+    # would show nothing.
+    assert "volume #2 level -1" in script
+    assert f"open {export.segmentation_path.name}" in script
+    assert "volume #3 level 0.5" in script
+
+
+def test_export_without_a_template_or_segmentation_says_nothing_about_them(
+    tmp_path: Path,
+) -> None:
+    tomogram = _tomogram(tmp_path)
+    export = export_picks_for_artiax(
+        tomogram=tomogram,
+        picks=_picks(tmp_path, tomogram),
+        out=tmp_path / "outputs",
+    )
+
+    assert export.template_path is None
+    assert export.segmentation_path is None
+    script = export.script_path.read_text()
+    assert "artiax attach" not in script
 
 
 def test_export_refuses_to_clobber_without_overwrite(tmp_path: Path) -> None:
