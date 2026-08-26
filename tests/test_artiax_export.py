@@ -78,7 +78,8 @@ def test_export_carries_the_template_and_segmentation(tmp_path: Path) -> None:
     tomogram = _tomogram(tmp_path)
     picks = _picks(tmp_path, tomogram)
     template_path = tmp_path / "template.zarr"
-    zarr.save(template_path, np.ones((2, 3, 4), dtype=np.float32))
+    template_values = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    zarr.save(template_path, template_values)
     template = Artifact(
         id="TS_TEST:template:pytom",
         kind=ArtifactKind.TEMPLATE,
@@ -108,12 +109,31 @@ def test_export_carries_the_template_and_segmentation(tmp_path: Path) -> None:
         assert float(mrc.voxel_size.x) == pytest.approx(_VOXEL_SIZE, abs=1e-3)
 
     script = export.script_path.read_text()
-    assert "artiax attach #2 toParticleList #1.2.1" in script
-    # The template is inverted to match dark particles, so a positive level
-    # would show nothing.
-    assert "volume #2 level -1" in script
+    assert "artiax attach #1 toParticleList #3.2.1" in script
+    # attach re-opens the file beneath the particle list, so naming the model it
+    # was opened under afterwards fails with "No volumes specified" and aborts
+    # the rest of the script.
+    # The level is set on the model that is about to be attached, because
+    # attaching copies the surface as it stands.
+    contour_line = next(
+        line for line in script.splitlines() if line.startswith("volume #1 level")
+    )
+    attach_line = next(line for line in script.splitlines() if line.startswith("artiax attach"))
+    assert script.index(contour_line) < script.index(attach_line)
+    # Attaching alone leaves the surface hidden while the list keeps drawing its
+    # own markers, so a level change appears to do nothing.
+    assert "artiax show #3.2.1 surfaces" in script
+    assert "artiax hide #3.2.1 markers" in script
+    # The template is inverted to match dark particles, so the level has to sit
+    # below its mean; ChimeraX's own default is above it, on the wrong side.
+    contour = contour_line
+    level = float(contour.split("level ")[1].split()[0])
+    assert level < float(template_values.mean())
+    assert level == pytest.approx(
+        float(template_values.mean() - 2.0 * template_values.std()), abs=1e-3
+    )
     assert f"open {export.segmentation_path.name}" in script
-    assert "volume #3 level 0.5" in script
+    assert "volume #2 level 0.5" in script
 
 
 def test_export_without_a_template_or_segmentation_says_nothing_about_them(

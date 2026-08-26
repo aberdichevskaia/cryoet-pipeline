@@ -88,8 +88,11 @@ def export_picks_for_artiax(
     directory.mkdir(parents=True, exist_ok=True)
     _write_tomogram_mrc(tomogram.path, tomogram_path, voxel_size_angstrom=voxel_size)
     shutil.copyfile(picks.path, picks_path)
+    template_level: float | None = None
     if template is not None and template_path is not None:
-        _write_tomogram_mrc(template.path, template_path, voxel_size_angstrom=voxel_size)
+        template_level = _write_tomogram_mrc(
+            template.path, template_path, voxel_size_angstrom=voxel_size
+        )
     if segmentation is not None and segmentation_path is not None:
         _write_tomogram_mrc(
             segmentation.path, segmentation_path, voxel_size_angstrom=voxel_size
@@ -100,6 +103,7 @@ def export_picks_for_artiax(
             picks_path.name,
             voxel_size_angstrom=voxel_size,
             template_name=template_path.name if template_path else None,
+            template_level=template_level,
             segmentation_name=segmentation_path.name if segmentation_path else None,
         )
     )
@@ -120,27 +124,40 @@ def _chimerax_script(
     *,
     voxel_size_angstrom: float,
     template_name: str | None = None,
+    template_level: float | None = None,
     segmentation_name: str | None = None,
 ) -> str:
     """Open everything at one scale, with each pick shown as the template.
 
-    Three things have to be said explicitly or the result is quietly wrong.
+    Four things have to be said explicitly or the result is quietly wrong.
     ArtiaX registers two readers for `.star` and both answer to the suffix, so
     the RELION 3.1 one is named — the RELION5 reader expects centred coordinates
     in Angstrom. ArtiaX places a particle at `coordinate * originScaleFactor`
     with the factor defaulting to one, while the coordinates are in tomogram
     voxels, so without it every pick lands at a fraction of its true position.
-    And the template is inverted to match a tomogram's dark particles, so its
-    surface has to be contoured at a negative level or nothing appears.
+    `artiax attach` re-opens the file beneath the particle list rather than
+    linking the model that was passed to it, so afterwards the template answers
+    to a new number and the one it was opened under no longer exists. And the
+    template is inverted to match dark particles, so ChimeraX's positive default
+    level wraps the background instead of the density.
 
-    Model numbering follows from the order below: ArtiaX is #1, its tomogram
-    #1.1.1, the particle list #1.2.1, and anything opened afterwards continues
-    from #2.
+    The volumes are opened before ArtiaX starts, because they are the ones the
+    later commands have to name and only a plain `open` into an empty session
+    gives them predictable numbers.
     """
 
+    extras = [name for name in (template_name, segmentation_name) if name is not None]
+    numbers = {name: index + 1 for index, name in enumerate(extras)}
+    artiax = len(extras) + 1
+    particle_list = f"#{artiax}.2.1"
+
     lines = [
-        "# Open with: chimerax <this file>",
+        "# Open with: chimerax <this file>, in a fresh session: the model numbers",
+        "# below assume nothing else is open.",
         "# Requires the ArtiaX bundle (toolshed install ArtiaX).",
+    ]
+    lines += [f"open {name}" for name in extras]
+    lines += [
         "artiax start",
         "# Through ArtiaX rather than as a plain volume, so the tomogram is under",
         "# its control and appears in the Tomograms list.",
@@ -150,28 +167,36 @@ def _chimerax_script(
         f"open {picks_name} format {CHIMERAX_STAR_FORMAT}",
         "# Coordinates are in tomogram voxels, and ArtiaX scales them by this",
         "# factor, which defaults to one.",
-        f"artiax particles #1.2.1 originScaleFactor {voxel_size_angstrom:.6f}",
+        f"artiax particles {particle_list} originScaleFactor {voxel_size_angstrom:.6f}",
     ]
-    next_model = 2
-    if template_name is not None:
-        lines += [
-            "",
-            "# Each pick drawn as the template at the orientation found for it,",
-            "# which is what makes a wrong orientation visible. The template is",
-            "# inverted to match dark particles, hence the negative level.",
-            f"open {template_name}",
-            f"artiax attach #{next_model} toParticleList #1.2.1",
-            f"volume #{next_model} level -1 style surface",
-            "# Adjust the level until the shape is recognisable.",
-        ]
-        next_model += 1
     if segmentation_name is not None:
         lines += [
             "",
             "# The membranes as a surface, so the picks have something to sit on",
             "# or miss. A tomogram slice shows one plane; this shows the set.",
-            f"open {segmentation_name}",
-            f"volume #{next_model} level 0.5 style surface transparency 0.5",
+            f"volume #{numbers[segmentation_name]} level 0.5 style surface transparency 0.5",
+        ]
+    if template_name is not None:
+        level = template_level if template_level is not None else -1.0
+        lines += [
+            "",
+            "# Each pick drawn as the template at the orientation found for it,",
+            "# which is what makes a wrong orientation visible.",
+            "# Contour first: attaching copies the surface as it stands, so a level",
+            "# set afterwards changes the original and not the copies drawn at each",
+            "# particle. Two standard deviations below the mean, which is inside the",
+            "# density because the template is inverted to match dark particles.",
+            f"volume #{numbers[template_name]} level {level:.4f} style surface",
+            f"artiax attach #{numbers[template_name]} toParticleList {particle_list}",
+            "# Attaching does not display: the list keeps drawing its own markers",
+            "# and the attached surface stays hidden.",
+            f"artiax show {particle_list} surfaces",
+            f"artiax hide {particle_list} markers",
+            f"artiax hide {particle_list} axes",
+            "# To try another level, set it on the model above and attach again.",
+            "# The level is two standard deviations below the template's mean,",
+            "# which is inside its density because the template is inverted.",
+            "# Adjust it if the shape is not recognisable.",
         ]
     lines.append("")
     return "\n".join(lines)
@@ -183,7 +208,13 @@ def _write_tomogram_mrc(
     destination: Path,
     *,
     voxel_size_angstrom: float,
-) -> None:
+) -> float:
+    """Convert to MRC and return a contour level that shows the density.
+
+    ChimeraX picks a positive default from the histogram, which is the wrong
+    side for a template inverted to match a tomogram's dark particles: the
+    surface then wraps the background instead of the particle.
+    """
     if source.is_dir():
         array = cast(Any, zarr.open(source, mode="r"))
         data = np.asarray(array[:], dtype=np.float32)
@@ -195,3 +226,4 @@ def _write_tomogram_mrc(
     with mrcfile.new(destination, overwrite=True) as mrc:
         mrc.set_data(data)
         mrc.voxel_size = voxel_size_angstrom
+    return float(data.mean() - 2.0 * data.std())
