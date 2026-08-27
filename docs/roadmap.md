@@ -442,3 +442,50 @@ the extraction options genuinely explorable, which matters because the trap
 recorded elsewhere is real: matching's `--particle-diameter` sets the Crowther
 angular sampling, extraction's sets peak separation as diameter/2, and they are
 not the same number for the same reason.
+
+## 11. The patch margin is in the wrong unit
+
+`generate-fiducial-seed --patch-margin-px` is in **binned** pixels of the
+tracking stack, so it is silently coupled to `--pre-binning`. Patch size is
+derived as
+
+```text
+usable   = binned_width - 2 * margin
+patch_px = usable / (1 + (count - 1) * (1 - overlap))
+```
+
+At 4096 px and `pre-binning 8` a 100 px margin leaves 312 of 512 px, which is
+defensible. The recipe in the trip notes for weak patch signal is to bin harder
+for contrast — and at `pre-binning 16` that same 100 px eats 200 of 256, at which
+point the sizing refuses because the patch would fall under its 32 px floor.
+Raising binning therefore means scaling the margin down by the same factor to
+keep the geometry, which nobody will remember.
+
+The unit is the defect. A margin exists because the specimen area usable in every
+tilt is narrower than one image — that is geometry in specimen coordinates, not in
+pixels of an arbitrary tracking binning. The convention elsewhere in the codebase
+is physical or unbinned: `--fiducial-diameter-nm`,
+`recommended_unbinned_thickness_px`, `residual_mean_unbinned_px`. This option is
+the one that falls outside it.
+
+The fix is a binning-independent unit converted inside the seed backend. A
+**fraction of the field** is preferable to unbinned pixels: it survives a change
+of detector as well as of binning, and "discard a fifth of each edge" is easier to
+reason about than 800 pixels.
+
+Two related points worth keeping:
+
+- **The default 100 is not derived.** It could be — edge smearing follows from
+  lamella thickness and maximum tilt, and the tilt angles are already in the
+  manifest — but two plausible derivations gave materially different numbers, one
+  below 100 and one nearly double. So it needs someone who holds the geometry, or
+  a measurement, rather than an invented formula. Until then, a poor patch
+  coverage confined to the X edges should be diagnosed by looking at which tilt
+  the edge leaves the field, not by nudging 100.
+- **The margin is applied to both axes equally**, while foreshortening acts
+  perpendicular to the tilt axis. With a tilt axis near vertical, as in
+  EMPIAR-11538 at 83.6 degrees, X and Y are not equivalent and one value for both
+  is over-conservative in Y.
+
+Not urgent: until patch tracking has run against real IMOD it is unknown whether
+the margin is a knob that gets turned at all. Do this once it works.

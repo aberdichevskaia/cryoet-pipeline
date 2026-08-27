@@ -1,0 +1,136 @@
+# Lane B — ribosome validation on EMPIAR-11538 (untreated), bin8.
+#
+# This file holds PARAMETER VALUES only. The order of steps lives in
+# scripts/run_series.py, deliberately: a config that describes step order is a
+# plan, and the plan belongs in the data model rather than in a YAML/TOML file
+# that would grow ordering, resume and failure handling into a second engine.
+#
+# Numbers here are transcribed from the validation runbook. Where a value is a
+# judgement call rather than a measurement, the reason is in a comment.
+
+[lane]
+name = "ribo-bin8"
+variant = "bin8"          # label applied from the stack rebuild onward
+
+[data]
+# {series} is substituted per series.
+mdoc = "data/empiar-11538/data/mdoc_files/{series}.mrc.mdoc"
+stack = "data/empiar-11538/data/Untreated_dataset/{series}.mrc"
+
+[binning]
+# CTF is fitted on a finer stack and transferred, because a fit at coarse
+# binning is badly constrained and does not say so.
+#
+# The fit stack is built WITHOUT a variant label on purpose: the lane rule is
+# that a lookup prefers a labelled candidate and otherwise falls back to the
+# shared unlabelled one, never to another lane's. A bin4-labelled CTF model
+# would therefore be invisible to `correct-ctf --variant bin8`.
+ctf_fit = 4               # 4.89 A/px, Nyquist 9.8 A
+tomogram = 8              # 9.78 A/px, Nyquist 19.6 A, 512^2, ribosome ~31 px
+
+[align]
+binning = 8               # coarse alignment works on a reduced stack
+min_std_ratio = 0.2
+# Deliberately not set: let IMOD find the rotation axis at coarse alignment and
+# compare what it finds against 83.6, which the MRC label and the mdoc both give.
+# Agreement is reassuring; disagreement is a signal worth chasing.
+# tilt_axis_angle = 83.6
+
+[qc_coarse]
+preview_binning = 16
+residual_warning_px = 2.0
+
+[fiducials]
+# Confirmed by eye in 3dmod: TS_0005 has no gold. So patch tracking, which has
+# never been run against real IMOD from this pipeline — expect to debug it.
+seed_backend = "imod-patch-seed"
+track_backend = "imod-patch-track"
+
+# The user-facing knobs are patch COUNT and OVERLAP; the patch size in pixels is
+# derived, mirroring etomo's own sizing:
+#
+#   usable    = binned_width - 2 * margin
+#   patch_px  = usable / (1 + (count - 1) * (1 - overlap))
+#
+# At 4096 px and pre_binning 8 the tracking stack is 512 px, so these values give
+#   usable   = 512 - 200 = 312 px
+#   patch    = 312 / (1 + 4 * 0.67) = 84 binned px = 672 raw px = 822 A = 82 nm
+#
+# The whole field is only 5009 A = 0.5 um across, so a 100 px binned margin cuts
+# about 98 nm from each side and leaves ~305 nm of the 501 nm field. That is
+# aggressive but defensible: at +64 deg the field foreshortens by cos(64) = 0.44,
+# so the specimen area common to every tilt is much narrower than one image.
+#
+# Tuning, from the QC readout after track-fiducials:
+#   coverage below the 0.8 warning     -> fewer patches (3x3, 4x4): bigger patches,
+#                                         stronger signal per patch
+#   coverage fine, fine-align residual -> more patches (6x6, 7x7): finer sampling,
+#     high                                weaker signal per patch
+#   patches failing at the X edges     -> raise margin. Foreshortening is along X
+#                                         because the tilt axis is near vertical
+#                                         (83.6 deg), and the margin is applied
+#                                         to both axes equally.
+# Below 32 px the sizing refuses rather than producing a useless grid.
+#
+# Trap: margin is in BINNED pixels, so it does not scale with pre_binning. Going
+# to pre_binning 16 leaves 256 px, of which margin 100 eats 200 — the sizing then
+# refuses. Raising pre_binning for contrast means scaling margin down by the same
+# factor to keep the same physical geometry (16 / 50 gives the same 822 A patch).
+pre_binning = 8
+num_patches_x = 5
+num_patches_y = 5
+patch_overlap = 0.33
+patch_margin_px = 100     # binned pixels, not raw
+
+# The bandpass tiltxcorr correlates through, in cycles/pixel. IMOD's standard
+# recommendations, left at their defaults. This is the knob to reach for if the
+# correlation itself fails on low-contrast lamella data rather than the geometry
+# being wrong — a symptom that looks like poor coverage everywhere at once, not
+# at the edges. Values must be above zero.
+# patch_filter_sigma1 = 0.03    # high-pass sigma
+# patch_filter_radius2 = 0.25   # low-pass cutoff radius
+# patch_filter_sigma2 = 0.05    # low-pass falloff sigma
+
+[fine_align]
+robust_fitting = true
+auto_prune_outliers = true
+
+[ctf]
+voltage_kv = 300.0
+# A Krios G4 without a corrector is 2.7 mm. Not in the mdoc — confirm against
+# the deposition rather than trusting this line.
+spherical_aberration_mm = 2.7
+amplitude_contrast = 0.07
+
+[reconstruct]
+# Left unset: thickness is derived. Set explicitly if the lamella depth is known.
+# thickness = 400
+
+[template]
+emdb_id = "EMD-16721"     # human 80S ribosome, untreated cells, same data
+low_pass_angstrom = 19.6  # bin8 Nyquist
+# No particle diameter and no mask radius: prepare-template measures the density
+# extent and derives the mask. Expect ~28 px on all three axes and a QC warning
+# saying the size was derived. If the three axes disagree, the map is not what
+# you think it is.
+
+[pick]
+# 290 A is the human 80S diameter that pytom's own documentation uses as its
+# worked example. It sets the angular sampling through Crowther. The measured
+# extent from prepare-template reads a few per cent under true (~274 A), so the
+# literature value is the conservative choice here.
+particle_diameter_angstrom = 290.0
+number_of_particles = 2000
+number_of_false_positives = 1.0   # assumptions hold for a discrete particle
+tophat_filter = true              # sharp isolated peaks — right for ribosomes
+gpu_ids = "0"
+
+[extract]
+box_size_px = 48          # 470 A at 9.78 A/px, ~1.5x the particle
+
+[executables]
+# $PYTOMO_MP_DIR — note the O; $PYTOM_MP_DIR is unset and expands to nothing.
+pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
+pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
+pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"
+pytom_extract_candidates = "$PYTOMO_MP_DIR/pytom_extract_candidates.py"

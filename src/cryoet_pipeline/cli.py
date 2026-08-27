@@ -816,9 +816,40 @@ def track_fiducials(
         typer.Option(help="Fiducial-tracking backend to use."),
     ] = "imod-beadtrack",
     rounds: Annotated[
-        int,
-        typer.Option(min=1, help="Number of Beadtrack tracking rounds."),
-    ] = 2,
+        int | None,
+        typer.Option(
+            min=1,
+            help="Beadtrack tracking rounds (default 2). imod-beadtrack only: "
+            "patch tracking is a single correlation pass and has no rounds.",
+        ),
+    ] = None,
+    patch_filter_sigma1: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            max=0.5,
+            help="Tiltxcorr high-pass sigma in cycles/pixel, above zero "
+            "(default 0.03). imod-patch-track only.",
+        ),
+    ] = None,
+    patch_filter_radius2: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            max=0.5,
+            help="Tiltxcorr low-pass cutoff radius in cycles/pixel, above zero "
+            "(default 0.25). imod-patch-track only.",
+        ),
+    ] = None,
+    patch_filter_sigma2: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            max=0.5,
+            help="Tiltxcorr low-pass falloff sigma in cycles/pixel, above zero "
+            "(default 0.05). imod-patch-track only.",
+        ),
+    ] = None,
     min_tracked_fiducials: Annotated[
         int,
         typer.Option(min=1, help="Minimum tracked fiducials required for QC pass."),
@@ -854,6 +885,18 @@ def track_fiducials(
 ) -> None:
     """Track the generated fiducial seed model through the tilt series."""
 
+    # Check the option/backend combination before touching the filesystem, so a
+    # flag the chosen backend cannot read is reported at once rather than after
+    # the manifest and registry have been parsed.
+    selected_backend = _fiducial_tracking_backend(backend)
+    backend_only_options = {
+        "--rounds": ("rounds", rounds),
+        "--patch-filter-sigma1": ("filter_sigma1", patch_filter_sigma1),
+        "--patch-filter-radius2": ("filter_radius2", patch_filter_radius2),
+        "--patch-filter-sigma2": ("filter_sigma2", patch_filter_sigma2),
+    }
+    _reject_foreign_tracking_options(selected_backend.name, backend_only_options)
+
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
     tracking_stack = _fiducial_tracking_stack_artifact(
@@ -866,15 +909,18 @@ def track_fiducials(
         tilt_series_manifest,
         variant=variant,
     )
-    selected_backend = _fiducial_tracking_backend(backend)
     parameters: dict[str, object] = {
         "overwrite": overwrite,
         "variant": variant,
-        "rounds": rounds,
         "min_tracked_fiducials": min_tracked_fiducials,
         "coverage_warning": coverage_warning,
         "coverage_failure": coverage_failure,
     }
+    # Left out when not given, so each backend's own default applies rather than
+    # this command deciding one on its behalf.
+    for key, value in backend_only_options.values():
+        if value is not None:
+            parameters[key] = value
     if imod_dir is not None:
         parameters["imod_dir"] = imod_dir
     context = BackendContext(
@@ -3048,6 +3094,45 @@ def _fiducial_tracking_backend(name: str) -> FiducialTrackingBackend:
         "expected: imod-beadtrack, imod-patch-track",
         param_hint="backend",
     )
+
+
+# Which tracking options each backend actually reads. Bead tracking iterates and
+# has rounds; patch tracking is a single tiltxcorr correlation pass and instead
+# exposes that correlation's bandpass.
+_TRACKING_BACKEND_OPTIONS: dict[str, frozenset[str]] = {
+    "imod-beadtrack": frozenset({"--rounds"}),
+    "imod-patch-track": frozenset(
+        {
+            "--patch-filter-sigma1",
+            "--patch-filter-radius2",
+            "--patch-filter-sigma2",
+        }
+    ),
+}
+
+
+def _reject_foreign_tracking_options(
+    backend_name: str,
+    supplied: dict[str, tuple[str, object]],
+) -> None:
+    """Refuse a backend-specific option the chosen backend would ignore.
+
+    Accepting one silently is worse than refusing it: the run looks configured
+    and behaves exactly as if the flag had never been passed.
+    """
+
+    owned = _TRACKING_BACKEND_OPTIONS.get(backend_name, frozenset())
+    for flag, (_, value) in supplied.items():
+        if value is None or flag in owned:
+            continue
+        owner = next(
+            (name for name, flags in _TRACKING_BACKEND_OPTIONS.items() if flag in flags),
+            None,
+        )
+        raise typer.BadParameter(
+            f"{flag} is read by {owner}, not by {backend_name}",
+            param_hint=flag,
+        )
 
 
 def _fine_alignment_backend(name: str) -> FineAlignmentBackend:

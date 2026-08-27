@@ -1162,6 +1162,47 @@ def test_segment_tomogram_command_updates_registry(
     assert len(updated.by_kind(ArtifactKind.QC)) == 1
 
 
+def test_track_fiducials_refuses_options_the_backend_cannot_read(tmp_path: Path) -> None:
+    """Bead rounds and patch filters belong to different backends.
+
+    Accepting one for the wrong backend silently would leave a run looking
+    configured while behaving as if the flag had never been passed. The check
+    runs before any file is read, so no fixtures are needed here.
+    """
+
+    runner = CliRunner()
+    base = [
+        "track-fiducials",
+        "--manifest",
+        str(tmp_path / "absent.json"),
+        "--registry",
+        str(tmp_path / "absent-registry.json"),
+        "--out",
+        str(tmp_path / "outputs"),
+    ]
+
+    rounds_at_patch = runner.invoke(
+        cli.app, [*base, "--backend", "imod-patch-track", "--rounds", "3"]
+    )
+    assert rounds_at_patch.exit_code != 0
+    assert "--rounds is read by imod-beadtrack" in rounds_at_patch.output
+
+    filter_at_bead = runner.invoke(
+        cli.app,
+        [*base, "--backend", "imod-beadtrack", "--patch-filter-sigma1", "0.05"],
+    )
+    assert filter_at_bead.exit_code != 0
+    assert "--patch-filter-sigma1 is read by imod-patch-track" in filter_at_bead.output
+
+    # Each backend accepts its own option: the guard stays quiet and the command
+    # gets far enough to fail on the absent manifest instead.
+    own_option = runner.invoke(
+        cli.app,
+        [*base, "--backend", "imod-patch-track", "--patch-filter-sigma1", "0.05"],
+    )
+    assert "is read by" not in own_option.output
+
+
 def _manifest(movie_path: Path) -> TiltSeriesManifest:
     return _manifest_from_movies([(movie_path, 0, 0.0)])
 
