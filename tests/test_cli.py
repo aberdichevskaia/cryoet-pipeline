@@ -6,6 +6,8 @@ from pathlib import Path
 
 import mrcfile
 import numpy as np
+import pytest
+import typer
 import zarr
 from typer.testing import CliRunner
 
@@ -1162,12 +1164,48 @@ def test_segment_tomogram_command_updates_registry(
     assert len(updated.by_kind(ArtifactKind.QC)) == 1
 
 
-def test_track_fiducials_refuses_options_the_backend_cannot_read(tmp_path: Path) -> None:
+def test_reject_foreign_tracking_options_names_the_owning_backend() -> None:
     """Bead rounds and patch filters belong to different backends.
 
     Accepting one for the wrong backend silently would leave a run looking
-    configured while behaving as if the flag had never been passed. The check
-    runs before any file is read, so no fixtures are needed here.
+    configured while behaving as if the flag had never been passed.
+
+    Asserted against the function rather than through the CLI: Typer renders a
+    usage error inside a Rich panel, which wraps the message and interleaves
+    border characters, so matching the text through `CliRunner` tests the panel
+    width as much as the rule.
+    """
+
+    with pytest.raises(typer.BadParameter, match="--rounds is read by imod-beadtrack"):
+        cli._reject_foreign_tracking_options(
+            "imod-patch-track", {"--rounds": ("rounds", 3)}
+        )
+
+    with pytest.raises(
+        typer.BadParameter,
+        match="--patch-filter-sigma1 is read by imod-patch-track",
+    ):
+        cli._reject_foreign_tracking_options(
+            "imod-beadtrack", {"--patch-filter-sigma1": ("filter_sigma1", 0.05)}
+        )
+
+    # Its own option passes, and so does one left unset.
+    cli._reject_foreign_tracking_options(
+        "imod-patch-track", {"--patch-filter-sigma1": ("filter_sigma1", 0.05)}
+    )
+    cli._reject_foreign_tracking_options(
+        "imod-beadtrack", {"--rounds": ("rounds", 2)}
+    )
+    cli._reject_foreign_tracking_options(
+        "imod-beadtrack", {"--patch-filter-sigma1": ("filter_sigma1", None)}
+    )
+
+
+def test_track_fiducials_accepts_the_patch_filter_options(tmp_path: Path) -> None:
+    """The options are wired to the command, and the check precedes any file read.
+
+    Negative assertions on purpose: the panel may wrap the message, but it cannot
+    invent one, so absence is what is safe to assert here.
     """
 
     runner = CliRunner()
@@ -1181,26 +1219,20 @@ def test_track_fiducials_refuses_options_the_backend_cannot_read(tmp_path: Path)
         str(tmp_path / "outputs"),
     ]
 
-    rounds_at_patch = runner.invoke(
-        cli.app, [*base, "--backend", "imod-patch-track", "--rounds", "3"]
-    )
-    assert rounds_at_patch.exit_code != 0
-    assert "--rounds is read by imod-beadtrack" in rounds_at_patch.output
-
-    filter_at_bead = runner.invoke(
+    refused = runner.invoke(
         cli.app,
         [*base, "--backend", "imod-beadtrack", "--patch-filter-sigma1", "0.05"],
     )
-    assert filter_at_bead.exit_code != 0
-    assert "--patch-filter-sigma1 is read by imod-patch-track" in filter_at_bead.output
+    assert refused.exit_code != 0
+    # The option exists; the failure is the rule, not an unknown flag.
+    assert "No such option" not in refused.output
 
-    # Each backend accepts its own option: the guard stays quiet and the command
-    # gets far enough to fail on the absent manifest instead.
-    own_option = runner.invoke(
+    accepted = runner.invoke(
         cli.app,
         [*base, "--backend", "imod-patch-track", "--patch-filter-sigma1", "0.05"],
     )
-    assert "is read by" not in own_option.output
+    # Got past the guard and died on the absent manifest instead.
+    assert "is read by" not in accepted.output
 
 
 def _manifest(movie_path: Path) -> TiltSeriesManifest:
