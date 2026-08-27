@@ -244,6 +244,13 @@ def viewable(project: Path, series: str, artifacts: list[dict[str, Any]]) -> Non
             print(f"      particle stack (Zarr): {path}")
             found.add(kind)
 
+        elif kind == "ctf_model":
+            diagnostic = params.get("diagnostic_path")
+            if isinstance(diagnostic, str):
+                print(f"  3dmod {diagnostic}")
+                print("      CTF diagnostic: measured Thon rings against the fitted ones")
+            print(f"      IMOD .defocus file: {path}")
+
         elif kind == "qc":
             document = load(Path(path))
             slices = document.get("central_slice_paths") if isinstance(document, dict) else None
@@ -275,9 +282,14 @@ def main() -> int:
         print(f"no readable registry at {registry_path}")
         return 1
 
-    artifacts = [a for a in payload.get("artifacts", []) if belongs_to(a, args.series)]
-    if args.kind:
-        artifacts = [a for a in artifacts if a.get("kind") == args.kind]
+    series_artifacts = [a for a in payload.get("artifacts", []) if belongs_to(a, args.series)]
+    # The --kind filter narrows the table only. "what to look at" is about the whole
+    # series, and filtering it would report things as absent that are merely hidden.
+    artifacts = (
+        [a for a in series_artifacts if a.get("kind") == args.kind]
+        if args.kind
+        else series_artifacts
+    )
     if not artifacts:
         print(f"no artifacts for {args.series} in {registry_path}")
         return 1
@@ -297,7 +309,7 @@ def main() -> int:
 
     print_artifacts(artifacts)
     print_alignments(artifacts)
-    viewable(args.project, args.series, artifacts)
+    viewable(args.project, args.series, series_artifacts)
     for label, path in qc_documents(artifacts):
         print_qc(label, path)
     return 0

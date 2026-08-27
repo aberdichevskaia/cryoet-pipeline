@@ -212,6 +212,34 @@ supported, tested route. A related snag: every command requires `--manifest`
 even where only `tilt_series_id` is used from it, which forces a manifest to
 exist for data that never entered through `init`.
 
+**Entering as an assembled stack silently loses a step, and probably not only
+one.** `import-tilt-stack` registers a `TILT_STACK` and its angles, and nothing
+else — there are no frames, so no `CORRECTED_PROJECTION` artifacts exist.
+`estimate-defocus-hint` resolves its input through
+`_zero_tilt_corrected_projection_artifact`, so for any dataset that entered as
+a stack the command cannot run at all. Found on EMPIAR-11538, where every
+series arrives as one assembled stack.
+
+The loss is not the fit itself: `estimate-ctf` performs the same first pass
+internally and records the answer as `hint_defocus_um` in `CtfEstimationQc`.
+What is lost is the hint being an artifact with its own `DefocusHintQc` before
+the whole stack commits to it, and that guard matters here: the second pass
+fits every view in a narrow window around the hint, so a hint that landed
+wrong is wrong for all of them, and no single view looks obviously bad.
+
+The fix is small — let the hint step take an aligned tilt stack and extract the
+view nearest zero tilt, which is what `estimate-ctf` already does internally.
+Note that CTFFIND asks a different sequence of questions for one view than for
+a stack, as section 1 above records, so the two paths cannot share a dialogue
+blindly.
+
+The general point is why this belongs in section 5 rather than on its own:
+**mid-pipeline entry is only a supported route if no step quietly depends on
+artifacts that only the frames path produces.** One such dependency is now
+known; the rest of the chain has not been audited for others, and that audit is
+the actual work item. Both stated entry points, frames and tilt series, should
+reach every step that does not physically need what they lack.
+
 **Compare backends in parallel — mostly done.** `--variant LABEL` labels a run's
 artifacts and selects inputs with the same label, so two lanes coexist in one
 registry. It covers the alignment-to-reconstruction chain, which is where the
