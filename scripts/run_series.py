@@ -160,7 +160,9 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             ["estimate-ctf", *common,
              *flag("ctf-voltage-kv", ctf["voltage_kv"]),
              *flag("ctf-spherical-aberration-mm", ctf["spherical_aberration_mm"]),
-             *flag("ctf-amplitude-contrast", ctf.get("amplitude_contrast"))],
+             *flag("ctf-amplitude-contrast", ctf.get("amplitude_contrast")),
+             *flag("ctffind-min-defocus-angstrom", ctf.get("min_defocus_angstrom")),
+             *flag("ctffind-max-defocus-angstrom", ctf.get("max_defocus_angstrom"))],
         ),
         # The lane parts here.
         (

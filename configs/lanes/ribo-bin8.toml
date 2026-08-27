@@ -23,9 +23,21 @@ stack = "data/empiar-11538/data/Untreated_dataset/{series}.mrc"
 #
 # The fit stack is built WITHOUT a variant label on purpose: the lane rule is
 # that a lookup prefers a labelled candidate and otherwise falls back to the
-# shared unlabelled one, never to another lane's. A bin4-labelled CTF model
-# would therefore be invisible to `correct-ctf --variant bin8`.
-ctf_fit = 4               # 4.89 A/px, Nyquist 9.8 A
+# shared unlabelled one, never to another lane's. A labelled CTF model would
+# therefore be invisible to `correct-ctf --variant bin8`.
+# Pick the fit binning by its Nyquist limit, not by the binning number. The fit
+# window closes at the stack's Nyquist, and a real fit reaches 6-8 A, so the fit
+# stack's Nyquist has to be finer than that or the stack caps the fit:
+#
+#   bin1  1.223 A/px   Nyquist  2.4 A   spare resolution, 4 GB stack
+#   bin2  2.446 A/px   Nyquist  4.9 A   finer than 6-8 A          <- use this
+#   bin4  4.892 A/px   Nyquist  9.8 A   coarser than 6-8 A, caps the fit
+#   bin8  9.784 A/px   Nyquist 19.6 A
+#
+# Lane A in the runbook fitted at 2.7 A/px and saw a bin8 fit at 5.4 A/px diverge
+# on a high-tilt view. bin4 here is 4.9 A/px, which is that same bad regime, so
+# matching lane A means bin2 rather than bin4 on this data.
+ctf_fit = 2               # 2.45 A/px, Nyquist 4.9 A, stack 2048^2
 tomogram = 8              # 9.78 A/px, Nyquist 19.6 A, 512^2, ribosome ~31 px
 
 [align]
@@ -102,10 +114,22 @@ auto_prune_outliers = true
 
 [ctf]
 voltage_kv = 300.0
-# A Krios G4 without a corrector is 2.7 mm. Not in the mdoc — confirm against
-# the deposition rather than trusting this line.
+# 2.7 mm is the Krios objective, and the MRC label plus the EMDB header both say
+# FEI Titan Krios. Checked and not found: the mdoc has Voltage but no Cs, and the
+# EMD-16721 header has no spherical-aberration field at all. Only the paper's
+# methods would state it. Left at 2.7 because at the bin2 fit limit the Cs term is
+# under 1% of the CTF phase, so even a large error in it is not measurable here.
 spherical_aberration_mm = 2.7
 amplitude_contrast = 0.07
+# From the EMD-16721 header: nominal_defocus_min 1.5, nominal_defocus_max 4.5 um.
+# Relaxed outward to [1, 5] um, which is what the notes prescribe for turning a
+# paper's stated range into ctffind bounds. Constrains the wide first pass over
+# the near-zero-tilt view; the second pass then searches a narrow window around
+# whatever that found. Cs is NOT in the EMDB header for this entry - only the
+# paper has it - but at this fit limit Cs contributes under 1% of the CTF phase,
+# so the Krios objective value stands.
+min_defocus_angstrom = 10000
+max_defocus_angstrom = 50000
 
 [reconstruct]
 # Left unset: thickness is derived. Set explicitly if the lamella depth is known.
