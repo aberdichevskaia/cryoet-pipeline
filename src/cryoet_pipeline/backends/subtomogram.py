@@ -342,6 +342,19 @@ class FftRefinementAveragingBackend:
         else:
             reference = aligned.mean(dim=0)
 
+        # Against whatever the refinement actually starts from, always. The
+        # final correlation on its own is a number without a scale: it says
+        # nothing about whether the refinement moved anything. Recording where
+        # it began is what turns it into a before and after.
+        starting_correlation_mean = float(
+            np.mean(
+                [
+                    _normalized_correlation(aligned[index], reference)
+                    for index in range(particle_count)
+                ]
+            )
+        )
+
         final_correlations = [math.nan] * particle_count
         for iteration in range(num_iterations):
             annealing = 2**iteration
@@ -382,6 +395,13 @@ class FftRefinementAveragingBackend:
         status = QcStatus.PASS
         mean_final_correlation = float(np.mean(final_correlations))
         minimum_final_correlation = float(np.min(final_correlations))
+        if mean_final_correlation <= starting_correlation_mean:
+            status = QcStatus.WARNING
+            warnings.append(
+                f"refinement did not improve the mean correlation: it started at "
+                f"{starting_correlation_mean:.3f} and ended at {mean_final_correlation:.3f}. "
+                "The search found nothing better than the orientations it was given"
+            )
         if minimum_final_correlation < 0.0:
             status = QcStatus.WARNING
             warnings.append(
@@ -411,6 +431,7 @@ class FftRefinementAveragingBackend:
             average_id=average_id,
             particle_count=particle_count,
             iterations_run=num_iterations,
+            starting_correlation_mean=starting_correlation_mean,
             mean_final_correlation=mean_final_correlation,
             minimum_final_correlation=minimum_final_correlation,
             initial_reference_correlation_mean=initial_reference_correlation_mean,
@@ -582,6 +603,21 @@ class ConeSearchRefinementBackend:
         for record, class_number in zip(records, assignments, strict=True):
             records[record.index] = replace(record, class_number=class_number)
 
+        # Against the references the search actually starts from, always. The
+        # final correlation on its own is a number without a scale: it says
+        # nothing about whether the refinement moved anything. Recording where
+        # it began is what turns it into a before and after.
+        starting_correlation_mean = float(
+            np.mean(
+                [
+                    _normalized_correlation(
+                        aligned[record.index], references[record.class_number - 1]
+                    )
+                    for record in records
+                ]
+            )
+        )
+
         warnings: list[str] = []
         correlations = [math.nan] * particle_count
         reassignment_fraction: float | None = None
@@ -730,6 +766,12 @@ class ConeSearchRefinementBackend:
                 f"{reassignment_fraction:.0%} of particles changed class in the last "
                 "iteration; classification has not converged, so run more iterations"
             )
+        if mean_correlation is not None and mean_correlation <= starting_correlation_mean:
+            warnings.append(
+                f"refinement did not improve the mean correlation: it started at "
+                f"{starting_correlation_mean:.3f} and ended at {mean_correlation:.3f}. "
+                "The search found nothing better than the orientations it was given"
+            )
         if warnings and status is QcStatus.PASS:
             status = QcStatus.WARNING
 
@@ -750,6 +792,7 @@ class ConeSearchRefinementBackend:
             crowther_increment_deg=minimum_sampling_deg,
             final_cone_sampling_deg=final_cone_sampling_deg,
             classes=class_summaries,
+            starting_correlation_mean=starting_correlation_mean,
             mean_final_correlation=mean_correlation,
             minimum_final_correlation=minimum_correlation,
             reassignment_fraction_last_iteration=reassignment_fraction,

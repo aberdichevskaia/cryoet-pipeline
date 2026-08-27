@@ -2679,14 +2679,25 @@ def average_particles(
         bool,
         typer.Option(help="Overwrite the average map, QC, and registry entries."),
     ] = False,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label this run so it coexists with other runs of the same stage "
+            "instead of replacing them, and select inputs carrying the same label. "
+            "Use it to compare backends or binnings side by side."
+        ),
+    ] = None,
 ) -> None:
     """Iteratively refine per-particle orientation/shift and average subtomograms."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    particle_stack = _particle_stack_artifact(artifact_registry, tilt_series_manifest)
+    particle_stack = _particle_stack_artifact(
+        artifact_registry, tilt_series_manifest, variant=variant
+    )
     selected_backend = _subtomogram_averaging_backend(backend)
     parameters: dict[str, object] = {
+        "variant": variant,
         "overwrite": overwrite,
         "num_iterations": num_iterations,
         "initial_angular_step_deg": initial_angular_step_deg,
@@ -3437,19 +3448,24 @@ def _picks_artifact(
 def _particle_stack_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.PARTICLE_STACK)
         if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
     ]
-    if len(matches) != 1:
+    if not matches:
         raise typer.BadParameter(
-            f"expected exactly one particle stack for {manifest.tilt_series_id}, "
-            f"found {len(matches)}",
-            param_hint="registry",
+            f"no particle stack for {manifest.tilt_series_id}", param_hint="registry"
         )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="particle stack",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _final_aligned_stack_artifact(

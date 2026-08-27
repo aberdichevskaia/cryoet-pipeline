@@ -710,6 +710,12 @@ class SubtomogramAveragingQc(BaseModel):
     iterations_run: int = Field(ge=0)
     mean_final_correlation: float | None = None
     minimum_final_correlation: float | None = None
+    starting_correlation_mean: float | None = None
+    """Mean correlation before refinement, against whatever it started from.
+
+    The final correlation alone has no scale. This is the other end of the
+    comparison, and it is recorded whether or not a reference was supplied.
+    """
     initial_reference_correlation_mean: float | None = None
     initial_reference_correlation_fraction_above_threshold: float | None = None
     status: QcStatus
@@ -720,6 +726,7 @@ class SubtomogramAveragingQc(BaseModel):
         correlation_values = [
             value
             for value in (
+                self.starting_correlation_mean,
                 self.mean_final_correlation,
                 self.minimum_final_correlation,
                 self.initial_reference_correlation_mean,
@@ -769,6 +776,12 @@ class SubtomogramClassificationQc(BaseModel):
     crowther_increment_deg: float = Field(gt=0.0)
     final_cone_sampling_deg: float = Field(gt=0.0)
     classes: list[ClassAverageSummary]
+    starting_correlation_mean: float | None = None
+    """Mean correlation before refinement, against the references it started from.
+
+    The final correlation alone has no scale, so on its own it cannot say
+    whether the refinement moved anything.
+    """
     mean_final_correlation: float | None = None
     minimum_final_correlation: float | None = None
     reassignment_fraction_last_iteration: float | None = None

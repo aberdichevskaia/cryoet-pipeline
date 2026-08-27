@@ -10,6 +10,7 @@ from cryoet_pipeline.backends.protocols import BackendContext, variant_label, va
 from cryoet_pipeline.cli import (
     _ctf_weighting_for_tomogram,
     _fiducial_seed_artifact,
+    _particle_stack_artifact,
     _reconstruction_input_stack_artifact,
     _select_variant,
     _tomogram_artifact,
@@ -326,3 +327,32 @@ def test_ctf_weighting_comes_from_the_model_that_corrected_this_tomogram(
 
     # Nothing corrected this one, so there is no weighting to declare.
     assert _ctf_weighting_for_tomogram(registry, _manifest(), plain_tomogram) is None
+
+
+def test_averaging_can_name_the_lane_it_averages(tmp_path: Path) -> None:
+    """Extraction labels its stack, so averaging has to be able to choose.
+
+    Two lanes could run all the way through extraction and then dead-end: the
+    lookup demanded exactly one particle stack and there was no flag to resolve
+    which. Not a wrong answer, but no way to proceed.
+    """
+
+    def stack(variant: str | None) -> Artifact:
+        suffix = f":{variant}" if variant else ""
+        return Artifact(
+            id=f"TS_TEST:particle_stack:cubic-crop{suffix}",
+            kind=ArtifactKind.PARTICLE_STACK,
+            path=tmp_path / f"particles{suffix}.zarr",
+            variant=variant,
+            parameters={"tilt_series_id": "TS_TEST"},
+        )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack(None))
+    registry.add(stack("bin8"))
+
+    assert _particle_stack_artifact(registry, _manifest(), variant="bin8").id == (
+        "TS_TEST:particle_stack:cubic-crop:bin8"
+    )
+    with pytest.raises(typer.BadParameter, match="found 2 candidates"):
+        _particle_stack_artifact(registry, _manifest())

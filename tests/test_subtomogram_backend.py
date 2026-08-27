@@ -320,6 +320,9 @@ def test_fft_refinement_averaging_recovers_known_orientations(tmp_path: Path) ->
     report = json.loads(qc_artifact.path.read_text())
     assert report["initial_reference_correlation_mean"] > 0.5
     assert report["mean_final_correlation"] > report["initial_reference_correlation_mean"]
+    # The baseline is recorded whether or not a reference was supplied, so
+    # "did the refinement move anything" is answerable from the report alone.
+    assert report["starting_correlation_mean"] is not None
 
     records = read_particle_star(Path(average_artifact.parameters["metadata_path"]))
     for record, true in zip(records, true_angles, strict=True):
@@ -486,6 +489,11 @@ def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: P
     assert report["num_classes"] == 1
     assert report["classes"][0]["particle_count"] == 3
     assert report["mean_final_correlation"] > 0.9
+    # Recorded whether or not a reference was supplied: the final correlation
+    # alone has no scale, and says nothing about whether refinement moved
+    # anything.
+    assert report["starting_correlation_mean"] is not None
+    assert report["mean_final_correlation"] > report["starting_correlation_mean"]
     assert report["crowther_increment_deg"] == pytest.approx(
         np.degrees(20.0 / 120.0), abs=1e-6
     )
