@@ -1,9 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=ribo-lane-b
 #SBATCH --output=slurm-ribo-%j.log
+#SBATCH --partition=cpu_p
+#SBATCH --qos=cpu_normal
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --time=6:00:00
+#
+# Partition and QOS are site-specific: this pair is what this cluster wants for
+# CPU work, and the GPU stages later need their own.
 #
 # Lane B, TS_0006..TS_0009, from import through CTF correction. CPU only: every
 # step here is IMOD or CTFFIND, and the GPU stages (picking, averaging) come
