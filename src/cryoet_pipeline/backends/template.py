@@ -142,10 +142,11 @@ class PytomTemplateBackend:
 
             template_statistics = _inspect_volume(temporary_template)
             actual_box_size = template_statistics.box_size
-            mask_radii = _mask_radii_px(
+            mask_radii, mask_radius_derived = _mask_radii_px(
                 context,
                 voxel_size_angstrom=output_voxel_size,
                 box_size=actual_box_size,
+                measured_extent_px=template_statistics.density_extent_px,
             )
 
             mask_command = [
@@ -204,6 +205,23 @@ class PytomTemplateBackend:
                 "check that the contrast matches the tomogram, since a mismatch makes "
                 "template matching quietly find nothing"
             )
+        if mask_radius_derived:
+            # A size the pipeline chose is worth a look even when it looks fine,
+            # and a warning nobody sees in the status is a warning nobody reads.
+            status = QcStatus.WARNING
+            warnings.append(
+                f"no mask size was given, so it was derived from the map itself: radius "
+                f"{mask_radii.x:.1f} px ({mask_radii.x * output_voxel_size:.0f} angstrom). "
+                "Check it against what the particle should be"
+            )
+        shape_warnings = _mask_versus_density_warnings(
+            mask_radii,
+            template_statistics,
+            voxel_size_angstrom=output_voxel_size,
+        )
+        if shape_warnings:
+            status = QcStatus.WARNING
+            warnings.extend(shape_warnings)
 
         template_id = (
             f"{manifest.tilt_series_id}:template:{self.name}"
@@ -231,10 +249,14 @@ class PytomTemplateBackend:
             inverted=invert,
             low_pass_angstrom=low_pass,
             mask_radius_px=mask_radii.x,
+            mask_radius_derived_from_density=mask_radius_derived,
             mask_sigma_px=mask_sigma,
             template_minimum=template_statistics.minimum,
             template_maximum=template_statistics.maximum,
             template_median=template_statistics.median,
+            density_extent_x_px=template_statistics.density_extent_px[0],
+            density_extent_y_px=template_statistics.density_extent_px[1],
+            density_extent_z_px=template_statistics.density_extent_px[2],
             status=status,
             warnings=warnings,
         )
@@ -248,6 +270,9 @@ class PytomTemplateBackend:
             "emdb_id": emdb_id,
             "box_size_px": actual_box_size,
             "inverted": invert,
+            # Recorded on the artifact, not only in QC, so a later step can ask
+            # how big the reference actually is without reopening the map.
+            "density_extent_px": list(template_statistics.density_extent_px),
             "command_log_path": str(paths.log),
             "qc_path": str(paths.report),
         }
@@ -345,6 +370,8 @@ class _VolumeStatistics:
     maximum: float
     median: float
     voxel_size_angstrom: float
+    density_extent_px: tuple[float, float, float]
+    """How far the density actually reaches, as `(x, y, z)` in pixels."""
 
 
 def _inspect_volume(path: Path) -> _VolumeStatistics:
@@ -357,13 +384,136 @@ def _inspect_volume(path: Path) -> _VolumeStatistics:
         raise RuntimeError(f"expected a cubic volume, got shape {data.shape}: {path}")
     if not np.isfinite(data).all():
         raise RuntimeError(f"volume contains nonfinite values: {path}")
+    median = float(np.median(data))
     return _VolumeStatistics(
         box_size=int(data.shape[0]),
         minimum=float(data.min()),
         maximum=float(data.max()),
-        median=float(np.median(data)),
+        median=median,
         voxel_size_angstrom=voxel_size,
+        density_extent_px=_density_extent_px(data, median=median),
     )
+
+
+def _density_extent_px(data: np.ndarray, *, median: float) -> tuple[float, float, float]:
+    """Measure how far the density reaches along each axis, as `(x, y, z)`.
+
+    Per axis rather than as one diameter, because a reference map is not always
+    a compact blob: EMD-2638 is a helical reconstruction whose density repeats
+    along z and fills the box in that direction, so a single number describes it
+    only by discarding what makes it different. Three numbers show the shape,
+    and their disagreement is exactly the signal that a spherical mask is wrong.
+
+    The width reported is where the profile falls to a tenth of its peak, which
+    reads a hard-edged sphere about 8% under its true diameter and is the only
+    tried measure that holds up in noise. Two others were tried and rejected on
+    a sphere buried in 30% noise, where the truth is 24 px: the width holding
+    95% of the mass drifted to 31, and the width at a twentieth of the peak —
+    exact on clean shapes — blew up to 64, the whole box. Being slightly under
+    is worth being stable, and the margin added when a mask is derived from this
+    is set accordingly.
+
+    Background has to be excluded first or the measurement is worthless. Mass
+    spread thinly over the whole box is still mass, so on a map with ordinary
+    noise every axis otherwise reads as the full box whatever the particle looks
+    like.
+
+    The background is removed from each axis's own profile, as the level it
+    falls to, rather than from the volume as a whole. Estimating a noise level
+    over the volume is what the obvious version does — a median absolute
+    deviation, three sigma — and it is wrong for exactly the maps this function
+    exists to describe. That estimator assumes most of the box is background,
+    which is true of a lone particle and false of a lattice, so on EMD-2638 it
+    measured the signal rather than the noise and cut away everything but the
+    single strongest band: 8 px of a 28 px box along one axis, for a map whose
+    density is spread across all three. Subtracting a per-axis floor makes no
+    such assumption, and reads 28/27/24 there.
+
+    Density is taken from whichever side of the median holds the signal, the
+    same test `_contrast_matches_inversion` makes, so this reads an inverted
+    template correctly.
+    """
+
+    signal = data - median
+    below = median - float(data.min())
+    above = float(data.max()) - median
+    signal = -np.minimum(signal, 0.0) if below > above else np.maximum(signal, 0.0)
+
+    extents: list[float] = []
+    # The array is indexed (z, y, x); summing over the other two axes leaves the
+    # profile along this one, so these yield x, then y, then z.
+    for other_axes in ((0, 1), (0, 2), (1, 2)):
+        profile = signal.sum(axis=other_axes).astype(np.float64)
+        # A low percentile rather than the minimum, so one empty slice at the
+        # edge of the box does not set the level for the whole axis.
+        profile = np.clip(profile - np.percentile(profile, 10.0), 0.0, None)
+        peak = profile.max()
+        if peak <= 0.0:
+            extents.append(0.0)
+            continue
+        occupied = np.nonzero(profile > 0.1 * peak)[0]
+        extents.append(float(occupied.max() - occupied.min() + 1))
+    return extents[0], extents[1], extents[2]
+
+
+_MASK_TOO_TIGHT = 0.6
+_MASK_TOO_LOOSE = 1.8
+_ANISOTROPIC = 1.5
+
+
+def _mask_versus_density_warnings(
+    radii: _MaskRadii,
+    statistics: _VolumeStatistics,
+    *,
+    voxel_size_angstrom: float,
+) -> list[str]:
+    """Compare the mask that was asked for against the density that is there.
+
+    The only existing guard on the requested size is that the mask fits in the
+    box, which catches a diameter larger than the whole map and nothing else.
+    That was enough for EMD-2638, whose box is 153 angstrom, only because the
+    proposed 250 angstrom exceeded it; on a map with a roomy box any wrong value
+    up to the box size passes silently, and a mask that misses the density finds
+    nothing without ever failing.
+
+    These are warnings, not errors. The measurement rests on a definition of
+    "extent" rather than on a fact about the map, a deliberately tight mask is a
+    legitimate choice for a lattice, and refusing to run on a judgement call
+    would be worse than saying what was noticed.
+    """
+
+    warnings: list[str] = []
+    axes = zip(
+        ("x", "y", "z"), (radii.x, radii.y, radii.z), statistics.density_extent_px, strict=True
+    )
+    for name, radius, extent in axes:
+        if extent <= 0.0:
+            continue
+        ratio = (radius * 2.0) / extent
+        if ratio < _MASK_TOO_TIGHT:
+            warnings.append(
+                f"mask is {radius * 2.0:.1f} px across along {name} but 95% of the density spans "
+                f"{extent:.1f} px ({extent * voxel_size_angstrom:.0f} angstrom), and that is a "
+                "floor; the mask cuts the particle, which lowers every score without failing"
+            )
+        elif ratio > _MASK_TOO_LOOSE:
+            warnings.append(
+                f"mask is {radius * 2.0:.1f} px across along {name} but 95% of the density "
+                f"spans only {extent:.1f} px ({extent * voxel_size_angstrom:.0f} angstrom); "
+                "the mask is "
+                "mostly background, which dilutes the correlation"
+            )
+
+    extents = statistics.density_extent_px
+    smallest, largest = min(extents), max(extents)
+    if radii.is_sphere and smallest > 0.0 and largest / smallest > _ANISOTROPIC:
+        warnings.append(
+            f"density is not isotropic — x/y/z span {extents[0]:.1f}/{extents[1]:.1f}/"
+            f"{extents[2]:.1f} px — but the mask is a sphere; consider "
+            "--template-mask-radius-y-px and --template-mask-radius-z-px, and note that a "
+            "non-spherical mask also changes how pytom normalises the score"
+        )
+    return warnings
 
 
 def _contrast_matches_inversion(
@@ -415,12 +565,38 @@ class _MaskRadii:
         return self.x == self.y == self.z
 
 
+_DERIVED_MARGIN = 1.2
+"""Overhang on the measured extent, following pytom-match-pick's own advice.
+
+Its documentation recommends a mask 10-20% wider than the particle radius, since
+a tight mask removes noise from around the particle. The measurement this
+multiplies reads a hard edge about 8% under true, so 1.2 lands near the bottom of
+that band — which is the side the documentation leans to.
+"""
+
+
 def _mask_radii_px(
     context: BackendContext,
     *,
     voxel_size_angstrom: float,
     box_size: int,
-) -> _MaskRadii:
+    measured_extent_px: tuple[float, float, float] | None = None,
+) -> tuple[_MaskRadii, bool]:
+    """Size the mask, and say whether the size had to be derived.
+
+    Deriving it is safe to add because asking for neither parameter used to be
+    an error, so no command line that works today changes behaviour. The derived
+    value is a sphere on the largest measured axis, never an ellipsoid: a
+    non-spherical mask changes how pytom normalises the score, which is too
+    consequential to start doing without being asked. When the map really is
+    anisotropic the QC warning says so and names the per-axis options.
+
+    A map whose density fills its box — a lattice, say — derives a radius that
+    does not fit, and the existing box check refuses it. That refusal is the
+    right answer: nothing about such a map says where one particle ends.
+    """
+
+    derived = False
     explicit = _optional_positive_float_parameter(context, "template_mask_radius_px")
     if explicit is not None:
         radius = explicit
@@ -428,12 +604,16 @@ def _mask_radii_px(
         diameter = _optional_positive_float_parameter(
             context, "template_particle_diameter_angstrom"
         )
-        if diameter is None:
+        if diameter is not None:
+            radius = diameter / 2.0 / voxel_size_angstrom
+        elif measured_extent_px is not None and max(measured_extent_px) > 0.0:
+            radius = max(measured_extent_px) * _DERIVED_MARGIN / 2.0
+            derived = True
+        else:
             raise TypeError(
                 "provide either 'template_mask_radius_px' or "
                 "'template_particle_diameter_angstrom' to size the mask"
             )
-        radius = diameter / 2.0 / voxel_size_angstrom
     radii = _MaskRadii(
         x=radius,
         y=_optional_positive_float_parameter(context, "template_mask_radius_y_px") or radius,
@@ -442,6 +622,17 @@ def _mask_radii_px(
 
     longest = max(radii.x, radii.y, radii.z)
     if longest * 2.0 > box_size:
+        if derived:
+            # `derived` is only set when the measurement exists.
+            extents = measured_extent_px or (0.0, 0.0, 0.0)
+            raise ValueError(
+                f"the density fills this map — measured extents "
+                f"{extents[0]:.0f}/{extents[1]:.0f}/{extents[2]:.0f} px in a "
+                f"{box_size} px box — so there is "
+                "no particle size to derive. This is what a lattice or a helical "
+                "reconstruction looks like; pass --template-particle-diameter-angstrom "
+                "or --template-mask-radius-px to say what one particle is"
+            )
         # Without an explicit box the size comes from the deposited map's own
         # extent after resampling, so the two numbers being far apart usually
         # means the requested diameter does not describe this map.
@@ -452,7 +643,7 @@ def _mask_radii_px(
             f"with at least {math.ceil(longest * 2.0)}, or check that the particle is "
             "really that large"
         )
-    return radii
+    return radii, derived
 
 
 @dataclass(frozen=True)

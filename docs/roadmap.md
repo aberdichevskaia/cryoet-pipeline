@@ -172,7 +172,30 @@ Still outstanding:
   reference common, then run the alignment and reference-update loop fully
   independently per half.
 - Missing-wedge and CTF weighting in the alignment correlation.
+  `_normalized_correlation` and `_best_shift_and_correlation` both score
+  unweighted, which their docstrings say outright. This is tolerable while
+  orientations are spread, because each particle's wedge then points somewhere
+  different in the reference frame and they cancel. It stops being tolerable
+  when the orientations cluster — see section 9 — since the wedge then averages
+  coherently and can build layers of its own that look like structure.
 - Symmetry.
+
+A trap worth keeping, found while deciding whether an average had converged.
+**A mean-per-slice profile taken over the whole box says nothing.** Rotating a
+cube leaves zeros in the corners, they fall in different places for every
+particle, and the resulting shell dominates both ends of every axis. Profiled
+that way a perfectly layered average looks like equal noise on all three axes,
+which is exactly the wrong conclusion. Profile over the inscribed sphere, drop
+the outermost slices where the sphere holds only a handful of voxels, and put
+all three axes on one scale — normalising each axis to its own maximum makes a
+faint wobble draw the same picture as real layering.
+
+The matching control is to average the same particles under **shuffled**
+orientations: real alignment collapses when the angles are swapped between
+particles. Its limitation is worth recording too, because it bit here. The
+shuffle only breaks what the orientation *distribution* does not already fix,
+so when every particle shares a tilt the swap preserves the geometry it was
+meant to destroy and the control reads as a false floor.
 
 ## 5. Run any part of the pipeline, and compare backends side by side
 
@@ -354,3 +377,68 @@ interpretation is what an agent surface would expose later, as recorded in
 [agent_architecture.md](agent_architecture.md); building the human-facing half now
 is worthwhile on its own, since the wall of fields is equally unreadable whoever is
 looking at it.
+
+## 9. A geometric layer, for lattices and membrane-bound particles
+
+Everything above treats particles as independent points with independent
+orientations. That is right for ribosomes and wrong for a Gag lattice on a
+virion, and the difference is not cosmetic — it breaks specific machinery.
+
+Three consequences, in the order they bite:
+
+**Half-sets split by particle index are not independent.** Neighbouring picks on
+one virion overlap in the tomogram and share the same alignment error, so
+splitting `1 + index % 2` puts correlated particles on opposite sides of the
+FSC. The resolution estimate is then optimistic for a second reason on top of
+the one section 4 records. The fix is to split by the object a particle belongs
+to — one virion goes entirely into one half.
+
+**Picks on a continuous lattice are not distinct particles.** Template matching
+returns many peaks per lattice patch, offset along the lattice rather than
+centred on anything, and the shift along the lattice is degenerate. Deduplicate
+by distance *and* by orientation consistency: two picks a lattice spacing apart
+with the same orientation are one measurement, not two.
+
+**The orientations cluster, and that couples to the missing wedge.** Membrane
+normals on a virion in a slab tomogram are not isotropic — the sides are
+resolved far better than the top and bottom, so matching finds them
+preferentially, and the picked tilt angles pile up near 90 degrees. Since the
+wedge is fixed along tomogram z for every subtomogram, a clustered orientation
+distribution sends it to nearly the same place in every particle's own frame.
+It then averages coherently instead of cancelling. This is what makes the
+unweighted correlation in section 4 an actual problem rather than a known
+approximation, and it is why the shuffled-angle control loses its power on
+exactly the data that needs it most.
+
+The cheap first slice is the first two items: splitting by object and
+deduplicating. Both are geometry over the existing picks and need no new
+external tool.
+
+The larger version is to derive positions from fitted geometry instead of only
+from correlation peaks. ArtiaX already offers the manual form of this — Fit
+Geometric Model (Sphere, Surface, Boundary) and Generate New Models → gen on
+surface — which fits spheres to virions and generates positions on the surface
+with normals that are correct by construction. Those orientations are an
+independent measurement to compare the matching against, and the comparison is
+the honest way to tell a real lattice average from reference bias. Doing it in
+the pipeline means a `GEOMETRIC_MODEL` artifact kind (sphere or surface fitted
+to a segmentation), positions generated on it, and picks carrying a reference
+to the object they came from — which is also what the half-set split above
+needs.
+
+## 10. Re-extract and re-refine without repeating the template match
+
+The GPU template match is by far the most expensive step and the one most often
+*not* what needs redoing. Changing the box size, the score threshold, the
+extraction diameter, or the number of particles are all cheap operations on a
+job that already ran, and pytom-match-pick supports exactly that: extraction
+reads the job JSON and the score and angle volumes the match wrote.
+
+Our `pick-particles` re-runs the match every time, because the artifact it
+registers is the extracted picks rather than the match itself. The work is to
+register the match's own outputs — job JSON, score volume, angle volume — as an
+artifact, and to make extraction a separate step consuming it. This also makes
+the extraction options genuinely explorable, which matters because the trap
+recorded elsewhere is real: matching's `--particle-diameter` sets the Crowther
+angular sampling, extraction's sets peak separation as diameter/2, and they are
+not the same number for the same reason.

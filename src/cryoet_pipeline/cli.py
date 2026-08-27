@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 import typer
 
@@ -1944,6 +1945,25 @@ def segment_tomogram(
     typer.echo(f"updated {registry}")
 
 
+def _read_qc_report(report: Artifact) -> dict[str, Any]:
+    """Load the JSON a QC artifact points at."""
+
+    return cast(dict[str, Any], json.loads(report.path.read_text()))
+
+
+def _echo_qc_warnings(report: dict[str, Any]) -> None:
+    """Print what a QC report says, not only that it has something to say.
+
+    Every command prints its QC status and none prints the reason, so a run that
+    ends in "QC status: warning" tells the reader that something was noticed and
+    not what. The text is already written to the report; this only puts it where
+    it will be seen.
+    """
+
+    for warning in report.get("warnings", []):
+        typer.echo(f"  warning: {warning}")
+
+
 @app.command("prepare-template")
 def prepare_template(
     manifest: Annotated[
@@ -2121,12 +2141,33 @@ def prepare_template(
     artifact_registry.write(registry)
 
     template, mask, qc_report = artifacts
+    report = _read_qc_report(qc_report)
+    voxel_size = template.pixel_spacing_angstrom or 0.0
+    extents = (
+        report["density_extent_x_px"],
+        report["density_extent_y_px"],
+        report["density_extent_z_px"],
+    )
+    radius = report["mask_radius_px"]
+
     typer.echo(f"wrote template: {template.path}")
     typer.echo(f"wrote template mask: {mask.path}")
     typer.echo(f"box size: {template.parameters['box_size_px']} px")
-    typer.echo(f"voxel size: {template.pixel_spacing_angstrom} A")
+    typer.echo(f"voxel size: {voxel_size} A")
+    # Printed rather than left in the report, because these are the two numbers
+    # a wrong template gets wrong, and nobody opens a JSON file to check a run
+    # that said it succeeded.
+    in_pixels = "/".join(f"{extent:.1f}" for extent in extents)
+    in_angstrom = "/".join(f"{extent * voxel_size:.0f}" for extent in extents)
+    typer.echo(f"density extent: {in_pixels} px ({in_angstrom} A)")
+
+    derived = ""
+    if report["mask_radius_derived_from_density"]:
+        derived = " - derived from the map, no size was given"
+    typer.echo(f"mask radius: {radius:.1f} px ({radius * voxel_size:.0f} A){derived}")
     typer.echo(f"wrote template QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
+    _echo_qc_warnings(report)
     typer.echo(f"updated {registry}")
 
 

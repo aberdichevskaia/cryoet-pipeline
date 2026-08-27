@@ -645,10 +645,18 @@ class TemplatePreparationQc(BaseModel):
     inverted: bool
     low_pass_angstrom: float | None = None
     mask_radius_px: float = Field(gt=0)
+    mask_radius_derived_from_density: bool = False
+    """True when no mask size was given and it was measured off the map instead."""
     mask_sigma_px: float | None = None
     template_minimum: float
     template_maximum: float
     template_median: float
+    density_extent_x_px: float = Field(ge=0.0)
+    density_extent_y_px: float = Field(ge=0.0)
+    density_extent_z_px: float = Field(ge=0.0)
+    """How far the density reaches along each axis, measured from the produced
+    template. Recorded per axis because a reference map is not always a compact
+    blob, and the three disagreeing is what says a spherical mask is wrong."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 
@@ -661,6 +669,9 @@ class TemplatePreparationQc(BaseModel):
             raise ValueError("template minimum cannot exceed its maximum")
         if self.mask_radius_px * 2.0 > self.box_size_px:
             raise ValueError("mask diameter cannot exceed the template box size")
+        extents = (self.density_extent_x_px, self.density_extent_y_px, self.density_extent_z_px)
+        if any(extent > self.box_size_px for extent in extents):
+            raise ValueError("measured density extent cannot exceed the template box size")
         return self
 
 
