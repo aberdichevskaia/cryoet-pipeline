@@ -517,3 +517,86 @@ Two related points worth keeping:
 
 Not urgent: until patch tracking has run against real IMOD it is unknown whether
 the margin is a knob that gets turned at all. Do this once it works.
+
+## 12. Derive the reconstruction thickness from the data
+
+`reconstruct-tomogram` takes its thickness from tiltalign's two-surface analysis
+when `--thickness` is not given. That derivation is degenerate for patch
+tracking, and it does not say so. Measured on two datasets:
+
+```text
+TS_01   (gold beads)  recommended_unbinned_thickness_px  2366  = 160 nm
+TS_0005 (patches)     recommended_unbinned_thickness_px    78  = 9.5 nm
+```
+
+Both numbers are internally correct. The gold beads sit on the two faces of the
+specimen, so their spread in Z *is* the thickness. Patches are two-dimensional
+features correlated across tilts, and their solved Z positions are nearly
+coplanar, so there is no spread to measure. A FIB lamella is 100 to 250 nm;
+9.5 nm is wrong by more than an order of magnitude, and the run reports
+`warning` for an unrelated residual rather than for this.
+
+**Only the thickness is degenerate, not the whole surface analysis.** The same
+analysis also yields the tilt-angle offset and the X-axis tilt, and those come
+from the *orientation* of the plane the fiducials lie in rather than from their
+spread — which coplanar points determine well, arguably better than scattered
+ones. One property of the point distribution therefore acts in opposite
+directions, and the two outputs must be judged separately.
+
+Measured, on TS_0005: the surface analysis applied a tilt-angle offset of
+-7.31 degrees, and refitting the intensity model below against the nominal
+angles instead of the solved ones drops its R^2 from 0.998 to 0.642. The offset
+is real — a FIB lamella carries a milling pretilt — and it was found correctly
+from a distribution that could say nothing about thickness.
+
+There is a measurement that does not depend on the fiducials. For a slab of
+thickness *t* the transmitted intensity follows Beer-Lambert with an effective
+path *t / cos θ*:
+
+```text
+ln I(theta) = ln I0 - (t / lambda) * (1 / cos theta)
+```
+
+so a straight-line fit of log mean intensity against `1 / cos theta` has slope
+`-t/lambda`. Everything it needs — an aligned stack and its tilt angles —
+already exists before reconstruction. Checked against synthetic data with a
+known answer: 180 nm in, 180.3 nm out, R^2 0.9998.
+
+Source priority:
+
+1. `--thickness` given explicitly — use it, derive nothing;
+2. otherwise the Beer-Lambert fit, when its R^2 clears a threshold — use it, and
+   report `warning` because the pipeline chose the number, as
+   `prepare-template` already does for a derived mask radius;
+3. otherwise refuse and require `--thickness`.
+
+The third line is the point. Today's failure mode is a confidently wrong 78 px;
+"this could not be measured, pass it explicitly" is strictly better than a guess
+that looks like a measurement.
+
+Three details, without which this becomes a new silent error:
+
+- **The mean free path is a hardcoded physical constant.** Roughly 300 nm for
+  vitreous ice at 300 kV, carrying about +-25% depending on composition, on
+  voltage, and on whether elastic scattering is counted. So expose
+  `--mean-free-path-nm`, record the value used, and report the interval rather
+  than a single number.
+- **Fit the right stack.** The model needs raw-ish intensities, and any
+  normalisation breaks it. Phase flipping should leave a mean alone, but the
+  derivation should not rest on that: let it look up the unlabelled pre-CTF
+  aligned stack deliberately, rather than taking whatever reconstruction
+  happens to consume.
+- **Gate on the fit.** A stack that does not obey the model still returns a
+  slope. Below the R^2 threshold, refuse rather than pass a number on.
+
+One check comes free. Two independent estimators of the same quantity means
+**their disagreement is itself a signal**: whether a fiducial Z distribution is
+meaningful cannot be tested automatically, but a factor-of-twenty gap between
+the two numbers can be, and that is exactly the case found by hand here. So
+keep tiltalign's recommendation in QC for comparison, and stop using it as the
+source.
+
+Worth doing together with the defocus-hint gap in section 5. Both are
+measurements that are properties of a tilt-series rather than of a step, both
+want to be inspectable before anything commits to them, and both are currently
+either unavailable or wrong for one of the two entry points.
