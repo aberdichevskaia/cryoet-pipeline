@@ -23,6 +23,10 @@ from typing import Any
 _QC_SKIP = frozenset({"schema_version", "tilt_series_id", "backend", "status", "warnings"})
 _NUMERIC = (int, float)
 
+# Suffixes 3dmod can actually open. A Zarr store cannot be opened by IMOD, and
+# suggesting it would be a confidently wrong instruction.
+_IMOD_SUFFIXES = frozenset({".st", ".mrc", ".rec", ".ali", ".preali", ".map"})
+
 
 def load(path: Path) -> Any:
     try:
@@ -178,6 +182,85 @@ def print_alignments(artifacts: list[dict[str, Any]]) -> None:
         print(f"  {'excluded_z_values':<44} {excluded if excluded else '[]'}")
 
 
+# What a person usually wants to open, and the command that would create it if it
+# is not there yet. Ordered as the pipeline runs, so the first missing line is the
+# next thing to do.
+_EXPECTED: tuple[tuple[str, str, str], ...] = (
+    ("coarse-aligned preview", "qc:coarse_alignment:preview", "qc-coarse-alignment"),
+    ("fine-aligned stack", "aligned_tilt_stack:final", "build-final-aligned-stack"),
+    ("tomogram", "tomogram", "reconstruct-tomogram"),
+    ("picks in ChimeraX", "chimerax_script", "export-picks"),
+    ("particle stack", "particle_stack", "extract-particles"),
+    ("average", "subtomogram_average", "average-particles"),
+)
+
+
+def viewable(project: Path, series: str, artifacts: list[dict[str, Any]]) -> None:
+    """Name the files worth opening, with the command that opens them.
+
+    Alignment steps produce transforms, not images, which is the usual source of
+    'which of these do I look at' — so say plainly when the thing wanted does not
+    exist yet and which step would make it.
+    """
+
+    print("\nwhat to look at")
+    found: set[str] = set()
+
+    for art in artifacts:
+        kind = art.get("kind")
+        params = art.get("parameters", {})
+        path = str(art.get("path", ""))
+
+        if kind in {"tilt_stack", "aligned_tilt_stack"}:
+            is_preview = "coarse_alignment:preview" in str(art.get("id"))
+            purpose = params.get("purpose") or ("coarse preview" if is_preview else "imported")
+            if Path(path).suffix in _IMOD_SUFFIXES:
+                print(f"  3dmod {path}")
+                print(f"      {kind} ({purpose})")
+            else:
+                print(f"      {kind} ({purpose}), not openable in 3dmod: {path}")
+            if purpose == "final_alignment":
+                found.add("aligned_tilt_stack:final")
+            if is_preview:
+                found.add("qc:coarse_alignment:preview")
+
+        elif kind in {"tomogram", "denoised_tomogram"}:
+            # The canonical store is Zarr, which 3dmod cannot open; the IMOD .rec
+            # is the compatibility copy, and it is in YZX section order.
+            rec = params.get("imod_rec_path")
+            if isinstance(rec, str):
+                print(f"  3dmod {rec}")
+                print(f"      {kind}, IMOD .rec ({params.get('imod_rec_axis_order', '?')})")
+            print(f"      canonical Zarr, not openable in 3dmod: {path}")
+            found.add("tomogram")
+
+        elif kind in {"template", "subtomogram_average"}:
+            opener = "ChimeraX" if Path(path).suffix in _IMOD_SUFFIXES else "(not a map)"
+            print(f"  {opener} {path}")
+            print(f"      {kind}")
+            found.add(kind)
+
+        elif kind == "particle_stack":
+            print(f"      particle stack (Zarr): {path}")
+            found.add(kind)
+
+        elif kind == "qc":
+            document = load(Path(path))
+            slices = document.get("central_slice_paths") if isinstance(document, dict) else None
+            if isinstance(slices, dict):
+                for axis, slice_path in sorted(slices.items()):
+                    print(f"      central slice {axis}: {slice_path}")
+
+    for script in sorted((project).rglob(f"{series}_open_in_chimerax.cxc")):
+        print(f"  chimerax {script}")
+        print("      picks over their tomogram (pins the RELION reader)")
+        found.add("chimerax_script")
+
+    for label, token, command in _EXPECTED:
+        if token not in found:
+            print(f"  (no {label} yet — run {command})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True, type=Path)
@@ -214,6 +297,7 @@ def main() -> int:
 
     print_artifacts(artifacts)
     print_alignments(artifacts)
+    viewable(args.project, args.series, artifacts)
     for label, path in qc_documents(artifacts):
         print_qc(label, path)
     return 0
