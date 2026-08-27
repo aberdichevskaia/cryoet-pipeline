@@ -31,9 +31,14 @@ tomogram = 8              # 9.78 A/px, Nyquist 19.6 A, 512^2, ribosome ~31 px
 [align]
 binning = 8               # coarse alignment works on a reduced stack
 min_std_ratio = 0.2
-# Deliberately not set: let IMOD find the rotation axis at coarse alignment and
-# compare what it finds against 83.6, which the MRC label and the mdoc both give.
-# Agreement is reassuring; disagreement is a signal worth chasing.
+# Deliberately not set, but NOT because coarse alignment searches for it — it does
+# not. With no override, _tilt_axis_angle takes rotation_angle_deg from the manifest
+# and returns angle - 90, and that value goes to `tiltxcorr -rotation` as an input.
+# So the coarse stage reports back the number it was given, and comparing it against
+# the mdoc proves nothing.
+#
+# The measured axis comes from fine alignment, which parses it out of tiltalign's own
+# log. Compare that against 83.6, which the MRC label and the mdoc both record.
 # tilt_axis_angle = 83.6
 
 [qc_coarse]
