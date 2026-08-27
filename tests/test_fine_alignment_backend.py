@@ -29,9 +29,18 @@ from cryoet_pipeline.models import (
 from cryoet_pipeline.runtime import DevicePreference
 
 
+@pytest.mark.parametrize("writes_filled_model", [True, False])
 def test_imod_tiltalign_backend_writes_fine_alignment_and_qc(
     tmp_path: Path,
+    writes_filled_model: bool,
 ) -> None:
+    """tiltalign omits the filled-in model when there are no gaps to fill.
+
+    Bead tracking always leaves gaps, so the file always appeared. Patch
+    tracking gives every patch a point on every view, and the absent file is
+    then a fact about complete coverage rather than a failed run.
+    """
+
     tracking_stack, fiducial_model = _input_artifacts(tmp_path)
     registry = ArtifactRegistry.empty()
     registry.extend([tracking_stack, fiducial_model])
@@ -83,7 +92,10 @@ def test_imod_tiltalign_backend_writes_fine_alignment_and_qc(
                 "0 0 1 -0.1 -0.2\n"
                 "0 0 2 0.2 0.2\n"
             )
-            _path_after(command, "-OutputFilledInModel").write_bytes(b"filled")
+            if writes_filled_model:
+                _path_after(command, "-OutputFilledInModel").write_bytes(
+                    b"filled"
+                )
             _path_after(command, "-OutputFidXYZFile").write_text("xyz\n")
             _path_after(command, "-OutputTiltFile").write_text(
                 "-6.100000\n-3.000000\n0.100000\n"
@@ -168,6 +180,11 @@ def test_imod_tiltalign_backend_writes_fine_alignment_and_qc(
     )
     assert alignment_artifact.parameters["axis_z_shift_applied_in_alignment"] is True
     assert Path(alignment_artifact.parameters["imod_xf_path"]).is_file()
+    filled = alignment_artifact.parameters["filled_fiducial_model_path"]
+    if writes_filled_model:
+        assert filled is not None and Path(filled).is_file()
+    else:
+        assert filled is None
     result = TiltAlignment.model_validate_json(alignment_artifact.path.read_text())
     assert result.stage == "fine"
     assert result.input_stack_id == tracking_stack.id

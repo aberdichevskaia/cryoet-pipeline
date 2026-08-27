@@ -309,8 +309,14 @@ class ImodTiltalignBackend:
                 solved_tilt_file,
                 x_axis_tilt_file,
                 fine_transform,
-                filled_model,
             )
+            # tiltalign writes -OutputFilledInModel only when there are gaps to
+            # fill. Bead tracking always loses beads at high tilt, so the file
+            # always appeared; patch tracking gives every patch a point on every
+            # view, leaving nothing to fill and no file. Its absence is a fact
+            # about complete coverage, not a failure.
+            optional_outputs = (filled_model,)
+            all_outputs = (*required_outputs, *optional_outputs)
             missing = [path for path in required_outputs if not path.is_file()]
             if missing:
                 raise RuntimeError(
@@ -345,7 +351,7 @@ class ImodTiltalignBackend:
                     log_path=paths.prune_log,
                 )
                 _replace_file(cleaned_model, alignment_input_model)
-                for output in required_outputs:
+                for output in all_outputs:
                     output.unlink(missing_ok=True)
                 result = self._command_runner(
                     command,
@@ -410,7 +416,7 @@ class ImodTiltalignBackend:
                     "-AxisZShift",
                     f"{applied_positioning.axis_z_shift_unbinned_px:.6f}",
                 )
-                for output in required_outputs:
+                for output in all_outputs:
                     output.unlink(missing_ok=True)
                 result = self._command_runner(
                     positioned_command,
@@ -564,7 +570,8 @@ class ImodTiltalignBackend:
             _replace_file(solved_tilt_file, paths.solved_tilt_file)
             _replace_file(x_axis_tilt_file, paths.x_axis_tilt_file)
             _replace_file(fine_transform, paths.fine_transform)
-            _replace_file(filled_model, paths.filled_model)
+            if filled_model.is_file():
+                _replace_file(filled_model, paths.filled_model)
             _replace_file(final_transform, paths.final_transform)
             _replace_file(alignment_input_model, paths.alignment_input_model)
 
@@ -591,7 +598,9 @@ class ImodTiltalignBackend:
                 "solved_tilt_file_path": str(paths.solved_tilt_file),
                 "x_axis_tilt_file_path": str(paths.x_axis_tilt_file),
                 "residual_file_path": str(paths.residual_file),
-                "filled_fiducial_model_path": str(paths.filled_model),
+                "filled_fiducial_model_path": (
+                    str(paths.filled_model) if paths.filled_model.is_file() else None
+                ),
                 "output_3d_model_path": str(paths.output_model),
                 "fiducial_xyz_path": str(paths.fiducial_xyz),
                 "tiltalign_log_path": str(paths.tiltalign_log),
@@ -1452,4 +1461,6 @@ def _fraction_parameter(
 
 
 def _paths_size_bytes(*paths: Path) -> int:
-    return sum(path.stat().st_size for path in paths)
+    # Skips what is absent: the filled-in model is optional, and anything
+    # genuinely required has already been checked by this point.
+    return sum(path.stat().st_size for path in paths if path.is_file())
