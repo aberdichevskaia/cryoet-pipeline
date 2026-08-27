@@ -34,13 +34,20 @@ CONFIG=configs/lanes/ribo-bin8.toml
 
 cd "$REPO"
 
-# conda is not initialised in a non-interactive batch shell, so `conda activate`
-# alone would fail here.
+export IMOD_DIR=/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12
+
+# `set -u` applies to our code, not to environment scripts that were not written
+# for it: IMOD-linux.sh appends to MANPATH assuming it already exists, which is
+# true in an interactive shell and false in a batch one. conda's hook is wrapped
+# for the same reason. Strictness resumes immediately after.
+#
+# conda is also not initialised in a non-interactive shell, so `conda activate`
+# on its own would fail here regardless.
+set +u
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate cryoet-pipeline
-
-export IMOD_DIR=/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12
 source "$IMOD_DIR/IMOD-linux.sh"
+set -u
 
 echo "host        $(hostname)"
 echo "started     $(date -Is)"
