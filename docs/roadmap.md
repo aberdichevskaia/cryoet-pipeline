@@ -600,3 +600,75 @@ Worth doing together with the defocus-hint gap in section 5. Both are
 measurements that are properties of a tilt-series rather than of a step, both
 want to be inspectable before anything commits to them, and both are currently
 either unavailable or wrong for one of the two entry points.
+
+## 13. Patch tracking inherited bead assumptions — audit for the rest
+
+The patch backend was written by analogy to the bead one, and everywhere the
+two differ *structurally* the bead assumption came along. Three instances
+turned up in a single afternoon on EMPIAR-11538, which is why the remaining
+work here is an audit rather than a list of fixes.
+
+The shape is always the same: something the bead path produces on every run is
+legitimately absent under patch tracking, and the code reads absence as failure
+or reports it as zero.
+
+**Fixed — the filled-in fiducial model.** `tiltalign -OutputFilledInModel`
+writes a model with gaps interpolated, and it writes nothing when there are no
+gaps. Bead tracking always loses beads at high tilt, so the file always
+appeared. Patch tracking gives every patch a point on every view — coverage
+1.0, 25 x 59 = 1475 points — so there was nothing to fill and no file, and fine
+alignment failed on a missing required output. It is optional now, and the run
+that first hit this also showed the subtlety: after outlier pruning creates
+gaps, later rounds *do* write it, so the file is neither always present nor
+always absent.
+
+**Fixed — the two-surface thickness.** See section 12: coplanar points make the
+two-plane fit degenerate, and the parser was reading the wrong one of
+tiltalign's two labelled blocks. `-SurfacesToAnalyze` is a parameter now, the
+block is chosen by its header, and QC warns when the split degenerates whatever
+the setting.
+
+**Open — fiducial-seed QC reports bead semantics for a patch grid.** The patch
+seed produces a grid descriptor, not a point model, so every field the QC model
+has is zero: `num_fiducials 0`, `num_points 0`, `coverage_fraction 0` — with
+status `pass`. Three series in a row have reported it. For a bead seed those
+numbers would be a catastrophe; here they are meaningless, and `pass` on a row
+of zeros is a bad habit for a project whose whole discipline is that a green
+status means something was checked. Either report what a patch grid actually
+has (patch count, derived patch size in binned and unbinned pixels, usable area
+after the margin) or say explicitly that the bead fields do not apply.
+
+**The audit is the work item.** Three found by tripping over them says nothing
+about how many are left. Every stage between seeding and reconstruction should
+be read once with the question "what does the bead path always produce here
+that patch tracking legitimately might not", and the same question asked of the
+frames versus assembled-stack entry points in section 5 — it is the same class
+of defect seen from a different angle.
+
+## 14. Exclude a view at fine alignment
+
+Coarse alignment drops low-variance views on its own and records
+`excluded_z_values`. Fine alignment has no equivalent: the options are
+thresholds, robust fitting, and outlier pruning, and none of them removes a
+view.
+
+That gap has a concrete cost. On TS_0006 the initial residuals were mean 1.754
+nm with sd 3.524 — sigma twice the mean, the signature of a heavy tail — and
+the log showed two separate causes. One patch was bad across most views,
+already crushed to weight 0.02 by robust fitting. And **view 59 was bad across
+four different patches at full weight 1.0**, carrying the largest residuals in
+the run. It is the extreme-tilt view, where a lamella is 2.3x thicker along the
+beam and the contrast collapses; that view is expected to be bad, and the
+honest remedy is to exclude it.
+
+What is available instead is pruning its points, which is not the same thing:
+the view stays in the stack with its geometry unconstrained, and with
+`-MinFidsTotalAndEachSurface` it may simply refuse. Pruning did work here —
+mean 0.812 nm, sd 0.672, tail gone — but it worked by accident of the fraction
+being large enough, not because it was the right instrument.
+
+Note while implementing: the default pruning fraction of 0.02 is also a
+bead-era number. With a 5x5 grid over 59 views there are 1475 points and one
+failed patch is 59 of them, so a single bad patch exceeds the limit. Deriving
+it as "up to two whole patches" gives `2 / num_patches`, which is 0.08 for a
+5x5 grid — see the comment in `configs/lanes/ribo-bin8.toml`.
