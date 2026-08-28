@@ -112,6 +112,25 @@ patch_margin_px = 100     # binned pixels, not raw
 robust_fitting = true
 auto_prune_outliers = true
 
+# The 0.02 default was set for bead tracking, where an outlier is a stray point.
+# With a 5x5 patch grid over 59 views there are 1475 points and one patch that
+# fails everywhere is 59 of them — 4.0% — so a single bad patch already exceeds
+# the default and fine alignment refuses rather than pruning. A patch landing on
+# a featureless region, a crack, or the lamella edge is expected and local, and
+# dropping it is the right answer.
+#
+# Derive the limit as "up to two whole patches", not a round number:
+#
+#   max_pruned_fraction = 2 / num_patches = 2 / 25 = 0.08
+#
+# More than two of twenty-five failing is no longer a couple of bad regions; it
+# is wrong geometry or wrong parameters, and the refusal is correct again.
+#
+# Only raise this after checking that the outliers really are concentrated in one
+# or two contours in the initial tiltalign log. Scattered across many patches
+# means the alignment is poor and a higher limit would hide it.
+# max_pruned_fraction = 0.08
+
 [ctf]
 voltage_kv = 300.0
 # 2.7 mm is the Krios objective, and the MRC label plus the EMDB header both say

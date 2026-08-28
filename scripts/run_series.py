@@ -146,7 +146,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             "fine-align-tilt-series",
             ["fine-align-tilt-series", *common,
              *flag("robust-fitting", fine.get("robust_fitting")),
-             *flag("auto-prune-outliers", fine.get("auto_prune_outliers"))],
+             *flag("auto-prune-outliers", fine.get("auto_prune_outliers")),
+             *flag("max-pruned-fraction", fine.get("max_pruned_fraction"))],
         ),
         # The CTF fit stack carries NO variant label, so that correct-ctf in any
         # lane can fall back to the model built from it.
