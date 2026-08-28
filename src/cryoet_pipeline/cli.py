@@ -1010,6 +1010,19 @@ def fine_align_tilt_series(
             help="Maximum Tiltalign reruns for surface-positioning convergence.",
         ),
     ] = 3,
+    surfaces_to_analyze: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=2,
+            help="Planes Tiltalign fits to the fiducials when recommending "
+            "specimen positioning. Two suits gold beads, which sit on both faces "
+            "of a section. Use one for patch tracking, whose points are coplanar: "
+            "a two-plane fit then sorts them onto a single surface plus a stray "
+            "point and reports that point's offset as the thickness. QC warns "
+            "when the split degenerates, whichever value was used.",
+        ),
+    ] = 2,
     imod_dir: Annotated[
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
@@ -1058,6 +1071,7 @@ def fine_align_tilt_series(
         "auto_prune_outliers": auto_prune_outliers,
         "max_pruned_fraction": max_pruned_fraction,
         "max_positioning_rounds": max_positioning_rounds,
+        "surfaces_to_analyze": surfaces_to_analyze,
     }
     if imod_dir is not None:
         parameters["imod_dir"] = imod_dir

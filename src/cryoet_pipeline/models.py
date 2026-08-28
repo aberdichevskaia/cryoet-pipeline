@@ -363,6 +363,11 @@ class FineAlignmentQc(BaseModel):
     minimum_tilt_rotation_deg: float
     recommended_x_axis_tilt_deg: float | None = None
     recommended_unbinned_thickness_px: float | None = Field(default=None, gt=0.0)
+    # Points Tiltalign sorted onto each surface, when it fitted two. A surface
+    # holding almost nothing means the two-plane fit degenerated and its
+    # thickness is the offset of a stray point, not a specimen dimension.
+    surface_point_counts: list[int] | None = None
+    surfaces_analyzed: int | None = Field(default=None, ge=1, le=2)
     recommended_unbinned_z_shift_px: float | None = None
     applied_tilt_angle_offset_deg: float | None = None
     applied_axis_z_shift_unbinned_px: float | None = None

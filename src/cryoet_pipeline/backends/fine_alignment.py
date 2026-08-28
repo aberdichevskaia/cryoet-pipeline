@@ -75,6 +75,21 @@ _INCREMENTAL_TILT_ANGLE_RE = re.compile(
 _TOTAL_TILT_ANGLE_RE = re.compile(
     r"Total tilt angle change\s*=\s*(?P<value>[-+.\deE]+)"
 )
+# Tiltalign prints its positioning recommendations twice and labels which case
+# each applies to: a single plane fitted to every fiducial, then two parallel
+# planes with the points sorted onto them. Both blocks contain "X axis tilt
+# needed" and both tilt-change lines, so a match must be located by block rather
+# than by position in the log — taking the last match silently means "always
+# two surfaces", which is wrong wherever the fiducials are coplanar.
+_ONE_PLANE_HEADER_RE = re.compile(r"NOT on two surfaces")
+_TWO_SURFACE_HEADER_RE = re.compile(r"ARE on two surfaces")
+_SURFACE_POINT_COUNT_RE = re.compile(
+    r"On \w+ surface:\s*#\s*of\s*points\s*=\s*(?P<value>\d+)"
+)
+# Tiltalign's own minimum per surface, from -MinFidsTotalAndEachSurface: below
+# this a surface is not a plane worth fitting, so the threshold is IMOD's rather
+# than one invented here.
+_MIN_FIDUCIALS_PER_SURFACE = 4
 
 
 @dataclass(frozen=True)
@@ -103,14 +118,21 @@ class ResidualVectorSummary:
 
 @dataclass(frozen=True)
 class TomogramPositioningSummary:
-    """Tiltalign surface-analysis recommendations in unbinned coordinates."""
+    """Tiltalign surface-analysis recommendations in unbinned coordinates.
+
+    Thickness and the Z shifts come only from a two-plane fit: one plane has no
+    thickness, so they are absent when a single surface was analysed. Orientation
+    is present either way — it is the plane's tilt, which one plane defines.
+    """
 
     x_axis_tilt_deg: float
-    unbinned_thickness_px: float
-    unbinned_z_shift_px: float
-    incremental_unbinned_z_shift_px: float
     total_tilt_angle_deg: float
     incremental_tilt_angle_deg: float
+    unbinned_thickness_px: float | None
+    unbinned_z_shift_px: float | None
+    incremental_unbinned_z_shift_px: float | None
+    surfaces_analyzed: int
+    surface_point_counts: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -180,6 +202,17 @@ class ImodTiltalignBackend:
             context,
             "apply_surface_positioning",
             default=True,
+        )
+        # Two is right for gold beads on both faces of a section, and wrong for
+        # patch tracking, where the points are coplanar: the two-plane fit then
+        # puts everything on one surface plus a stray point, and calls the stray
+        # point's offset the thickness. Default stays 2 so bead runs are
+        # unchanged; a warning fires below when the split degenerates.
+        surfaces_to_analyze = _int_choice_parameter(
+            context,
+            "surfaces_to_analyze",
+            default=2,
+            allowed=(1, 2),
         )
         max_positioning_rounds = _positive_int_parameter(
             context,
@@ -274,7 +307,7 @@ class ImodTiltalignBackend:
                 "-ResidualReportCriterion",
                 "3.0",
                 "-SurfacesToAnalyze",
-                "2",
+                str(surfaces_to_analyze),
                 "-MetroFactor",
                 "0.25",
                 "-MaximumCycles",
@@ -387,7 +420,7 @@ class ImodTiltalignBackend:
                     "the configured failure threshold.\n"
                 )
             positioning_summary = parse_tiltalign_surface_analysis(
-                result.stdout or ""
+                result.stdout or "", surfaces=surfaces_to_analyze
             )
             applied_positioning: AppliedTomogramPositioning | None = None
             positioning_round = 0
@@ -402,8 +435,14 @@ class ImodTiltalignBackend:
             ):
                 applied_positioning = AppliedTomogramPositioning(
                     tilt_angle_offset_deg=positioning_summary.total_tilt_angle_deg,
+                    # A one-plane fit recommends no recentring, so zero is what
+                    # gets applied — and applied it is, which keeps
+                    # axis_z_shift_applied_in_alignment honest for
+                    # reconstruction rather than forcing an explicit override.
                     axis_z_shift_unbinned_px=(
                         positioning_summary.unbinned_z_shift_px
+                        if positioning_summary.unbinned_z_shift_px is not None
+                        else 0.0
                     ),
                 )
                 positioned_command = _replace_command_option(
@@ -453,7 +492,7 @@ class ImodTiltalignBackend:
                     outlier_threshold_px=residual_max_warning_px,
                 )
                 positioning_summary = parse_tiltalign_surface_analysis(
-                    result.stdout or ""
+                    result.stdout or "", surfaces=surfaces_to_analyze
                 )
                 positioning_round += 1
                 alignment_rounds += 1
@@ -719,56 +758,133 @@ def parse_tiltalign_log(text: str) -> TiltalignLogSummary:
     return values
 
 
+def _positioning_block(text: str, *, surfaces: int) -> tuple[str | None, bool]:
+    """The slice of the log holding the recommendations for `surfaces` planes.
+
+    Returns the slice and whether Tiltalign labelled its blocks. When it did, the
+    block is found by its own header, which is the only way to read the case that
+    actually applies. When it did not — an abbreviated or synthetic log — there is
+    no way to tell the blocks apart, so fall back to believing the last occurrence
+    of each value, which is what this parser did before the blocks were located.
+    """
+
+    one_plane = _ONE_PLANE_HEADER_RE.search(text)
+    two_surface = _TWO_SURFACE_HEADER_RE.search(text)
+    if one_plane is None and two_surface is None:
+        return text, False
+    if surfaces == 1:
+        if one_plane is None:
+            return None, True
+        end = two_surface.start() if two_surface is not None else len(text)
+        return text[one_plane.end() : end], True
+    if two_surface is None:
+        return None, True
+    return text[two_surface.end() :], True
+
+
+def _positioning_value(
+    pattern: re.Pattern[str],
+    block: str,
+    *,
+    labelled: bool,
+) -> re.Match[str] | None:
+    """One value from a positioning block.
+
+    A labelled block holds each value once, so the first match is the only match.
+    An unlabelled log may hold both cases concatenated, and there the last match
+    is the two-surface one.
+    """
+
+    matches = list(pattern.finditer(block))
+    if not matches:
+        return None
+    return matches[0] if labelled else matches[-1]
+
+
 def parse_tiltalign_surface_analysis(
     text: str,
+    *,
+    surfaces: int = 2,
 ) -> TomogramPositioningSummary | None:
-    """Parse optional specimen-positioning recommendations from Tiltalign."""
+    """Parse optional specimen-positioning recommendations from Tiltalign.
 
-    x_axis_matches = list(_X_AXIS_TILT_RE.finditer(text))
-    thickness_match = _UNBINNED_THICKNESS_RE.search(text)
-    z_shift_match = _UNBINNED_Z_SHIFT_RE.search(text)
-    incremental_z_shift_match = _INCREMENTAL_UNBINNED_Z_SHIFT_RE.search(text)
-    total_tilt_matches = list(_TOTAL_TILT_ANGLE_RE.finditer(text))
-    incremental_tilt_matches = list(_INCREMENTAL_TILT_ANGLE_RE.finditer(text))
-    matches = (
-        bool(x_axis_matches),
-        thickness_match is not None,
-        z_shift_match is not None,
-        incremental_z_shift_match is not None,
-        bool(total_tilt_matches),
-        bool(incremental_tilt_matches),
-    )
-    if not any(matches):
+    `surfaces` selects which of Tiltalign's two labelled blocks to believe. With
+    one plane there is no thickness and no Z shift to read, and that is a fact
+    about a plane rather than a truncated log — orientation is still present,
+    since a single plane defines it.
+    """
+
+    block, labelled = _positioning_block(text, surfaces=surfaces)
+    if block is None:
         return None
-    if not all(matches):
+
+    def value(pattern: re.Pattern[str]) -> re.Match[str] | None:
+        return _positioning_value(pattern, block, labelled=labelled)
+
+    x_axis_match = value(_X_AXIS_TILT_RE)
+    total_tilt_match = value(_TOTAL_TILT_ANGLE_RE)
+    incremental_tilt_match = value(_INCREMENTAL_TILT_ANGLE_RE)
+    orientation = (x_axis_match, total_tilt_match, incremental_tilt_match)
+    if not any(match is not None for match in orientation):
+        return None
+    if not all(match is not None for match in orientation):
         raise ValueError("Tiltalign surface analysis is incomplete")
-    assert thickness_match is not None
-    assert z_shift_match is not None
-    assert incremental_z_shift_match is not None
+    assert x_axis_match is not None
+    assert total_tilt_match is not None
+    assert incremental_tilt_match is not None
+
+    thickness_match = value(_UNBINNED_THICKNESS_RE)
+    z_shift_match = value(_UNBINNED_Z_SHIFT_RE)
+    incremental_z_shift_match = value(_INCREMENTAL_UNBINNED_Z_SHIFT_RE)
+    depth = (thickness_match, z_shift_match, incremental_z_shift_match)
+    if surfaces == 1 and labelled:
+        # A single plane has no thickness, so finding one means the block that was
+        # read is not the one that was asked for.
+        if any(match is not None for match in depth):
+            raise ValueError(
+                "Tiltalign reported a thickness for a single-plane fit; "
+                "the log does not match the requested surface count"
+            )
+    elif not all(match is not None for match in depth):
+        raise ValueError("Tiltalign surface analysis is incomplete")
+
+    counts = tuple(
+        int(match.group("value")) for match in _SURFACE_POINT_COUNT_RE.finditer(text)
+    )
 
     values = TomogramPositioningSummary(
-        x_axis_tilt_deg=float(x_axis_matches[-1].group("value")),
-        unbinned_thickness_px=float(thickness_match.group("value")),
-        unbinned_z_shift_px=float(z_shift_match.group("value")),
-        incremental_unbinned_z_shift_px=float(
-            incremental_z_shift_match.group("value")
+        x_axis_tilt_deg=float(x_axis_match.group("value")),
+        total_tilt_angle_deg=float(total_tilt_match.group("value")),
+        incremental_tilt_angle_deg=float(incremental_tilt_match.group("value")),
+        unbinned_thickness_px=(
+            float(thickness_match.group("value"))
+            if thickness_match is not None
+            else None
         ),
-        total_tilt_angle_deg=float(total_tilt_matches[-1].group("value")),
-        incremental_tilt_angle_deg=float(
-            incremental_tilt_matches[-1].group("value")
+        unbinned_z_shift_px=(
+            float(z_shift_match.group("value")) if z_shift_match is not None else None
         ),
+        incremental_unbinned_z_shift_px=(
+            float(incremental_z_shift_match.group("value"))
+            if incremental_z_shift_match is not None
+            else None
+        ),
+        surfaces_analyzed=surfaces,
+        surface_point_counts=counts,
     )
     numeric = (
         values.x_axis_tilt_deg,
+        values.total_tilt_angle_deg,
+        values.incremental_tilt_angle_deg,
         values.unbinned_thickness_px,
         values.unbinned_z_shift_px,
         values.incremental_unbinned_z_shift_px,
-        values.total_tilt_angle_deg,
-        values.incremental_tilt_angle_deg,
     )
-    if not all(np.isfinite(value) for value in numeric):
+    if not all(
+        np.isfinite(value) for value in numeric if value is not None
+    ):
         raise ValueError("Tiltalign surface analysis values must be finite")
-    if values.unbinned_thickness_px <= 0.0:
+    if values.unbinned_thickness_px is not None and values.unbinned_thickness_px <= 0.0:
         raise ValueError("Tiltalign recommended thickness must be positive")
     return values
 
@@ -809,10 +925,12 @@ def _replace_command_option(
 
 
 def _positioning_is_converged(summary: TomogramPositioningSummary) -> bool:
-    return (
-        abs(summary.incremental_tilt_angle_deg) <= 0.1
-        and abs(summary.incremental_unbinned_z_shift_px) <= 1.0
-    )
+    if abs(summary.incremental_tilt_angle_deg) > 0.1:
+        return False
+    # A single-plane fit recommends no Z shift, so the angle alone decides.
+    if summary.incremental_unbinned_z_shift_px is None:
+        return True
+    return abs(summary.incremental_unbinned_z_shift_px) <= 1.0
 
 
 def _read_residual_magnitudes(path: Path) -> list[float]:
@@ -1051,6 +1169,7 @@ def _fine_alignment_qc(
     if (
         applied_positioning is not None
         and positioning_summary is not None
+        and positioning_summary.incremental_unbinned_z_shift_px is not None
         and abs(positioning_summary.incremental_unbinned_z_shift_px) > 1.0
     ):
         if status is QcStatus.PASS:
@@ -1059,6 +1178,29 @@ def _fine_alignment_qc(
             "post-positioning Z correction "
             f"{positioning_summary.incremental_unbinned_z_shift_px:.3f} "
             "unbinned px exceeds 1.000 px"
+        )
+    # A two-plane fit only means something when both planes hold points. Patch
+    # tracking gives coplanar points, and Tiltalign then sorts almost everything
+    # onto one surface and calls the remaining stray point the other one — so the
+    # thickness it reports is that point's offset. The count is the tell, and it
+    # is worth a warning whoever configured the run.
+    if (
+        positioning_summary is not None
+        and positioning_summary.surfaces_analyzed == 2
+        and len(positioning_summary.surface_point_counts) == 2
+        and min(positioning_summary.surface_point_counts) < _MIN_FIDUCIALS_PER_SURFACE
+    ):
+        if status is QcStatus.PASS:
+            status = QcStatus.WARNING
+        counts = "/".join(
+            str(count) for count in positioning_summary.surface_point_counts
+        )
+        warnings.append(
+            f"two-surface analysis sorted {counts} points onto the two surfaces, "
+            f"fewer than {_MIN_FIDUCIALS_PER_SURFACE} on one of them; the "
+            "recommended thickness is the offset of a stray point, not a "
+            "specimen dimension. Pass an explicit thickness to reconstruction, "
+            "and consider surfaces_to_analyze=1 for coplanar fiducials"
         )
     return FineAlignmentQc(
         tilt_series_id=manifest.tilt_series_id,
@@ -1083,6 +1225,17 @@ def _fine_alignment_qc(
         recommended_x_axis_tilt_deg=(
             positioning_summary.x_axis_tilt_deg
             if positioning_summary is not None
+            else None
+        ),
+        surfaces_analyzed=(
+            positioning_summary.surfaces_analyzed
+            if positioning_summary is not None
+            else None
+        ),
+        surface_point_counts=(
+            list(positioning_summary.surface_point_counts)
+            if positioning_summary is not None
+            and positioning_summary.surface_point_counts
             else None
         ),
         recommended_unbinned_thickness_px=(
@@ -1127,17 +1280,29 @@ def _positioning_parameters(
     if summary is None:
         return {}
     parameters: dict[str, object] = {
-        "positioning_source": "tiltalign_two_surface_analysis",
+        "positioning_source": (
+            "tiltalign_two_surface_analysis"
+            if summary.surfaces_analyzed == 2
+            else "tiltalign_single_plane_analysis"
+        ),
         "recommended_x_axis_tilt_deg": summary.x_axis_tilt_deg,
-        "recommended_unbinned_thickness_px": summary.unbinned_thickness_px,
-        "recommended_unbinned_z_shift_px": summary.unbinned_z_shift_px,
         "positioning_incremental_tilt_angle_deg": (
             summary.incremental_tilt_angle_deg
         ),
-        "positioning_incremental_z_shift_unbinned_px": (
-            summary.incremental_unbinned_z_shift_px
-        ),
     }
+    # Omitted rather than written as null when a single plane was fitted:
+    # reconstruction reads the thickness only when no explicit one was given, and
+    # a missing key makes it ask for one instead of dividing by nothing.
+    if summary.unbinned_thickness_px is not None:
+        parameters["recommended_unbinned_thickness_px"] = (
+            summary.unbinned_thickness_px
+        )
+    if summary.unbinned_z_shift_px is not None:
+        parameters["recommended_unbinned_z_shift_px"] = summary.unbinned_z_shift_px
+    if summary.incremental_unbinned_z_shift_px is not None:
+        parameters["positioning_incremental_z_shift_unbinned_px"] = (
+            summary.incremental_unbinned_z_shift_px
+        )
     if applied is not None:
         parameters.update(
             {
@@ -1445,6 +1610,22 @@ def _positive_int_parameter(
         raise TypeError(f"context parameter {key!r} must be an int")
     if value < 1:
         raise ValueError(f"context parameter {key!r} must be at least 1")
+    return value
+
+
+def _int_choice_parameter(
+    context: BackendContext,
+    key: str,
+    *,
+    default: int,
+    allowed: tuple[int, ...],
+) -> int:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value not in allowed:
+        listed = ", ".join(str(option) for option in allowed)
+        raise ValueError(f"context parameter {key!r} must be one of {listed}")
     return value
 
 

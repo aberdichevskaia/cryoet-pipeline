@@ -394,6 +394,79 @@ def test_parse_tiltalign_surface_analysis_uses_two_surface_recommendation() -> N
     assert summary.incremental_unbinned_z_shift_px == pytest.approx(513.8)
     assert summary.total_tilt_angle_deg == pytest.approx(3.72)
     assert summary.incremental_tilt_angle_deg == pytest.approx(3.72)
+    # No block headers in this log, so the blocks cannot be told apart and the
+    # last occurrence of each value is still what gets believed.
+    assert summary.surfaces_analyzed == 2
+    assert summary.surface_point_counts == ()
+
+
+# The real shape of the section, from a patch-tracked run on EMPIAR-11538: both
+# cases labelled, and 24 of 25 coplanar points sorted onto one "surface" with a
+# single stray point forming the other. Numbers in the two-surface tail are
+# representative; the phrases are the ones Tiltalign prints.
+_LABELLED_SURFACE_LOG = """
+ The following parameters are appropriate if fiducials are NOT on two surfaces:
+
+ Fit of one plane to all fiducials:
+ # of points =               25
+ Mean residual =           3.27
+ X axis tilt needed =     -1.00
+ Incremental tilt angle change =  -5.43
+ Total tilt angle change =        -5.43
+
+ The following parameters are appropriate if fiducials ARE on two surfaces,
+ based on fit of two parallel planes to fiducials sorted onto two surfaces:
+
+ On bottom surface:
+ # of points =           24
+ Mean residual =       1.85
+
+ On top surface:
+ # of points =            1
+ Mean residual =       0.00
+
+ X axis tilt needed =             -1.68
+ Unbinned thickness needed to contain centers of all fiducials =    29.5
+ Total unbinned shift needed to center range of fiducials in Z =   13.6
+ Incremental unbinned shift needed to center range of fiducials in Z =  13.6
+ Incremental tilt angle change =  -5.92
+ Total tilt angle change =        -5.92
+"""
+
+
+def test_parse_tiltalign_surface_analysis_reads_the_labelled_block_asked_for() -> None:
+    """Both cases are printed, so the block must be chosen by its own header.
+
+    Reading whichever value came last means "always two surfaces", which is wrong
+    for coplanar fiducials: here it would take -1.68 where -1.00 applies.
+    """
+
+    one = parse_tiltalign_surface_analysis(_LABELLED_SURFACE_LOG, surfaces=1)
+    assert one is not None
+    assert one.x_axis_tilt_deg == pytest.approx(-1.00)
+    assert one.total_tilt_angle_deg == pytest.approx(-5.43)
+    assert one.incremental_tilt_angle_deg == pytest.approx(-5.43)
+    # A single plane has no thickness and nothing to recentre.
+    assert one.unbinned_thickness_px is None
+    assert one.unbinned_z_shift_px is None
+    assert one.incremental_unbinned_z_shift_px is None
+    assert one.surfaces_analyzed == 1
+
+    two = parse_tiltalign_surface_analysis(_LABELLED_SURFACE_LOG, surfaces=2)
+    assert two is not None
+    assert two.x_axis_tilt_deg == pytest.approx(-1.68)
+    assert two.total_tilt_angle_deg == pytest.approx(-5.92)
+    assert two.unbinned_thickness_px == pytest.approx(29.5)
+    assert two.surfaces_analyzed == 2
+
+
+def test_parse_tiltalign_surface_analysis_records_the_surface_split() -> None:
+    """The point counts are what reveal a degenerate two-plane fit."""
+
+    summary = parse_tiltalign_surface_analysis(_LABELLED_SURFACE_LOG, surfaces=2)
+
+    assert summary is not None
+    assert summary.surface_point_counts == (24, 1)
 
 
 def test_parse_tiltalign_surface_analysis_rejects_partial_summary() -> None:
