@@ -173,6 +173,21 @@ number_of_false_positives = 1.0   # assumptions hold for a discrete particle
 tophat_filter = true              # sharp isolated peaks — right for ribosomes
 gpu_ids = "0"
 
+# Without these the match runs across the whole band, out to the bin8 Nyquist of
+# 19.6 A, where a ribosome has little signal and the tomogram has plenty of
+# noise. That flattens the score volume: the first run produced a cut-off of
+# 0.1159 with the only two survivors at 0.1161 and 0.1184, which is a
+# distribution with no peaks in it at all rather than a threshold set too high.
+#
+# 35 A keeps the ribosome's shape, which is what distinguishes it, and drops the
+# detail that at this binning is mostly noise. Going coarser starts matching
+# any blob of about the right size.
+low_pass_angstrom = 35.0
+# Estimates the noise background by matching a phase-randomised template, which
+# is what the number-of-false-positives cut-off is calibrated against. Off, that
+# cut-off comes from a cruder model — and it is the step that returned 2 of 2000.
+random_phase_correction = true
+
 [extract]
 box_size_px = 48          # 470 A at 9.78 A/px, ~1.5x the particle
 

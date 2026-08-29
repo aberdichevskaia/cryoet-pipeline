@@ -456,6 +456,18 @@ needs.
 
 ## 10. Re-extract and re-refine without repeating the template match
 
+A scheduling fact that bears on this, found by trying to be clever about it:
+**pytom cannot be imported without a CUDA runtime, whatever the tool does.**
+`pytom_create_template.py` merely resamples a map, but its import reaches
+`matching.TemplateMatchingGPU` and then `voltools`, which probes devices at
+import time; on a CPU node that raises `cudaErrorInsufficientDriver` before any
+work starts. So the schedulable boundary is pytom rather than the shape of the
+computation: `template.py`, `picking.py` and `subtomogram.py` need a GPU
+allocation, while `export-picks` and `extract-particles` import nothing from
+pytom and can run anywhere. Worth knowing before writing resource profiles for
+the controller, and an argument for this section: if the match cannot be
+re-entered cheaply, every downstream re-try drags a GPU allocation with it.
+
 The GPU template match is by far the most expensive step and the one most often
 *not* what needs redoing. Changing the box size, the score threshold, the
 extraction diameter, or the number of particles are all cheap operations on a
@@ -672,3 +684,44 @@ bead-era number. With a 5x5 grid over 59 views there are 1475 points and one
 failed patch is 59 of them, so a single bad patch exceeds the limit. Deriving
 it as "up to two whole patches" gives `2 / num_patches`, which is 0.08 for a
 5x5 grid — see the comment in `configs/lanes/ribo-bin8.toml`.
+
+## 15. Derive the matching low-pass from the alignment residual
+
+`pick-particles` exposes `--pytom-low-pass` and passes it through correctly,
+but nothing derives it, so a lane config that omits it matches across the whole
+band out to Nyquist. That is what produced 2 candidates from a requested 2000
+on TS_0005: not an error, a flat score volume with the extraction cut-off flush
+against its maximum.
+
+The value should not be recalled from practice. One bound is computable from a
+number the pipeline already measures. An rms misalignment of delta blurs the
+reconstruction, attenuating spatial frequency k by `exp(-2 pi^2 delta^2 k^2)`,
+which reaches 1/e at `d = pi * delta * sqrt(2)`:
+
+```text
+TS_0005   fine-alignment residual 0.694 nm  ->  30.8 A
+TS_0006   fine-alignment residual 0.812 nm  ->  36.1 A
+```
+
+It differs per series, which is the argument for deriving rather than
+configuring it. Caveat to record alongside the number: this accounts for
+alignment blur only, and dose, lamella thickness and the missing wedge all
+degrade further, so it is an optimistic bound on resolution and therefore a
+*lower* bound on the low-pass. Erring coarser is safe; finer is not.
+
+**This is the third instance of the same shape**, and they are worth building
+together rather than one at a time:
+
+- section 12, the reconstruction thickness, derivable from the Beer-Lambert
+  falloff of intensity with tilt;
+- section 5, the defocus hint, already computed inside `estimate-ctf` but not
+  available as an inspectable artifact for stack-imported data;
+- this one, the matching low-pass, derivable from the fine-alignment residual.
+
+Each is a number a person currently guesses, each is derivable from something
+already measured, and each is silent when wrong — the thickness reports a
+degenerate 9.5 nm, the hint lands wrong for every view at once, the low-pass
+returns an empty pick list with `status: pass`. A shared shape suggests a
+shared treatment: derive it, record the derivation and its assumption in QC,
+gate on whatever makes the derivation invalid, and refuse rather than guess
+when the gate fails.

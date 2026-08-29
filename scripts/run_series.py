@@ -198,6 +198,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-number-of-particles", pick["number_of_particles"]),
              *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
              *flag("pytom-tophat-filter", pick.get("tophat_filter")),
+             *flag("pytom-low-pass", pick.get("low_pass_angstrom")),
+             *flag("pytom-random-phase-correction", pick.get("random_phase_correction")),
              *flag("pytom-gpu-ids", pick["gpu_ids"]),
              *flag("pytom-match-template-executable", exe["pytom_match_template"]),
              *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
