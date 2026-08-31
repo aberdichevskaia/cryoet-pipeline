@@ -747,15 +747,22 @@ otherwise looks exactly like one with it.
 
 Two things remain.
 
-**View identity is lost before pytom sees it.** `_write_tilt_angles` reads the
-solved angles as a bare list of numbers, so nothing downstream can tell which
-manifest views survived fine alignment. Both `_write_defocus_micrometres` and
-`_write_dose_accumulation` therefore pair by position and refuse when the
-counts disagree. That is honest, and it means a series with any excluded view
-cannot be picked with either weighting at all. The excluded Z values are on the
-alignment artifact, so the fix is to carry them through and select the same
-views the reconstruction was built from, rather than requiring that none were
-dropped.
+**Fixed — the dose now follows the views the tomogram was built from.** Only
+the dose was affected, and finding that out cut the work in half: the aligned
+stack already drops excluded views and records `included_z_values`, so the CTF
+was fitted on the surviving views and the `.defocus` file matched by
+construction. The dose came from the manifest, which lists everything
+collected, so a series with a single excluded view refused outright and could
+not be picked with weighting at all. Reconstruction records `included_z_values`
+on the tomogram, and `_write_dose_accumulation` now selects by it, refusing
+only when the tomogram names a z value the manifest does not have. Tomograms
+written before the field existed return None and fall back to the count check.
+
+Still worth doing: `_write_tilt_angles` reads the solved angles as a bare list
+of numbers, so the angles themselves still carry no view identity. Nothing
+depends on that today — the count check catches a mismatch — but it is the
+reason two separate functions had to reconstruct which views survived from
+somewhere else.
 
 **A fallback for mdocs that do not record `PriorRecordDose`.** Older SerialEM
 and other acquisition software write only `ExposureDose`. Acquisition order is
