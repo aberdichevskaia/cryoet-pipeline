@@ -65,6 +65,25 @@ thousand. Collapsing the per-projection artifacts into one stacked artifact with
 `T` axis buys roughly five times the headroom and is worth doing anyway, since
 hundreds of thousands of small files is its own problem on a parallel filesystem.
 
+**QC schema versions are now something `reindex` has to face.**
+Cross-tilt-series averaging bumped `SubtomogramAveragingQc` and
+`SubtomogramClassificationQc` to `schema_version: 2`, replacing
+`tilt_series_id` with `tilt_series_ids` and `particle_stack_id` with a list.
+Nothing reads those documents through the model today — they are written by the
+backend and read generically as JSON — so the change cost nothing. An index
+that rebuilds itself by scanning the project will read them, and then a
+version-1 document is a decision rather than a detail: it either migrates on
+read, or is refused with a message naming the version. Sliding past it silently
+would put a document's own idea of its shape at odds with the schema indexing
+it, which is the failure that makes an index untrustworthy rather than merely
+incomplete.
+
+The general form is worth settling once, because the QC models are the metric
+vocabulary the whole comparison layer stands on: **a `schema_version` that
+nothing checks is decoration.** Either `reindex` knows how to read every
+version it may meet, or the versions have to be migrated in place before it
+runs.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
