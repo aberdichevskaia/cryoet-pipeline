@@ -14,6 +14,8 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
+    _match_template_command,
+    _write_dose_accumulation,
     pick_and_register,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -141,6 +143,10 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
     assert report["input_tomogram_id"] == tomogram.id
     assert report["segmentation_id"] == segmentation.id
     assert Path(picks.parameters["command_log_path"]).is_file()
+    # Whether the data was weighted is recorded, because otherwise a run without
+    # dose weighting is indistinguishable from one with it.
+    assert picks.parameters["per_tilt_weighting"] is False
+    assert picks.parameters["dose_weighted"] is False
 
 
 def test_pytom_match_pick_requires_cuda_device(tmp_path: Path) -> None:
@@ -746,6 +752,137 @@ def _segmentation_artifact(tmp_path: Path) -> Artifact:
             "tomogram_branch": "full",
         },
     )
+
+
+def _match_command(tmp_path: Path, **parameters: object) -> list[str]:
+    return _match_template_command(
+        Path("pytom_match_template.py"),
+        BackendContext(
+            output_dir=tmp_path,
+            device=DevicePreference.CUDA,
+            parameters={"pytom_particle_diameter": 290.0, **parameters},
+        ),
+        tomogram_path=tmp_path / "tomo.mrc",
+        template_path=tmp_path / "template.mrc",
+        template_mask_path=tmp_path / "mask.mrc",
+        tilt_angles_path=tmp_path / "angles.rawtlt",
+        tomogram_mask_path=None,
+        destination_dir=tmp_path / "out",
+        gpu_ids=["0"],
+        voxel_spacing_angstrom=9.784,
+        dose_path=tmp_path / "dose.txt",
+    )
+
+
+def test_dose_is_passed_only_alongside_per_tilt_weighting(tmp_path: Path) -> None:
+    """Dose reaches pytom through per-tilt weighting and nowhere else.
+
+    Weighting the template as a single average has nothing to do with a dose
+    file, so passing one on its own would at best be ignored — and the cost of
+    finding out which is a 26-minute match.
+    """
+
+    weighted = _match_command(tmp_path, pytom_per_tilt_weighting=True)
+    assert "--per-tilt-weighting" in weighted
+    assert "--dose-accumulation" in weighted
+    assert weighted[weighted.index("--dose-accumulation") + 1].endswith("dose.txt")
+
+    unweighted = _match_command(tmp_path)
+    assert "--per-tilt-weighting" not in unweighted
+    assert "--dose-accumulation" not in unweighted
+
+
+def test_dose_is_omitted_when_the_mdoc_had_none(tmp_path: Path) -> None:
+    command = _match_template_command(
+        Path("pytom_match_template.py"),
+        BackendContext(
+            output_dir=tmp_path,
+            device=DevicePreference.CUDA,
+            parameters={
+                "pytom_particle_diameter": 290.0,
+                "pytom_per_tilt_weighting": True,
+            },
+        ),
+        tomogram_path=tmp_path / "tomo.mrc",
+        template_path=tmp_path / "template.mrc",
+        template_mask_path=tmp_path / "mask.mrc",
+        tilt_angles_path=tmp_path / "angles.rawtlt",
+        tomogram_mask_path=None,
+        destination_dir=tmp_path / "out",
+        gpu_ids=["0"],
+        voxel_spacing_angstrom=9.784,
+        dose_path=None,
+    )
+
+    assert "--per-tilt-weighting" in command
+    assert "--dose-accumulation" not in command
+
+
+def _dose_manifest(doses: list[object]) -> TiltSeriesManifest:
+    manifest = _manifest()
+    images = [
+        image.model_copy(update={"metadata": {"PriorRecordDose": dose}})
+        for image, dose in zip(manifest.images, doses)
+    ]
+    return manifest.model_copy(update={"images": images})
+
+
+def test_dose_accumulation_uses_the_dose_already_taken(tmp_path: Path) -> None:
+    """PriorRecordDose is accumulated in acquisition order, which is the point.
+
+    A dose-symmetric series is written in tilt order and acquired in another, so
+    accumulating ExposureDose down the file would weight the views inside out.
+    SerialEM's running total already accounts for that, and here the second view
+    in the file carries the *smaller* dose because it was acquired first.
+    """
+
+    output = tmp_path / "dose.txt"
+    result = _write_dose_accumulation(
+        _dose_manifest(["2.450890", "0.000000"]),
+        output,
+        expected_views=2,
+    )
+
+    assert result == output
+    assert output.read_text() == "2.450890\n0.000000\n"
+
+
+def test_dose_accumulation_is_absent_when_the_mdoc_did_not_record_it(
+    tmp_path: Path,
+) -> None:
+    """Dose weighting is an improvement, not a requirement."""
+
+    assert (
+        _write_dose_accumulation(_manifest(), tmp_path / "dose.txt", expected_views=2)
+        is None
+    )
+
+
+def test_dose_accumulation_refuses_a_view_count_it_cannot_pair(
+    tmp_path: Path,
+) -> None:
+    """pytom pairs dose with tilt angles by position, so counts must agree.
+
+    Refusing matches how the defocus file is handled: with the solved angles
+    reaching this code as a bare list of numbers, a mismatch cannot be resolved
+    here, and guessing would weight the wrong views.
+    """
+
+    with pytest.raises(ValueError, match="must describe the same views"):
+        _write_dose_accumulation(
+            _dose_manifest(["0.0", "2.45"]),
+            tmp_path / "dose.txt",
+            expected_views=3,
+        )
+
+
+def test_dose_accumulation_rejects_an_unparseable_value(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="is not a number"):
+        _write_dose_accumulation(
+            _dose_manifest(["0.0", "not-a-dose"]),
+            tmp_path / "dose.txt",
+            expected_views=2,
+        )
 
 
 def _manifest() -> TiltSeriesManifest:

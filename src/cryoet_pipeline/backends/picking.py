@@ -128,10 +128,16 @@ class PytomMatchPickBackend:
                 temporary_root / f"{manifest.tilt_series_id}_defocus.txt",
                 expected_views=view_count,
             )
+            dose_path = _write_dose_accumulation(
+                manifest,
+                temporary_root / f"{manifest.tilt_series_id}_dose.txt",
+                expected_views=view_count,
+            )
             match_command = _match_template_command(
                 match_template_executable,
                 context,
                 defocus_path=defocus_path,
+                dose_path=dose_path,
                 tomogram_path=temporary_tomogram,
                 template_path=template,
                 template_mask_path=template_mask,
@@ -226,6 +232,14 @@ class PytomMatchPickBackend:
                 "picking_method": "template_matching",
                 "pytom_template_path": str(template),
                 "tomogram_mask_coverage": mask_coverage,
+                # Recorded because its absence is otherwise invisible: a match
+                # run without dose weighting looks exactly like one with it, and
+                # whether the mdoc carried PriorRecordDose is not something a
+                # later reader can recover.
+                "per_tilt_weighting": _bool_parameter(
+                    context, "pytom_per_tilt_weighting", default=False
+                ),
+                "dose_weighted": dose_path is not None,
                 "pytom_template_mask_path": str(template_mask),
                 "pytom_job_json_path": str(paths.job_json),
                 "command_log_path": str(paths.log),
@@ -483,6 +497,7 @@ def _match_template_command(
     gpu_ids: Sequence[str],
     voxel_spacing_angstrom: float,
     defocus_path: Path | None = None,
+    dose_path: Path | None = None,
 ) -> list[str]:
     command = [
         str(executable),
@@ -521,6 +536,11 @@ def _match_template_command(
         command.append("--non-spherical-mask")
     if _bool_parameter(context, "pytom_per_tilt_weighting", default=False):
         command.append("--per-tilt-weighting")
+        # Dose only enters through per-tilt weighting, so it is passed with it
+        # rather than on its own: pytom would have nothing to do with a dose
+        # file while weighting the template as a single average.
+        if dose_path is not None:
+            command.extend(["--dose-accumulation", str(dose_path.resolve())])
     command.extend(_ctf_weighting_arguments(context, defocus_path))
     if _bool_parameter(context, "pytom_spectral_whitening", default=False):
         command.append("--spectral-whitening")
@@ -790,6 +810,47 @@ def _write_defocus_micrometres(
     output_path.write_text(
         "".join(f"{entry.mean_defocus_nm / 1000.0:.6f}\n" for entry in entries)
     )
+    return output_path
+
+
+def _write_dose_accumulation(
+    manifest: TiltSeriesManifest,
+    output_path: Path,
+    *,
+    expected_views: int,
+) -> Path | None:
+    """Accumulated dose per view, so the template can be weighted per tilt.
+
+    SerialEM records `PriorRecordDose`: the dose the specimen had already taken
+    when that exposure was made. It starts at zero for the view acquired first
+    and grows in acquisition order, which is what makes it usable here — a
+    dose-symmetric series is *written* in tilt order and *acquired* in another,
+    so accumulating `ExposureDose` down the file would weight the views inside
+    out, calling the freshest ones the most damaged.
+
+    Returns None when the mdoc did not record it, since dose weighting is an
+    improvement rather than a requirement.
+    """
+
+    raw = [image.metadata.get("PriorRecordDose") for image in manifest.images]
+    if any(value is None for value in raw):
+        return None
+    doses: list[float] = []
+    for index, value in enumerate(raw):
+        try:
+            doses.append(float(str(value)))
+        except ValueError as exc:
+            raise ValueError(
+                f"{manifest.tilt_series_id}: PriorRecordDose for ZValue {index} "
+                f"is not a number: {value!r}"
+            ) from exc
+    if len(doses) != expected_views:
+        raise ValueError(
+            f"the mdoc covers {len(doses)} views but the tomogram was "
+            f"reconstructed from {expected_views}; pytom pairs dose with tilt "
+            "angles by position, so the two must describe the same views"
+        )
+    output_path.write_text("".join(f"{dose:.6f}\n" for dose in doses))
     return output_path
 
 
