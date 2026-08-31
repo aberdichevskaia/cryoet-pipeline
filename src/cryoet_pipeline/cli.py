@@ -3258,7 +3258,7 @@ def _tilt_angles_for_tomogram(
     stacks = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and registry.descends_from(tomogram.id, artifact.id)
     ]
     for stack in stacks:
@@ -3283,7 +3283,7 @@ def _ctf_weighting_for_tomogram(
     corrected = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("purpose") == "ctf_corrected"
         and registry.descends_from(tomogram.id, artifact.id)
     ]
@@ -3323,7 +3323,7 @@ def _ctf_model_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.CTF_MODEL)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and (backend is None or artifact.parameters.get("backend") == backend)
     ]
     if variant is not None and matches:
@@ -3333,7 +3333,7 @@ def _ctf_model_artifact(
         available = sorted(
             str(artifact.parameters.get("backend"))
             for artifact in registry.by_kind(ArtifactKind.CTF_MODEL)
-            if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+            if artifact.covers(manifest.tilt_series_id)
         )
         detail = f"; registered estimation backends: {', '.join(available)}" if available else ""
         raise typer.BadParameter(
@@ -3419,7 +3419,7 @@ def _template_artifacts(
     templates = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.TEMPLATE)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if not templates:
         return None
@@ -3476,7 +3476,7 @@ def _optional_segmentation_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.SEGMENTATION)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if not matches:
         return None
@@ -3495,7 +3495,7 @@ def _tilt_stack_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if len(matches) != 1:
         raise typer.BadParameter(
@@ -3573,7 +3573,7 @@ def _tomogram_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.TOMOGRAM)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("tomogram_branch", "full") == "full"
     ]
     return _select_variant(
@@ -3591,7 +3591,7 @@ def _picks_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.PICKS)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if len(matches) != 1:
         raise typer.BadParameter(
@@ -3611,7 +3611,7 @@ def _particle_stack_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.PARTICLE_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if not matches:
         raise typer.BadParameter(
@@ -3634,7 +3634,7 @@ def _final_aligned_stack_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("purpose") == "final_alignment"
     ]
     return _select_variant(
@@ -3664,7 +3664,7 @@ def _reconstruction_input_stack_artifact(
     corrected_matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("purpose") == "ctf_corrected"
     ]
     if from_stack == "aligned":
@@ -3720,7 +3720,7 @@ def _optional_defocus_hint_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.DEFOCUS_HINT)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     if len(matches) > 1:
         raise typer.BadParameter(
@@ -3740,7 +3740,7 @@ def _fiducial_tracking_stack_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("purpose") == "fiducial_tracking"
     ]
     return _select_variant(
@@ -3760,7 +3760,7 @@ def _fiducial_seed_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     return _select_variant(
         matches,
@@ -3779,7 +3779,7 @@ def _fiducial_model_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.FIDUCIAL_MODEL)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
     ]
     return _select_variant(
         matches,
@@ -3798,7 +3798,7 @@ def _fine_alignment_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNMENT)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("stage") == "fine"
     ]
     return _select_variant(
@@ -3816,7 +3816,7 @@ def _alignment_artifact(
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNMENT)
-        if artifact.parameters.get("tilt_series_id") == manifest.tilt_series_id
+        if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("stage") == "coarse"
     ]
     if len(matches) != 1:

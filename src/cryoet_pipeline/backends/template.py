@@ -694,7 +694,7 @@ def _template_paths(
 def _validate_tomogram(tomogram: Artifact, manifest: TiltSeriesManifest) -> None:
     if tomogram.kind not in {ArtifactKind.TOMOGRAM, ArtifactKind.DENOISED_TOMOGRAM}:
         raise ValueError(f"expected tomogram artifact, got {tomogram.kind}")
-    if tomogram.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not tomogram.covers(manifest.tilt_series_id):
         raise ValueError(
             f"tomogram is for {tomogram.parameters.get('tilt_series_id')}, "
             f"expected {manifest.tilt_series_id}"

@@ -78,7 +78,7 @@ def main() -> int:
     print("  uniform within the maskable region would be 81.4")
     print("  a 177 px lamella would be about 51")
     counts, edges = np.histogram(z_values, bins=16, range=(0, depth))
-    for count, low in zip(counts, edges[:-1]):
+    for count, low in zip(counts, edges[:-1], strict=True):
         bar = "#" * int(count * 40 / max(counts.max(), 1))
         print(f"  z {low:4.0f}-{low + depth / 16:4.0f} {count:4d} {bar}")
     return 0

@@ -12,7 +12,11 @@ import zarr
 
 from cryoet_pipeline.backends.subtomogram import read_particle_star
 from cryoet_pipeline.models import FscQc, QcStatus
-from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
+from cryoet_pipeline.rotations import (
+    center_particle_volume,
+    relion_euler_to_matrix,
+    resample_volume_zyx,
+)
 
 
 def _fourier_shell_correlation(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -99,19 +103,35 @@ def build_half_set_average(
 ) -> torch.Tensor:
     """Average one half-set's particles using each particle's already-refined
     orientation/shift, as written by `average-particles`.
+
+    `ParticleRecord.index` is a position in the array at hand, never a particle's
+    name, so the STAR and the stack have to be the pair that were written for one
+    another. Extraction makes that true by construction — one row per slice — and
+    cross-tilt-series averaging broke it: its refined STAR carries combined
+    indices spanning every stack it averaged, and this command takes exactly one
+    stack. The count comparison below is what stands between that and a
+    confidently wrong resolution.
     """
 
-    records = [
-        record
-        for record in read_particle_star(metadata_path)
-        if record.random_subset == random_subset
-    ]
+    all_records = read_particle_star(metadata_path)
+    particle_stack = cast(Any, zarr.open(particle_stack_path, mode="r"))
+    stack_count = int(particle_stack.shape[0])
+    if len(all_records) != stack_count:
+        raise ValueError(
+            f"{metadata_path} describes {len(all_records)} particles but "
+            f"{particle_stack_path} holds {stack_count}. A refined STAR from a "
+            "cross-tilt-series average indexes all of its stacks at once and cannot "
+            "be paired with a single stack, so this half-set FSC would silently "
+            "average whichever particles those indices happened to land on"
+        )
+    records = [record for record in all_records if record.random_subset == random_subset]
     if not records:
         raise ValueError(f"no particles with random_subset={random_subset} in {metadata_path}")
-    particle_stack = cast(Any, zarr.open(particle_stack_path, mode="r"))
     volumes = []
     for record in records:
-        raw = torch.as_tensor(np.asarray(particle_stack[record.index]), device=device)
+        raw = center_particle_volume(
+            torch.as_tensor(np.asarray(particle_stack[record.index]), device=device)
+        )
         matrix = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
         shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
         volumes.append(resample_volume_zyx(raw, matrix, shift, device=device))

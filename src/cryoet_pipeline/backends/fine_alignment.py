@@ -1070,7 +1070,7 @@ def _validate_inputs(
         raise FileNotFoundError(f"fiducial model not found: {fiducial_model.path}")
     if tracking_stack.id not in fiducial_model.parent_ids:
         raise ValueError("fiducial model does not belong to tracking stack")
-    if fiducial_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not fiducial_model.covers(manifest.tilt_series_id):
         raise ValueError("fiducial model is for a different tilt series")
 
     included = _int_list_parameter(tracking_stack, "included_z_values")

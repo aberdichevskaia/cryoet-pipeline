@@ -69,9 +69,23 @@ def test_compute_fsc_curve_rejects_non_3d_input() -> None:
 
 
 def test_build_half_set_average_filters_and_averages_by_subset(tmp_path: Path) -> None:
+    """Two distinguishable half-sets, told apart by structure rather than by level.
+
+    This used to use constant volumes of 1.0 and 5.0, which distinguished the
+    halves purely by their mean — the one thing `center_particle_volume` removes,
+    because a non-zero mean is what stamps a rotation-shaped envelope into every
+    average. Zero-mean patterns test the same thing (that filtering by
+    `random_subset` picks up the right particles) without resting on the offset.
+    """
+
     box_size = 6
-    volume_a = torch.full((box_size, box_size, box_size), 1.0, dtype=torch.float32)
-    volume_b = torch.full((box_size, box_size, box_size), 5.0, dtype=torch.float32)
+    half = box_size // 2
+    volume_a = torch.full((box_size, box_size, box_size), -1.0, dtype=torch.float32)
+    volume_a[:half] = 1.0
+    volume_b = torch.full((box_size, box_size, box_size), -1.0, dtype=torch.float32)
+    volume_b[:, :half] = 1.0
+    assert volume_a.mean() == 0.0 and volume_b.mean() == 0.0
+    assert not torch.allclose(volume_a, volume_b)
 
     stack_path = tmp_path / "particles.zarr"
     stack = zarr.open(
@@ -167,6 +181,103 @@ def test_build_half_set_average_rejects_missing_subset(tmp_path: Path) -> None:
             random_subset=2,
             device=torch.device("cpu"),
         )
+
+
+def _stack_and_star(tmp_path: Path, *, stack_count: int, record_count: int) -> tuple[Path, Path]:
+    """A stack of one size and a STAR describing another — the mismatch under test."""
+
+    box_size = 4
+    stack_path = tmp_path / "particles.zarr"
+    stack = zarr.open(
+        stack_path,
+        mode="w",
+        shape=(stack_count, box_size, box_size, box_size),
+        chunks=(1, box_size, box_size, box_size),
+        dtype=np.float32,
+    )
+    stack[:] = np.zeros((stack_count, box_size, box_size, box_size), dtype=np.float32)
+    metadata_path = tmp_path / "refined.star"
+    write_particle_star(
+        metadata_path,
+        [
+            ParticleRecord(
+                index=index,
+                x_px=0.0,
+                y_px=0.0,
+                z_px=0.0,
+                rot_deg=0.0,
+                tilt_deg=0.0,
+                psi_deg=0.0,
+                shift_x_px=0.0,
+                shift_y_px=0.0,
+                shift_z_px=0.0,
+                score=0.5,
+                class_number=1,
+                random_subset=1 + (index % 2),
+            )
+            for index in range(record_count)
+        ],
+    )
+    return stack_path, metadata_path
+
+
+def test_build_half_set_average_refuses_a_cross_series_star_against_one_stack(
+    tmp_path: Path,
+) -> None:
+    """The refined STAR of a cross-tilt-series average indexes all of its stacks.
+
+    `compute-fsc --mode half-set` takes exactly one stack, so those indices run
+    past its end. Before the guard this raised zarr's `BoundsCheckError`, which
+    named a dimension length and not the actual mistake.
+    """
+
+    stack_path, metadata_path = _stack_and_star(tmp_path, stack_count=4, record_count=8)
+
+    with pytest.raises(ValueError, match="describes 8 particles but"):
+        build_half_set_average(
+            particle_stack_path=stack_path,
+            metadata_path=metadata_path,
+            random_subset=1,
+            device=torch.device("cpu"),
+        )
+
+
+def test_build_half_set_average_refuses_a_stack_larger_than_its_star(
+    tmp_path: Path,
+) -> None:
+    """The dangerous half of the same bug: every index resolves, silently.
+
+    A stack holding more particles than the STAR describes — a re-extraction at a
+    smaller box drops fewer particles at the edge, so more survive — leaves every
+    combined index in range and pointing at the wrong particle. That path
+    returned a map and a resolution number with nothing amiss on the surface,
+    which is worse than a crash.
+    """
+
+    stack_path, metadata_path = _stack_and_star(tmp_path, stack_count=12, record_count=8)
+
+    with pytest.raises(ValueError, match="cannot .*be paired with a single stack"):
+        build_half_set_average(
+            particle_stack_path=stack_path,
+            metadata_path=metadata_path,
+            random_subset=1,
+            device=torch.device("cpu"),
+        )
+
+
+def test_build_half_set_average_accepts_a_matched_stack_and_star(tmp_path: Path) -> None:
+    """The guard is a count comparison, so the legitimate pair must still pass."""
+
+    stack_path, metadata_path = _stack_and_star(tmp_path, stack_count=8, record_count=8)
+
+    average = build_half_set_average(
+        particle_stack_path=stack_path,
+        metadata_path=metadata_path,
+        random_subset=1,
+        device=torch.device("cpu"),
+    )
+
+    assert average.shape == (4, 4, 4)
 
 
 def test_load_mrc_volume_round_trips_shape_and_voxel_size(tmp_path: Path) -> None:
@@ -279,3 +390,124 @@ def test_compute_fsc_curve_reports_the_missing_package_clearly(
 
     with pytest.raises(ImportError, match="torch-fourier-shell-correlation"):
         compute_fsc_curve(volume, volume, pixel_spacing_angstrom=2.0, threshold=0.5)
+
+
+def _noise_half_average(
+    count: int, *, offset: float, centered: bool, rng: np.random.Generator
+) -> torch.Tensor:
+    """Average `count` pure-noise particles at independent random orientations."""
+
+    from cryoet_pipeline.rotations import (
+        center_particle_volume,
+        relion_euler_to_matrix,
+        resample_volume_zyx,
+    )
+
+    box_size = 32
+    volumes = []
+    for _ in range(count):
+        raw = torch.as_tensor(
+            (rng.normal(size=(box_size, box_size, box_size)) + offset).astype(np.float32)
+        )
+        if centered:
+            raw = center_particle_volume(raw)
+        matrix = relion_euler_to_matrix(*rng.uniform(0.0, 360.0, 3))
+        volumes.append(
+            resample_volume_zyx(raw, matrix, np.zeros(3), device=torch.device("cpu"))
+        )
+    return torch.stack(volumes).mean(dim=0)
+
+
+def test_an_uncentered_particle_offset_fabricates_correlation_between_noise_halves() -> None:
+    """The defect this guards against, stated as the measurement that found it.
+
+    Zero padding under rotation writes the particle's own mean into an
+    orientation-shaped region, and averaged over orientations that becomes a
+    smooth envelope which is nearly identical in any two subsets. Two half-sets
+    of PURE NOISE — disjoint particles, independent random orientations, no
+    shared reference of any kind, so no amount of refinement independence could
+    help — then correlate almost perfectly at low frequency.
+
+    The offset used is the 0.064 sigma measured on real box-48 crops of TS_01 at
+    bin8. Asserted as a floor rather than a point value so the test states the
+    effect and not the RNG: without centering the first shell sits above 0.8 at
+    this box size, and with it the median across seeds is indistinguishable from
+    zero.
+    """
+
+    uncentered = [
+        compute_fsc_curve(
+            _noise_half_average(
+                20, offset=0.064, centered=False, rng=np.random.default_rng(seed)
+            ),
+            _noise_half_average(
+                20, offset=0.064, centered=False, rng=np.random.default_rng(seed + 500)
+            ),
+            pixel_spacing_angstrom=5.4,
+            threshold=0.143,
+        ).correlation[0]
+        for seed in range(4)
+    ]
+
+    assert min(uncentered) > 0.8, f"expected the artefact, got {uncentered}"
+
+
+def test_centering_each_particle_removes_the_fabricated_correlation() -> None:
+    """The fix, measured the same way: noise must look like noise.
+
+    Across seeds the first-shell correlation scatters around zero and is
+    negative about half the time, which is what an FSC between two independent
+    noise averages should do. Any consistently positive floor here would mean a
+    second systematic path had been found, so the assertion is on the median
+    plus the presence of negative draws rather than on a single run — a lone
+    low-frequency shell holds few voxels and is genuinely noisy.
+    """
+
+    centered = [
+        compute_fsc_curve(
+            _noise_half_average(
+                20, offset=0.064, centered=True, rng=np.random.default_rng(seed)
+            ),
+            _noise_half_average(
+                20, offset=0.064, centered=True, rng=np.random.default_rng(seed + 500)
+            ),
+            pixel_spacing_angstrom=5.4,
+            threshold=0.143,
+        ).correlation[0]
+        for seed in range(8)
+    ]
+
+    assert abs(float(np.median(centered))) < 0.25, f"still systematic: {centered}"
+    assert any(value < 0.0 for value in centered), f"never negative: {centered}"
+
+
+def test_centering_the_final_map_is_not_a_substitute_for_centering_each_particle() -> None:
+    """Recorded because it is the fix one would reach for first, and it does nothing.
+
+    By the time the average exists the envelope is inside every term of it, so
+    removing the mean of the result leaves the curve where it was: the crossing
+    is unchanged and the shells agree to floating-point noise. Subtracting a
+    constant moves only the DC bin in exact arithmetic, and the DC bin is not
+    even part of the returned curve.
+    """
+
+    average_a = _noise_half_average(
+        20, offset=0.064, centered=False, rng=np.random.default_rng(11)
+    )
+    average_b = _noise_half_average(
+        20, offset=0.064, centered=False, rng=np.random.default_rng(22)
+    )
+
+    before = compute_fsc_curve(
+        average_a, average_b, pixel_spacing_angstrom=5.4, threshold=0.143
+    )
+    after = compute_fsc_curve(
+        average_a - average_a.mean(),
+        average_b - average_b.mean(),
+        pixel_spacing_angstrom=5.4,
+        threshold=0.143,
+    )
+
+    assert after.crossing_resolution_angstrom == before.crossing_resolution_angstrom
+    np.testing.assert_allclose(after.correlation, before.correlation, atol=1e-6)
+    assert before.correlation[0] > 0.8, "the artefact should still be there"

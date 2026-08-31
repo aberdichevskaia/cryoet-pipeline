@@ -875,7 +875,7 @@ def _validate_ctf_model(
 
     if ctf_model.kind is not ArtifactKind.CTF_MODEL:
         raise ValueError(f"expected CTF model artifact, got {ctf_model.kind}")
-    if ctf_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not ctf_model.covers(manifest.tilt_series_id):
         raise ValueError("CTF model is for a different tilt series")
     if not ctf_model.path.is_file():
         raise FileNotFoundError(f"CTF model file not found: {ctf_model.path}")

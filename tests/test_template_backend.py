@@ -557,7 +557,10 @@ def test_prepare_template_rejects_a_mask_larger_than_the_box(tmp_path: Path) -> 
 
 def test_prepare_template_rejects_a_tomogram_from_another_series(tmp_path: Path) -> None:
     tomogram = _tomogram(tmp_path).model_copy(
-        update={"parameters": {"tilt_series_id": "TS_OTHER", "tomogram_branch": "full"}}
+        update={
+            "parameters": {"tilt_series_id": "TS_OTHER", "tomogram_branch": "full"},
+            "tilt_series_ids": ["TS_OTHER"],
+        }
     )
     create_template, create_mask = _executables(tmp_path)
 

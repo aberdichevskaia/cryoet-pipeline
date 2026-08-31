@@ -1172,7 +1172,7 @@ def _validate_patch_tracking_inputs(
         raise FileNotFoundError(f"fiducial seed model not found: {seed_model.path}")
     if seed_model.parent_ids != [tracking_stack.id]:
         raise ValueError("fiducial seed model does not belong to tracking stack")
-    if seed_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not seed_model.covers(manifest.tilt_series_id):
         raise ValueError("fiducial seed model is for a different tilt series")
 
     included_z_values = tracking_stack.parameters.get("included_z_values")
@@ -1579,7 +1579,7 @@ def _validate_tracking_inputs(
         raise ValueError(
             "fiducial seed model must record beadtrack_box_size_unbinned_px"
         )
-    if seed_model.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not seed_model.covers(manifest.tilt_series_id):
         raise ValueError("fiducial seed model is for a different tilt series")
     return _TrackingMetadata(
         prealign_transform=prealign_transform,

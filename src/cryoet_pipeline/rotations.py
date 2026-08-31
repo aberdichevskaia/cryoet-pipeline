@@ -176,3 +176,34 @@ def resample_volume_zyx(
         align_corners=True,
     )
     return sampled[0, 0]
+
+
+def center_particle_volume(volume: torch.Tensor) -> torch.Tensor:
+    """Subtract a particle's own mean, so that zero padding means "nothing here".
+
+    `resample_volume_zyx` pads with zeros, and a rotation moves the corners of
+    the box outside it, so whatever the padding value is gets written into a
+    corner-shaped region that depends on the angle. If the particle's mean is not
+    zero, the padding is not neutral: it stamps a step of that size around the
+    edge. Averaged over many orientations the steps combine into a smooth,
+    spherically symmetric envelope which is nearly IDENTICAL in any two subsets
+    of the particles, because it is a function of the box and the offset rather
+    than of the specimen.
+
+    That envelope is a correlated low-frequency signal, and an FSC between two
+    half-sets sees it as agreement. Measured on this pipeline's own path: pure
+    Gaussian noise, disjoint particles, independent random orientations, no
+    shared reference at all, offset by the 0.064 sigma measured on real box-48
+    crops of TS_01 at bin8 — the first shells correlate at 0.97 and the curve
+    crosses 0.143 at 65 A with 20 particles per half, and at 52 A with 100.
+    It gets WORSE with more particles, because the envelope adds coherently
+    while the noise averages down.
+
+    Centering each particle removes it completely: the same test then falls below
+    the threshold in the first shell, which is the correct answer for noise.
+    Centering the final map instead changes nothing at all — the envelope is
+    already inside every term of the average by then. Hence per particle, before
+    resampling, which is what this is for and where it has to be called.
+    """
+
+    return volume - volume.mean()

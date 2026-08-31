@@ -325,9 +325,14 @@ given particle diameter and target resolution; see
 
 `compute-fsc` also runs in `--mode map-to-model` to compare the average against
 the template. Both modes accept `--mask` so background noise outside the
-particle is not counted. Note that the half-set FSC is currently optimistic:
-both halves are refined against a shared reference, so it is not yet a true
-gold-standard estimate — see [docs/roadmap.md](docs/roadmap.md).
+particle is not counted. Note that the half-set FSC is still optimistic: both
+halves are refined against a shared reference, rebuilt from all particles every
+iteration, so it is not yet a true gold-standard estimate — see
+[docs/roadmap.md](docs/roadmap.md). A separate and larger defect has been fixed:
+particles were averaged without removing their own mean, and zero padding under
+rotation turned that offset into an envelope which correlated between any two
+half-sets. It reported ~65 A from pure noise with perfectly independent halves,
+and got worse with more particles.
 
 On a Linux/NVIDIA processing host where MotionCor3 is already managed by the
 user or cluster, replace only the motion backend:

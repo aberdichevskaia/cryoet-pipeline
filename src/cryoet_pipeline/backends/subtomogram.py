@@ -33,6 +33,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.rotations import (
+    center_particle_volume,
     cone_offsets,
     matrix_to_relion_euler,
     perturbation_matrix,
@@ -47,6 +48,15 @@ class ParticleRecord:
     """One row of per-particle metadata carried alongside a particle stack."""
 
     index: int
+    """Position in the array or list at hand — never a particle's name.
+
+    Written as the slice number in the stack by extraction, rewritten with an
+    offset by `_combine_particle_stacks` when several stacks are averaged
+    together, and used as a subscript in roughly sixteen places. So a STAR and a
+    stack are only interchangeable if they were written for one another, and a
+    record cannot say which pick or which tilt-series it came from. Both facts
+    are relied on; neither was stated anywhere until this line.
+    """
     x_px: float
     y_px: float
     z_px: float
@@ -1264,7 +1274,7 @@ def _crop_start(
 def _validate_tomogram(tomogram: Artifact, manifest: TiltSeriesManifest) -> tuple[int, ...]:
     if tomogram.kind not in {ArtifactKind.TOMOGRAM, ArtifactKind.DENOISED_TOMOGRAM}:
         raise ValueError(f"expected tomogram artifact, got {tomogram.kind}")
-    if tomogram.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not tomogram.covers(manifest.tilt_series_id):
         raise ValueError(
             f"tomogram is for {tomogram.parameters.get('tilt_series_id')}, "
             f"expected {manifest.tilt_series_id}"
@@ -1283,7 +1293,7 @@ def _validate_tomogram(tomogram: Artifact, manifest: TiltSeriesManifest) -> tupl
 def _validate_picks(picks: Artifact, tomogram: Artifact, manifest: TiltSeriesManifest) -> None:
     if picks.kind is not ArtifactKind.PICKS:
         raise ValueError(f"expected picks artifact, got {picks.kind}")
-    if picks.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not picks.covers(manifest.tilt_series_id):
         raise ValueError("picks are for a different tilt series")
     if picks.parameters.get("input_tomogram_id") != tomogram.id:
         raise ValueError("picks were generated from a different tomogram")
@@ -1294,7 +1304,7 @@ def _validate_picks(picks: Artifact, tomogram: Artifact, manifest: TiltSeriesMan
 def _validate_particle_stack(particles: Artifact, manifest: TiltSeriesManifest) -> None:
     if particles.kind is not ArtifactKind.PARTICLE_STACK:
         raise ValueError(f"expected particle stack artifact, got {particles.kind}")
-    if particles.parameters.get("tilt_series_id") != manifest.tilt_series_id:
+    if not particles.covers(manifest.tilt_series_id):
         raise ValueError("particle stack is for a different tilt series")
     if not particles.path.is_dir():
         raise FileNotFoundError(f"particle stack Zarr not found: {particles.path}")
@@ -1364,6 +1374,10 @@ def _read_pytom_star(path: Path) -> list[_PytomStarRow]:
     ]
 
 
+# Every name here is REQUIRED on read: `read_particle_star` collects the missing
+# ones and raises. So appending a column to this tuple makes every particle STAR
+# already on disk unreadable, and a new column has to be read as optional instead
+# — the same shape the optional `filled.fid` output took in fine alignment.
 _PARTICLE_STAR_COLUMNS = (
     "particleIndex",
     "rlnCoordinateX",
@@ -1556,8 +1570,11 @@ def _combine_particle_stacks(
             )
         metadata_path = Path(cast(str, artifact.parameters["metadata_path"]))
         offset = len(volumes)
+        # Centered here, at the one place every averaging and classification run
+        # loads its particles, rather than at extraction: the stacks on disk stay
+        # exactly as written, so nothing has to be re-extracted.
         volumes.extend(
-            torch.as_tensor(np.asarray(array[index]), device=device)
+            center_particle_volume(torch.as_tensor(np.asarray(array[index]), device=device))
             for index in range(count)
         )
         records.extend(

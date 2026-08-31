@@ -84,6 +84,76 @@ nothing checks is decoration.** Either `reindex` knows how to read every
 version it may meet, or the versions have to be migrated in place before it
 runs.
 
+**Scope is a field now, and the parameter it replaces is still there.**
+`Artifact.tilt_series_ids` holds which tilt-series an artifact is about — a list,
+because a cross-series average is about several and no single id can say so — and
+`covers(tilt_series_id)` is how a caller asks. Twenty-nine resolvers and guards
+that compared `parameters["tilt_series_id"]` by hand now go through it.
+
+The parameter stays, adopted into the field, on the precedent `backend` and
+`variant` set: promote the field, leave the producers. A field that disagrees
+with the parameters is refused on construction and on deserialization, so the
+two cannot drift apart anywhere a registry is written or read. `model_copy` runs
+no validators and is the exception — a stale copy is caught on its next
+validation, which for a registry is immediately, and negative tests depend on
+being able to build incoherent objects, so the hole is pinned by a test rather
+than closed.
+
+Dropping the parameter from the forty-two producers belongs with the move to an
+index, not before it, and [database_design.md](database_design.md) carries the
+argument: that is where `parameters` becomes a JSON column beside real columns
+and a duplicated scope turns into a second source of truth. Doing it earlier
+means touching the same forty-two sites twice.
+
+**Particle selection waits, and nothing is lost by waiting.** Selecting by
+tilt-series already works: `covers()` is the membership test and a repeated
+`--manifest` is the query. Selecting individual particles is not expressible, and
+should stay that way until the fifty-series run, for a checked reason rather than
+a preference — everything a selection would need is still recoverable from what
+is kept. The pick-row a particle came from is a deterministic replay of the
+extraction filter over inputs that all survive: the picks STAR, `box_size_px`,
+`minimum_score_threshold` in the extraction QC, and the tomogram's `shape` field,
+which outlives the tomogram file. The tilt-series behind a combined index is a
+cumulative sum over `particle_stack_ids` and each stack's recorded count.
+
+So no per-particle identity column, and in particular no new REQUIRED column in
+the particle STAR: `read_particle_star` hard-fails on any missing name, so adding
+one makes every stack already on disk unreadable and forces re-extraction. When
+identity does land it is typed columns, with the new one read as optional — the
+shape the optional `filled.fid` output took in fine alignment.
+
+**The half-set FSC had a larger defect than its lack of independence, and it is
+fixed.** Particles were averaged without removing their own mean. Zero padding in
+`resample_volume_zyx` writes that offset into an orientation-shaped region, and
+over many orientations it becomes a smooth envelope that is nearly identical in
+any two subsets of the particles, because it is a function of the box and the
+offset rather than of the specimen. Measured on the pipeline's own path with pure
+Gaussian noise, disjoint particles, independent random orientations and no shared
+reference at all: the first shell correlated at 0.975 with 20 particles per half
+and 0.996 with 100, crossing 0.143 at 65 A and 52 A. It got worse with more
+particles, because the envelope adds coherently while the noise averages down.
+Nothing about refinement independence could have caught it — that test had
+perfect independence.
+
+`center_particle_volume` now runs at the two places particles are loaded, so
+existing stacks need no re-extraction. After it the median first-shell
+correlation across seeds is −0.026, negative in seven runs of twelve, and the
+median run reports no crossing at all. Three tests pin the artefact, the fix, and
+the wrong fix — subtracting the mean of the final map, which leaves the curve
+exactly where it was, because by then the envelope is inside every term of it.
+
+**What remains for a real gold-standard estimate**, in order: the reference is
+still rebuilt from all particles every iteration, which is the defective scheme
+Scheres & Chen name explicitly, and there is no low-pass on the reference
+anywhere — and a shared starting reference is only legitimate *because* of that
+low-pass, above which the guarantee holds. Independent refinement measured at
+1.005x the compute of the joint version, since each half searches only its own
+particles, so cost is not the obstacle and never was. Splitting per particle
+within one tomogram is correct as it stands for discrete particles like
+ribosomes; group-level splitting is an opt-in for overlapping density, which is
+what the Gag-lattice question would need. Also missing: no QC anywhere records
+per-half particle counts, so a 2-versus-200 split reports PASS with a number.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array

@@ -516,10 +516,11 @@ What this design breaks, and what it does not:
   the most valuable existing asset: they are the metric vocabulary the deferred
   comparison needs, and no surveyed tool has an equivalent.
 - **Replaced.** `Artifact.parent_ids` becomes a derived view over run-mediated
-  lineage. `parameters["tilt_series_id"]` becomes `artifact_scope`, which is
-  required the moment subtomogram averaging spans several tilt-series — the next
-  milestone. `--variant` encoded in id strings becomes a `lane` column plus
-  fingerprints.
+  lineage. `parameters["tilt_series_id"]` becomes `artifact_scope`, which
+  became required the moment subtomogram averaging spanned several tilt-series;
+  it now exists as `Artifact.tilt_series_ids`, and the parameter it replaces is
+  still written alongside it. `--variant` encoded in id strings becomes a
+  `lane` column plus fingerprints.
 - **Corrected.** [`ArtifactRegistry`](../src/cryoet_pipeline/artifacts.py) does
   read-modify-write of an entire JSON document with no locking, so two runs
   finishing simultaneously lose one another's entries, and the rewrite is O(n)
@@ -539,9 +540,31 @@ change twice:
 
 1. introduce `run` and declared input/output slots, in pydantic, still on JSON;
 2. split identity from naming: add fingerprints alongside the semantic ids;
-3. make scope a relation (`artifact_scope`), before multi-tilt-series averaging;
+3. make scope a relation (`artifact_scope`), before multi-tilt-series averaging
+   — **half done**, see below;
 4. move to a database as a rebuildable index, with `reindex`;
 5. add `plan_*` and a thin Slurm runner.
+
+Step 3 arrived early, because cross-tilt-series averaging landed first and an
+artifact about two tomograms cannot state that in a field called
+`tilt_series_id`. `Artifact.tilt_series_ids` is now a list field with
+`covers(tilt_series_id)` as the way to ask, and every resolver and guard in the
+CLI and the backends goes through it — twenty-nine call sites that used to read
+`parameters["tilt_series_id"]` directly.
+
+What is done is the file-first shape: a list on the artifact, which is one row
+per element of `artifact_scope` once there are rows. What is not done is the
+removal — forty-two producers still write the scope into `parameters` as well,
+and the field is adopted from it, exactly as `backend` and `variant` were
+promoted without rewriting their producers. Construction and deserialization
+refuse a field that disagrees with the parameters, so the duplication cannot
+drift silently; it is duplication, not ambiguity.
+
+The removal belongs with step 4 rather than before it, for a reason worth
+writing down: `parameters` becomes a JSON column beside real columns, and that
+is the point at which a duplicated scope stops being harmless redundancy and
+starts being a second source of truth the index would have to choose between.
+Removing it earlier would mean touching forty-two call sites twice.
 
 ## Format conversion
 

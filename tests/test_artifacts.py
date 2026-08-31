@@ -259,3 +259,111 @@ def test_artifact_registry_raises_key_error_for_unknown_id() -> None:
 
     with pytest.raises(KeyError, match="unknown artifact id"):
         registry.get("missing")
+
+
+def test_scope_is_adopted_from_the_single_parameter_every_backend_writes(
+    tmp_path: Path,
+) -> None:
+    """Every registry written before the field existed carries only this."""
+
+    artifact = Artifact(
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "t.mrc",
+        parameters={"tilt_series_id": "TS_0005"},
+    )
+
+    assert artifact.tilt_series_ids == ["TS_0005"]
+    assert artifact.covers("TS_0005")
+    assert not artifact.covers("TS_0006")
+
+
+def test_scope_is_adopted_from_the_list_a_cross_series_average_writes(
+    tmp_path: Path,
+) -> None:
+    """The case the field exists for: one artifact about several tilt-series."""
+
+    average = Artifact(
+        kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
+        path=tmp_path / "avg.mrc",
+        parameters={"tilt_series_ids": ["TS_0005", "TS_0006"]},
+    )
+
+    assert average.tilt_series_ids == ["TS_0005", "TS_0006"]
+    assert average.covers("TS_0005")
+    assert average.covers("TS_0006")
+
+
+def test_an_artifact_about_no_particular_series_has_an_empty_scope(
+    tmp_path: Path,
+) -> None:
+    """A shared template belongs to the project, not to one tilt-series."""
+
+    template = Artifact(kind=ArtifactKind.TEMPLATE, path=tmp_path / "ref.mrc")
+
+    assert template.tilt_series_ids == []
+    assert not template.covers("TS_0005")
+
+
+def test_an_explicit_scope_is_not_overwritten_by_adoption(tmp_path: Path) -> None:
+    artifact = Artifact(
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "t.mrc",
+        tilt_series_ids=["TS_0005"],
+        parameters={"tilt_series_id": "TS_0005"},
+    )
+
+    assert artifact.tilt_series_ids == ["TS_0005"]
+
+
+def test_a_scope_that_disagrees_with_its_parameters_is_refused(tmp_path: Path) -> None:
+    """The promotion is only worth having if the two homes cannot diverge.
+
+    Nothing writes both today, so a disagreement means a bug — and a silent one,
+    since a resolver would read the field while a human read the parameter.
+    """
+
+    with pytest.raises(ValidationError, match="scope disagrees with its parameters"):
+        Artifact(
+            kind=ArtifactKind.TOMOGRAM,
+            path=tmp_path / "t.mrc",
+            tilt_series_ids=["TS_0009"],
+            parameters={"tilt_series_id": "TS_0005"},
+        )
+
+
+def test_scope_survives_a_round_trip_through_json(tmp_path: Path) -> None:
+    """What a rebuilt index will actually read, and the column it will fill."""
+
+    average = Artifact(
+        kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
+        path=tmp_path / "avg.mrc",
+        parameters={"tilt_series_ids": ["TS_0005", "TS_0006"]},
+    )
+
+    restored = Artifact.model_validate_json(average.model_dump_json())
+
+    assert restored.tilt_series_ids == ["TS_0005", "TS_0006"]
+
+
+def test_model_copy_does_not_re_derive_the_scope(tmp_path: Path) -> None:
+    """Pinned because it is the one way the two homes can still diverge.
+
+    `model_copy` runs no validators, so updating `parameters` alone leaves the
+    field saying what it said before. The invariant holds where a registry
+    actually crosses it — construction and deserialization — and not here.
+    Negative tests rely on this to build artifacts that violate cross-field
+    rules, which is why the hole is documented rather than closed by overriding
+    `model_copy`: a caller updating scope must update both, or construct anew.
+    """
+
+    artifact = Artifact(
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "t.mrc",
+        parameters={"tilt_series_id": "TS_0005"},
+    )
+
+    stale = artifact.model_copy(update={"parameters": {"tilt_series_id": "TS_OTHER"}})
+
+    assert stale.tilt_series_ids == ["TS_0005"]
+    with pytest.raises(ValidationError, match="scope disagrees with its parameters"):
+        Artifact.model_validate(stale.model_dump())

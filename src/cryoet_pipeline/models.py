@@ -985,6 +985,70 @@ class Artifact(BaseModel):
     retention_policy: RetentionPolicy = RetentionPolicy.RECOMPUTE
     can_recompute: bool = True
     size_bytes: int | None = Field(default=None, ge=0)
+    tilt_series_ids: list[str] = Field(default_factory=list)
+    """Which tilt-series this artifact is about — its scope.
+
+    A list because the moment particles from several tomograms are averaged
+    together, the result is about all of them, and a single id cannot say so.
+    Ordinary artifacts have exactly one; a cross-series average has several; a
+    project-wide artifact such as a shared template has none.
+
+    This is the file-first shape of `artifact_scope(artifact_id, tilt_series_id)`
+    in [database_design.md](../../docs/database_design.md), which is a relation
+    there and a list here. Promoted out of `parameters` for the same reason
+    `backend` and `variant` were: a scope buried in an untyped dict cannot be
+    indexed, joined, or checked.
+    """
+
+    @model_validator(mode="after")
+    def adopt_scope_from_parameters(self) -> Artifact:
+        """Fill the scope from `parameters` when only the parameter was given.
+
+        Every backend has long recorded `tilt_series_id` as a parameter, and some
+        now record `tilt_series_ids`. Adopting both keeps every existing registry
+        readable and every existing producer correct, while making the field the
+        one place a reader has to look.
+
+        A field that disagrees with the parameters is refused rather than
+        reconciled: nothing writes both, so a disagreement is a bug, and a
+        silent one — a resolver reads the field while a human reads the
+        parameter. This runs on construction and on deserialization, which is
+        every path a registry takes; `model_copy` runs no validators, so a stale
+        copy is caught on its next validation rather than at the copy.
+        """
+
+        recorded = self._recorded_scope()
+        if not self.tilt_series_ids:
+            if recorded is not None:
+                object.__setattr__(self, "tilt_series_ids", recorded)
+            return self
+        if recorded is not None and recorded != self.tilt_series_ids:
+            raise ValueError(
+                f"artifact scope disagrees with its parameters: field says "
+                f"{self.tilt_series_ids}, parameters say {recorded}"
+            )
+        return self
+
+    def _recorded_scope(self) -> list[str] | None:
+        """The scope as `parameters` states it, or None if it states none."""
+
+        listed = self.parameters.get("tilt_series_ids")
+        if isinstance(listed, list) and all(isinstance(item, str) for item in listed):
+            return list(listed)
+        single = self.parameters.get("tilt_series_id")
+        if isinstance(single, str):
+            return [single]
+        return None
+
+    def covers(self, tilt_series_id: str) -> bool:
+        """Whether this artifact is about the given tilt-series.
+
+        The question a resolver actually asks, and the reason it is a method: a
+        caller comparing against `tilt_series_ids[0]` would be right for every
+        artifact until the first cross-series one, and wrong from then on.
+        """
+
+        return tilt_series_id in self.tilt_series_ids
 
     @model_validator(mode="after")
     def adopt_backend_from_parameters(self) -> Artifact:
@@ -993,8 +1057,12 @@ class Artifact(BaseModel):
         Backends have long recorded which implementation ran as a parameter.
         Promoting it to a field gives it one canonical home — the shape a
         relational schema will want as a column — without rewriting the thirty
-        odd places that already set the parameter, and without the two homes
-        being able to disagree.
+        odd places that already set the parameter.
+
+        Adoption only fires when the field is unset, so it cannot silently
+        contradict a field a caller stated. It does not check the two against
+        each other the way `adopt_scope_from_parameters` does; nothing writes
+        both, and if that changes this should gain the same check.
         """
 
         if self.backend is None:
