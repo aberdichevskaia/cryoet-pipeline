@@ -303,6 +303,12 @@ def main() -> int:
     parser.add_argument("--series", action="append", required=True, dest="series")
     parser.add_argument("--from", dest="start", default=None, help="first step to emit")
     parser.add_argument("--until", dest="end", default=None, help="last step to emit")
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="add --overwrite to every step; blanket by design, since a re-run "
+        "of a range is what it is for, and every command accepts the flag",
+    )
     parser.add_argument("--execute", action="store_true", help="run instead of printing")
     parser.add_argument("--list-steps", action="store_true")
     args = parser.parse_args()
@@ -318,6 +324,8 @@ def main() -> int:
         steps = slice_steps(build_steps(cfg, args.project, series), args.start, args.end)
         print(f"\n# ---- {series} ({cfg['lane']['name']}) ----")
         for name, command in steps:
+            if args.overwrite:
+                command = [*command, "--overwrite"]
             if not args.execute:
                 print(f"\n# {name}")
                 print(render(command))
