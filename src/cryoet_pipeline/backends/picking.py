@@ -710,6 +710,26 @@ def _z_spread_verdict(
     whether the observed spread is *significantly* below that, judged by the
     sampling error of a standard deviation, `sd / sqrt(2n)`, at three sigma —
     rather than by a fraction picked to look reasonable.
+
+    PROVISIONAL. This encodes an expectation that has not been confirmed by
+    anyone who reads these tomograms: that a reconstruction places a confined
+    specimen in a confined band of Z, so that its particles are confined too.
+    Every attempt to locate the lamella in Z directly failed — a variance profile
+    is too insensitive at this dose, and a mean profile cannot see a slab at all
+    because weighted backprojection multiplies by |k| and removes exactly the
+    lowest frequencies a slab boundary lives in. So the premise stands on
+    reasoning rather than on measurement, and it is out for review.
+
+    There is one case where uniform is simply correct and this still fires: a
+    thickness sized snugly around the specimen leaves it filling the volume, so
+    its particles fill it too. That is a *good* reconstruction, and the warning
+    names it rather than claiming a fault. Sizing snugly is worth doing, so the
+    case is not hypothetical.
+
+    If it turns out that picks legitimately fill a generous thickness as well,
+    this warning fires on correct results and should be deleted; the recorded
+    numbers are worth keeping either way, since they state a fact rather than an
+    interpretation.
     """
 
     observed = statistics.coordinate_z_sd
@@ -736,8 +756,12 @@ def _z_spread_verdict(
         f"picks spread {observed:.1f} px through Z where uniform over the "
         f"{centreable} px a template box can be centred in would spread "
         f"{uniform:.1f} px — {shortfall:.1f} standard errors below uniform, so "
-        "not distinguishable from it. Particles of a confined specimen are "
-        "confined; check whether these are peaks or noise before extracting"
+        "not distinguishable from it. Three readings, and this cannot tell them "
+        "apart: the picks are noise; or the reconstruction does not place the "
+        "specimen in a band of Z; or the thickness is snug around the specimen, "
+        "which fills the volume and makes uniform the correct answer. Compare "
+        "the reconstruction thickness against the specimen's own before treating "
+        "this as a fault"
     )
 
 

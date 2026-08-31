@@ -850,6 +850,11 @@ def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
     assert warning is not None
     assert "not distinguishable from it" in warning
     assert "80.3" in warning
+    # All three readings named, because this measurement cannot separate them —
+    # and one of them, a thickness sized snugly around the specimen, is a good
+    # reconstruction rather than a fault.
+    assert "the picks are noise" in warning
+    assert "snug around the specimen" in warning
 
 
 def test_z_spread_is_silent_for_picks_confined_to_a_lamella() -> None:
