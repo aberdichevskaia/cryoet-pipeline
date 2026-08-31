@@ -640,15 +640,21 @@ tiltalign's two labelled blocks. `-SurfacesToAnalyze` is a parameter now, the
 block is chosen by its header, and QC warns when the split degenerates whatever
 the setting.
 
-**Open — fiducial-seed QC reports bead semantics for a patch grid.** The patch
-seed produces a grid descriptor, not a point model, so every field the QC model
-has is zero: `num_fiducials 0`, `num_points 0`, `coverage_fraction 0` — with
-status `pass`. Three series in a row have reported it. For a bead seed those
-numbers would be a catastrophe; here they are meaningless, and `pass` on a row
-of zeros is a bad habit for a project whose whole discipline is that a green
-status means something was checked. Either report what a patch grid actually
-has (patch count, derived patch size in binned and unbinned pixels, usable area
-after the margin) or say explicitly that the bead fields do not apply.
+**Fixed — the fiducial-seed QC reported bead semantics for a patch grid.** The
+patch seed produces a grid descriptor, not a point model, so every field
+`FiducialModelQc` has read zero: `num_fiducials 0`, `num_points 0`,
+`coverage_fraction 0` — with status `pass`, three series in a row. For a bead
+seed those numbers would be a catastrophe. There is a `PatchGridQc` now,
+reporting what a grid actually has: patch counts, patch size in binned pixels
+and in Angstrom, the margin, and what fraction of the field it leaves.
+
+Its one warning is derived rather than chosen. At the largest tilt the specimen
+foreshortens by cos(tilt) across the tilt axis, so that fraction of one image is
+what every view still covers; a margin leaving less than that cuts more than the
+geometry asks for. On EMPIAR-11538 the configured margin leaves 0.609 against a
+foreshortening fraction of 0.439 — aggressive but defensible, and silent. A
+margin of 160 binned pixels would leave 0.375 and warn. That reasoning used to
+live in a comment in the lane config; now it checks itself.
 
 **The audit is the work item.** Three found by tripping over them says nothing
 about how many are left. Every stage between seeding and reconstruction should
