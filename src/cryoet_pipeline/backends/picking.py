@@ -192,6 +192,11 @@ class PytomMatchPickBackend:
                 f"{manifest.tilt_series_id}:picks:{branch.value}:{self.name}"
                 f"{variant_suffix(context)}"
             )
+            uniform_z_sd, spread_warning = _z_spread_verdict(
+                statistics,
+                tomogram_shape=tomogram.shape,
+                template_box_px=_template_box_px(job_json),
+            )
             report = PicksQc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
@@ -202,7 +207,11 @@ class PytomMatchPickBackend:
                 minimum_score=statistics.minimum_score,
                 maximum_score=statistics.maximum_score,
                 mean_score=statistics.mean_score,
-                status=QcStatus.PASS,
+                coordinate_z_median=statistics.coordinate_z_median,
+                coordinate_z_sd=statistics.coordinate_z_sd,
+                uniform_z_sd=uniform_z_sd,
+                status=QcStatus.WARNING if spread_warning else QcStatus.PASS,
+                warnings=[spread_warning] if spread_warning else [],
             )
             temporary_report.write_text(
                 json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
@@ -332,6 +341,8 @@ class _PicksStatistics:
     minimum_score: float | None
     maximum_score: float | None
     mean_score: float | None
+    coordinate_z_median: float | None = None
+    coordinate_z_sd: float | None = None
 
 
 def _picking_paths(
@@ -640,11 +651,93 @@ def _read_star_statistics(star_path: Path) -> _PicksStatistics:
         )
     score_index = columns.index("rlnLCCmax")
     scores = [float(row[score_index]) for row in rows]
+    z_median: float | None = None
+    z_sd: float | None = None
+    if "rlnCoordinateZ" in columns:
+        z_values = np.asarray(
+            [float(row[columns.index("rlnCoordinateZ")]) for row in rows],
+            dtype=np.float64,
+        )
+        z_median = float(np.median(z_values))
+        z_sd = float(z_values.std())
     return _PicksStatistics(
         particle_count=particle_count,
         minimum_score=min(scores),
         maximum_score=max(scores),
         mean_score=sum(scores) / len(scores),
+        coordinate_z_median=z_median,
+        coordinate_z_sd=z_sd,
+    )
+
+
+def _template_box_px(job_json: Path) -> int | None:
+    """The template box size pytom actually used, from the job it wrote.
+
+    Taken from there rather than measured off the template file because that is
+    the number the match was run with, and because a box read back from disk
+    could have been rebuilt since.
+    """
+
+    try:
+        payload = json.loads(job_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    shape = payload.get("template_shape")
+    if not isinstance(shape, list) or not shape:
+        return None
+    sizes = [item for item in shape if isinstance(item, int) and item > 0]
+    if len(sizes) != len(shape):
+        return None
+    return max(sizes)
+
+
+def _z_spread_verdict(
+    statistics: _PicksStatistics,
+    *,
+    tomogram_shape: tuple[int, ...] | None,
+    template_box_px: int | None,
+) -> tuple[float | None, str | None]:
+    """Are these picks confined to something, or spread through the volume?
+
+    A specimen occupies part of the reconstructed thickness, so its particles do
+    too; noise peaks fill whatever they are allowed to fill. The count cannot
+    tell the two apart — a threshold loose enough will always produce plenty —
+    and this is the readout that can.
+
+    The comparison needs no reference dataset and no assumption about contrast.
+    Uniform picks inside the region where a template box can be centred spread by
+    `(thickness - box) / sqrt(12)`, both numbers being known here. The verdict is
+    whether the observed spread is *significantly* below that, judged by the
+    sampling error of a standard deviation, `sd / sqrt(2n)`, at three sigma —
+    rather than by a fraction picked to look reasonable.
+    """
+
+    observed = statistics.coordinate_z_sd
+    count = statistics.particle_count
+    if observed is None or count < 2 or tomogram_shape is None or template_box_px is None:
+        return None, None
+    if len(tomogram_shape) != 3:
+        return None, None
+
+    # Canonical tomograms are (Z, Y, X), so the thickness is the first axis.
+    thickness = tomogram_shape[0]
+    centreable = thickness - template_box_px
+    if centreable <= 0:
+        return None, None
+    uniform = centreable / math.sqrt(12.0)
+
+    standard_error = observed / math.sqrt(2.0 * count)
+    if standard_error <= 0.0:
+        return uniform, None
+    shortfall = (uniform - observed) / standard_error
+    if shortfall >= 3.0:
+        return uniform, None
+    return uniform, (
+        f"picks spread {observed:.1f} px through Z where uniform over the "
+        f"{centreable} px a template box can be centred in would spread "
+        f"{uniform:.1f} px — {shortfall:.1f} standard errors below uniform, so "
+        "not distinguishable from it. Particles of a confined specimen are "
+        "confined; check whether these are peaks or noise before extracting"
     )
 
 

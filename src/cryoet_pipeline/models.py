@@ -681,6 +681,15 @@ class PicksQc(BaseModel):
     minimum_score: float | None = None
     maximum_score: float | None = None
     mean_score: float | None = None
+    # Where the picks sit through the tomogram's thickness. A confined specimen
+    # confines its particles; noise peaks are spread through the whole
+    # reconstructed volume, and the count alone cannot tell the two apart.
+    coordinate_z_median: float | None = None
+    coordinate_z_sd: float | None = None
+    uniform_z_sd: float | None = Field(default=None, gt=0.0)
+    """The spread picks would have if they were uniform through the region where
+    a template box can be centred: (thickness - box) / sqrt(12). Recorded so the
+    observed spread can be read against it without knowing either size."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

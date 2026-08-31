@@ -15,6 +15,8 @@ from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
     _match_template_command,
+    _PicksStatistics,
+    _z_spread_verdict,
     _included_z_values,
     _write_dose_accumulation,
     pick_and_register,
@@ -817,6 +819,88 @@ def test_dose_is_omitted_when_the_mdoc_had_none(tmp_path: Path) -> None:
 
     assert "--per-tilt-weighting" in command
     assert "--dose-accumulation" not in command
+
+
+def _stats(count: int, z_sd: float | None) -> _PicksStatistics:
+    return _PicksStatistics(
+        particle_count=count,
+        minimum_score=0.10,
+        maximum_score=0.13,
+        mean_score=0.11,
+        coordinate_z_median=158.0,
+        coordinate_z_sd=z_sd,
+    )
+
+
+def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
+    """The measured case: 385 picks at 80.3 px through a 320 px tomogram.
+
+    Uniform over the 281 px a 39 px box can be centred in spreads 81.1 px, and
+    the sampling error of a standard deviation over 385 picks is 2.9 px, so 80.3
+    sits a third of one standard error below uniform. Nothing about that count
+    says anything — a loose enough threshold always produces plenty — and this is
+    the readout that does.
+    """
+
+    uniform, warning = _z_spread_verdict(
+        _stats(385, 80.3), tomogram_shape=(320, 512, 512), template_box_px=39
+    )
+
+    assert uniform == pytest.approx(281 / 12**0.5, rel=1e-3)
+    assert warning is not None
+    assert "not distinguishable from it" in warning
+    assert "80.3" in warning
+
+
+def test_z_spread_is_silent_for_picks_confined_to_a_lamella() -> None:
+    """A 177 px lamella in a 320 px volume spreads about 51 px.
+
+    That is thirty standard errors below uniform, which is what a confined
+    specimen looks like and what should pass without comment.
+    """
+
+    uniform, warning = _z_spread_verdict(
+        _stats(385, 51.0), tomogram_shape=(320, 512, 512), template_box_px=39
+    )
+
+    assert uniform == pytest.approx(281 / 12**0.5, rel=1e-3)
+    assert warning is None
+
+
+def test_z_spread_says_nothing_without_the_numbers_to_say_it_with() -> None:
+    """Silence rather than a guess when a piece is missing."""
+
+    assert _z_spread_verdict(
+        _stats(385, None), tomogram_shape=(320, 512, 512), template_box_px=39
+    ) == (None, None)
+    assert _z_spread_verdict(
+        _stats(385, 80.3), tomogram_shape=None, template_box_px=39
+    ) == (None, None)
+    assert _z_spread_verdict(
+        _stats(1, 80.3), tomogram_shape=(320, 512, 512), template_box_px=39
+    ) == (None, None)
+    # A box that does not fit leaves nowhere to centre it.
+    assert _z_spread_verdict(
+        _stats(385, 80.3), tomogram_shape=(32, 512, 512), template_box_px=39
+    ) == (None, None)
+
+
+def test_z_spread_scales_with_the_volume_rather_than_a_fixed_number() -> None:
+    """The reference comes from the tomogram, not from a constant.
+
+    The same spread is uniform in one volume and confined in a thicker one, which
+    is why the comparison is computed per tomogram.
+    """
+
+    _, thin = _z_spread_verdict(
+        _stats(400, 80.0), tomogram_shape=(320, 512, 512), template_box_px=39
+    )
+    _, thick = _z_spread_verdict(
+        _stats(400, 80.0), tomogram_shape=(800, 512, 512), template_box_px=39
+    )
+
+    assert thin is not None
+    assert thick is None
 
 
 def _dose_manifest(doses: list[object]) -> TiltSeriesManifest:
