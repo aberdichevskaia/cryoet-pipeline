@@ -263,13 +263,32 @@ class FftRefinementAveragingBackend:
 
     def average(
         self,
-        particles: Artifact,
-        manifest: TiltSeriesManifest,
+        particles: Sequence[Artifact],
+        manifests: Sequence[TiltSeriesManifest],
         context: BackendContext,
     ) -> list[Artifact]:
-        """Return an average map, refined per-particle metadata, and a QC artifact."""
+        """Return an average map, refined per-particle metadata, and a QC artifact.
 
-        _validate_particle_stack(particles, manifest)
+        Takes several particle stacks because averaging over particles from many
+        tomograms is the point of averaging; one stack is the same call with a
+        list of one, and produces byte-identical ids and paths to before.
+        """
+
+        if len(particles) != len(manifests):
+            raise ValueError(
+                f"{len(particles)} particle stacks were given for {len(manifests)} "
+                "manifests; each stack needs the manifest of the series it came from"
+            )
+        if not particles:
+            raise ValueError("averaging needs at least one particle stack")
+        for stack, stack_manifest in zip(particles, manifests, strict=True):
+            _validate_particle_stack(stack, stack_manifest)
+        # Sorted so that the average does not depend on the order the manifests
+        # were listed in — neither its contents nor the name it is filed under.
+        pairs = sorted(
+            zip(particles, manifests, strict=True),
+            key=lambda pair: pair[1].tilt_series_id,
+        )
         num_iterations = _positive_int_parameter(context, "num_iterations", default=5)
         initial_angular_step_deg = _positive_float_parameter(
             context, "initial_angular_step_deg", default=6.0
@@ -284,9 +303,11 @@ class FftRefinementAveragingBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
+        combined = _combine_particle_stacks(pairs, device=device)
+        scope = averaging_scope(combined.tilt_series_ids)
         paths = _averaging_paths(
             context.output_dir,
-            manifest,
+            scope,
             backend_name=self.name,
             label=variant_label(context),
         )
@@ -294,18 +315,10 @@ class FftRefinementAveragingBackend:
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
 
-        particle_stack = cast(Any, zarr.open(particles.path, mode="r"))
-        particle_count = int(particle_stack.shape[0])
-        if particle_count == 0:
-            raise ValueError("particle stack has no particles to average")
-        box_size = int(particle_stack.shape[1])
-        metadata_path = Path(cast(str, particles.parameters["metadata_path"]))
-        records = read_particle_star(metadata_path)
-
-        raw_volumes = [
-            torch.as_tensor(np.asarray(particle_stack[index]), device=device)
-            for index in range(particle_count)
-        ]
+        particle_count = combined.particle_count
+        box_size = combined.box_size
+        records = combined.records
+        raw_volumes = combined.volumes
 
         aligned = torch.stack(
             [
@@ -388,7 +401,7 @@ class FftRefinementAveragingBackend:
         _write_average_mrc(
             paths.average_map,
             reference.detach().cpu().numpy(),
-            pixel_spacing_angstrom=particles.pixel_spacing_angstrom,
+            pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
         )
 
         warnings: list[str] = []
@@ -420,16 +433,17 @@ class FftRefinementAveragingBackend:
             )
 
         average_id = (
-            f"{manifest.tilt_series_id}:subtomogram_average:{self.name}"
+            f"{scope}:subtomogram_average:{self.name}"
             f"{variant_suffix(context)}"
 
         )
         report = SubtomogramAveragingQc(
-            tilt_series_id=manifest.tilt_series_id,
+            tilt_series_ids=combined.tilt_series_ids,
             backend=self.name,
-            particle_stack_id=particles.id,
+            particle_stack_ids=combined.stack_ids,
             average_id=average_id,
             particle_count=particle_count,
+            particle_counts=combined.counts,
             iterations_run=num_iterations,
             starting_correlation_mean=starting_correlation_mean,
             mean_final_correlation=mean_final_correlation,
@@ -448,15 +462,15 @@ class FftRefinementAveragingBackend:
             variant=variant_label(context),
             kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
             path=paths.average_map,
-            parent_ids=[particles.id],
+            parent_ids=list(combined.stack_ids),
             shape=(box_size, box_size, box_size),
             dtype="float32",
             axis_order=AxisOrder.ZYX,
-            pixel_spacing_angstrom=particles.pixel_spacing_angstrom,
+            pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
             parameters={
                 "backend": self.name,
-                "tilt_series_id": manifest.tilt_series_id,
-                "particle_stack_id": particles.id,
+                "tilt_series_ids": list(combined.tilt_series_ids),
+                "particle_stack_ids": list(combined.stack_ids),
                 "particle_count": particle_count,
                 "iterations_run": num_iterations,
                 "metadata_path": str(paths.particle_metadata),
@@ -471,7 +485,7 @@ class FftRefinementAveragingBackend:
         )
         qc_artifact = Artifact(
             id=(
-                f"{manifest.tilt_series_id}:qc:subtomogram_averaging:{self.name}"
+                f"{scope}:qc:subtomogram_averaging:{self.name}"
                 f"{variant_suffix(context)}"
             ),
             variant=variant_label(context),
@@ -481,7 +495,7 @@ class FftRefinementAveragingBackend:
             parameters={
                 "qc_type": "subtomogram_averaging",
                 "backend": self.name,
-                "tilt_series_id": manifest.tilt_series_id,
+                "tilt_series_ids": list(combined.tilt_series_ids),
                 "status": status.value,
             },
             storage_role=StorageRole.QC,
@@ -518,13 +532,30 @@ class ConeSearchRefinementBackend:
 
     def average(
         self,
-        particles: Artifact,
-        manifest: TiltSeriesManifest,
+        particles: Sequence[Artifact],
+        manifests: Sequence[TiltSeriesManifest],
         context: BackendContext,
     ) -> list[Artifact]:
-        """Return one average per class, refined metadata, and a QC artifact."""
+        """Return one average per class, refined metadata, and a QC artifact.
 
-        _validate_particle_stack(particles, manifest)
+        Takes several particle stacks for the same reason the other averaging
+        backend does: an average over particles from many tomograms is the point,
+        and one stack is this call with a list of one.
+        """
+
+        if len(particles) != len(manifests):
+            raise ValueError(
+                f"{len(particles)} particle stacks were given for {len(manifests)} "
+                "manifests; each stack needs the manifest of the series it came from"
+            )
+        if not particles:
+            raise ValueError("averaging needs at least one particle stack")
+        for stack, stack_manifest in zip(particles, manifests, strict=True):
+            _validate_particle_stack(stack, stack_manifest)
+        pairs = sorted(
+            zip(particles, manifests, strict=True),
+            key=lambda pair: pair[1].tilt_series_id,
+        )
         num_classes = _positive_int_parameter(context, "num_classes", default=1)
         num_iterations = _positive_int_parameter(context, "num_iterations", default=5)
         cone_range_deg = _nonnegative_float_parameter(context, "cone_range_deg", default=30.0)
@@ -542,9 +573,11 @@ class ConeSearchRefinementBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
+        combined = _combine_particle_stacks(pairs, device=device)
+        scope = averaging_scope(combined.tilt_series_ids)
         paths = _averaging_paths(
             context.output_dir,
-            manifest,
+            scope,
             backend_name=self.name,
             label=variant_label(context),
         )
@@ -552,16 +585,13 @@ class ConeSearchRefinementBackend:
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
 
-        particle_stack = cast(Any, zarr.open(particles.path, mode="r"))
-        particle_count = int(particle_stack.shape[0])
-        if particle_count == 0:
-            raise ValueError("particle stack has no particles to average")
+        particle_count = combined.particle_count
         if num_classes > particle_count:
             raise ValueError(
                 f"cannot refine {num_classes} classes from {particle_count} particles"
             )
-        box_size = int(particle_stack.shape[1])
-        pixel_spacing_angstrom = _pixel_spacing_angstrom(particles)
+        box_size = combined.box_size
+        pixel_spacing_angstrom = _pixel_spacing_angstrom(pairs[0][0])
         particle_diameter_angstrom = _positive_float_parameter(
             context,
             "particle_diameter_angstrom",
@@ -575,13 +605,8 @@ class ConeSearchRefinementBackend:
         minimum_sampling_deg = crowther_angular_increment_deg(
             particle_diameter_angstrom, target_resolution_angstrom
         )
-        metadata_path = Path(cast(str, particles.parameters["metadata_path"]))
-        records = read_particle_star(metadata_path)
-
-        raw_volumes = [
-            torch.as_tensor(np.asarray(particle_stack[index]), device=device)
-            for index in range(particle_count)
-        ]
+        records = combined.records
+        raw_volumes = combined.volumes
         aligned = [
             resample_volume_zyx(
                 raw_volumes[record.index],
@@ -688,10 +713,10 @@ class ConeSearchRefinementBackend:
             _write_average_mrc(
                 average_path,
                 reference.detach().cpu().numpy(),
-                pixel_spacing_angstrom=particles.pixel_spacing_angstrom,
+                pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
             )
             average_id = _class_average_id(
-                manifest.tilt_series_id, self.name, class_number, num_classes=num_classes
+                scope, self.name, class_number, num_classes=num_classes
             )
             member_correlations = [
                 correlations[record.index]
@@ -714,15 +739,15 @@ class ConeSearchRefinementBackend:
                     variant=variant_label(context),
                     kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
                     path=average_path,
-                    parent_ids=[particles.id],
+                    parent_ids=list(combined.stack_ids),
                     shape=(box_size, box_size, box_size),
                     dtype="float32",
                     axis_order=AxisOrder.ZYX,
-                    pixel_spacing_angstrom=particles.pixel_spacing_angstrom,
+                    pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
                     parameters={
                         "backend": self.name,
-                        "tilt_series_id": manifest.tilt_series_id,
-                        "particle_stack_id": particles.id,
+                        "tilt_series_ids": list(combined.tilt_series_ids),
+                        "particle_stack_ids": list(combined.stack_ids),
                         "class_number": class_number,
                         "num_classes": num_classes,
                         "particle_count": len(members),
@@ -776,9 +801,9 @@ class ConeSearchRefinementBackend:
             status = QcStatus.WARNING
 
         report = SubtomogramClassificationQc(
-            tilt_series_id=manifest.tilt_series_id,
+            tilt_series_ids=combined.tilt_series_ids,
             backend=self.name,
-            particle_stack_id=particles.id,
+            particle_stack_ids=combined.stack_ids,
             particle_count=particle_count,
             num_classes=num_classes,
             iterations_run=num_iterations,
@@ -803,7 +828,7 @@ class ConeSearchRefinementBackend:
 
         qc_artifact = Artifact(
             id=(
-                f"{manifest.tilt_series_id}:qc:subtomogram_classification:{self.name}"
+                f"{scope}:qc:subtomogram_classification:{self.name}"
                 f"{variant_suffix(context)}"
             ),
             variant=variant_label(context),
@@ -813,7 +838,7 @@ class ConeSearchRefinementBackend:
             parameters={
                 "qc_type": "subtomogram_classification",
                 "backend": self.name,
-                "tilt_series_id": manifest.tilt_series_id,
+                "tilt_series_ids": list(combined.tilt_series_ids),
                 "num_classes": num_classes,
                 "status": status.value,
             },
@@ -1082,8 +1107,8 @@ def extract_and_register(
 
 def average_and_register(
     backend: SubtomogramAveragingBackend,
-    particles: Artifact,
-    manifest: TiltSeriesManifest,
+    particles: Sequence[Artifact],
+    manifests: Sequence[TiltSeriesManifest],
     context: BackendContext,
     registry: ArtifactRegistry,
     *,
@@ -1091,7 +1116,7 @@ def average_and_register(
 ) -> list[Artifact]:
     """Average particles and register the average-map and QC artifacts."""
 
-    artifacts = backend.average(particles, manifest, context)
+    artifacts = backend.average(particles, manifests, context)
     registry.extend(artifacts, replace=replace_existing)
     return artifacts
 
@@ -1460,18 +1485,115 @@ class _AveragingPaths:
         return (self.average_map, self.particle_metadata, self.report)
 
 
+@dataclass(frozen=True)
+class _CombinedParticles:
+    """Several particle stacks presented as one indexable set of particles.
+
+    The stacks are not concatenated on disk. Records already carry an index into
+    their own stack, so offsetting those indices is enough to make everything
+    downstream — which only ever sees the flat lists — work unchanged, and no
+    gigabytes are copied to achieve it.
+    """
+
+    volumes: list[Any]
+    records: list[ParticleRecord]
+    box_size: int
+    tilt_series_ids: list[str]
+    stack_ids: list[str]
+    counts: list[int]
+
+    @property
+    def particle_count(self) -> int:
+        return len(self.volumes)
+
+
+def averaging_scope(tilt_series_ids: Sequence[str]) -> str:
+    """The name an average is filed under, given what contributed to it.
+
+    A single series keeps exactly the name it had before this could take several,
+    so no existing id or path changes. Several are named after the first with a
+    count, which stays short enough for a directory and says at a glance that the
+    average is not one series'.
+
+    Callers sort the ids first, so the name does not depend on the order the
+    manifests were listed in.
+    """
+
+    if not tilt_series_ids:
+        raise ValueError("an average needs at least one tilt-series")
+    if len(tilt_series_ids) == 1:
+        return tilt_series_ids[0]
+    return f"{tilt_series_ids[0]}_and_{len(tilt_series_ids) - 1}_more"
+
+
+def _combine_particle_stacks(
+    pairs: Sequence[tuple[Artifact, TiltSeriesManifest]],
+    *,
+    device: Any,
+) -> _CombinedParticles:
+    """Load every stack and present them as one flat set of particles."""
+
+    volumes: list[Any] = []
+    records: list[ParticleRecord] = []
+    ids: list[str] = []
+    stack_ids: list[str] = []
+    counts: list[int] = []
+    box_size: int | None = None
+
+    for artifact, manifest in pairs:
+        array = cast(Any, zarr.open(artifact.path, mode="r"))
+        count = int(array.shape[0])
+        if count == 0:
+            raise ValueError(f"{artifact.id}: particle stack has no particles to average")
+        stack_box = int(array.shape[1])
+        if box_size is None:
+            box_size = stack_box
+        elif stack_box != box_size:
+            raise ValueError(
+                f"{artifact.id} has a box of {stack_box} px but the first stack has "
+                f"{box_size} px; particles can only be averaged together at one box "
+                "size, so re-extract them with a single --box-size-px"
+            )
+        metadata_path = Path(cast(str, artifact.parameters["metadata_path"]))
+        offset = len(volumes)
+        volumes.extend(
+            torch.as_tensor(np.asarray(array[index]), device=device)
+            for index in range(count)
+        )
+        records.extend(
+            replace(record, index=record.index + offset)
+            for record in read_particle_star(metadata_path)
+        )
+        ids.append(manifest.tilt_series_id)
+        stack_ids.append(artifact.id)
+        counts.append(count)
+
+    assert box_size is not None
+    if len(records) != len(volumes):
+        raise ValueError(
+            f"the stacks hold {len(volumes)} particles but their metadata describes "
+            f"{len(records)}; each stack's star file must cover its own particles"
+        )
+    return _CombinedParticles(
+        volumes=volumes,
+        records=records,
+        box_size=box_size,
+        tilt_series_ids=ids,
+        stack_ids=stack_ids,
+        counts=counts,
+    )
+
+
 def _averaging_paths(
     output_root: Path,
-    manifest: TiltSeriesManifest,
+    scope: str,
     *,
     backend_name: str,
     label: str | None = None,
 ) -> _AveragingPaths:
-    average_dir = output_root / "averages" / manifest.tilt_series_id
-    qc_dir = output_root / "qc" / manifest.tilt_series_id / "subtomogram_averaging"
-    prefix = f"{manifest.tilt_series_id}_{backend_name}" + (
-        f"_{label}" if label else ""
-    )
+    average_dir = output_root / "averages" / scope
+    qc_dir = output_root / "qc" / scope / "subtomogram_averaging"
+    prefix = f"{scope}_{backend_name}" + (f"_{label}" if label else "")
     return _AveragingPaths(
         average_dir=average_dir,
         qc_dir=qc_dir,

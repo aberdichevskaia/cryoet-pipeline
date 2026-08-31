@@ -881,10 +881,13 @@ class SubtomogramClassificationQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
-    tilt_series_id: str
+    schema_version: int = 2
+    tilt_series_ids: list[str]
+    """Every tilt-series that contributed particles, for the same reason
+    `SubtomogramAveragingQc` carries a list: classifying particles from several
+    tomograms is ordinary, and a single-id field made it unrecordable."""
     backend: str
-    particle_stack_id: str
+    particle_stack_ids: list[str]
     particle_count: int = Field(ge=1)
     num_classes: int = Field(ge=1)
     iterations_run: int = Field(ge=0)

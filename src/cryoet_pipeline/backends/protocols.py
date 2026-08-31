@@ -330,11 +330,15 @@ class SubtomogramAveragingBackend(Protocol):
 
     def average(
         self,
-        particles: Artifact,
-        manifest: TiltSeriesManifest,
+        particles: Sequence[Artifact],
+        manifests: Sequence[TiltSeriesManifest],
         context: BackendContext,
     ) -> list[Artifact]:
-        """Return an average map, a refined per-particle alignment table, and a QC artifact."""
+        """Average particles from one or more tilt-series into one map.
+
+        Sequences rather than single values because averaging across tomograms is
+        the ordinary case, not an extension of it. One stack is a list of one.
+        """
         ...
 
 

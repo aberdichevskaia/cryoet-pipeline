@@ -2662,8 +2662,12 @@ def extract_particles(
 @app.command("average-particles")
 def average_particles(
     manifest: Annotated[
-        Path,
-        typer.Option(help="Tilt-series manifest JSON written by init."),
+        list[Path],
+        typer.Option(
+            help="Tilt-series manifest JSON written by init. Repeat it to average "
+            "particles from several tilt-series together, which is what averaging "
+            "is for; one manifest behaves exactly as before."
+        ),
     ],
     registry: Annotated[
         Path,
@@ -2791,11 +2795,24 @@ def average_particles(
 ) -> None:
     """Iteratively refine per-particle orientation/shift and average subtomograms."""
 
-    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    if not manifest:
+        raise typer.BadParameter("at least one --manifest is required", param_hint="manifest")
+    tilt_series_manifests = [
+        TiltSeriesManifest.model_validate_json(path.read_text()) for path in manifest
+    ]
+    seen = [one.tilt_series_id for one in tilt_series_manifests]
+    duplicates = sorted({name for name in seen if seen.count(name) > 1})
+    if duplicates:
+        raise typer.BadParameter(
+            f"the same tilt-series was given more than once: {', '.join(duplicates)}; "
+            "each series contributes its particles once",
+            param_hint="manifest",
+        )
     artifact_registry = ArtifactRegistry.load(registry)
-    particle_stack = _particle_stack_artifact(
-        artifact_registry, tilt_series_manifest, variant=variant
-    )
+    particle_stacks = [
+        _particle_stack_artifact(artifact_registry, one, variant=variant)
+        for one in tilt_series_manifests
+    ]
     selected_backend = _subtomogram_averaging_backend(backend)
     parameters: dict[str, object] = {
         "variant": variant,
@@ -2826,8 +2843,8 @@ def average_particles(
     )
     artifacts = average_and_register(
         selected_backend,
-        particle_stack,
-        tilt_series_manifest,
+        particle_stacks,
+        tilt_series_manifests,
         context,
         artifact_registry,
         replace_existing=overwrite,

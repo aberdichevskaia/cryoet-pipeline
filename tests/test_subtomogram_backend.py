@@ -220,10 +220,14 @@ def _synthetic_particle(
 
 
 def _particle_stack_artifact(
-    tmp_path: Path, volumes: list[torch.Tensor], picked_angles: list[tuple[float, float, float]]
+    tmp_path: Path,
+    volumes: list[torch.Tensor],
+    picked_angles: list[tuple[float, float, float]],
+    *,
+    tilt_series_id: str = "TS_TEST",
 ) -> tuple[Artifact, list[str]]:
     box_size = volumes[0].shape[0]
-    stack_path = tmp_path / "particles.zarr"
+    stack_path = tmp_path / f"particles_{tilt_series_id}.zarr"
     stack = zarr.open(
         stack_path,
         mode="w",
@@ -254,22 +258,160 @@ def _particle_stack_artifact(
         )
         for index, angles in enumerate(picked_angles)
     ]
-    metadata_path = tmp_path / "particles.star"
+    metadata_path = tmp_path / f"particles_{tilt_series_id}.star"
     write_particle_star(metadata_path, records)
 
     artifact = Artifact(
-        id="TS_TEST:particle_stack:cubic_crop",
+        id=f"{tilt_series_id}:particle_stack:cubic_crop",
         kind=ArtifactKind.PARTICLE_STACK,
         path=stack_path,
         shape=(len(volumes), box_size, box_size, box_size),
         axis_order=AxisOrder.NZYX,
         pixel_spacing_angstrom=9.504,
         parameters={
-            "tilt_series_id": "TS_TEST",
+            "tilt_series_id": tilt_series_id,
             "metadata_path": str(metadata_path),
         },
     )
     return artifact, [str(metadata_path)]
+
+
+def _manifest_for(tilt_series_id: str) -> TiltSeriesManifest:
+    return _manifest().model_copy(update={"tilt_series_id": tilt_series_id})
+
+
+def test_averaging_combines_particles_from_several_tilt_series(tmp_path: Path) -> None:
+    """The point of averaging, and until now impossible to even record.
+
+    Two stacks with different particle counts, so the per-stack counts have to be
+    kept apart rather than inferred: an average that is mostly one series is worth
+    seeing as such.
+    """
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    first_angles = [(0.0, 0.0, 0.0), (30.0, 20.0, -10.0)]
+    second_angles = [(-45.0, 60.0, 15.0)]
+
+    first, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in first_angles],
+        first_angles,
+        tilt_series_id="TS_0006",
+    )
+    second, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in second_angles],
+        second_angles,
+        tilt_series_id="TS_0005",
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.extend([first, second])
+
+    # Given out of order on purpose: the result must not depend on it.
+    artifacts = average_and_register(
+        FftRefinementAveragingBackend(),
+        [first, second],
+        [_manifest_for("TS_0006"), _manifest_for("TS_0005")],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"num_iterations": 2},
+        ),
+        registry,
+    )
+
+    average_artifact, qc_artifact = artifacts
+    report = json.loads(qc_artifact.path.read_text())
+
+    # Sorted, so the same two series in either order give the same answer.
+    assert report["tilt_series_ids"] == ["TS_0005", "TS_0006"]
+    assert report["particle_stack_ids"] == [second.id, first.id]
+    assert report["particle_counts"] == [1, 2]
+    assert report["particle_count"] == 3
+
+    # Both stacks are parents, because both contributed.
+    assert set(average_artifact.parent_ids) == {first.id, second.id}
+    # Named for the scope rather than for one series, which would be a lie.
+    assert average_artifact.id.startswith("TS_0005_and_1_more:")
+
+
+def test_averaging_one_series_keeps_the_name_it_always_had(tmp_path: Path) -> None:
+    """A list of one must not rename anything, or every existing id moves."""
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (30.0, 20.0, -10.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    artifacts = average_and_register(
+        FftRefinementAveragingBackend(),
+        [stack],
+        [_manifest()],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"num_iterations": 1},
+        ),
+        registry,
+    )
+
+    average_artifact, _ = artifacts
+    assert average_artifact.id.startswith("TS_TEST:subtomogram_average:")
+    assert "and_" not in average_artifact.id
+
+
+def test_averaging_refuses_stacks_with_different_box_sizes(tmp_path: Path) -> None:
+    """Particles can only be averaged together at one box size."""
+
+    small = _blob_reference(24)
+    large = _blob_reference(32)
+    first, _ = _particle_stack_artifact(
+        tmp_path, [_synthetic_particle(small, true_angles=(0.0, 0.0, 0.0))],
+        [(0.0, 0.0, 0.0)], tilt_series_id="TS_0005",
+    )
+    second, _ = _particle_stack_artifact(
+        tmp_path, [_synthetic_particle(large, true_angles=(0.0, 0.0, 0.0))],
+        [(0.0, 0.0, 0.0)], tilt_series_id="TS_0006",
+    )
+
+    with pytest.raises(ValueError, match="single --box-size-px"):
+        FftRefinementAveragingBackend().average(
+            [first, second],
+            [_manifest_for("TS_0005"), _manifest_for("TS_0006")],
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CPU,
+                parameters={"num_iterations": 1},
+            ),
+        )
+
+
+def test_averaging_refuses_mismatched_stacks_and_manifests(tmp_path: Path) -> None:
+    box_size = 24
+    reference = _blob_reference(box_size)
+    stack, _ = _particle_stack_artifact(
+        tmp_path, [_synthetic_particle(reference, true_angles=(0.0, 0.0, 0.0))],
+        [(0.0, 0.0, 0.0)],
+    )
+
+    with pytest.raises(ValueError, match="each stack needs the manifest"):
+        FftRefinementAveragingBackend().average(
+            [stack, stack],
+            [_manifest()],
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CPU,
+                parameters={},
+            ),
+        )
 
 
 def test_fft_refinement_averaging_recovers_known_orientations(tmp_path: Path) -> None:
@@ -300,8 +442,8 @@ def test_fft_refinement_averaging_recovers_known_orientations(tmp_path: Path) ->
 
     artifacts = average_and_register(
         FftRefinementAveragingBackend(),
-        particle_stack,
-        _manifest(),
+        [particle_stack],
+        [_manifest()],
         BackendContext(
             output_dir=tmp_path / "outputs",
             device=DevicePreference.CPU,
@@ -359,8 +501,8 @@ def test_fft_refinement_averaging_requires_nonempty_stack(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="no particles to average"):
         FftRefinementAveragingBackend().average(
-            particle_stack,
-            _manifest(),
+            [particle_stack],
+            [_manifest()],
             BackendContext(
                 output_dir=tmp_path / "outputs",
                 device=DevicePreference.CPU,
@@ -473,8 +615,8 @@ def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: P
 
     artifacts = average_and_register(
         ConeSearchRefinementBackend(),
-        particles,
-        _manifest(),
+        [particles],
+        [_manifest()],
         _cone_search_context(tmp_path),
         registry,
     )
@@ -512,8 +654,8 @@ def test_cone_search_refinement_separates_two_distinct_species(tmp_path: Path) -
     particles = _write_particle_stack(tmp_path, volumes, picked, name="twoclass")
 
     artifacts = ConeSearchRefinementBackend().average(
-        particles,
-        _manifest(),
+        [particles],
+        [_manifest()],
         _cone_search_context(
             tmp_path,
             num_classes=2,
@@ -553,8 +695,8 @@ def test_cone_search_refinement_reports_when_sampling_hits_the_crowther_floor(
     particles = _write_particle_stack(tmp_path, volumes, [(0.0, 0.0, 0.0)], name="floor")
 
     artifacts = ConeSearchRefinementBackend().average(
-        particles,
-        _manifest(),
+        [particles],
+        [_manifest()],
         _cone_search_context(
             tmp_path,
             num_iterations=4,
@@ -580,7 +722,7 @@ def test_cone_search_refinement_rejects_more_classes_than_particles(tmp_path: Pa
 
     with pytest.raises(ValueError, match="cannot refine 3 classes from 1 particles"):
         ConeSearchRefinementBackend().average(
-            particles,
-            _manifest(),
+            [particles],
+            [_manifest()],
             _cone_search_context(tmp_path, num_classes=3),
         )
