@@ -796,12 +796,22 @@ class SubtomogramAveragingQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
-    tilt_series_id: str
+    schema_version: int = 2
+    tilt_series_ids: list[str]
+    """Every tilt-series that contributed particles, in the order given.
+
+    A list rather than one id because an average over particles from ten
+    tomograms is the point of averaging, and a field that can hold only one
+    made that impossible to record — which is what kept it impossible to do.
+    """
     backend: str
-    particle_stack_id: str
+    particle_stack_ids: list[str]
     average_id: str
     particle_count: int = Field(ge=0)
+    particle_counts: list[int] = Field(default_factory=list)
+    """Particles taken from each stack, positionally matching
+    `particle_stack_ids`. One series contributing almost everything is worth
+    seeing, because an average is then mostly that series."""
     iterations_run: int = Field(ge=0)
     mean_final_correlation: float | None = None
     minimum_final_correlation: float | None = None
@@ -835,6 +845,23 @@ class SubtomogramAveragingQc(BaseModel):
             raise ValueError(
                 "initial_reference_correlation_fraction_above_threshold must be in [0, 1]"
             )
+        if not self.tilt_series_ids:
+            raise ValueError("an average must record at least one tilt-series")
+        if len(self.tilt_series_ids) != len(set(self.tilt_series_ids)):
+            raise ValueError("tilt-series ids must be unique")
+        if len(self.particle_stack_ids) != len(self.tilt_series_ids):
+            raise ValueError(
+                "every tilt-series must contribute exactly one particle stack"
+            )
+        if self.particle_counts:
+            if len(self.particle_counts) != len(self.particle_stack_ids):
+                raise ValueError(
+                    "per-stack particle counts must match the stacks they describe"
+                )
+            if sum(self.particle_counts) != self.particle_count:
+                raise ValueError(
+                    "per-stack particle counts must sum to the total particle count"
+                )
         return self
 
 

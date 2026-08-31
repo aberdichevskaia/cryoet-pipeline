@@ -49,10 +49,13 @@ The `--project` layout it assumes is the one every command already uses:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +69,58 @@ def flag(name: str, value: Any) -> Command:
     if isinstance(value, bool):
         return [f"--{name}"] if value else []
     return [f"--{name}", str(value)]
+
+
+def project_size_bytes(project: Path) -> int:
+    """How much the project occupies, for the per-step delta.
+
+    Walked rather than asked of the filesystem because the interesting number is
+    what this project holds, not what the volume has free — and on a shared
+    quota the latter moves for reasons that have nothing to do with this run.
+    """
+
+    total = 0
+    for path in project.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            # A temporary file a step is still writing may vanish mid-walk.
+            continue
+    return total
+
+
+def record_timing(
+    project: Path,
+    *,
+    series: str,
+    step: str,
+    seconds: float,
+    disk_delta_bytes: int,
+    exit_code: int,
+) -> None:
+    """Append one measured step to the project's timing table.
+
+    Appended to a file rather than printed only, because the numbers are needed
+    to size a sandbox and a quota request, and scrollback is not a table. One
+    JSON object per line so an interrupted run leaves every step it did finish.
+
+    This is a stand-in for what the `run` entity will record properly, and it is
+    deliberately not a substitute: no fingerprint, no parameters, no attribution.
+    """
+
+    row = {
+        "series": series,
+        "step": step,
+        "seconds": round(seconds, 1),
+        "disk_delta_bytes": disk_delta_bytes,
+        "exit_code": exit_code,
+        "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    destination = project / "step_timings.jsonl"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("a") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[str, Command]]:
@@ -272,7 +327,24 @@ def main() -> int:
             # No shell here, so $VAR in a config value would reach the tool
             # literally. Expand it ourselves; printing keeps the readable form.
             expanded = [os.path.expandvars(part) for part in command]
+            started = time.monotonic()
+            disk_before = project_size_bytes(args.project)
             result = subprocess.run(["cryoet", *expanded], check=False)
+            elapsed = time.monotonic() - started
+            disk_after = project_size_bytes(args.project)
+            record_timing(
+                args.project,
+                series=series,
+                step=name,
+                seconds=elapsed,
+                disk_delta_bytes=disk_after - disk_before,
+                exit_code=result.returncode,
+            )
+            print(
+                f"# {name}: {elapsed / 60:.1f} min, "
+                f"{(disk_after - disk_before) / 1e9:+.2f} GB",
+                flush=True,
+            )
             if result.returncode != 0:
                 print(
                     f"\n# FAILED at {name} (exit {result.returncode}) for {series}."
