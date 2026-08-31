@@ -37,6 +37,60 @@ def _write_stack(path: Path, *, tilt_count: int, pixel_spacing_angstrom: float =
         mrc.voxel_size = pixel_spacing_angstrom
 
 
+def test_import_external_tilt_stack_keeps_a_float_source_as_float(
+    tmp_path: Path,
+) -> None:
+    """A dtype MRC cannot hold is widened; one it can is not.
+
+    The rule is about what the format supports, not about preferring integers:
+    a float source stays float, and only something MRC has no mode for becomes
+    float32.
+    """
+
+    mdoc_path = tmp_path / "TS_0003.mrc.mdoc"
+    mdoc_path.write_text(_mdoc_text(tilt_count=2))
+    stack_path = tmp_path / "raw" / "TS_0003.mrc"
+    stack_path.parent.mkdir(parents=True, exist_ok=True)
+    with mrcfile.new(stack_path, overwrite=True) as mrc:
+        mrc.set_data(np.linspace(0.0, 1.0, 2 * 4 * 6, dtype=np.float32).reshape(2, 4, 6))
+        mrc.voxel_size = 1.188
+
+    result = import_external_tilt_stack(
+        mdoc_path=mdoc_path,
+        stack_path=stack_path,
+        tilt_series_id="TS_0003",
+        out=tmp_path / "out",
+    )
+
+    assert result.tilt_stack.dtype == "float32"
+    with mrcfile.open(result.tilt_stack.path, permissive=True) as canonical:
+        assert canonical.data.dtype == np.float32
+
+
+def test_import_external_tilt_stack_rejects_a_nonfinite_float_source(
+    tmp_path: Path,
+) -> None:
+    """The finiteness check still applies where non-finite values can exist."""
+
+    mdoc_path = tmp_path / "TS_0004.mrc.mdoc"
+    mdoc_path.write_text(_mdoc_text(tilt_count=2))
+    stack_path = tmp_path / "raw" / "TS_0004.mrc"
+    stack_path.parent.mkdir(parents=True, exist_ok=True)
+    data = np.zeros((2, 4, 6), dtype=np.float32)
+    data[1, 2, 3] = np.nan
+    with mrcfile.new(stack_path, overwrite=True) as mrc:
+        mrc.set_data(data)
+        mrc.voxel_size = 1.188
+
+    with pytest.raises(ValueError, match="nonfinite"):
+        import_external_tilt_stack(
+            mdoc_path=mdoc_path,
+            stack_path=stack_path,
+            tilt_series_id="TS_0004",
+            out=tmp_path / "out",
+        )
+
+
 def test_import_external_tilt_stack_writes_manifest_stack_and_registry(
     tmp_path: Path,
 ) -> None:
@@ -63,17 +117,19 @@ def test_import_external_tilt_stack_writes_manifest_stack_and_registry(
 
     assert result.tilt_stack.kind == ArtifactKind.TILT_STACK
     assert result.tilt_stack.shape == (3, 4, 6)
-    assert result.tilt_stack.dtype == "float32"
+    # The source is 16-bit, and so is the copy: widening it to float32 would
+    # double every byte on disk without adding a digit of information.
+    assert result.tilt_stack.dtype == "int16"
     assert result.tilt_stack.axis_order == AxisOrder.TYX
     assert result.tilt_stack.pixel_spacing_angstrom == pytest.approx(1.188)
     assert result.tilt_stack.parameters["source_stack_path"] == str(stack_path)
 
     with mrcfile.open(result.tilt_stack.path, permissive=True) as canonical:
-        np.testing.assert_allclose(
+        np.testing.assert_array_equal(
             canonical.data,
-            np.arange(3 * 4 * 6, dtype=np.int16).reshape(3, 4, 6).astype(np.float32),
+            np.arange(3 * 4 * 6, dtype=np.int16).reshape(3, 4, 6),
         )
-        assert canonical.data.dtype == np.float32
+        assert canonical.data.dtype == np.int16
 
     assert result.tilt_angles.kind == ArtifactKind.TILT_ANGLES
     assert result.tilt_angles.path.read_text() == "-20.000000\n-18.000000\n-16.000000\n"

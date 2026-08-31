@@ -88,7 +88,7 @@ def import_external_tilt_stack(
     canonical_stack_path = stack_dir / f"{tilt_series_id}.st"
     if canonical_stack_path.exists() and not overwrite:
         raise FileExistsError(f"tilt stack already exists: {canonical_stack_path}")
-    _write_canonical_stack(
+    canonical_dtype = _write_canonical_stack(
         stack_path,
         canonical_stack_path,
         pixel_spacing_angstrom=stack_info.pixel_spacing_angstrom,
@@ -107,7 +107,7 @@ def import_external_tilt_stack(
         path=canonical_stack_path,
         parent_ids=[],
         shape=stack_info.shape,
-        dtype="float32",
+        dtype=canonical_dtype,
         axis_order=AxisOrder.TYX,
         pixel_spacing_angstrom=stack_info.pixel_spacing_angstrom,
         parameters={
@@ -158,20 +158,46 @@ def _write_manifest(
     return manifest_path
 
 
+# The dtypes an MRC file can hold directly, so that importing one need not
+# widen it. A detector writes 16-bit integers, and storing those as float32
+# doubles every byte on disk without adding a digit of information.
+_MRC_NATIVE_DTYPES = frozenset({"int8", "int16", "uint16", "float16", "float32"})
+
+
 def _write_canonical_stack(
     source_path: Path,
     destination_path: Path,
     *,
     pixel_spacing_angstrom: float,
-) -> None:
-    with mrcfile.open(source_path, permissive=True) as source:
-        data = np.asarray(cast(np.ndarray, source.data), dtype=np.float32)
-    if not np.isfinite(data).all():
-        raise ValueError(f"external tilt stack contains nonfinite values: {source_path}")
+) -> str:
+    """Copy the stack into the project, keeping its dtype. Returns that dtype.
+
+    Anything MRC stores natively is passed through unchanged; only a dtype the
+    format cannot hold is widened to float32.
+    """
+
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    with mrcfile.new(destination_path, overwrite=True) as destination:
-        destination.set_data(data)
-        destination.voxel_size = pixel_spacing_angstrom
+    # Everything happens while the source is open: a dtype that needs no
+    # conversion is passed through without copying, so it stays owned by the
+    # file it came from.
+    with mrcfile.open(source_path, permissive=True) as source:
+        array = cast(np.ndarray, source.data)
+        if array.dtype.name in _MRC_NATIVE_DTYPES:
+            data = np.asarray(array)
+        else:
+            data = np.asarray(array, dtype=np.float32)
+
+        # Integers have no non-finite values to find, and the check is a full
+        # pass over the stack — two gigabytes for one series at 4096 squared.
+        if data.dtype.kind == "f" and not np.isfinite(data).all():
+            raise ValueError(
+                f"external tilt stack contains nonfinite values: {source_path}"
+            )
+
+        with mrcfile.new(destination_path, overwrite=True) as destination:
+            destination.set_data(data)
+            destination.voxel_size = pixel_spacing_angstrom
+        return data.dtype.name
 
 
 def _package_version(name: str) -> str:
