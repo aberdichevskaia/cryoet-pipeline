@@ -157,10 +157,20 @@ max_defocus_angstrom = 50000
 [template]
 emdb_id = "EMD-16721"     # human 80S ribosome, untreated cells, same data
 low_pass_angstrom = 19.6  # bin8 Nyquist
-# No particle diameter and no mask radius: prepare-template measures the density
-# extent and derives the mask. Expect ~28 px on all three axes and a QC warning
-# saying the size was derived. If the three axes disagree, the map is not what
-# you think it is.
+# The mask radius is set rather than derived, because the derivation came out
+# more generous than the runbook's own guidance. It takes the measured density
+# extent and multiplies by _DERIVED_MARGIN = 1.2, and the measurement itself
+# already overshoots the particle: it caught 32 px where the literature diameter
+# is 290 A = 29.6 px, because a low-passed map has a low-density periphery. The
+# two margins compound:
+#
+#   particle radius     290 / 2 / 9.784 = 14.8 px
+#   derived radius      32 * 1.2 / 2    = 19.2 px   +30% on the radius
+#   in volume           (19.2/14.8)^3   = 2.2x      so half the mask is noise
+#
+# The runbook asks for 10-20% overhang, because the mask exists to keep the noise
+# around the particle out of the correlation. 17 px gives +15%.
+mask_radius_px = 17
 
 [pick]
 # 290 A is the human 80S diameter that pytom's own documentation uses as its
@@ -169,8 +179,22 @@ low_pass_angstrom = 19.6  # bin8 Nyquist
 # literature value is the conservative choice here.
 particle_diameter_angstrom = 290.0
 number_of_particles = 2000
-number_of_false_positives = 1.0   # assumptions hold for a discrete particle
-tophat_filter = true              # sharp isolated peaks — right for ribosomes
+# Measured, not assumed. One expected false positive over 84 million voxels
+# demands a cut-off of 0.13440, and the whole real population — if it is real —
+# lives between 0.115 and 0.138, so that threshold takes almost none of it:
+#
+#   fp = 1, tophat on    cut-off 0.13440    0 particles
+#   fp = 100, tophat off cut-off 0.12227  254 particles
+#   the same, weighted   cut-off 0.10530  385 particles
+#
+# Extracting generously and cleaning up by classification is the normal practice
+# anyway; a single statistical threshold is not meant to produce a pure set.
+#
+# Honest gap: those two settings were never separated. fp=1 was only ever run
+# with the top-hat filter and fp=100 only without it, so which of the two
+# produced the zero is not established. This is the pair that was measured.
+number_of_false_positives = 100.0
+tophat_filter = false
 gpu_ids = "0"
 
 # Without these the match runs across the whole band, out to the bin8 Nyquist of
@@ -187,6 +211,15 @@ low_pass_angstrom = 35.0
 # is what the number-of-false-positives cut-off is calibrated against. Off, that
 # cut-off comes from a cruder model — and it is the step that returned 2 of 2000.
 random_phase_correction = true
+# Weights the CTF and the missing wedge per view rather than as one average, and
+# is also what lets the accumulated dose in through --dose-accumulation: without
+# it pytom has nothing to do with a dose file. The dose comes from the mdoc's
+# PriorRecordDose, which is already accumulated in acquisition order — the order
+# a dose-symmetric series was shot in, not the tilt order it is stored in.
+per_tilt_weighting = true
+# Flattens the tomogram's power spectrum before correlating. Standard practice
+# for template matching in tomograms, and it was off.
+spectral_whitening = true
 
 [extract]
 box_size_px = 48          # 470 A at 9.78 A/px, ~1.5x the particle

@@ -44,8 +44,10 @@ copy "$P/qc/$SERIES/coarse_alignment/${SERIES}_coarse_aligned_bin16.st"
 copy "$P/templates/$SERIES/${SERIES}_pytom_bin8_template.mrc"
 copy "$P/templates/$SERIES/${SERIES}_pytom_bin8_mask.mrc"
 
-# Where the picks landed, ready to open over the tomogram.
-copy "$P/artiax/$SERIES"
+# Deliberately NOT included: our own picks. They are the result whose validity
+# is the question, and showing them invites explaining them rather than judging
+# the tomogram fresh. The bulk of that directory is a second copy of the volume
+# already here anyway.
 
 # Every QC document, so the numbers are checkable rather than quoted.
 mkdir -p "$OUT/qc"
