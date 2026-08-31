@@ -421,7 +421,57 @@ def test_prepare_template_derives_the_mask_size_when_none_is_given(tmp_path: Pat
     assert report["mask_radius_derived_from_density"] is True
     assert report["mask_radius_px"] > 0.0
     assert report["status"] == QcStatus.WARNING
-    assert any("derived from the map itself" in warning for warning in report["warnings"])
+
+    # The warning has to carry the numbers, not just announce that a size was
+    # chosen: the derivation applies a margin to an extent that already exceeds
+    # the particle, and only a reader who can see both can judge the result.
+    derived = next(w for w in report["warnings"] if "no mask size was given" in w)
+    widest = max(
+        report["density_extent_x_px"],
+        report["density_extent_y_px"],
+        report["density_extent_z_px"],
+    )
+    assert f"{widest:.1f} px at its widest" in derived
+    assert str(report["mask_derived_margin"]) in derived
+    assert f"{report['mask_radius_px']:.1f} px" in derived
+    assert "10-20%" in derived
+
+    # Recorded as a field as well, so the derivation is reproducible from the
+    # document without reading the source.
+    assert report["mask_derived_margin"] == pytest.approx(1.2)
+
+
+def test_an_explicit_mask_size_records_no_margin(tmp_path: Path) -> None:
+    """The margin field says what was applied, and nothing was applied here.
+
+    A size that was given is not a derivation, so leaving the field set would
+    invite reading a factor into a number that never had one.
+    """
+
+    from cryoet_pipeline.models import TemplatePreparationQc
+
+    given = TemplatePreparationQc(
+        tilt_series_id="TS_TEST",
+        backend="pytom-create-template",
+        source_map_path="emd_16721.map",
+        template_id="TS_TEST:template",
+        template_mask_id="TS_TEST:template_mask",
+        input_voxel_size_angstrom=1.188,
+        output_voxel_size_angstrom=9.784,
+        box_size_px=39,
+        inverted=True,
+        mask_radius_px=17.0,
+        mask_radius_derived_from_density=False,
+        template_minimum=-0.00207,
+        template_maximum=0.000252,
+        template_median=0.0,
+        density_extent_x_px=32.0,
+        density_extent_y_px=31.0,
+        density_extent_z_px=30.0,
+        status=QcStatus.PASS,
+    )
+
+    assert given.mask_derived_margin is None
 
 
 def test_prepare_template_refuses_to_guess_a_size_for_a_map_that_fills_its_box(

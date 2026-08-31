@@ -208,11 +208,21 @@ class PytomTemplateBackend:
         if mask_radius_derived:
             # A size the pipeline chose is worth a look even when it looks fine,
             # and a warning nobody sees in the status is a warning nobody reads.
+            # Quantified rather than merely announced, because the derivation
+            # applies two margins and only one of them is visible: the extent is
+            # measured off a low-passed map, whose density reaches past the
+            # particle before the factor below is applied on top.
             status = QcStatus.WARNING
+            widest = max(template_statistics.density_extent_px)
             warnings.append(
-                f"no mask size was given, so it was derived from the map itself: radius "
-                f"{mask_radii.x:.1f} px ({mask_radii.x * output_voxel_size:.0f} angstrom). "
-                "Check it against what the particle should be"
+                f"no mask size was given, so it was derived from the map: the "
+                f"density reaches {widest:.1f} px at its widest, and a "
+                f"{_DERIVED_MARGIN} margin on that gives a radius of "
+                f"{mask_radii.x:.1f} px — a mask "
+                f"{mask_radii.x * 2.0 * output_voxel_size:.0f} angstrom across. "
+                "Divide that by the particle's known diameter for the overhang; a "
+                "tight mask wants 10-20%, and the two margins compound because "
+                "the measured extent already exceeds the particle"
             )
         shape_warnings = _mask_versus_density_warnings(
             mask_radii,
@@ -250,6 +260,7 @@ class PytomTemplateBackend:
             low_pass_angstrom=low_pass,
             mask_radius_px=mask_radii.x,
             mask_radius_derived_from_density=mask_radius_derived,
+            mask_derived_margin=_DERIVED_MARGIN if mask_radius_derived else None,
             mask_sigma_px=mask_sigma,
             template_minimum=template_statistics.minimum,
             template_maximum=template_statistics.maximum,

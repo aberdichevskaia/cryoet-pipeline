@@ -718,6 +718,10 @@ class TemplatePreparationQc(BaseModel):
     mask_radius_px: float = Field(gt=0)
     mask_radius_derived_from_density: bool = False
     """True when no mask size was given and it was measured off the map instead."""
+    mask_derived_margin: float | None = Field(default=None, gt=0.0)
+    """The factor applied to the measured extent when the radius was derived, so
+    that the derivation can be reproduced from this document alone. None when a
+    size was given rather than measured."""
     mask_sigma_px: float | None = None
     template_minimum: float
     template_maximum: float
