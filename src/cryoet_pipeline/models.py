@@ -338,6 +338,72 @@ class FiducialModelQc(BaseModel):
         return self
 
 
+class PatchGridQc(BaseModel):
+    """QC summary for a patch-tracking seed, which is a grid and not a model.
+
+    A patch seed produces a description of where correlation patches will be
+    placed, not a set of located points, so none of `FiducialModelQc` applies to
+    it: reported through that model every field reads zero, which for a bead seed
+    would mean the seeding had failed completely. These are the quantities a grid
+    actually has.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    stage: str = "seed"
+    model_id: str
+    image_count: int = Field(ge=1)
+    num_patches_x: int = Field(ge=1)
+    num_patches_y: int = Field(ge=1)
+    num_patches: int = Field(ge=1)
+    patch_overlap: float = Field(ge=0.0, lt=1.0)
+    # Sizes in the binned pixels the tracking stack is in, and in Angstrom,
+    # because only the physical size can be judged against a specimen.
+    pre_binning: int = Field(ge=1)
+    patch_size_x_px: int = Field(ge=1)
+    patch_size_y_px: int = Field(ge=1)
+    patch_size_x_angstrom: float = Field(gt=0.0)
+    patch_size_y_angstrom: float = Field(gt=0.0)
+    # The margin is in binned pixels and does not scale with pre_binning, which
+    # is the trap; recording what it left makes that visible.
+    patch_margin_px: int = Field(ge=0)
+    binned_width_px: int = Field(ge=1)
+    binned_height_px: int = Field(ge=1)
+    usable_width_fraction: float = Field(gt=0.0, le=1.0)
+    usable_height_fraction: float = Field(gt=0.0, le=1.0)
+    # cos of the largest tilt: the share of one image that every view still
+    # covers once foreshortening is accounted for. A margin cutting more than
+    # this is cutting more than the geometry asks for.
+    foreshortening_fraction: float = Field(gt=0.0, le=1.0)
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+    @field_validator("stage")
+    @classmethod
+    def require_seed_stage(cls, value: str) -> str:
+        if value != "seed":
+            raise ValueError("patch grid QC describes the seed stage only")
+        return value
+
+    @model_validator(mode="after")
+    def validate_grid(self) -> PatchGridQc:
+        if self.num_patches != self.num_patches_x * self.num_patches_y:
+            raise ValueError("patch count must be the product of the two axis counts")
+        for value in (
+            self.patch_size_x_angstrom,
+            self.patch_size_y_angstrom,
+            self.usable_width_fraction,
+            self.usable_height_fraction,
+            self.foreshortening_fraction,
+        ):
+            if not isfinite(value):
+                raise ValueError("patch grid QC values must be finite")
+        return self
+
+
 class FineAlignmentQc(BaseModel):
     """Residual and geometry summary for fiducial-based fine alignment."""
 

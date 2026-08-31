@@ -8,6 +8,7 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
+from pydantic import ValidationError
 import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
@@ -28,6 +29,7 @@ from cryoet_pipeline.models import (
     ArtifactKind,
     AxisOrder,
     FiducialModelQc,
+    PatchGridQc,
     QcStatus,
     TiltAlignment,
     TiltImage,
@@ -346,6 +348,85 @@ def test_compute_patch_size_px_rejects_invalid_inputs() -> None:
         _compute_patch_size_px(100, 10, margin_px=40, overlap_fraction=0.0)
 
 
+def test_patch_grid_qc_warns_when_the_margin_beats_foreshortening() -> None:
+    """The margin is judged against geometry, not against a round number.
+
+    At the largest tilt the specimen foreshortens by cos(tilt) along the axis
+    across the tilt axis, so that fraction of one image is what every view still
+    covers. A margin leaving less than that is cutting more than the geometry
+    asks for — which is worth saying, because the margin is in binned pixels and
+    so does not scale with pre_binning.
+    """
+
+    common = dict(
+        tilt_series_id="TS_TEST",
+        backend="imod-patch-seed",
+        model_id="TS_TEST:fiducial_seed:imod-patch-seed",
+        image_count=59,
+        num_patches_x=5,
+        num_patches_y=5,
+        num_patches=25,
+        patch_overlap=0.33,
+        pre_binning=8,
+        patch_size_x_px=84,
+        patch_size_y_px=84,
+        patch_size_x_angstrom=822.0,
+        patch_size_y_angstrom=822.0,
+        binned_width_px=512,
+        binned_height_px=512,
+        # cos(64 degrees), the largest tilt in EMPIAR-11538
+        foreshortening_fraction=0.438,
+    )
+
+    # 100 px of margin leaves 312 of 512, or 0.609 — more than foreshortening
+    # needs, so aggressive but defensible and no warning.
+    generous = PatchGridQc(
+        **common,
+        patch_margin_px=100,
+        usable_width_fraction=312 / 512,
+        usable_height_fraction=312 / 512,
+        status=QcStatus.PASS,
+    )
+    assert generous.usable_width_fraction > generous.foreshortening_fraction
+
+    # 160 px leaves 192 of 512, or 0.375, below what every view covers.
+    tight = PatchGridQc(
+        **common,
+        patch_margin_px=160,
+        usable_width_fraction=192 / 512,
+        usable_height_fraction=192 / 512,
+        status=QcStatus.WARNING,
+        warnings=["the margin is cutting more than foreshortening requires"],
+    )
+    assert tight.usable_width_fraction < tight.foreshortening_fraction
+
+
+def test_patch_grid_qc_rejects_an_inconsistent_patch_count() -> None:
+    with pytest.raises(ValidationError, match="product of the two axis counts"):
+        PatchGridQc(
+            tilt_series_id="TS_TEST",
+            backend="imod-patch-seed",
+            model_id="TS_TEST:fiducial_seed:imod-patch-seed",
+            image_count=59,
+            num_patches_x=5,
+            num_patches_y=5,
+            num_patches=24,
+            patch_overlap=0.33,
+            pre_binning=8,
+            patch_size_x_px=84,
+            patch_size_y_px=84,
+            patch_size_x_angstrom=822.0,
+            patch_size_y_angstrom=822.0,
+            patch_margin_px=100,
+            binned_width_px=512,
+            binned_height_px=512,
+            usable_width_fraction=0.609,
+            usable_height_fraction=0.609,
+            foreshortening_fraction=0.438,
+            status=QcStatus.PASS,
+        )
+
+
 def test_imod_patch_tracking_backends_generate_and_track_models(
     tmp_path: Path,
 ) -> None:
@@ -397,12 +478,26 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
     assert seed_model.parameters["num_patches_y"] == 2
     assert seed_model.parameters["patch_size_x_px"] == 48
     assert seed_model.parameters["patch_size_y_px"] == 48
-    seed_qc = FiducialModelQc.model_validate_json(
-        seed_qc_artifact.path.read_text()
-    )
+    # A patch seed reports its grid, not point counts: through FiducialModelQc
+    # every field read zero, which for a bead seed would mean total failure.
+    seed_qc = PatchGridQc.model_validate_json(seed_qc_artifact.path.read_text())
     assert seed_qc.stage == "seed"
     assert seed_qc.status == QcStatus.PASS
-    assert seed_qc.num_fiducials == 0
+    assert seed_qc.warnings == []
+    assert (seed_qc.num_patches_x, seed_qc.num_patches_y) == (2, 2)
+    assert seed_qc.num_patches == 4
+    assert seed_qc.patch_size_x_px == 48
+    assert seed_qc.patch_size_y_px == 48
+    assert seed_qc.pre_binning == 1
+    # Reported in Angstrom too, because only a physical size can be judged
+    # against a specimen.
+    scale = seed_qc.pre_binning * tracking_stack.pixel_spacing_angstrom
+    assert seed_qc.patch_size_x_angstrom == pytest.approx(48 * scale)
+    # Margin 0 leaves the whole field, which is never below foreshortening.
+    assert seed_qc.patch_margin_px == 0
+    assert seed_qc.usable_width_fraction == pytest.approx(1.0)
+    assert seed_qc.usable_height_fraction == pytest.approx(1.0)
+    assert 0.0 < seed_qc.foreshortening_fraction <= 1.0
 
     commands: list[list[str]] = []
 

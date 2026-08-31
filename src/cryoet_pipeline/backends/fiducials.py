@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shlex
 import subprocess
 import tempfile
@@ -34,6 +35,7 @@ from cryoet_pipeline.models import (
     ArtifactKind,
     AxisOrder,
     FiducialModelQc,
+    PatchGridQc,
     QcStatus,
     RetentionPolicy,
     StorageRole,
@@ -760,23 +762,54 @@ class ImodPatchSeedBackend:
         }
         _write_json(paths.grid, grid)
 
-        report = FiducialModelQc(
+        usable_width_fraction = (binned_width - 2 * patch_margin_px) / binned_width
+        usable_height_fraction = (binned_height - 2 * patch_margin_px) / binned_height
+        # The share of one image that every view still covers: at the largest
+        # tilt the specimen foreshortens by cos(tilt) along the axis
+        # perpendicular to the tilt axis, so that is how much of the field is
+        # common to the whole series.
+        max_abs_tilt_deg = max(
+            abs(manifest.images[index].tilt_angle_deg) for index in included_indices
+        )
+        foreshortening_fraction = math.cos(math.radians(max_abs_tilt_deg))
+
+        seed_warnings: list[str] = []
+        seed_status = QcStatus.PASS
+        tightest = min(usable_width_fraction, usable_height_fraction)
+        if tightest < foreshortening_fraction:
+            seed_status = QcStatus.WARNING
+            seed_warnings.append(
+                f"a margin of {patch_margin_px} binned px leaves "
+                f"{tightest:.3f} of the field, less than the {foreshortening_fraction:.3f} "
+                f"every view still covers at {max_abs_tilt_deg:.1f} degrees of tilt; "
+                "the margin is cutting more than foreshortening requires"
+            )
+
+        report = PatchGridQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
-            stage="seed",
             model_id=(
                 f"{manifest.tilt_series_id}:fiducial_seed:{self.name}"
                 f"{variant_suffix(context)}"
             ),
             image_count=len(included_indices),
-            num_fiducials=0,
-            num_points=0,
-            min_points_per_fiducial=0,
-            median_points_per_fiducial=0.0,
-            max_points_per_fiducial=0,
-            coverage_fraction=0.0,
-            status=QcStatus.PASS,
-            warnings=[],
+            num_patches_x=num_patches_x,
+            num_patches_y=num_patches_y,
+            num_patches=num_patches_x * num_patches_y,
+            patch_overlap=patch_overlap,
+            pre_binning=pre_binning,
+            patch_size_x_px=patch_size_x_px,
+            patch_size_y_px=patch_size_y_px,
+            patch_size_x_angstrom=patch_size_x_px * pre_binning * raw_pixel_spacing,
+            patch_size_y_angstrom=patch_size_y_px * pre_binning * raw_pixel_spacing,
+            patch_margin_px=patch_margin_px,
+            binned_width_px=binned_width,
+            binned_height_px=binned_height,
+            usable_width_fraction=usable_width_fraction,
+            usable_height_fraction=usable_height_fraction,
+            foreshortening_fraction=foreshortening_fraction,
+            status=seed_status,
+            warnings=seed_warnings,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
         tracking_info = validate_complete_mrc(paths.tracking_stack)
