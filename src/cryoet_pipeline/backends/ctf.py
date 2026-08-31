@@ -4,7 +4,6 @@ import json
 import math
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -20,6 +19,7 @@ from cryoet_pipeline.backends.alignment import (
     run_command,
     write_tilt_angles_file,
 )
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     CtfCorrectionBackend,
@@ -183,7 +183,7 @@ class Ctffind5CtfEstimationBackend:
                 _replace_output(extra, paths.rotational_average)
             succeeded = True
         finally:
-            _write_command_log(paths.log, command_log)
+            write_command_log(paths.log, *command_log)
             if succeeded:
                 shutil.rmtree(temporary_root, ignore_errors=True)
 
@@ -484,7 +484,10 @@ class ImodCtfPlotterEstimationBackend:
                 cwd=temporary_root,
                 env=imod_environment(ctfplotter, context),
             )
-            _write_command_log(paths.log, [(command, result)])
+            write_command_log(
+                paths.log,
+                *[(command, result)],
+            )
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD ctfplotter failed with exit code {result.returncode}; see {paths.log}"
@@ -654,7 +657,10 @@ class ImodCtfPhaseFlipBackend:
                 cwd=temporary_root,
                 env=imod_environment(ctfphaseflip, context),
             )
-            _write_command_log(paths.log, [(command, result)])
+            write_command_log(
+                paths.log,
+                *[(command, result)],
+            )
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD ctfphaseflip failed with exit code {result.returncode}; "
@@ -1442,21 +1448,6 @@ def _resolve_ctffind_executable(context: BackendContext) -> Path:
         "CTFFIND executable not found; pass --ctffind-executable or add it to PATH"
     )
 
-
-def _write_command_log(
-    path: Path,
-    command_results: Sequence[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
-) -> None:
-    sections = []
-    for command, result in command_results:
-        sections.append(
-            f"$ {shlex.join(str(token) for token in command)}\n\n"
-            f"[stdout]\n{result.stdout or ''}\n"
-            f"[stderr]\n{result.stderr or ''}\n"
-            f"[exit_code]\n{result.returncode}\n"
-        )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n\n".join(sections))
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

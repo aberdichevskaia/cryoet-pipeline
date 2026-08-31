@@ -20,6 +20,7 @@ from cryoet_pipeline.backends.alignment import (
     resolve_imod_executable,
     run_command,
 )
+from cryoet_pipeline.backends.command_log import command_log_text, write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FineAlignmentBackend,
@@ -329,7 +330,7 @@ class ImodTiltalignBackend:
                 cwd=temporary_root,
                 env=imod_environment(tiltalign, context),
             )
-            _write_command_log(paths.initial_tiltalign_log, command, result)
+            write_command_log(paths.initial_tiltalign_log, (command, result))
             _require_success(
                 result,
                 program="IMOD tiltalign",
@@ -391,7 +392,7 @@ class ImodTiltalignBackend:
                     cwd=temporary_root,
                     env=imod_environment(tiltalign, context),
                 )
-                _write_command_log(paths.preposition_tiltalign_log, command, result)
+                write_command_log(paths.preposition_tiltalign_log, (command, result))
                 _require_success(
                     result,
                     program="IMOD tiltalign after outlier pruning",
@@ -463,11 +464,7 @@ class ImodTiltalignBackend:
                     env=imod_environment(tiltalign, context),
                 )
                 if positioning_round == 0:
-                    _write_command_log(
-                        paths.tiltalign_log,
-                        positioned_command,
-                        result,
-                    )
+                    write_command_log(paths.tiltalign_log, (positioned_command, result))
                 else:
                     _append_command_log(
                         paths.tiltalign_log,
@@ -518,11 +515,7 @@ class ImodTiltalignBackend:
                 cwd=temporary_root,
                 env=imod_environment(xfproduct, context),
             )
-            _write_command_log(
-                paths.xfproduct_log,
-                xfproduct_command,
-                xfproduct_result,
-            )
+            write_command_log(paths.xfproduct_log, (xfproduct_command, xfproduct_result))
             _require_success(
                 xfproduct_result,
                 program="IMOD xfproduct",
@@ -1368,7 +1361,7 @@ def _prune_fiducial_model(
         env=imod_environment(model2point, context),
     )
     if export_result.returncode != 0:
-        _write_command_log(log_path, export_command, export_result)
+        write_command_log(log_path, (export_command, export_result))
         raise RuntimeError(
             f"IMOD model2point failed with exit code {export_result.returncode}; "
             f"see {log_path}"
@@ -1517,13 +1510,6 @@ def _positive_numeric_parameter(artifact: Artifact, key: str) -> float:
     return value
 
 
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(_command_log_text(command, result))
-
 
 def _append_command_log(
     path: Path,
@@ -1532,19 +1518,8 @@ def _append_command_log(
 ) -> None:
     with path.open("a") as log:
         log.write("\n--- positioning iteration ---\n\n")
-        log.write(_command_log_text(command, result))
+        log.write(command_log_text((command, result)))
 
-
-def _command_log_text(
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> str:
-    return (
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _require_success(

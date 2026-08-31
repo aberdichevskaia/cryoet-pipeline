@@ -14,11 +14,11 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
+    _included_z_values,
     _match_template_command,
     _PicksStatistics,
-    _z_spread_verdict,
-    _included_z_values,
     _write_dose_accumulation,
+    _z_spread_verdict,
     pick_and_register,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -912,7 +912,7 @@ def _dose_manifest(doses: list[object]) -> TiltSeriesManifest:
     manifest = _manifest()
     images = [
         image.model_copy(update={"metadata": {"PriorRecordDose": dose}})
-        for image, dose in zip(manifest.images, doses)
+        for image, dose in zip(manifest.images, doses, strict=True)
     ]
     return manifest.model_copy(update={"images": images})
 

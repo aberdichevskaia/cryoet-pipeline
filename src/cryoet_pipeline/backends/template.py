@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -16,6 +15,7 @@ import numpy as np
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     TemplatePreparationBackend,
@@ -128,14 +128,14 @@ class PytomTemplateBackend:
             )
             command_log.append((template_command, result))
             if result.returncode != 0:
-                _write_command_log(paths.log, command_log)
+                write_command_log(paths.log, *command_log)
                 detail = (result.stderr or result.stdout or "no process output").strip()
                 raise RuntimeError(
                     f"pytom_create_template.py failed with exit code {result.returncode}: "
                     f"{detail}; see {paths.log}"
                 )
             if not temporary_template.is_file():
-                _write_command_log(paths.log, command_log)
+                write_command_log(paths.log, *command_log)
                 raise RuntimeError(
                     f"pytom_create_template.py did not write {temporary_template}"
                 )
@@ -175,7 +175,7 @@ class PytomTemplateBackend:
 
             result = self._command_runner(mask_command, cwd=temporary_root, env=os.environ.copy())
             command_log.append((mask_command, result))
-            _write_command_log(paths.log, command_log)
+            write_command_log(paths.log, *command_log)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "no process output").strip()
                 raise RuntimeError(
@@ -734,21 +734,6 @@ def _resolve_pytom_executable(
         f"{default_name} not found; pass --{key.replace('_', '-')} or add it to PATH"
     )
 
-
-def _write_command_log(
-    path: Path,
-    command_results: Sequence[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
-) -> None:
-    sections = []
-    for command, result in command_results:
-        sections.append(
-            f"$ {shlex.join(str(token) for token in command)}\n\n"
-            f"[stdout]\n{result.stdout or ''}\n"
-            f"[stderr]\n{result.stderr or ''}\n"
-            f"[exit_code]\n{result.returncode}\n"
-        )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n\n".join(sections))
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,6 +15,7 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     DenoisingBackend,
@@ -101,7 +100,10 @@ class IsoNet2RestorationBackend:
                 number_subtomos=number_subtomos,
             )
             prepare_result = self._command_runner(prepare_command, cwd=temporary_root, env={})
-            _write_command_log(paths.log, [(prepare_command, prepare_result)])
+            write_command_log(
+                paths.log,
+                *[(prepare_command, prepare_result)],
+            )
             if prepare_result.returncode != 0:
                 raise RuntimeError(
                     f"IsoNet2 prepare_star failed with exit code "
@@ -116,9 +118,9 @@ class IsoNet2RestorationBackend:
                 output_dir=isonet_output_dir,
             )
             predict_result = self._command_runner(predict_command, cwd=temporary_root, env={})
-            _write_command_log(
+            write_command_log(
                 paths.log,
-                [(prepare_command, prepare_result), (predict_command, predict_result)],
+                *[(prepare_command, prepare_result), (predict_command, predict_result)],
             )
             if predict_result.returncode != 0:
                 raise RuntimeError(
@@ -479,20 +481,6 @@ def _write_mrc_to_canonical_zarr(
         standard_deviation=float(data64.std()),
     )
 
-
-def _write_command_log(
-    path: Path,
-    command_results: Sequence[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
-) -> None:
-    sections = []
-    for command, result in command_results:
-        sections.append(
-            f"$ {shlex.join(command)}\n\n"
-            f"[stdout]\n{result.stdout or ''}\n"
-            f"[stderr]\n{result.stderr or ''}\n"
-            f"[exit_code]\n{result.returncode}\n"
-        )
-    path.write_text("\n\n".join(sections))
 
 
 def _replace_output(source: Path, destination: Path) -> None:

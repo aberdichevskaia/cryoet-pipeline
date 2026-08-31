@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import shlex
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -15,6 +13,7 @@ from cryoet_pipeline.backends.alignment import (
     write_binned_mrc_stack,
     write_tilt_angles_file,
 )
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FinalAlignedStackBackend,
@@ -141,7 +140,7 @@ class ImodFinalAlignedStackBackend:
                 cwd=temporary_root,
                 env=imod_environment(newstack, context),
             )
-            _write_command_log(paths.newstack_log, command, result)
+            write_command_log(paths.newstack_log, (command, result))
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD newstack failed with exit code {result.returncode}; "
@@ -372,18 +371,6 @@ def _format_transform(
         f"{transform.shift_y_px * shift_scale:.3f}\n"
     )
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _replace_file(source: Path, destination: Path) -> None:

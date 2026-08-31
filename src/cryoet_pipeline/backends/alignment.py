@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +14,7 @@ import numpy as np
 import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import BackendContext, TiltAlignmentBackend
 from cryoet_pipeline.models import (
     AlignmentTransform,
@@ -172,7 +172,7 @@ class ImodTiltXcorrAlignmentBackend:
                 cwd=temporary_root,
                 env=imod_environment(tiltxcorr_executable, context),
             )
-            _write_command_log(paths.tiltxcorr_log, command, result)
+            write_command_log(paths.tiltxcorr_log, (command, result))
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD tiltxcorr failed with exit code {result.returncode}; "
@@ -204,7 +204,7 @@ class ImodTiltXcorrAlignmentBackend:
                 cwd=temporary_root,
                 env=imod_environment(xftoxg_executable, context),
             )
-            _write_command_log(paths.xftoxg_log, xftoxg_command, xftoxg_result)
+            write_command_log(paths.xftoxg_log, (xftoxg_command, xftoxg_result))
             if xftoxg_result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD xftoxg failed with exit code {xftoxg_result.returncode}; "
@@ -611,18 +611,6 @@ def imod_environment(executable: Path, context: BackendContext) -> dict[str, str
         environment["IMOD_QTLIBDIR"] = str(qtlib)
     return environment
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _write_alignment_outputs(

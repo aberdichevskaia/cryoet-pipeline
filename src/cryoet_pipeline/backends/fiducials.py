@@ -22,6 +22,7 @@ from cryoet_pipeline.backends.alignment import (
     write_binned_mrc_stack,
     write_tilt_angles_file,
 )
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     FiducialSeedBackend,
@@ -210,7 +211,7 @@ class ImodAutofidseedBackend:
                 cwd=temporary_root,
                 env=imod_environment(newstack, context),
             )
-            _write_command_log(paths.newstack_log, newstack_command, newstack_result)
+            write_command_log(paths.newstack_log, (newstack_command, newstack_result))
             _require_success(
                 newstack_result,
                 program="IMOD newstack",
@@ -260,11 +261,7 @@ class ImodAutofidseedBackend:
                 cwd=temporary_root,
                 env=imod_environment(autofidseed, context),
             )
-            _write_command_log(
-                paths.autofidseed_log,
-                autofidseed_command,
-                autofidseed_result,
-            )
+            write_command_log(paths.autofidseed_log, (autofidseed_command, autofidseed_result))
             _require_success(
                 autofidseed_result,
                 program="IMOD autofidseed",
@@ -499,7 +496,7 @@ class ImodBeadtrackBackend:
                 cwd=temporary_root,
                 env=imod_environment(beadtrack, context),
             )
-            _write_command_log(paths.beadtrack_log, command, result)
+            write_command_log(paths.beadtrack_log, (command, result))
             _require_success(
                 result,
                 program="IMOD beadtrack",
@@ -985,7 +982,7 @@ class ImodPatchTrackBackend:
                 cwd=temporary_root,
                 env=imod_environment(tiltxcorr, context),
             )
-            _write_command_log(paths.beadtrack_log, command, result)
+            write_command_log(paths.beadtrack_log, (command, result))
             _require_success(
                 result,
                 program="IMOD tiltxcorr (patch tracking)",
@@ -1792,7 +1789,7 @@ def _inspect_imod_model(
         cwd=cwd,
         env=imod_environment(imodinfo, context),
     )
-    _write_command_log(log_path, command, result)
+    write_command_log(log_path, (command, result))
     _require_success(result, program="IMOD imodinfo", log_path=log_path)
     return parse_imod_model_ascii(result.stdout or "")
 
@@ -1912,18 +1909,6 @@ def _numeric_artifact_parameter(artifact: Artifact, key: str) -> float:
         raise ValueError(f"artifact parameter {key!r} must be positive and finite")
     return normalized
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _require_success(

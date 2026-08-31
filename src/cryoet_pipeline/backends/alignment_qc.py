@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
 import tempfile
 from collections.abc import Sequence
@@ -19,6 +18,7 @@ from cryoet_pipeline.backends.alignment import (
     write_binned_mrc_stack,
     write_tilt_angles_file,
 )
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import BackendContext, CoarseAlignmentQcBackend
 from cryoet_pipeline.models import (
     AlignmentTransform,
@@ -153,7 +153,7 @@ class ImodCoarseAlignmentQcBackend:
                 cwd=temporary_root,
                 env=imod_environment(newstack_executable, context),
             )
-            _write_command_log(paths.newstack_log, newstack_command, newstack_result)
+            write_command_log(paths.newstack_log, (newstack_command, newstack_result))
             _require_success(
                 newstack_result,
                 program="IMOD newstack",
@@ -182,7 +182,7 @@ class ImodCoarseAlignmentQcBackend:
                 cwd=temporary_root,
                 env=imod_environment(tiltxcorr_executable, context),
             )
-            _write_command_log(paths.residual_log, residual_command, residual_result)
+            write_command_log(paths.residual_log, (residual_command, residual_result))
             _require_success(
                 residual_result,
                 program="IMOD residual tiltxcorr",
@@ -456,18 +456,6 @@ def _write_scaled_xf(
         )
     path.write_text("".join(lines))
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _require_success(

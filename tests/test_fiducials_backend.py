@@ -8,8 +8,8 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
-from pydantic import ValidationError
 import zarr
+from pydantic import ValidationError
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.fiducials import (

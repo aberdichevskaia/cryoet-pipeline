@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,6 +17,7 @@ from numpy.typing import NDArray
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import BackendContext, MotionCorrectionBackend
 from cryoet_pipeline.models import (
     Artifact,
@@ -146,7 +145,7 @@ class MotionCor3MotionCorrectionBackend:
                 cwd=work_dir,
                 env=os.environ.copy(),
             )
-            _write_command_log(command_log_path, command, result)
+            write_command_log(command_log_path, (command, result))
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "no process output").strip()
                 raise RuntimeError(
@@ -631,18 +630,6 @@ def _require_available_paths(paths: Sequence[Path], *, overwrite: bool) -> None:
             f"corrected projection output already exists:\n{formatted}"
         )
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _read_movie_frames(path: Path) -> NDArray[np.float32]:

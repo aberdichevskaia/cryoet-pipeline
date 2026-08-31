@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -23,6 +21,7 @@ from cryoet_pipeline.backends.alignment import (
     run_command,
     write_tilt_angles_file,
 )
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     ReconstructionBackend,
@@ -153,7 +152,7 @@ class ImodTiltReconstructionBackend:
                 cwd=temporary_root,
                 env=imod_environment(executable, context),
             )
-            _write_command_log(paths.log, command, result)
+            write_command_log(paths.log, (command, result))
             if result.returncode != 0:
                 raise RuntimeError(
                     f"IMOD tilt failed with exit code {result.returncode}; see {paths.log}"
@@ -636,18 +635,6 @@ def _write_central_slices(
             output.set_data(data)
             output.voxel_size = voxel_spacing_angstrom
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _replace_output(source: Path, destination: Path) -> None:

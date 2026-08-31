@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
-import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,6 +16,7 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     SegmentationBackend,
@@ -100,7 +99,7 @@ class MemBrainSegSegmentationBackend:
                 cwd=temporary_root,
                 env=os.environ.copy(),
             )
-            _write_command_log(paths.log, command, result)
+            write_command_log(paths.log, (command, result))
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "no process output").strip()
                 raise RuntimeError(
@@ -527,18 +526,6 @@ def _write_mrc_to_canonical_zarr(
         foreground_fraction=foreground / data.size,
     )
 
-
-def _write_command_log(
-    path: Path,
-    command: Sequence[str],
-    result: subprocess.CompletedProcess[str],
-) -> None:
-    path.write_text(
-        f"$ {shlex.join(command)}\n\n"
-        f"[stdout]\n{result.stdout or ''}\n"
-        f"[stderr]\n{result.stderr or ''}\n"
-        f"[exit_code]\n{result.returncode}\n"
-    )
 
 
 def _replace_output(source: Path, destination: Path) -> None:

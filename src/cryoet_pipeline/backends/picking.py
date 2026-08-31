@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
-import shlex
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,6 +16,7 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import CommandRunner, run_command
+from cryoet_pipeline.backends.command_log import write_command_log
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
     PickingBackend,
@@ -154,7 +153,10 @@ class PytomMatchPickBackend:
                 env=os.environ.copy(),
             )
             if match_result.returncode != 0:
-                _write_command_log(paths.log, [(match_command, match_result)])
+                write_command_log(
+                paths.log,
+                *[(match_command, match_result)],
+            )
                 detail = (match_result.stderr or match_result.stdout or "no process output").strip()
                 raise RuntimeError(
                     f"pytom_match_template.py failed with exit code {match_result.returncode}: "
@@ -173,9 +175,9 @@ class PytomMatchPickBackend:
                 cwd=temporary_root,
                 env=os.environ.copy(),
             )
-            _write_command_log(
+            write_command_log(
                 paths.log,
-                [(match_command, match_result), (extract_command, extract_result)],
+                *[(match_command, match_result), (extract_command, extract_result)],
             )
             if extract_result.returncode != 0:
                 detail = (
@@ -839,20 +841,6 @@ def _write_zarr_to_mrc(
         mrc.voxel_size = voxel_spacing_angstrom
 
 
-def _write_command_log(
-    path: Path,
-    command_results: Sequence[tuple[Sequence[str], subprocess.CompletedProcess[str]]],
-) -> None:
-    sections = []
-    for command, result in command_results:
-        sections.append(
-            f"$ {shlex.join(command)}\n\n"
-            f"[stdout]\n{result.stdout or ''}\n"
-            f"[stderr]\n{result.stderr or ''}\n"
-            f"[exit_code]\n{result.returncode}\n"
-        )
-    path.write_text("\n\n".join(sections))
-
 
 def _replace_output(source: Path, destination: Path) -> None:
     if destination.exists():
@@ -990,7 +978,7 @@ def _write_dose_accumulation(
     if any(value is None for value in raw):
         return None
     doses: list[float] = []
-    for image, value in zip(images, raw):
+    for image, value in zip(images, raw, strict=True):
         try:
             doses.append(float(str(value)))
         except ValueError as exc:
