@@ -266,18 +266,35 @@ Still outstanding:
 3. A comparison report over variants, reusing the per-stage QC models that
    already exist.
 
-## 6. Make external-tool logs uniform and addressable — do this soon
+## 6. Make external-tool logs uniform and addressable — half done
 
-Every adapter that shells out already captures the right material: argv, stdout,
-stderr, and the exit code, written by a private `_write_command_log`. The defect
-is that none of it is addressable from outside the adapter that wrote it.
+Every adapter that shells out already captures the right material: argv,
+stdout, stderr, and the exit code. The uniformity half is done; addressability
+is not.
 
-- **`_write_command_log` exists in twelve private copies**, one per backend
-  module (`alignment`, `alignment_qc`, `ctf`, `fiducials`, `final_stack`,
-  `fine_alignment`, `motion`, `picking`, `reconstruction`, `restoration`,
-  `segmentation`, `template`). There is no shared module. The bodies have drifted:
-  some take a single `CompletedProcess`, some take a list of them, one appends a
-  rendered `<<stdin>>` block because CTFFIND is driven through stdin.
+**Done — one writer instead of twelve.** `backends/command_log.py` holds
+`write_command_log` and `command_log_text`, and all twelve backends call them.
+The copies had drifted into eight variants across three axes — whether argv
+tokens were coerced to `str`, whether the parent directory was created, and
+whether the signature took one command or a list — and each disagreement showed
+up only as a crash in the adapter that lacked the tolerant version, so each was
+resolved toward the tolerant one.
+
+**Done — progress bars no longer bury the logs.** `text=True` translates tqdm's
+carriage returns into newlines, so a redrawn bar arrives as one line per
+update: one pytom match wrote 41,212 of them, which was the entire 2.7 MB of
+that log and the reason finding the two lines that mattered needed `tail -60`.
+The writer now keeps a bar's final state and replaces the rest with `[... N
+progress updates elided]` — elided rather than dropped, so nobody has to wonder
+whether output went missing.
+
+**Still open — nothing on a terminal while a step runs.** `run_command` uses
+`capture_output=True`, so a 26-minute match prints nothing until it finishes.
+Showing output *and* recording it means the runner has to tee, which changes
+its contract, so this is a real design change rather than a tweak. Worth doing:
+a step that says nothing for half an hour is indistinguishable from a hung one,
+and that came up while running lane B by hand.
+
 - **Log paths are recorded under about a dozen different keys** in untyped
   `parameters` dicts: `command_log_path`, `command_log`, `log_path`,
   `tiltxcorr_log_path`, `xftoxg_log_path`, `newstack_log_path`,
@@ -297,21 +314,22 @@ person working from the registry rather than from the output directory.
 
 The work:
 
-1. One shared runner for external processes, replacing the twelve copies. It
-   should record argv, the resolved executable path, stdin when used, stdout,
-   stderr, exit code, and wall time, and it should be the only place that decides
-   the log file's format.
+1. ~~One shared writer, replacing the twelve copies.~~ Done. What it does *not*
+   yet record is the resolved executable path, stdin when used, and wall time —
+   all three belong with the `run` entity rather than in the log text.
 2. A typed list of log records per unit of work — program name, path, exit code —
    instead of ad-hoc keys in `parameters`. This lands on the `run` entity
    described in [database_design.md](database_design.md); until that exists it
    belongs in a typed model rather than in a free-form dict.
 
-Both are plain hygiene and are worth doing independently of anything downstream.
-They also unblock deterministic failure classification: once logs are uniform, a
-`parse_failure(log, result) -> FailureSignature | None` can be added to the
-backend protocols, where the adapter that knows a tool's dialect is also the
-thing that recognizes its errors. That parser is a follow-on, not part of this
-item.
+What remains is plain hygiene and worth doing independently of anything
+downstream. `write_command_log` returns the path it wrote for exactly this
+reason: a caller can record the log on the artifact it belongs to as soon as
+there is a field to put it in. They also unblock deterministic failure
+classification: once logs are uniform, a `parse_failure(log, result) ->
+FailureSignature | None` can be added to the backend protocols, where the
+adapter that knows a tool's dialect is also the thing that recognizes its
+errors. That parser is a follow-on, not part of this item.
 
 ## 7. Attribution — required in the first version of the run entity
 
