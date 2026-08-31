@@ -15,6 +15,7 @@ from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
     _match_template_command,
+    _included_z_values,
     _write_dose_accumulation,
     pick_and_register,
 )
@@ -825,6 +826,60 @@ def _dose_manifest(doses: list[object]) -> TiltSeriesManifest:
         for image, dose in zip(manifest.images, doses)
     ]
     return manifest.model_copy(update={"images": images})
+
+
+def test_dose_follows_the_views_the_tomogram_was_built_from(tmp_path: Path) -> None:
+    """Fine alignment can drop views, and the dose has to drop the same ones.
+
+    The manifest lists everything collected. Pairing the full list against a
+    tomogram built from fewer views used to refuse outright, so a series with a
+    single excluded view could not be picked with weighting at all.
+    """
+
+    manifest = _dose_manifest(["0.000000", "2.450890"])
+    third = manifest.images[1].model_copy(
+        update={"z_value": 2, "metadata": {"PriorRecordDose": "4.901780"}}
+    )
+    manifest = manifest.model_copy(update={"images": [*manifest.images, third]})
+
+    output = tmp_path / "dose.txt"
+    result = _write_dose_accumulation(
+        manifest,
+        output,
+        expected_views=2,
+        included_z_values=[0, 2],
+    )
+
+    assert result == output
+    # The middle view is gone, and so is its dose.
+    assert output.read_text() == "0.000000\n4.901780\n"
+
+
+def test_dose_refuses_a_z_value_the_manifest_does_not_have(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="manifest does not contain"):
+        _write_dose_accumulation(
+            _dose_manifest(["0.0", "2.45"]),
+            tmp_path / "dose.txt",
+            expected_views=2,
+            included_z_values=[0, 7],
+        )
+
+
+def test_included_z_values_is_absent_on_a_tomogram_that_never_recorded_it() -> None:
+    """Older tomograms predate the field and must keep working."""
+
+    plain = Artifact(
+        id="TS_TEST:tomogram:fine",
+        kind=ArtifactKind.TOMOGRAM,
+        path=Path("tomo.zarr"),
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    assert _included_z_values(plain) is None
+
+    recorded = plain.model_copy(
+        update={"parameters": {**plain.parameters, "included_z_values": [0, 2]}}
+    )
+    assert _included_z_values(recorded) == [0, 2]
 
 
 def test_dose_accumulation_uses_the_dose_already_taken(tmp_path: Path) -> None:

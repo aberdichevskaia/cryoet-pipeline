@@ -132,6 +132,7 @@ class PytomMatchPickBackend:
                 manifest,
                 temporary_root / f"{manifest.tilt_series_id}_dose.txt",
                 expected_views=view_count,
+                included_z_values=_included_z_values(tomogram),
             )
             match_command = _match_template_command(
                 match_template_executable,
@@ -813,11 +814,30 @@ def _write_defocus_micrometres(
     return output_path
 
 
+def _included_z_values(tomogram: Artifact) -> list[int] | None:
+    """The views the tomogram was reconstructed from, when it recorded them.
+
+    Reconstruction writes this because fine alignment can drop views, and
+    everything downstream that pairs per-view metadata needs to know which ones
+    survived. Older tomograms predate the field, and None keeps them working —
+    they then rely on the count matching, which it does whenever nothing was
+    dropped.
+    """
+
+    value = tomogram.parameters.get("included_z_values")
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, int) for item in value):
+        raise ValueError("tomogram included_z_values must be a list of integers")
+    return list(value)
+
+
 def _write_dose_accumulation(
     manifest: TiltSeriesManifest,
     output_path: Path,
     *,
     expected_views: int,
+    included_z_values: Sequence[int] | None = None,
 ) -> Path | None:
     """Accumulated dose per view, so the template can be weighted per tilt.
 
@@ -828,21 +848,38 @@ def _write_dose_accumulation(
     so accumulating `ExposureDose` down the file would weight the views inside
     out, calling the freshest ones the most damaged.
 
+    The manifest lists every view collected, while fine alignment may have
+    dropped some, so `included_z_values` says which ones the tomogram was built
+    from. Without it the two only agree when nothing was dropped, and the count
+    check below is all that stands between a silent mispairing and a refusal.
+
     Returns None when the mdoc did not record it, since dose weighting is an
     improvement rather than a requirement.
     """
 
-    raw = [image.metadata.get("PriorRecordDose") for image in manifest.images]
+    images = list(manifest.images)
+    if included_z_values is not None:
+        wanted = list(included_z_values)
+        by_z = {image.z_value: image for image in images}
+        missing = [z for z in wanted if z not in by_z]
+        if missing:
+            raise ValueError(
+                f"{manifest.tilt_series_id}: the tomogram was built from z values "
+                f"{missing} that the manifest does not contain"
+            )
+        images = [by_z[z] for z in wanted]
+
+    raw = [image.metadata.get("PriorRecordDose") for image in images]
     if any(value is None for value in raw):
         return None
     doses: list[float] = []
-    for index, value in enumerate(raw):
+    for image, value in zip(images, raw):
         try:
             doses.append(float(str(value)))
         except ValueError as exc:
             raise ValueError(
-                f"{manifest.tilt_series_id}: PriorRecordDose for ZValue {index} "
-                f"is not a number: {value!r}"
+                f"{manifest.tilt_series_id}: PriorRecordDose for ZValue "
+                f"{image.z_value} is not a number: {value!r}"
             ) from exc
     if len(doses) != expected_views:
         raise ValueError(
