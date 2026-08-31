@@ -731,3 +731,39 @@ returns an empty pick list with `status: pass`. A shared shape suggests a
 shared treatment: derive it, record the derivation and its assumption in QC,
 gate on whatever makes the derivation invalid, and refuse rather than guess
 when the gate fails.
+
+## 16. Pair per-view metadata with views, not with positions
+
+Done: dose weighting. `--dose-accumulation` is passed now, taken from
+SerialEM's `PriorRecordDose` — the dose the specimen had already received when
+that exposure was made. That is the right field rather than `ExposureDose`,
+because a dose-symmetric series is *written* in tilt order and *acquired* in
+another: on EMPIAR-11538 the view acquired first is ZValue 30 at +7.97 degrees,
+thirty-first in the file, so accumulating `ExposureDose` down the file would
+call the freshest views the most damaged and weight them accordingly. Whether
+any weighting was applied is recorded on the picks artifact as
+`per_tilt_weighting` and `dose_weighted`, because a match run without it
+otherwise looks exactly like one with it.
+
+Two things remain.
+
+**View identity is lost before pytom sees it.** `_write_tilt_angles` reads the
+solved angles as a bare list of numbers, so nothing downstream can tell which
+manifest views survived fine alignment. Both `_write_defocus_micrometres` and
+`_write_dose_accumulation` therefore pair by position and refuse when the
+counts disagree. That is honest, and it means a series with any excluded view
+cannot be picked with either weighting at all. The excluded Z values are on the
+alignment artifact, so the fix is to carry them through and select the same
+views the reconstruction was built from, rather than requiring that none were
+dropped.
+
+**A fallback for mdocs that do not record `PriorRecordDose`.** Older SerialEM
+and other acquisition software write only `ExposureDose`. Acquisition order is
+recoverable from `DateTime`, which the mdoc parser already keeps in `metadata`,
+and accumulating in that order gives the same answer. Two reasons to guard it
+rather than simply write it: it introduces a dependency on a date format, and
+an order reconstructed wrongly weights the views inside out while completing
+normally. Check it against what is already known — the accumulation must be
+monotone in acquisition order, and its total must equal `ExposureDose` times
+the view count — and refuse rather than guess when `DateTime` is missing or
+does not parse.
