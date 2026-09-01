@@ -17,7 +17,6 @@ from cryoet_pipeline.backends.subtomogram import (
     FftRefinementAveragingBackend,
     average_and_register,
     extract_and_register,
-    read_particle_star,
 )
 from cryoet_pipeline.models import (
     Artifact,
@@ -26,6 +25,9 @@ from cryoet_pipeline.models import (
     QcStatus,
     TiltImage,
     TiltSeriesManifest,
+)
+from cryoet_pipeline.particles import (
+    read_particle_star,
 )
 from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
 from cryoet_pipeline.runtime import DevicePreference
@@ -238,7 +240,7 @@ def _particle_stack_artifact(
     for index, volume in enumerate(volumes):
         stack[index] = volume.numpy()
 
-    from cryoet_pipeline.backends.subtomogram import ParticleRecord, write_particle_star
+    from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 
     records = [
         ParticleRecord(
@@ -487,7 +489,7 @@ def test_fft_refinement_averaging_requires_nonempty_stack(tmp_path: Path) -> Non
         dtype=np.float32,
     )
     metadata_path = tmp_path / "empty.star"
-    from cryoet_pipeline.backends.subtomogram import write_particle_star
+    from cryoet_pipeline.particles import write_particle_star
 
     write_particle_star(metadata_path, [])
     particle_stack = Artifact(
@@ -519,7 +521,7 @@ def _write_particle_stack(
     name: str = "cone-search",
     pixel_spacing_angstrom: float = 10.0,
 ) -> Artifact:
-    from cryoet_pipeline.backends.subtomogram import ParticleRecord, write_particle_star
+    from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 
     box_size = int(volumes[0].shape[0])
     stack_path = tmp_path / f"{name}_particles.zarr"
@@ -726,3 +728,258 @@ def test_cone_search_refinement_rejects_more_classes_than_particles(tmp_path: Pa
             [_manifest()],
             _cone_search_context(tmp_path, num_classes=3),
         )
+
+
+def test_one_half_set_cannot_influence_the_other_half_maps(tmp_path: Path) -> None:
+    """The guarantee gold-standard rests on, tested directly rather than argued.
+
+    Change a particle that belongs to half 2 and half 1's map must come back
+    bit-identical. That is the whole claim: no particle on one side ever reaches a
+    reference the other side is aligned against. It is worth testing as an
+    identity rather than through a resolution number, because a resolution can
+    look right for the wrong reasons — and because on this backend's local search
+    the joint scheme's inflation was not measurable on noise, so a test asserting
+    that a number improved would be asserting something not demonstrated.
+    """
+
+    import numpy as np
+    import torch
+
+    from cryoet_pipeline.backends.subtomogram import _refine_half_sets_fft
+    from cryoet_pipeline.particles import ParticleRecord
+    from cryoet_pipeline.rotations import (
+        center_particle_volume,
+        relion_euler_to_matrix,
+        resample_volume_zyx,
+    )
+
+    box_size = 12
+    device = torch.device("cpu")
+
+    def build(perturb_half_two: bool, *, num_iterations: int) -> torch.Tensor:
+        volumes, records = [], []
+        for index in range(8):
+            # Half 2 is the odd indices. Perturbing only those must leave half 1 alone.
+            seed = index if not (perturb_half_two and index % 2 == 1) else 100 + index
+            noise = np.random.default_rng(seed).normal(size=(box_size,) * 3)
+            volumes.append(
+                center_particle_volume(torch.as_tensor(noise.astype(np.float32)))
+            )
+            records.append(
+                ParticleRecord(
+                    index=index,
+                    x_px=0.0,
+                    y_px=0.0,
+                    z_px=0.0,
+                    rot_deg=0.0,
+                    tilt_deg=0.0,
+                    psi_deg=0.0,
+                    shift_x_px=0.0,
+                    shift_y_px=0.0,
+                    shift_z_px=0.0,
+                    score=0.5,
+                    class_number=1,
+                    random_subset=1 + (index % 2),
+                )
+            )
+        aligned = torch.stack(
+            [
+                resample_volume_zyx(
+                    volumes[record.index],
+                    relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg),
+                    np.zeros(3),
+                    device=device,
+                )
+                for record in records
+            ]
+        )
+        result = _refine_half_sets_fft(
+            records=records,
+            raw_volumes=volumes,
+            aligned=aligned,
+            start_reference=None,
+            num_iterations=num_iterations,
+            initial_angular_step_deg=20.0,
+            initial_shift_step_px=1.0,
+            pixel_spacing_angstrom=5.4,
+            initial_low_pass_angstrom=60.0,
+            finest_low_pass_angstrom=10.8,
+            low_pass_margin_shells=2.0,
+            device=device,
+        )
+        return result.half_references[1]
+
+    # One iteration: every particle is aligned to a reference built only from its
+    # own half, and nothing has crossed between them yet.
+    assert torch.equal(
+        build(perturb_half_two=False, num_iterations=1),
+        build(perturb_half_two=True, num_iterations=1),
+    )
+
+
+def test_the_only_channel_between_the_halves_is_shut_when_the_fsc_says_nothing(
+    tmp_path: Path,
+) -> None:
+    """Exactly one number can cross between the halves, and it is conditional.
+
+    The resolution limit is derived from the FSC between the two half maps, so
+    when that FSC is informative half 1's filter — and therefore half 1's map —
+    depends on half 2's content. That coupling is deliberate: it is the feedback
+    that stops the refinement reaching into frequencies where only noise agrees,
+    and a fully sealed pair would have nothing to set its limit from.
+
+    On noise-dominated data the crossing lands on the first or second shell, which
+    carries no information, so the schedule holds and nothing crosses at all —
+    which is what this test measures, with three iterations and pure noise. The
+    companion test above pins the one-iteration case, and
+    `test_an_uninformative_fsc_crossing_never_loosens_the_low_pass` pins the rule
+    that decides which regime applies. Together they say: the channel exists, it
+    carries one scalar, and it is shut unless the halves actually agree somewhere.
+    """
+
+    import numpy as np
+    import torch
+
+    from cryoet_pipeline.backends.subtomogram import _refine_half_sets_fft
+    from cryoet_pipeline.particles import ParticleRecord
+    from cryoet_pipeline.rotations import (
+        center_particle_volume,
+        relion_euler_to_matrix,
+        resample_volume_zyx,
+    )
+
+    box_size = 12
+    device = torch.device("cpu")
+
+    def build(perturb_half_two: bool) -> tuple[torch.Tensor, list[float]]:
+        volumes, records = [], []
+        for index in range(8):
+            seed = index if not (perturb_half_two and index % 2 == 1) else 100 + index
+            noise = np.random.default_rng(seed).normal(size=(box_size,) * 3)
+            volumes.append(
+                center_particle_volume(torch.as_tensor(noise.astype(np.float32)))
+            )
+            records.append(
+                ParticleRecord(
+                    index=index,
+                    x_px=0.0,
+                    y_px=0.0,
+                    z_px=0.0,
+                    rot_deg=0.0,
+                    tilt_deg=0.0,
+                    psi_deg=0.0,
+                    shift_x_px=0.0,
+                    shift_y_px=0.0,
+                    shift_z_px=0.0,
+                    score=0.5,
+                    class_number=1,
+                    random_subset=1 + (index % 2),
+                )
+            )
+        aligned = torch.stack(
+            [
+                resample_volume_zyx(
+                    volumes[record.index],
+                    relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg),
+                    np.zeros(3),
+                    device=device,
+                )
+                for record in records
+            ]
+        )
+        result = _refine_half_sets_fft(
+            records=records,
+            raw_volumes=volumes,
+            aligned=aligned,
+            start_reference=None,
+            num_iterations=3,
+            initial_angular_step_deg=20.0,
+            initial_shift_step_px=1.0,
+            pixel_spacing_angstrom=5.4,
+            initial_low_pass_angstrom=60.0,
+            finest_low_pass_angstrom=10.8,
+            low_pass_margin_shells=2.0,
+            device=device,
+        )
+        return result.half_references[1], result.low_pass_trace
+
+    unperturbed, trace = build(perturb_half_two=False)
+    perturbed, perturbed_trace = build(perturb_half_two=True)
+
+    # The schedule never moved, so the channel carried nothing...
+    assert trace == [60.0, 60.0, 60.0]
+    assert perturbed_trace == trace
+    # ...and half 1 is therefore untouched by what happened to half 2.
+    assert torch.equal(unperturbed, perturbed)
+
+
+def test_an_uninformative_fsc_crossing_never_loosens_the_low_pass() -> None:
+    """The defect the first version of this rule had, pinned as a test.
+
+    A crossing at the first or second Fourier shell is the median outcome on
+    noise-dominated data, and it means the halves agree nowhere — not that the map
+    is coarse. Bounded only on the fine side, the rule turned that into a limit
+    coarser than the operator's own starting filter and then held it: 60 A to 86 A
+    at box 48, to 115 A at box 64. Filtering a refinement more heavily than asked
+    is worse than holding the start.
+    """
+
+    from cryoet_pipeline.backends.subtomogram import next_low_pass_angstrom
+    from cryoet_pipeline.fsc import FscCurve
+
+    pixel_spacing = 5.4
+    start = 60.0
+
+    def limit(box_size: int, crossing_shell: int) -> float:
+        resolution = box_size * pixel_spacing / crossing_shell
+        curve = FscCurve(
+            resolution_angstrom=[resolution],
+            correlation=[0.0],
+            threshold=0.143,
+            crossing_resolution_angstrom=resolution,
+        )
+        return next_low_pass_angstrom(
+            curve,
+            current_angstrom=start,
+            coarsest_angstrom=start,
+            finest_angstrom=2.0 * pixel_spacing,
+            margin_shells=2.0,
+            box_size=box_size,
+            pixel_spacing_angstrom=pixel_spacing,
+        )
+
+    for box_size in (32, 48, 64):
+        for crossing_shell in (1, 2):
+            assert limit(box_size, crossing_shell) == start
+        for crossing_shell in (1, 2, 3, 6, 12, 20):
+            assert 2.0 * pixel_spacing <= limit(box_size, crossing_shell) <= start
+
+    # An informative crossing still tightens it, or the feedback would do nothing.
+    assert limit(32, 12) < start
+
+
+def test_a_curve_that_never_crosses_holds_the_low_pass_where_it_was() -> None:
+    """No crossing is an absence of an estimate, not an estimate of infinity."""
+
+    from cryoet_pipeline.backends.subtomogram import next_low_pass_angstrom
+    from cryoet_pipeline.fsc import FscCurve
+
+    curve = FscCurve(
+        resolution_angstrom=[100.0, 50.0],
+        correlation=[0.9, 0.8],
+        threshold=0.143,
+        crossing_resolution_angstrom=None,
+    )
+
+    assert (
+        next_low_pass_angstrom(
+            curve,
+            current_angstrom=37.0,
+            coarsest_angstrom=60.0,
+            finest_angstrom=10.8,
+            margin_shells=2.0,
+            box_size=48,
+            pixel_spacing_angstrom=5.4,
+        )
+        == 37.0
+    )

@@ -823,7 +823,68 @@ class SubtomogramAveragingQc(BaseModel):
     """
     initial_reference_correlation_mean: float | None = None
     initial_reference_correlation_fraction_above_threshold: float | None = None
+    half_set_counts: dict[int, int] = Field(default_factory=dict)
+    """Particles in each half-set, which is what makes the resolution readable.
+
+    Nothing recorded the split before, so a two-versus-two-hundred division
+    reported PASS with a number beside it. The counts are the first thing a
+    reader needs in order to decide whether the FSC below is an estimate or a
+    coincidence.
+    """
+    gold_standard: bool = False
+    """Whether the two halves were refined without ever seeing each other.
+
+    False means the halves were split after a joint refinement against one
+    shared reference, which inflates the FSC — the scheme Scheres & Chen name as
+    defective. The flag exists so that a resolution can never be read as
+    gold-standard by default: it has to be claimed, by the code that earned it.
+    """
+    resolution_angstrom: float | None = None
+    """The inter-half FSC crossing at 0.143 after the final iteration.
+
+    None when the curve never crossed, which is not a resolution of infinity but
+    an absence of one.
+    """
+    resolution_trace_angstrom: list[float | None] = Field(default_factory=list)
+    """The crossing after each iteration, in order.
+
+    A refinement that is working shows this improving and then flattening. One
+    that is overfitting shows it improving without pause, which is the signature
+    worth being able to see rather than infer.
+    """
+    low_pass_trace_angstrom: list[float] = Field(default_factory=list)
+    """The resolution limit the reference was filtered to, per iteration.
+
+    Recorded next to the trace above because the two are a feedback loop: the
+    limit comes from the previous iteration's agreement, and the agreement is
+    measured on a reference cut at that limit. Reading either alone hides that.
+    """
+    resolution_is_interpretable: bool = True
+    """False when a half holds too few particles for its FSC to mean anything.
+
+    Separate from `status` so that a small-particle run is not indistinguishable
+    from a broken one: the average may be perfectly good while the resolution
+    beside it is a draw from a wide distribution.
+    """
     status: QcStatus
+
+    @model_validator(mode="after")
+    def check_half_set_counts_against_the_total(self) -> SubtomogramAveragingQc:
+        """The halves have to be a partition of the particles, or they are not halves."""
+
+        if not self.half_set_counts:
+            return self
+        if sorted(self.half_set_counts) != [1, 2]:
+            raise ValueError(
+                f"half-set counts must be keyed 1 and 2, got {sorted(self.half_set_counts)}"
+            )
+        total = sum(self.half_set_counts.values())
+        if total != self.particle_count:
+            raise ValueError(
+                f"half-set counts sum to {total} but the average used "
+                f"{self.particle_count} particles"
+            )
+        return self
     warnings: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -910,6 +971,21 @@ class SubtomogramClassificationQc(BaseModel):
     mean_final_correlation: float | None = None
     minimum_final_correlation: float | None = None
     reassignment_fraction_last_iteration: float | None = None
+    gold_standard: bool = False
+    """Whether the half-sets were refined without ever seeing each other.
+
+    False, and not as an oversight: this backend refines every particle against a
+    shared set of class references, rebuilt from all of them each iteration.
+    Making the halves independent here is not simply the same change as for
+    single-class refinement, because each half would build its own K references
+    and "class 2" on one side need not be "class 2" on the other — a per-class FSC
+    would then need a correspondence between them. Whether the established
+    practice is to classify jointly and gold-standard-refine one class afterwards
+    is an open question recorded in the roadmap, not something this flag decides.
+
+    It is here so that a reader of this report never has to know any of that to
+    see that the resolution is not a gold-standard number.
+    """
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

@@ -154,6 +154,77 @@ ribosomes; group-level splitting is an opt-in for overlapping density, which is
 what the Gag-lattice question would need. Also missing: no QC anywhere records
 per-half particle counts, so a 2-versus-200 split reports PASS with a number.
 
+**Independent half-set refinement is built for `fft-refinement`, and the benefit
+was not measurable.** Both halves now refine against a reference built only from
+their own particles, the reference is low-passed every iteration, and the limit
+comes from the FSC between the two halves — the RELION feedback, and the reason a
+shared starting map is legitimate at all. The two half maps are written beside the
+average, because a resolution is a claim about those two files agreeing and
+without them nobody can recheck it. Compute is unchanged: each half searches only
+its own particles, so the inner loop runs the same number of times.
+
+What could not be shown is that any number improved. On pure noise, twenty-four
+particles, six iterations, the first-shell correlation barely moves across
+iterations under either scheme, and the drift is small and inconsistent in sign
+(-0.014, -0.004, -0.038 joint; -0.007, -0.020, +0.002 independent). The reason is
+visible in the code: `_search_local_alignment` is a local grid search from each
+particle's current orientation with a halving step, so it has too little freedom
+to imprint noise the way the global refinements Scheres & Chen describe do. **So
+this change rests on being the correct scheme and on costing nothing, not on a
+measured improvement** — and anyone who tightens the search later inherits the
+protection rather than having to discover the need for it. `ConeSearchRefinementBackend`
+searches a far larger space and is where the defect would be expected to bite;
+it is still joint, and its QC says so.
+
+The independence is structural, not total: exactly one number crosses between the
+halves, the resolution limit, derived from their FSC. Half 1's map therefore does
+depend on half 2's content from the second iteration on — through that scalar and
+nothing else. A test found this by asserting full independence and failing, which
+was worth more than the assertion would have been. Two tests now pin both
+directions, because tightening it would break the anti-overfitting feedback and
+widening it would let structure across.
+
+**The low-pass rule as built, and the better version of it.** Bounded on both
+sides: a crossing below shell 3 holds the schedule, and the limit can never go
+coarser than the operator's starting filter. Both guards exist because the first
+version had only the fine bound, and a first-shell crossing — the median outcome
+on noise-dominated data — then set the limit to 86 A at box 48 and 115 A at box
+64, coarser than the 60 A it started from, and held it there. Filtering a
+refinement more heavily than asked is worse than holding the start.
+
+Four improvements are known and unbuilt, in rough order of value:
+
+- Work in **integer Fourier shells**, not angstrom. The instability is a function
+  of shell index alone — the same handful of samples in the lowest shells at every
+  box size — and an angstrom-space rule hides that variable.
+- Drive the schedule off the **FSC = 0.5** crossing while continuing to report at
+  0.143. That is the curve RELION applies its own 0.5 rule to, so it is the
+  calibrated choice; 0.143 stays as the reported number for comparability.
+- Scale the margin with the box, `max(3, round(0.08 * box))`, rather than a flat
+  two shells. A fixed count tuned for 200-400 px boxes is wrong at 32-64. Do not
+  port RELION's `fsc0143 - fsc05 + 5` term, which at box 32 would be wider than
+  the whole useful band.
+- Set the filter's `edge_width_shells` to `min(2.0, margin / 2)`. Two shells is
+  RELION's value, sized against ten-shell margins; against a three-shell margin
+  it consumes two thirds of the headroom the margin exists to create.
+
+**Two defects remain in the multi-class path**, and they are the same kind as the
+ones just fixed. It applies **no low-pass at all** to its class references, so
+joint refinement there is unprotected in the way the single-class path no longer
+is. And it emits a resolution number for a jointly refined split; the right
+behaviour is to emit none — a caveated number travels downstream and the caveat
+does not. `gold_standard` already reports False, which is the floor, not the fix.
+
+**Still open.** Whether classification should have independent halves at all:
+each half would build its own K references and "class 2" on one side need not be
+"class 2" on the other, so a per-class FSC needs a correspondence between them.
+The likely established practice is to classify jointly and then gold-standard-
+refine a single class, which is a pipeline shape rather than a backend flag — this
+is reasoned, not confirmed, and `SubtomogramClassificationQc.gold_standard`
+reports False either way. Also unbuilt: no mask before the FSC, and no
+phase-randomisation correction for the mask-induced correlation a mask would
+introduce.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array

@@ -10,8 +10,8 @@ import numpy as np
 import torch
 import zarr
 
-from cryoet_pipeline.backends.subtomogram import read_particle_star
 from cryoet_pipeline.models import FscQc, QcStatus
+from cryoet_pipeline.particles import read_particle_star
 from cryoet_pipeline.rotations import (
     center_particle_volume,
     relion_euler_to_matrix,

@@ -19,6 +19,8 @@ from cryoet_pipeline.backends.protocols import (
     variant_label,
     variant_suffix,
 )
+from cryoet_pipeline.filters import low_pass_filter_volume
+from cryoet_pipeline.fsc import FscCurve, compute_fsc_curve
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -32,6 +34,12 @@ from cryoet_pipeline.models import (
     SubtomogramClassificationQc,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.particles import (
+    ParticleRecord,
+    read_particle_star,
+    read_star_loop,
+    write_particle_star,
+)
 from cryoet_pipeline.rotations import (
     center_particle_volume,
     cone_offsets,
@@ -41,34 +49,6 @@ from cryoet_pipeline.rotations import (
     resample_volume_zyx,
 )
 from cryoet_pipeline.runtime import DevicePreference
-
-
-@dataclass(frozen=True)
-class ParticleRecord:
-    """One row of per-particle metadata carried alongside a particle stack."""
-
-    index: int
-    """Position in the array or list at hand — never a particle's name.
-
-    Written as the slice number in the stack by extraction, rewritten with an
-    offset by `_combine_particle_stacks` when several stacks are averaged
-    together, and used as a subscript in roughly sixteen places. So a STAR and a
-    stack are only interchangeable if they were written for one another, and a
-    record cannot say which pick or which tilt-series it came from. Both facts
-    are relied on; neither was stated anywhere until this line.
-    """
-    x_px: float
-    y_px: float
-    z_px: float
-    rot_deg: float
-    tilt_deg: float
-    psi_deg: float
-    shift_x_px: float
-    shift_y_px: float
-    shift_z_px: float
-    score: float | None
-    class_number: int
-    random_subset: int
 
 
 @dataclass(frozen=True)
@@ -260,6 +240,282 @@ class CubicCropExtractionBackend:
         return [particle_stack_artifact, qc_artifact]
 
 
+GOLD_STANDARD_FSC_THRESHOLD = 0.143
+"""The crossing used for the inter-half FSC, per Rosenthal & Henderson."""
+
+_LOW_PASS_MIN_DRIVING_SHELL = 3
+"""A crossing this low says the halves agree nowhere, not that the map is coarse.
+
+The first shell holds a handful of Fourier samples, so its correlation scatters
+across roughly [-0.37, +0.56] on independent noise averages — a crossing there is
+a draw, and the median draw on noise-dominated data lands exactly there. Driving
+the filter from it moved the limit coarser than the operator's start and kept it
+there, so below this the schedule holds instead.
+"""
+
+_MINIMUM_PARTICLES_PER_HALF = 1
+"""An empty half has nothing to compare against, so refinement refuses.
+
+One particle is enough to refuse *nothing*: it can be averaged (into itself),
+and the map built from every particle stays meaningful. What one particle per
+half cannot support is a resolution, which is a separate claim — see
+`_MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION`. Conflating the two would mean
+refusing to average a handful of particles because the FSC would be
+uninterpretable, which is the wrong thing to refuse.
+"""
+
+_MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION = 10
+"""Below this the inter-half FSC is reported but flagged as uninterpretable.
+
+PROVISIONAL. A lone low-frequency shell holds few voxels, so with a handful of
+particles per half the correlation there scatters widely — measured on this
+pipeline's own path, the first shell ranges over roughly [-0.37, +0.56] across
+seeds for two independent noise averages of twenty particles each. A crossing
+drawn from that scatter is a draw, not an estimate. The number is still recorded
+rather than suppressed, because a reader who knows the count can judge it.
+"""
+
+
+@dataclass(frozen=True)
+class _HalfSetRefinement:
+    """What independently refining the two half-sets produced.
+
+    `half_references` are the two maps that never saw each other's particles, so
+    the FSC between them is the gold-standard estimate. `combined_reference` is
+    the map built from every particle at its refined orientation — the one to
+    deposit — and is exactly the count-weighted mean of the two halves, which is
+    why the aligned volumes need not be kept.
+    """
+
+    records: list[ParticleRecord]
+    half_references: dict[int, torch.Tensor]
+    combined_reference: torch.Tensor
+    correlations: list[float]
+    starting_correlation_mean: float
+    low_pass_trace: list[float]
+    resolution_trace: list[float | None]
+    half_counts: dict[int, int]
+
+
+def half_set_indices(records: Sequence[ParticleRecord]) -> dict[int, list[int]]:
+    """Group record positions by their persisted half-set assignment.
+
+    The assignment is made once at extraction and written to `rlnRandomSubset`;
+    nothing recomputes it, so a particle keeps its half across refinement, across
+    a re-average, and across any later selection that carries the STAR rows.
+    """
+
+    grouped: dict[int, list[int]] = {1: [], 2: []}
+    for record in records:
+        if record.random_subset not in grouped:
+            raise ValueError(
+                f"particle {record.index} has random_subset={record.random_subset}; "
+                "the half-set assignment must be 1 or 2"
+            )
+        grouped[record.random_subset].append(record.index)
+    return grouped
+
+
+def next_low_pass_angstrom(
+    curve: FscCurve,
+    *,
+    current_angstrom: float,
+    coarsest_angstrom: float,
+    finest_angstrom: float,
+    margin_shells: float,
+    box_size: int,
+    pixel_spacing_angstrom: float,
+) -> float:
+    """The resolution limit for the next iteration, from the halves' agreement.
+
+    This is the feedback that makes a shared starting reference legitimate: the
+    refinement is only ever allowed to use frequencies the two independent halves
+    already agree on, plus a small margin so that the estimate has somewhere to
+    grow into. Without the margin the limit can never improve, since nothing is
+    ever refined beyond where it already is; with too generous a margin the
+    refinement reaches into frequencies where only noise agrees, and that noise
+    then pushes the next estimate further out — the runaway the split exists to
+    prevent.
+
+    Bounded on BOTH sides, which the first version of this was not, and the
+    missing side was the one that bit. A crossing at the first or second shell is
+    the median outcome on noise-dominated data — measured, not supposed — and
+    with only a `finest` bound the rule turned that into a limit COARSER than the
+    operator's own starting filter and then sat there: from 60 A to 86 A at box
+    48, to 115 A at box 64. A refinement filtered more heavily than it was asked
+    to be is worse than one that simply held the start.
+
+    Two guards, and they overlap on purpose. A crossing below
+    `_LOW_PASS_MIN_DRIVING_SHELL` carries no information, so the limit holds
+    rather than being recomputed from it; and the result can never go coarser
+    than `coarsest_angstrom` regardless, as the backstop for whatever the first
+    guard fails to catch.
+
+    PROVISIONAL: the margin is a fixed shell count, the driving threshold is the
+    reporting threshold, and the rule works in angstrom rather than in integer
+    shells. Better versions of all three exist and are recorded in the roadmap;
+    this function is the only place any of them would change.
+
+    A curve that never crosses the threshold carries no estimate either, so that
+    also holds rather than inventing one.
+    """
+
+    if curve.crossing_resolution_angstrom is None:
+        return current_angstrom
+    shell_frequency = 1.0 / (box_size * pixel_spacing_angstrom)
+    crossing_shell = 1.0 / (curve.crossing_resolution_angstrom * shell_frequency)
+    if crossing_shell < _LOW_PASS_MIN_DRIVING_SHELL:
+        return current_angstrom
+    crossing_frequency = 1.0 / curve.crossing_resolution_angstrom
+    target = 1.0 / (crossing_frequency + margin_shells * shell_frequency)
+    return min(max(target, finest_angstrom), coarsest_angstrom)
+
+
+def _refine_half_sets_fft(
+    *,
+    records: list[ParticleRecord],
+    raw_volumes: Sequence[Any],
+    aligned: torch.Tensor,
+    start_reference: torch.Tensor | None,
+    num_iterations: int,
+    initial_angular_step_deg: float,
+    initial_shift_step_px: float,
+    pixel_spacing_angstrom: float,
+    initial_low_pass_angstrom: float,
+    finest_low_pass_angstrom: float,
+    low_pass_margin_shells: float,
+    device: Any,
+) -> _HalfSetRefinement:
+    """Refine both half-sets, each against a reference built only from itself.
+
+    The two halves advance in lockstep rather than one after the other, because
+    the resolution limit they share is derived from the FSC between them and so
+    has to be recomputed between iterations. Independence is about whose
+    particles build a reference, not about when the work happens: no particle in
+    half 1 is ever compared against anything half 2 contributed to.
+
+    When no starting reference is given each half builds its own from its own
+    particles, which is stronger than the standard requires. When one is given
+    both start from it, which is standard practice and is sound only because the
+    low-pass keeps the shared start away from the frequencies being measured.
+
+    The independence is structural, not total, and the exception is deliberate:
+    exactly one number can cross between the halves, the resolution limit, and it
+    is derived from their FSC. When that FSC is informative, half 1's filter — and
+    so half 1's map — depends on half 2's content, through that scalar and nothing
+    else. This is what RELION does, and it is the feedback that stops the
+    refinement reaching into frequencies where only noise agrees; a fully sealed
+    pair would have nothing to set its limit from.
+
+    The channel is conditional, which is worth stating precisely because the
+    obvious phrasing overstates it: on noise-dominated data the crossing lands on
+    a shell too low to carry information, the schedule holds, and nothing crosses
+    at all. Three tests pin the pieces — the sealed single iteration, the shut
+    channel under noise, and the rule that decides which regime applies.
+    """
+
+    grouped = half_set_indices(records)
+    for subset, indices in grouped.items():
+        if len(indices) < _MINIMUM_PARTICLES_PER_HALF:
+            raise ValueError(
+                f"half-set {subset} is empty, so there is nothing to refine it "
+                "against and nothing to compare the other half with. Gold-standard "
+                "refinement splits the particles before aligning them, so both "
+                "halves have to exist; check rlnRandomSubset in the particle STAR"
+            )
+
+    references: dict[int, torch.Tensor] = {}
+    for subset, indices in grouped.items():
+        if start_reference is not None:
+            references[subset] = start_reference
+        else:
+            references[subset] = torch.stack([aligned[index] for index in indices]).mean(dim=0)
+
+    # Against the reference each particle will actually face, which is now its
+    # own half's. The final correlation alone is a number without a scale; where
+    # it began is what turns it into a before and after.
+    starting_correlation_mean = float(
+        np.mean(
+            [
+                _normalized_correlation(aligned[index], references[subset])
+                for subset, indices in grouped.items()
+                for index in indices
+            ]
+        )
+    )
+
+    correlations = [math.nan] * len(records)
+    low_pass = initial_low_pass_angstrom
+    low_pass_trace: list[float] = []
+    resolution_trace: list[float | None] = []
+
+    for iteration in range(num_iterations):
+        annealing = 2**iteration
+        angular_step_deg = initial_angular_step_deg / annealing
+        shift_step_px = initial_shift_step_px / annealing
+        low_pass_trace.append(low_pass)
+
+        for subset, indices in grouped.items():
+            filtered_reference = low_pass_filter_volume(
+                references[subset],
+                cutoff_angstrom=low_pass,
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+            )
+            half_aligned: list[torch.Tensor] = []
+            for index in indices:
+                candidate = _search_local_alignment(
+                    raw_volumes[index],
+                    filtered_reference,
+                    records[index],
+                    angular_step_deg=angular_step_deg,
+                    shift_step_px=shift_step_px,
+                    device=device,
+                )
+                records[index] = replace(
+                    records[index],
+                    rot_deg=candidate.rot_deg,
+                    tilt_deg=candidate.tilt_deg,
+                    psi_deg=candidate.psi_deg,
+                    shift_x_px=candidate.shift_x_px,
+                    shift_y_px=candidate.shift_y_px,
+                    shift_z_px=candidate.shift_z_px,
+                )
+                half_aligned.append(candidate.aligned_volume)
+                correlations[index] = candidate.correlation
+            references[subset] = torch.stack(half_aligned).mean(dim=0)
+
+        curve = compute_fsc_curve(
+            references[1],
+            references[2],
+            pixel_spacing_angstrom=pixel_spacing_angstrom,
+            threshold=GOLD_STANDARD_FSC_THRESHOLD,
+        )
+        resolution_trace.append(curve.crossing_resolution_angstrom)
+        low_pass = next_low_pass_angstrom(
+            curve,
+            current_angstrom=low_pass,
+            coarsest_angstrom=initial_low_pass_angstrom,
+            finest_angstrom=finest_low_pass_angstrom,
+            margin_shells=low_pass_margin_shells,
+            box_size=int(references[1].shape[0]),
+            pixel_spacing_angstrom=pixel_spacing_angstrom,
+        )
+
+    counts = {subset: len(indices) for subset, indices in grouped.items()}
+    total = counts[1] + counts[2]
+    combined = (counts[1] * references[1] + counts[2] * references[2]) / total
+    return _HalfSetRefinement(
+        records=records,
+        half_references=references,
+        combined_reference=combined,
+        correlations=correlations,
+        starting_correlation_mean=starting_correlation_mean,
+        low_pass_trace=low_pass_trace,
+        resolution_trace=resolution_trace,
+        half_counts=counts,
+    )
+
+
 class FftRefinementAveragingBackend:
     """Iteratively refine per-particle orientation/shift and average, using a
     coarse-to-fine local search scored by normalized cross-correlation.
@@ -310,6 +566,16 @@ class FftRefinementAveragingBackend:
         initial_reference_correlation_threshold = _positive_float_parameter(
             context, "initial_reference_correlation_threshold", default=0.3
         )
+        # The reference is filtered every iteration, which is what lets the two
+        # half-sets share a starting map without sharing what is being measured.
+        # 60 A is the customary starting limit; the floor is Nyquist, since no
+        # limit finer than that is representable in the box at all.
+        initial_low_pass_angstrom = _positive_float_parameter(
+            context, "initial_low_pass_angstrom", default=60.0
+        )
+        low_pass_margin_shells = _positive_float_parameter(
+            context, "low_pass_margin_shells", default=2.0
+        )
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
@@ -344,12 +610,13 @@ class FftRefinementAveragingBackend:
 
         initial_reference_correlation_mean: float | None = None
         initial_reference_correlation_fraction_above_threshold: float | None = None
+        start_reference: torch.Tensor | None = None
         if initial_reference_path is not None:
-            initial_reference = _load_reference_mrc(
+            start_reference = _load_reference_mrc(
                 initial_reference_path, expected_box_size=box_size, device=device
             )
             initial_correlations = [
-                _normalized_correlation(aligned[index], initial_reference)
+                _normalized_correlation(aligned[index], start_reference)
                 for index in range(particle_count)
             ]
             initial_reference_correlation_mean = float(np.mean(initial_correlations))
@@ -361,61 +628,67 @@ class FftRefinementAveragingBackend:
                     ]
                 )
             )
-            reference = initial_reference
-        else:
-            reference = aligned.mean(dim=0)
 
-        # Against whatever the refinement actually starts from, always. The
-        # final correlation on its own is a number without a scale: it says
-        # nothing about whether the refinement moved anything. Recording where
-        # it began is what turns it into a before and after.
-        starting_correlation_mean = float(
-            np.mean(
-                [
-                    _normalized_correlation(aligned[index], reference)
-                    for index in range(particle_count)
-                ]
-            )
+        pixel_spacing_angstrom = pairs[0][0].pixel_spacing_angstrom
+        finest_low_pass_angstrom = 2.0 * pixel_spacing_angstrom
+        refinement = _refine_half_sets_fft(
+            records=records,
+            raw_volumes=raw_volumes,
+            aligned=aligned,
+            start_reference=start_reference,
+            num_iterations=num_iterations,
+            initial_angular_step_deg=initial_angular_step_deg,
+            initial_shift_step_px=initial_shift_step_px,
+            pixel_spacing_angstrom=pixel_spacing_angstrom,
+            initial_low_pass_angstrom=initial_low_pass_angstrom,
+            finest_low_pass_angstrom=finest_low_pass_angstrom,
+            low_pass_margin_shells=low_pass_margin_shells,
+            device=device,
         )
-
-        final_correlations = [math.nan] * particle_count
-        for iteration in range(num_iterations):
-            annealing = 2**iteration
-            angular_step_deg = initial_angular_step_deg / annealing
-            shift_step_px = initial_shift_step_px / annealing
-            new_aligned = torch.empty_like(aligned)
-            for record in records:
-                candidate = _search_local_alignment(
-                    raw_volumes[record.index],
-                    reference,
-                    record,
-                    angular_step_deg=angular_step_deg,
-                    shift_step_px=shift_step_px,
-                    device=device,
-                )
-                records[record.index] = replace(
-                    record,
-                    rot_deg=candidate.rot_deg,
-                    tilt_deg=candidate.tilt_deg,
-                    psi_deg=candidate.psi_deg,
-                    shift_x_px=candidate.shift_x_px,
-                    shift_y_px=candidate.shift_y_px,
-                    shift_z_px=candidate.shift_z_px,
-                )
-                new_aligned[record.index] = candidate.aligned_volume
-                final_correlations[record.index] = candidate.correlation
-            aligned = new_aligned
-            reference = aligned.mean(dim=0)
+        records = refinement.records
+        final_correlations = refinement.correlations
+        starting_correlation_mean = refinement.starting_correlation_mean
+        reference = refinement.combined_reference
 
         write_particle_star(paths.particle_metadata, records)
         _write_average_mrc(
             paths.average_map,
             reference.detach().cpu().numpy(),
-            pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
+            pixel_spacing_angstrom=pixel_spacing_angstrom,
+        )
+        for subset, half_path in paths.half_maps.items():
+            _write_average_mrc(
+                half_path,
+                refinement.half_references[subset].detach().cpu().numpy(),
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+            )
+
+        smallest_half = min(refinement.half_counts.values())
+        resolution_is_interpretable = (
+            smallest_half >= _MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION
+        )
+        resolution_angstrom = (
+            refinement.resolution_trace[-1] if refinement.resolution_trace else None
         )
 
         warnings: list[str] = []
         status = QcStatus.PASS
+        if not resolution_is_interpretable:
+            status = QcStatus.WARNING
+            warnings.append(
+                f"the smaller half-set holds {smallest_half} particles, fewer than "
+                f"{_MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION}; the refinement is still "
+                "gold-standard but the resolution beside it is drawn from a wide "
+                "distribution and should not be read as an estimate"
+            )
+        if resolution_angstrom is None:
+            status = QcStatus.WARNING
+            warnings.append(
+                "the two half-sets never disagreed enough to cross "
+                f"{GOLD_STANDARD_FSC_THRESHOLD:.3f}, so no resolution was measured; with "
+                "few particles this means the curve is dominated by the shells they "
+                "share rather than that the map is that good"
+            )
         mean_final_correlation = float(np.mean(final_correlations))
         minimum_final_correlation = float(np.min(final_correlations))
         if mean_final_correlation <= starting_correlation_mean:
@@ -462,6 +735,12 @@ class FftRefinementAveragingBackend:
             initial_reference_correlation_fraction_above_threshold=(
                 initial_reference_correlation_fraction_above_threshold
             ),
+            half_set_counts=dict(refinement.half_counts),
+            gold_standard=True,
+            resolution_angstrom=resolution_angstrom,
+            resolution_trace_angstrom=list(refinement.resolution_trace),
+            low_pass_trace_angstrom=list(refinement.low_pass_trace),
+            resolution_is_interpretable=resolution_is_interpretable,
             status=status,
             warnings=warnings,
         )
@@ -485,12 +764,20 @@ class FftRefinementAveragingBackend:
                 "iterations_run": num_iterations,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
+                # Recorded so the resolution can be rechecked by someone who did
+                # not run the job: these are the two maps it is a claim about.
+                "half_map_paths": {
+                    str(subset): str(path) for subset, path in sorted(paths.half_maps.items())
+                },
+                "gold_standard": True,
+                "resolution_angstrom": resolution_angstrom,
             },
             software_versions={"torch": _package_version("torch")},
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
             size_bytes=_path_size_bytes(paths.average_map)
+            + sum(_path_size_bytes(path) for path in paths.half_maps.values())
             + _path_size_bytes(paths.particle_metadata),
         )
         qc_artifact = Artifact(
@@ -1325,30 +1612,8 @@ _PYTOM_STAR_REQUIRED_COLUMNS = (
 )
 
 
-def _read_star_loop(path: Path) -> tuple[list[str], list[list[str]]]:
-    lines = path.read_text().splitlines()
-    columns: list[str] = []
-    in_loop = False
-    data_start: int | None = None
-    for line_index, raw_line in enumerate(lines):
-        line = raw_line.strip()
-        if line == "loop_":
-            in_loop = True
-            continue
-        if in_loop and line.startswith("_"):
-            columns.append(line.split()[0].lstrip("_"))
-            continue
-        if in_loop and columns and line:
-            data_start = line_index
-            break
-    if data_start is None:
-        raise ValueError(f"no STAR data rows found in {path}")
-    rows = [line.split() for line in lines[data_start:] if line.strip()]
-    return columns, rows
-
-
 def _read_pytom_star(path: Path) -> list[_PytomStarRow]:
-    columns, rows = _read_star_loop(path)
+    columns, rows = read_star_loop(path)
     missing = [name for name in _PYTOM_STAR_REQUIRED_COLUMNS if name not in columns]
     if missing:
         raise ValueError(f"{path} is missing required STAR columns: {missing}")
@@ -1372,84 +1637,6 @@ def _read_pytom_star(path: Path) -> list[_PytomStarRow]:
         )
         for row_index, fields in enumerate(rows)
     ]
-
-
-# Every name here is REQUIRED on read: `read_particle_star` collects the missing
-# ones and raises. So appending a column to this tuple makes every particle STAR
-# already on disk unreadable, and a new column has to be read as optional instead
-# — the same shape the optional `filled.fid` output took in fine alignment.
-_PARTICLE_STAR_COLUMNS = (
-    "particleIndex",
-    "rlnCoordinateX",
-    "rlnCoordinateY",
-    "rlnCoordinateZ",
-    "rlnAngleRot",
-    "rlnAngleTilt",
-    "rlnAnglePsi",
-    "shiftXPx",
-    "shiftYPx",
-    "shiftZPx",
-    "rlnLCCmax",
-    "rlnClassNumber",
-    "rlnRandomSubset",
-)
-
-
-def write_particle_star(path: Path, records: list[ParticleRecord]) -> None:
-    lines = ["data_particles", "", "loop_"]
-    lines.extend(f"_{name} #{position}" for position, name in enumerate(_PARTICLE_STAR_COLUMNS, 1))
-    for record in records:
-        lines.append(
-            " ".join(
-                [
-                    str(record.index),
-                    f"{record.x_px:.3f}",
-                    f"{record.y_px:.3f}",
-                    f"{record.z_px:.3f}",
-                    f"{record.rot_deg:.6f}",
-                    f"{record.tilt_deg:.6f}",
-                    f"{record.psi_deg:.6f}",
-                    f"{record.shift_x_px:.6f}",
-                    f"{record.shift_y_px:.6f}",
-                    f"{record.shift_z_px:.6f}",
-                    f"{record.score:.6f}" if record.score is not None else "nan",
-                    str(record.class_number),
-                    str(record.random_subset),
-                ]
-            )
-        )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
-
-
-def read_particle_star(path: Path) -> list[ParticleRecord]:
-    columns, rows = _read_star_loop(path)
-    missing = [name for name in _PARTICLE_STAR_COLUMNS if name not in columns]
-    if missing:
-        raise ValueError(f"{path} is missing required columns: {missing}")
-    positions = {name: columns.index(name) for name in _PARTICLE_STAR_COLUMNS}
-    records = []
-    for fields in rows:
-        score_text = fields[positions["rlnLCCmax"]]
-        records.append(
-            ParticleRecord(
-                index=int(fields[positions["particleIndex"]]),
-                x_px=float(fields[positions["rlnCoordinateX"]]),
-                y_px=float(fields[positions["rlnCoordinateY"]]),
-                z_px=float(fields[positions["rlnCoordinateZ"]]),
-                rot_deg=float(fields[positions["rlnAngleRot"]]),
-                tilt_deg=float(fields[positions["rlnAngleTilt"]]),
-                psi_deg=float(fields[positions["rlnAnglePsi"]]),
-                shift_x_px=float(fields[positions["shiftXPx"]]),
-                shift_y_px=float(fields[positions["shiftYPx"]]),
-                shift_z_px=float(fields[positions["shiftZPx"]]),
-                score=None if score_text == "nan" else float(score_text),
-                class_number=int(fields[positions["rlnClassNumber"]]),
-                random_subset=int(fields[positions["rlnRandomSubset"]]),
-            )
-        )
-    records.sort(key=lambda record: record.index)
-    return records
 
 
 @dataclass(frozen=True)
@@ -1491,12 +1678,24 @@ class _AveragingPaths:
     average_dir: Path
     qc_dir: Path
     average_map: Path
+    half_maps: dict[int, Path]
+    """The two independently refined maps, written because they are the evidence.
+
+    A resolution is a claim about these two files agreeing; without them the
+    number cannot be rechecked, remasked, or recomputed at another threshold by
+    anyone who did not run the job.
+    """
     particle_metadata: Path
     report: Path
 
     @property
     def outputs(self) -> tuple[Path, ...]:
-        return (self.average_map, self.particle_metadata, self.report)
+        return (
+            self.average_map,
+            *sorted(self.half_maps.values()),
+            self.particle_metadata,
+            self.report,
+        )
 
 
 @dataclass(frozen=True)
@@ -1615,6 +1814,9 @@ def _averaging_paths(
         average_dir=average_dir,
         qc_dir=qc_dir,
         average_map=average_dir / f"{prefix}_average.mrc",
+        half_maps={
+            subset: average_dir / f"{prefix}_half{subset}.mrc" for subset in (1, 2)
+        },
         particle_metadata=average_dir / f"{prefix}_particles.star",
         report=qc_dir / f"{prefix}_qc.json",
     )

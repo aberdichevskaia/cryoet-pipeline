@@ -8,7 +8,6 @@ import pytest
 import torch
 import zarr
 
-from cryoet_pipeline.backends.subtomogram import ParticleRecord, write_particle_star
 from cryoet_pipeline.fsc import (
     build_half_set_average,
     compute_fsc_curve,
@@ -16,6 +15,7 @@ from cryoet_pipeline.fsc import (
     load_mrc_volume,
     plot_fsc_curve,
 )
+from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 
 
 def _smooth_blob(size: int, *, seed: int) -> torch.Tensor:
