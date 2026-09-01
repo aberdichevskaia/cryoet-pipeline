@@ -189,7 +189,7 @@ _EXPECTED: tuple[tuple[str, str, str], ...] = (
     ("coarse-aligned preview", "qc:coarse_alignment:preview", "qc-coarse-alignment"),
     ("fine-aligned stack", "aligned_tilt_stack:final", "build-final-aligned-stack"),
     ("tomogram", "tomogram", "reconstruct-tomogram"),
-    ("picks in ChimeraX", "chimerax_script", "export-picks"),
+    ("picks in ChimeraX", "chimerax_script", "export-chimerax"),
     ("particle stack", "particle_stack", "extract-particles"),
     ("average", "subtomogram_average", "average-particles"),
 )

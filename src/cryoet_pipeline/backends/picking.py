@@ -199,6 +199,9 @@ class PytomMatchPickBackend:
                 tomogram_shape=tomogram.shape,
                 template_box_px=_template_box_px(job_json),
             )
+            search = _search_statistics(job_json)
+            significance = _significance_verdict(statistics, search)
+            warnings = [one for one in (spread_warning, significance.warning) if one]
             report = PicksQc(
                 tilt_series_id=manifest.tilt_series_id,
                 backend=self.name,
@@ -212,8 +215,15 @@ class PytomMatchPickBackend:
                 coordinate_z_median=statistics.coordinate_z_median,
                 coordinate_z_sd=statistics.coordinate_z_sd,
                 uniform_z_sd=uniform_z_sd,
-                status=QcStatus.WARNING if spread_warning else QcStatus.PASS,
-                warnings=[spread_warning] if spread_warning else [],
+                search_sigma=significance.sigma,
+                search_space=significance.search_space,
+                score_max_sigma=significance.score_max_sigma,
+                score_cut_off_sigma=significance.score_cut_off_sigma,
+                one_false_positive_sigma=significance.one_false_positive_sigma,
+                picks_above_one_false_positive=significance.picks_above_floor,
+                excess_over_noise_at_cut_off=significance.excess_at_cut_off,
+                status=QcStatus.WARNING if warnings else QcStatus.PASS,
+                warnings=warnings,
             )
             temporary_report.write_text(
                 json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
@@ -345,6 +355,12 @@ class _PicksStatistics:
     mean_score: float | None
     coordinate_z_median: float | None = None
     coordinate_z_sd: float | None = None
+    scores: tuple[float, ...] = ()
+    """Every pick's score, so significance needs no second pass over the STAR.
+
+    A tuple rather than a list because this dataclass is frozen and the scores
+    are read once and never edited.
+    """
 
 
 def _picking_paths(
@@ -667,9 +683,144 @@ def _read_star_statistics(star_path: Path) -> _PicksStatistics:
         minimum_score=min(scores),
         maximum_score=max(scores),
         mean_score=sum(scores) / len(scores),
+        scores=tuple(scores),
         coordinate_z_median=z_median,
         coordinate_z_sd=z_sd,
     )
+
+
+@dataclass(frozen=True)
+class _SearchStatistics:
+    """What pytom knows about the noise it searched, and never told anyone.
+
+    pytom accumulates the standard deviation of the locally-normalised
+    cross-correlation across its rotation loop and records it, with the size of
+    the space it searched, in the job JSON. Together they turn a score into a
+    significance: how far above the noise a peak sits, and how high a peak the
+    noise alone reaches over a space that large.
+
+    Read here rather than in a script afterwards because it is the number that
+    says whether a half hour of matching found anything, and a run that does not
+    report it leaves the question to be re-asked later from files.
+    """
+
+    sigma: float
+    search_space: float
+
+    def z(self, score: float) -> float:
+        return score / self.sigma
+
+    @property
+    def one_false_positive_z(self) -> float:
+        """The highest peak a peak-free search over this space gives.
+
+        Where the expected number of Gaussian samples above it is exactly one.
+        By bisection so that the definition stays visible and no new dependency
+        is needed.
+        """
+
+        low, high = 0.0, 40.0
+        for _ in range(200):
+            middle = (low + high) / 2.0
+            if self.search_space * 0.5 * math.erfc(middle / math.sqrt(2.0)) > 1.0:
+                low = middle
+            else:
+                high = middle
+        return (low + high) / 2.0
+
+    def expected_above(self, z: float) -> float:
+        """How many picks the noise alone puts above `z`."""
+
+        return self.search_space * 0.5 * math.erfc(z / math.sqrt(2.0))
+
+
+@dataclass(frozen=True)
+class _SignificanceVerdict:
+    """Every significance field for the report, and the one warning worth raising."""
+
+    sigma: float | None = None
+    search_space: float | None = None
+    score_max_sigma: float | None = None
+    score_cut_off_sigma: float | None = None
+    one_false_positive_sigma: float | None = None
+    picks_above_floor: int | None = None
+    excess_at_cut_off: float | None = None
+    warning: str | None = None
+
+
+def _significance_verdict(
+    statistics: _PicksStatistics, search: _SearchStatistics | None
+) -> _SignificanceVerdict:
+    """Turn scores into significance, or return nothing if pytom did not say.
+
+    The one warning here is scale-free on purpose. Whether the best pick clears
+    the height a peak-free search of this size reaches needs no external
+    benchmark and no assumption about how another package normalises its
+    sigma — a comparison already got wrong once here, between two packages that
+    normalise differently. Everything that needs a benchmark is left for a reader
+    who has one.
+    """
+
+    if search is None or statistics.maximum_score is None:
+        return _SignificanceVerdict()
+
+    floor = search.one_false_positive_z
+    z_max = search.z(statistics.maximum_score)
+    z_cut = (
+        search.z(statistics.minimum_score) if statistics.minimum_score is not None else None
+    )
+    above = (
+        sum(1 for score in statistics.scores if search.z(score) > floor)
+        if statistics.scores
+        else None
+    )
+    excess = (
+        statistics.particle_count - search.expected_above(z_cut) if z_cut is not None else None
+    )
+
+    warning = None
+    if z_max <= floor:
+        warning = (
+            f"the best pick is {z_max:.2f} sigma, at or below the {floor:.2f} sigma a "
+            "peak-free search over this space reaches on its own, so no single pick "
+            "here is a detection. An excess of picks over the noise prediction can "
+            "still be real signal; the count is what to read, not the peak height"
+        )
+
+    return _SignificanceVerdict(
+        sigma=search.sigma,
+        search_space=search.search_space,
+        score_max_sigma=z_max,
+        score_cut_off_sigma=z_cut,
+        one_false_positive_sigma=floor,
+        picks_above_floor=above,
+        excess_at_cut_off=excess,
+        warning=warning,
+    )
+
+
+def _search_statistics(job_json: Path) -> _SearchStatistics | None:
+    """The noise scale and search size pytom recorded, or None if absent.
+
+    Optional by design: a job JSON from another version may not carry
+    `job_stats`, and picking must not start failing over a statistic it did not
+    used to read.
+    """
+
+    try:
+        payload = json.loads(job_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    stats = payload.get("job_stats")
+    if not isinstance(stats, dict):
+        return None
+    sigma = stats.get("std")
+    search_space = stats.get("search_space")
+    if not isinstance(sigma, (int, float)) or not isinstance(search_space, (int, float)):
+        return None
+    if sigma <= 0.0 or search_space <= 0.0:
+        return None
+    return _SearchStatistics(sigma=float(sigma), search_space=float(search_space))
 
 
 def _template_box_px(job_json: Path) -> int | None:

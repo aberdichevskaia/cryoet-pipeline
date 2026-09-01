@@ -375,7 +375,7 @@ Notes worth keeping:
 
 ## 3. Inspect picks in ChimeraX + ArtiaX — done
 
-`export-picks` writes a matched tomogram MRC plus picks STAR and a `.cxc`
+`export-chimerax` writes a matched tomogram MRC plus picks STAR and a `.cxc`
 script, so checking a result is one command.
 
 The trap here: ArtiaX registers **two** readers for `.star` — "RELION STAR file"
@@ -728,7 +728,7 @@ A scheduling fact that bears on this, found by trying to be clever about it:
 import time; on a CPU node that raises `cudaErrorInsufficientDriver` before any
 work starts. So the schedulable boundary is pytom rather than the shape of the
 computation: `template.py`, `picking.py` and `subtomogram.py` need a GPU
-allocation, while `export-picks` and `extract-particles` import nothing from
+allocation, while `export-chimerax` and `extract-particles` import nothing from
 pytom and can run anywhere. Worth knowing before writing resource profiles for
 the controller, and an argument for this section: if the match cannot be
 re-entered cheaply, every downstream re-try drags a GPU allocation with it.

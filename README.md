@@ -273,7 +273,7 @@ cryoet pick-particles \
   --pytom-particle-diameter 250 \
   --device cuda
 
-cryoet export-picks \
+cryoet export-chimerax \
   --manifest outputs/dev/manifests/TS_01.json \
   --registry outputs/dev/artifacts.json \
   --out outputs/dev

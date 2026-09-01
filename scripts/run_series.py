@@ -264,8 +264,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("variant", lane)],
         ),
         (
-            "export-picks",
-            ["export-picks", *common, *flag("variant", lane)],
+            "export-chimerax",
+            ["export-chimerax", *common, *flag("variant", lane)],
         ),
         (
             "extract-particles",

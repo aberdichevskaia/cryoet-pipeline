@@ -2659,8 +2659,8 @@ def pick_particles(
     typer.echo(f"updated {registry}")
 
 
-@app.command("export-picks")
-def export_picks(
+@app.command("export-chimerax")
+def export_chimerax(
     manifest: Annotated[
         Path,
         typer.Option(help="Tilt-series manifest JSON written by init."),

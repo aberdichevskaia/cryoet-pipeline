@@ -690,6 +690,38 @@ class PicksQc(BaseModel):
     """The spread picks would have if they were uniform through the region where
     a template box can be centred: (thickness - box) / sqrt(12). Recorded so the
     observed spread can be read against it without knowing either size."""
+    search_sigma: float | None = Field(default=None, gt=0.0)
+    """The noise scale of the search, as the matcher measured it.
+
+    pytom accumulates the standard deviation of the locally-normalised
+    cross-correlation across its rotation loop. Without it a score is a number
+    with no scale, and every question about whether a pick is real has to be
+    re-asked later from files.
+    """
+    search_space: float | None = Field(default=None, gt=0.0)
+    """Positions times orientations searched — how many chances noise had."""
+    score_max_sigma: float | None = None
+    """The best pick, in sigma. The number that says whether anything was found."""
+    score_cut_off_sigma: float | None = None
+    """Where the cut-off sat, in sigma. Set by the false-positive budget asked for."""
+    one_false_positive_sigma: float | None = None
+    """The highest peak a peak-free search over this space gives.
+
+    The floor a detection has to clear. Comparing `score_max_sigma` against it is
+    scale-free: it needs no external benchmark, and no assumption about how any
+    other package defines its sigma — a comparison that has already been got
+    wrong once here, between packages that normalise differently.
+    """
+    picks_above_one_false_positive: int | None = Field(default=None, ge=0)
+    """How many picks clear that floor. One or two is what noise alone gives."""
+    excess_over_noise_at_cut_off: float | None = None
+    """Observed picks minus what the noise alone predicts, at the cut-off.
+
+    For in-cell matching this is often the whole of the evidence: a real
+    population whose members each sit near the noise floor still shows up as a
+    count the null cannot account for. A value near zero means the picks ARE the
+    tail.
+    """
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

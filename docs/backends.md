@@ -39,8 +39,8 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `average-particles` | `cone-search` | ✓ | — | Cone search + multi-reference classification. |
 | | `fft-refinement` | | — | Simple per-Euler-angle baseline. |
 
-`compute-fsc`, `export-picks`, `import-tilt-stack` and `download-empiar` have no
-backend choice.
+`compute-fsc`, `export-chimerax`, `import-tilt-stack` and `download-empiar`
+have no backend choice.
 
 ## Choosing between backends
 
@@ -326,8 +326,8 @@ match starts rather than after it.
 - **STAR flavour in ChimeraX.** ArtiaX registers two readers for `.star`:
   RELION 3.1 (`rlnCoordinateX/Y/Z` in pixels, which is what pytom-match-pick
   writes) and RELION 5 (centered coordinates in Ångström). Both claim the suffix
-  and both answer to the nickname `star`, so the script written by `export-picks`
-  pins `format relion` rather than letting ChimeraX choose.
+  and both answer to the nickname `star`, so the script written by
+  `export-chimerax` pins `format relion` rather than letting ChimeraX choose.
 
 ## Adding a backend
 
