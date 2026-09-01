@@ -172,9 +172,9 @@ particle's current orientation with a halving step, so it has too little freedom
 to imprint noise the way the global refinements Scheres & Chen describe do. **So
 this change rests on being the correct scheme and on costing nothing, not on a
 measured improvement** — and anyone who tightens the search later inherits the
-protection rather than having to discover the need for it. `ConeSearchRefinementBackend`
-searches a far larger space and is where the defect would be expected to bite;
-it is still joint, and its QC says so.
+protection rather than having to discover the need for it. The cone-search
+backend searches a far larger space and is where the defect would be expected
+to bite; it is still joint, and its QC says so.
 
 The independence is structural, not total: exactly one number crosses between the
 halves, the resolution limit, derived from their FSC. Half 1's map therefore does
@@ -224,6 +224,26 @@ is reasoned, not confirmed, and `SubtomogramClassificationQc.gold_standard`
 reports False either way. Also unbuilt: no mask before the FSC, and no
 phase-randomisation correction for the mask-induced correlation a mask would
 introduce.
+
+**`--variant` does two jobs, and they need separating everywhere.** It selects
+which inputs to read AND labels what gets written, with one string. So the thing
+`variant_label`'s own docstring names as its purpose — "a different parameter
+sweep" — cannot be done: a fresh label finds no inputs, and reusing the old one
+overwrites the previous result. Comparing two settings over the same inputs is
+ordinary work and the pipeline could not express it.
+
+`average-particles` now takes `--output-variant`, which labels the output while
+`--variant` still selects inputs. That is sound only because the backend uses the
+label for nothing but naming — the path, the id suffix, and the artifact's own
+`variant` field — which a test pins by averaging one set of particles under two
+labels and asserting the maps come back byte-identical.
+
+Every other step that reads inputs by label has the same gap: `classify-particles`
+first, then the rest of the chain. Not spread now, deliberately — it is the same
+three lines in each of about fifteen commands, and the useful version of the
+change is driven by which comparison someone actually wants to run, not by
+symmetry. Each site should also be checked the way this one was, since a label
+that reaches anything but naming makes the split unsound there.
 
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in

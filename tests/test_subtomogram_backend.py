@@ -983,3 +983,59 @@ def test_a_curve_that_never_crosses_holds_the_low_pass_where_it_was() -> None:
         )
         == 37.0
     )
+
+
+def test_the_output_label_is_the_only_thing_variant_does_to_the_backend(
+    tmp_path: Path,
+) -> None:
+    """So two averaging settings over one set of stacks can coexist.
+
+    `--variant` selects inputs and labels outputs with the same string, which makes
+    the thing its own docstring names as its purpose — a parameter sweep —
+    impossible: a fresh label finds no particle stacks, and reusing the old one
+    overwrites the first result. The CLI now resolves inputs by `--variant` and
+    labels the output by `--output-variant`, which is only sound because the
+    backend uses the label for nothing but naming. That is what this pins: same
+    particles, same parameters, two labels, identical content under different ids
+    and paths.
+    """
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (30.0, 20.0, -10.0), (-15.0, 40.0, 5.0), (10.0, -25.0, 60.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    def run(label: str) -> Artifact:
+        registry = ArtifactRegistry.empty()
+        registry.add(stack)
+        average_artifact, _ = average_and_register(
+            FftRefinementAveragingBackend(),
+            [stack],
+            [_manifest()],
+            BackendContext(
+                output_dir=tmp_path / label,
+                device=DevicePreference.CPU,
+                parameters={"num_iterations": 1, "variant": label},
+            ),
+            registry,
+        )
+        return average_artifact
+
+    first = run("sweep-a")
+    second = run("sweep-b")
+
+    # Different names and different places, so neither replaces the other...
+    assert first.id != second.id
+    assert first.path != second.path
+    assert first.variant == "sweep-a"
+    assert second.variant == "sweep-b"
+    # ...and identical maps, because the label reached nothing but the naming.
+    import mrcfile
+    import numpy as np
+
+    with mrcfile.open(first.path) as one, mrcfile.open(second.path) as other:
+        np.testing.assert_array_equal(one.data, other.data)

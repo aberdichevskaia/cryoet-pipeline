@@ -2927,6 +2927,16 @@ def average_particles(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    output_variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label the OUTPUT with this instead of --variant, while still "
+            "selecting inputs by --variant. Without it the two are the same string, "
+            "so two averaging settings over one set of particle stacks cannot coexist: "
+            "a new label finds no inputs, and the old one overwrites the first result. "
+            "Averaging the same particles twice is what a parameter sweep is."
+        ),
+    ] = None,
 ) -> None:
     """Iteratively refine per-particle orientation/shift and average subtomograms."""
 
@@ -2950,7 +2960,9 @@ def average_particles(
     ]
     selected_backend = _subtomogram_averaging_backend(backend)
     parameters: dict[str, object] = {
-        "variant": variant,
+        # Inputs were resolved by `variant` above; the backend only ever uses this
+        # to label what it writes, so the two can differ.
+        "variant": output_variant if output_variant is not None else variant,
         "overwrite": overwrite,
         "num_iterations": num_iterations,
         "initial_angular_step_deg": initial_angular_step_deg,
