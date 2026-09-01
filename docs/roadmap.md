@@ -208,12 +208,24 @@ Four improvements are known and unbuilt, in rough order of value:
   RELION's value, sized against ten-shell margins; against a three-shell margin
   it consumes two thirds of the headroom the margin exists to create.
 
-**Two defects remain in the multi-class path**, and they are the same kind as the
-ones just fixed. It applies **no low-pass at all** to its class references, so
-joint refinement there is unprotected in the way the single-class path no longer
-is. And it emits a resolution number for a jointly refined split; the right
-behaviour is to emit none — a caveated number travels downstream and the caveat
-does not. `gold_standard` already reports False, which is the floor, not the fix.
+**The multi-class path applied no low-pass at all to its class references, and
+now does** — at a limit held constant, since with several classes there is no
+defined pairing between half 1's class *k* and half 2's class *k* to derive one
+from. Joint refinement is not exempt from a reference imprinting its own noise on
+the particles that built it.
+
+Adding it broke an existing cone-search test, which had been earning its keep
+without anyone noticing: the starting correlation was measured against the
+UNFILTERED reference while the search is scored against the filtered one, so the
+before-and-after compared two different questions and read as a refinement that
+made things worse. The half-set path had the same fault and no test saw it. Both
+now measure the start against what the search actually faces.
+
+A second defect recorded here — that this path emits a resolution number it has
+not earned — **was wrong, and is withdrawn.** `SubtomogramClassificationQc` emits
+no resolution at all; its only resolution-shaped field is
+`target_resolution_angstrom`, which is an input. The `gold_standard` flag stays
+useful for the reader, but there was no number for it to qualify.
 
 **Still open.** Whether classification should have independent halves at all:
 each half would build its own K references and "class 2" on one side need not be
