@@ -2539,6 +2539,17 @@ def pick_particles(
             "or overwrites what it is being compared against."
         ),
     ] = None,
+    pytom_keep_score_volume: Annotated[
+        bool,
+        typer.Option(
+            "--pytom-keep-score-volume",
+            help="Keep the correlation and orientation volumes beside the picks. "
+            "They are what the half hour of matching actually produced — extracting "
+            "candidates from them takes seconds — so without them every change to a "
+            "cut-off or an exclusion distance costs a full re-match. About a gigabyte "
+            "each per series at bin8, which is why this is off by default.",
+        ),
+    ] = False,
 ) -> None:
     """Pick particles from a reconstructed tomogram and register a canonical STAR result."""
 
@@ -2579,6 +2590,7 @@ def pick_particles(
     parameters: dict[str, object] = {
         # Inputs were resolved by `variant`; this only labels what is written.
         "variant": output_variant if output_variant is not None else variant,
+        "pytom_keep_score_volume": pytom_keep_score_volume,
         "overwrite": overwrite,
         "pytom_template": pytom_template,
         "pytom_template_mask": pytom_template_mask,

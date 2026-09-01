@@ -163,6 +163,7 @@ class PytomMatchPickBackend:
                     f"{detail}; see {paths.log}"
                 )
 
+            keep_volumes = _bool_parameter(context, "pytom_keep_score_volume", default=False)
             job_json = _find_output_file(destination_dir, suffix="_job.json")
             extract_command = _extract_candidates_command(
                 extract_candidates_executable,
@@ -232,6 +233,16 @@ class PytomMatchPickBackend:
             _replace_output(job_json, paths.job_json)
             _replace_output(particles_star, paths.particles_star)
             _replace_output(temporary_report, paths.report)
+            if keep_volumes:
+                # The correlation volume is what the half hour of GPU actually
+                # bought; the candidates are one cheap reading of it. Keeping it
+                # turns the next question about a cut-off or an exclusion
+                # distance from a re-match into seconds.
+                for suffix, destination in (
+                    ("_scores.mrc", paths.scores_volume),
+                    ("_angles.mrc", paths.angles_volume),
+                ):
+                    _replace_output(_find_output_file(destination_dir, suffix=suffix), destination)
 
         return Artifact(
             id=(
@@ -264,6 +275,12 @@ class PytomMatchPickBackend:
                 "dose_weighted": dose_path is not None,
                 "pytom_template_mask_path": str(template_mask),
                 "pytom_job_json_path": str(paths.job_json),
+                "pytom_scores_volume_path": (
+                    str(paths.scores_volume) if paths.scores_volume.is_file() else None
+                ),
+                "pytom_angles_volume_path": (
+                    str(paths.angles_volume) if paths.angles_volume.is_file() else None
+                ),
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
             },
@@ -334,6 +351,8 @@ class _PickingPaths:
         job_json: Path,
         report: Path,
         log: Path,
+        scores_volume: Path,
+        angles_volume: Path,
     ) -> None:
         self.picks_dir = picks_dir
         self.qc_dir = qc_dir
@@ -341,10 +360,26 @@ class _PickingPaths:
         self.job_json = job_json
         self.report = report
         self.log = log
+        self.scores_volume = scores_volume
+        self.angles_volume = angles_volume
 
     @property
     def outputs(self) -> tuple[Path, ...]:
         return (self.particles_star, self.job_json, self.report, self.log)
+
+    @property
+    def volumes(self) -> tuple[Path, ...]:
+        """The correlation volumes, kept only when asked for.
+
+        Not in `outputs`, so an existing pair does not block a re-run and a run
+        that does not keep them is unaffected. They are about a gigabyte each per
+        series at bin8, which is why keeping them is a choice — but the match
+        that produces them costs half an hour of GPU and extracting candidates
+        from them costs seconds, so during parameter tuning the choice is
+        obvious in the other direction.
+        """
+
+        return (self.scores_volume, self.angles_volume)
 
 
 @dataclass(frozen=True)
@@ -381,6 +416,8 @@ def _picking_paths(
         qc_dir=qc_dir,
         particles_star=picks_dir / f"{prefix}_particles.star",
         job_json=picks_dir / f"{prefix}_job.json",
+        scores_volume=picks_dir / f"{prefix}_scores.mrc",
+        angles_volume=picks_dir / f"{prefix}_angles.mrc",
         report=qc_dir / f"{prefix}_qc.json",
         log=picks_dir / f"{prefix}.log",
     )
