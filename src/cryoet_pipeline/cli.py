@@ -2058,6 +2058,59 @@ def _echo_picks_summary(report: dict[str, Any]) -> None:
         )
 
 
+def _echo_averaging_summary(report: dict[str, Any]) -> None:
+    """Print how many particles went in, how they split, and what came out.
+
+    The resolution is printed only when the refinement earned the right to call it
+    one: `gold_standard` false means the halves were split after a joint
+    refinement, and such a number is not comparable with a published resolution.
+    Printing it with a caveat attached would be worse than not printing it, since
+    the number travels and the caveat does not.
+    """
+
+    count = report.get("particle_count")
+    if count is None:
+        return
+    counts = report.get("half_set_counts") or {}
+    split = " + ".join(str(counts[key]) for key in sorted(counts)) if counts else None
+    across = f" ({split} across the half-sets)" if split else ""
+    typer.echo(f"particles averaged: {count}{across}")
+
+    per_series = report.get("particle_counts") or []
+    series_ids = report.get("tilt_series_ids") or []
+    if len(per_series) == len(series_ids) > 1:
+        joined = ", ".join(f"{name} {n}" for name, n in zip(series_ids, per_series, strict=True))
+        typer.echo(f"  from: {joined}")
+
+    starting = report.get("starting_correlation_mean")
+    final = report.get("mean_final_correlation")
+    if starting is not None and final is not None:
+        typer.echo(f"correlation: {starting:.4f} before refinement, {final:.4f} after")
+
+    if not report.get("gold_standard", False):
+        typer.echo(
+            "resolution: not reported - the half-sets were refined against a shared "
+            "reference, so an FSC between them is not a gold-standard estimate"
+        )
+        return
+    resolution = report.get("resolution_angstrom")
+    if resolution is None:
+        typer.echo("resolution: no crossing - the two half-sets did not disagree anywhere")
+    else:
+        caveat = (
+            ""
+            if report.get("resolution_is_interpretable", True)
+            else " (too few particles per half to be read as an estimate)"
+        )
+        typer.echo(
+            f"resolution: {resolution:.1f} A at FSC 0.143 between the half-sets{caveat}"
+        )
+    trace = report.get("resolution_trace_angstrom") or []
+    if len(trace) > 1:
+        shown = ", ".join("none" if value is None else f"{value:.0f}" for value in trace)
+        typer.echo(f"  per iteration: {shown} A")
+
+
 def _echo_extraction_summary(report: dict[str, Any]) -> None:
     """Print what survived extraction and what did not, with the reason.
 
@@ -2822,6 +2875,26 @@ def average_particles(
             help="First-iteration local shift search step, in pixels (halves each iteration).",
         ),
     ] = 2.0,
+    initial_low_pass_angstrom: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="[fft-refinement] Resolution the reference is filtered to in the first "
+            "iteration. Later iterations tighten it from the FSC between the two "
+            "half-sets, and never loosen it past this value. 60 A is customary; pick it "
+            "for the binning, not for the resolution you hope for.",
+        ),
+    ] = 60.0,
+    low_pass_margin_shells: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="[fft-refinement] How many Fourier shells beyond the measured "
+            "agreement the reference is allowed to keep. Too small and the estimate can "
+            "never improve; too large and the refinement reaches into shells where only "
+            "noise agrees.",
+        ),
+    ] = 2.0,
     initial_reference: Annotated[
         Path | None,
         typer.Option(
@@ -2882,6 +2955,8 @@ def average_particles(
         "num_iterations": num_iterations,
         "initial_angular_step_deg": initial_angular_step_deg,
         "initial_shift_step_px": initial_shift_step_px,
+        "initial_low_pass_angstrom": initial_low_pass_angstrom,
+        "low_pass_margin_shells": low_pass_margin_shells,
         "initial_reference_correlation_threshold": initial_reference_correlation_threshold,
         "num_classes": num_classes,
         "cone_range_deg": cone_range_deg,
@@ -2914,12 +2989,19 @@ def average_particles(
     artifact_registry.write(registry)
 
     *average_maps, qc_report = artifacts
+    report = _read_qc_report(qc_report)
     for average_map in average_maps:
         class_number = average_map.parameters.get("class_number")
         label = f" (class {class_number})" if class_number is not None else ""
         typer.echo(f"wrote subtomogram average{label}: {average_map.path}")
+        for subset, half_path in sorted(
+            (average_map.parameters.get("half_map_paths") or {}).items()
+        ):
+            typer.echo(f"  half-set {subset}: {half_path}")
+    _echo_averaging_summary(report)
     typer.echo(f"wrote averaging QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
+    _echo_qc_warnings(report)
     typer.echo(f"updated {registry}")
 
 
