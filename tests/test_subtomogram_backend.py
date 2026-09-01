@@ -1039,3 +1039,77 @@ def test_the_output_label_is_the_only_thing_variant_does_to_the_backend(
 
     with mrcfile.open(first.path) as one, mrcfile.open(second.path) as other:
         np.testing.assert_array_equal(one.data, other.data)
+
+
+def test_a_zero_search_step_offers_one_candidate_not_three_identical_ones() -> None:
+    """Zero means "do not search this axis", and saying so costs 27x less.
+
+    Three offsets of (-0, 0, +0) are the same orientation resampled three times,
+    and the rotation grid is the cube of that: 27 identical candidates, then 27
+    identical shifts. Collapsing it is both faster and clearer about intent.
+    """
+
+    from cryoet_pipeline.backends.subtomogram import _search_deltas
+
+    assert _search_deltas(0.0) == (0.0,)
+    assert _search_deltas(6.0) == (-6.0, 0.0, 6.0)
+
+
+def test_averaging_accepts_a_zero_step_and_keeps_the_orientations_it_was_given(
+    tmp_path: Path,
+) -> None:
+    """The mode this exists for: average the picks as template matching left them.
+
+    It is the cleanest test of whether a set of picks is real, because it gives
+    the refinement no opportunity to manufacture agreement — so the parameter
+    reader has to accept zero. It did not: the CLI advertised `min=0.0` while the
+    backend demanded strictly positive, so the option promised something the code
+    refused. Pinned end to end through `average_and_register`, not through the
+    search function alone, because that gap lived between the two.
+    """
+
+    import mrcfile
+    import numpy as np
+
+    from cryoet_pipeline.particles import read_particle_star
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (30.0, 20.0, -10.0), (-15.0, 40.0, 5.0), (10.0, -25.0, 60.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    average_artifact, qc_artifact = average_and_register(
+        FftRefinementAveragingBackend(),
+        [stack],
+        [_manifest()],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "num_iterations": 1,
+                "initial_angular_step_deg": 0.0,
+                "initial_shift_step_px": 0.0,
+                "low_pass_margin_shells": 0.0,
+            },
+        ),
+        registry,
+    )
+
+    with mrcfile.open(average_artifact.path) as handle:
+        assert np.isfinite(handle.data).all()
+
+    refined = read_particle_star(
+        Path(str(average_artifact.parameters["metadata_path"]))
+    )
+    for record, (rot, tilt, psi) in zip(refined, angles, strict=True):
+        assert (record.rot_deg, record.tilt_deg, record.psi_deg) == (rot, tilt, psi)
+        assert (record.shift_x_px, record.shift_y_px, record.shift_z_px) == (0.0, 0.0, 0.0)
+
+    report = json.loads(qc_artifact.path.read_text())
+    assert report["gold_standard"] is True

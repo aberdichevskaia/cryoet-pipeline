@@ -245,6 +245,33 @@ change is driven by which comparison someone actually wants to run, not by
 symmetry. Each site should also be checked the way this one was, since a label
 that reaches anything but naming makes the split unsound there.
 
+**Averaging picks at their template-matched orientations cannot test whether
+the picks are real.** Measured, because it was about to be relied on: 100 pure
+noise volumes, each oriented by a global search over 300 orientations against a
+template — which is what template matching does — average to a map correlating
+**+0.321** with that template. The same volumes at random orientations correlate
+**+0.035**. Nearly tenfold, on nothing at all, with a grid far coarser than
+pytom's.
+
+So the obvious test — average the picks as matching left them and look for the
+expected shape — is confounded, and confounded toward a false yes. It gets worse
+with more particles, since the template-like part adds coherently. Refining
+afterwards does not help: the orientations already carry the bias, and the
+refinement search here is local, so it cannot leave the basin the template put
+each particle in.
+
+This also rules out reading a half-set FSC as evidence of the picks being real.
+Both halves were oriented against the same template, so both averages resemble
+it, so they correlate — independent refinement of the halves does nothing about
+a bias that entered before the split. `--random-phase-correction` corrects the
+score statistics used to place the cut-off; it does not touch orientations.
+
+**A control has to break the link between the template and the orientations**,
+not merely re-refine downstream of it. Which control that should be is being
+settled separately; the candidates are matching with a mirrored or
+phase-randomised template, averaging the population just below the cut-off, and
+boxes at random coordinates.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array

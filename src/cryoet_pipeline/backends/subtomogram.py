@@ -556,10 +556,10 @@ class FftRefinementAveragingBackend:
             key=lambda pair: pair[1].tilt_series_id,
         )
         num_iterations = _positive_int_parameter(context, "num_iterations", default=5)
-        initial_angular_step_deg = _positive_float_parameter(
+        initial_angular_step_deg = _non_negative_float_parameter(
             context, "initial_angular_step_deg", default=6.0
         )
-        initial_shift_step_px = _positive_float_parameter(
+        initial_shift_step_px = _non_negative_float_parameter(
             context, "initial_shift_step_px", default=2.0
         )
         initial_reference_path = _optional_path_parameter(context, "initial_reference_path")
@@ -573,7 +573,7 @@ class FftRefinementAveragingBackend:
         initial_low_pass_angstrom = _positive_float_parameter(
             context, "initial_low_pass_angstrom", default=60.0
         )
-        low_pass_margin_shells = _positive_float_parameter(
+        low_pass_margin_shells = _non_negative_float_parameter(
             context, "low_pass_margin_shells", default=2.0
         )
         overwrite = _bool_parameter(context, "overwrite", default=False)
@@ -1430,6 +1430,12 @@ class _AlignmentCandidate:
     aligned_volume: torch.Tensor
 
 
+def _search_deltas(step: float) -> tuple[float, ...]:
+    """The offsets a local search tries on one axis: three, or one if the step is zero."""
+
+    return (0.0,) if step == 0.0 else (-step, 0.0, step)
+
+
 def _search_local_alignment(
     raw: torch.Tensor,
     reference: torch.Tensor,
@@ -1447,8 +1453,11 @@ def _search_local_alignment(
     """
 
     current_shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
-    angle_deltas = (-angular_step_deg, 0.0, angular_step_deg)
-    shift_deltas = (-shift_step_px, 0.0, shift_step_px)
+    # A zero step means "do not search this axis", so it offers one candidate
+    # rather than three identical ones — which is 27x less work per particle, and
+    # says what the caller meant instead of arriving at it by coincidence.
+    angle_deltas = _search_deltas(angular_step_deg)
+    shift_deltas = _search_deltas(shift_step_px)
 
     best_rot, best_tilt, best_psi = record.rot_deg, record.tilt_deg, record.psi_deg
     best_correlation = -math.inf
@@ -1871,6 +1880,33 @@ def _positive_int_parameter(
     if value <= 0:
         raise ValueError(f"context parameter {key!r} must be greater than zero")
     return value
+
+
+def _non_negative_float_parameter(
+    context: BackendContext, key: str, *, default: float | None = None
+) -> float:
+    """Read a float parameter for which zero is a setting rather than a mistake.
+
+    A search step of zero means "do not search": average the particles at the
+    orientations they arrived with. That is the cleanest test of whether a set of
+    picks is real, because it gives the refinement no opportunity to manufacture
+    agreement — so it has to be expressible. A low-pass margin of zero likewise
+    means "no margin", which is the conservative choice, not an invalid one.
+
+    Separate from `_positive_float_parameter` rather than a flag on it, because
+    for most parameters here zero really is a mistake: a sampling of zero degrees
+    or a refine factor of zero would loop forever or divide by nothing.
+    """
+
+    value = context.parameters.get(key, default)
+    if value is None:
+        raise TypeError(f"context parameter {key!r} is required")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {key!r} must be numeric")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"context parameter {key!r} must be finite and not negative")
+    return normalized
 
 
 def _positive_float_parameter(
