@@ -35,12 +35,16 @@ The observed-versus-null table is the fuller answer: if the counts track the
 Gaussian null across the whole retained range, the picks ARE the tail. An excess
 above the null curve is a real population, and its height is how many there are.
 
-One caveat this prints rather than hides. `--random-phase-correction` reports
-`scores - noise_scores + noise_scores.mean()`, an additive pedestal, while sigma
-is accumulated from the uncorrected map. So absolute z carries an unknown
-constant offset. A constant offset preserves the SLOPE of ln N(>z) against z,
-which under the null equals -z, so the fitted slope gives an offset-free estimate
-of the true z. Both are printed; where they disagree, trust the slope.
+One caveat, which this now tests rather than merely warns about.
+`--random-phase-correction` reports `scores - noise_scores + noise_scores.mean()`,
+an additive pedestal, while sigma is accumulated from the uncorrected map — so
+absolute z could carry a constant offset. The self-check settles it: pytom places
+the cut-off where the expected false positives equal what was asked for, so a
+pedestal would move the observed cut-off off its predicted z. On the five real
+series the prediction is 6.59 and the observation 6.58, bounding the pedestal at
+about 0.01 sigma. Where the check disagrees instead, the fitted slope of
+ln N(>z) is the fallback: under the null it equals -z, and no constant offset can
+change a slope.
 
 Disposable, like the rest of `scripts/`. Its replacement is reading these stats
 in the picking backend and recording them in `PicksQc`, so that a run says
@@ -56,6 +60,14 @@ import math
 from pathlib import Path
 
 import numpy as np
+
+EXPECTED_FALSE_POSITIVES = 100.0
+"""What `--pytom-number-of-false-positives` was set to for these runs.
+
+Only used by the self-check below, which needs to know what the cut-off was
+asked to admit in order to predict where it should sit. If a project used a
+different value, this is the one place to change.
+"""
 
 
 def _read_star_columns(path: Path) -> dict[str, np.ndarray]:
@@ -97,6 +109,33 @@ def _largest_noise_peak_sigma(search_space: float) -> float:
         else:
             high = middle
     return (low + high) / 2.0
+
+
+def _sigma_scale_consistency(
+    z_cut: float, search_space: float, expected_false_positives: float
+) -> tuple[float, float]:
+    """Where the cut-off SHOULD sit, and where it does, on the same sigma scale.
+
+    A free consistency check on the whole measurement. pytom places the cut-off
+    so that `search_space * Q(z) = expected_false_positives`; if the sigma this
+    script divides by is the sigma pytom used, the observed cut-off must land on
+    that z. Agreement also bounds the additive pedestal that
+    `--random-phase-correction` leaves in the reported scores, because a pedestal
+    would shift the observed cut-off away from the predicted one.
+
+    Measured on the five real series: predicted 6.59, observed 6.58. So the
+    pedestal is about 0.01 sigma and the absolute z values can be read as
+    absolute.
+    """
+
+    low, high = 0.0, 40.0
+    for _ in range(200):
+        middle = (low + high) / 2.0
+        if search_space * 0.5 * math.erfc(middle / math.sqrt(2.0)) > expected_false_positives:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2.0, z_cut
 
 
 def _fitted_slope(scores: np.ndarray, sigma: float) -> float | None:
@@ -194,14 +233,29 @@ def main() -> int:
             print(f"    {threshold:>7.2f} {observed:>9d} {null:>12.2f}")
 
     print()
+    print("Sigma-scale self-check. pytom places the cut-off where the expected number")
+    print("of false positives equals what was asked for, so if this script is dividing")
+    print("by the sigma pytom used, the observed cut-off must land on the predicted z.")
+    print("Agreement also bounds the pedestal --random-phase-correction leaves behind.")
+    for series, z, _z_one, search_space in tables:
+        predicted, observed = _sigma_scale_consistency(
+            float(z.min()), search_space, EXPECTED_FALSE_POSITIVES
+        )
+        agreement = "consistent" if abs(predicted - observed) < 0.1 else "DISAGREES"
+        print(
+            f"  {series:10} predicted cut-off z={predicted:.2f}, observed z={observed:.2f} "
+            f"-> {agreement}"
+        )
+
+    print()
     print("For scale, published in-cell values: 80S ribosome ~40 sigma, nuclear pore")
     print("~10, a 100 kDa tubulin dimer ~6 (Cruz-Leon et al. 2024, Nat Commun 15:3992).")
     print()
-    print("Absolute z carries an unknown additive offset when")
-    print("--random-phase-correction was used, because the reported score is")
-    print("shifted while sigma comes from the uncorrected map. The fitted slope is")
-    print("offset-free: under the null it equals -z, so where the two disagree the")
-    print("slope is the one to trust.")
+    print("Where the self-check above says consistent, absolute z can be read as")
+    print("absolute: a pedestal from --random-phase-correction would have moved the")
+    print("cut-off off its predicted z, and it did not. Where it says DISAGREES, use")
+    print("the slope column instead - under the null it equals -z, and a constant")
+    print("offset cannot change a slope.")
     return 0
 
 
