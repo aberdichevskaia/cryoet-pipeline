@@ -2237,6 +2237,15 @@ def prepare_template(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    output_variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label the OUTPUT with this instead of --variant, while still "
+            "selecting inputs by --variant. Without it the two are one string, so a "
+            "run that varies a parameter over the same inputs either finds nothing "
+            "or overwrites what it is being compared against."
+        ),
+    ] = None,
 ) -> None:
     """Fetch a reference map and build a matching template plus mask."""
 
@@ -2263,7 +2272,8 @@ def prepare_template(
 
     selected_backend = _template_preparation_backend(backend)
     parameters: dict[str, object] = {
-        "variant": variant,
+        # Inputs were resolved by `variant`; this only labels what is written.
+        "variant": output_variant if output_variant is not None else variant,
         "overwrite": overwrite,
         "template_invert": template_invert,
         "template_center": template_center,
@@ -2520,6 +2530,15 @@ def pick_particles(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    output_variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label the OUTPUT with this instead of --variant, while still "
+            "selecting inputs by --variant. Without it the two are one string, so a "
+            "run that varies a parameter over the same inputs either finds nothing "
+            "or overwrites what it is being compared against."
+        ),
+    ] = None,
 ) -> None:
     """Pick particles from a reconstructed tomogram and register a canonical STAR result."""
 
@@ -2558,7 +2577,8 @@ def pick_particles(
             if isinstance(recorded, bool):
                 pytom_non_spherical_mask = not recorded
     parameters: dict[str, object] = {
-        "variant": variant,
+        # Inputs were resolved by `variant`; this only labels what is written.
+        "variant": output_variant if output_variant is not None else variant,
         "overwrite": overwrite,
         "pytom_template": pytom_template,
         "pytom_template_mask": pytom_template_mask,
