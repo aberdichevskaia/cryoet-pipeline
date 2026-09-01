@@ -1113,3 +1113,50 @@ def test_averaging_accepts_a_zero_step_and_keeps_the_orientations_it_was_given(
 
     report = json.loads(qc_artifact.path.read_text())
     assert report["gold_standard"] is True
+
+
+def test_the_before_and_after_correlations_are_measured_against_the_same_thing(
+    tmp_path: Path,
+) -> None:
+    """A comparison across two different references is not a before and after.
+
+    The reference is low-passed before the search is scored against it, so a
+    starting correlation measured on the UNFILTERED reference and a final one
+    measured on the filtered reference answer different questions — and the
+    difference reads as a refinement that made the alignment worse. An existing
+    cone-search test caught this on the multi-class path the moment filtering was
+    added there; the half-set path had the same fault and no test saw it.
+
+    Pinned by the property that has to hold rather than by a number: with a
+    starting reference the particles already agree with, refinement must not
+    report a fall.
+    """
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    # Particles at their true orientations, so the start is already good and any
+    # apparent decline is a measurement artefact rather than a failed search.
+    angles = [(0.0, 0.0, 0.0), (25.0, 15.0, -20.0), (-30.0, 45.0, 10.0), (60.0, -20.0, 35.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    _, qc_artifact = average_and_register(
+        FftRefinementAveragingBackend(),
+        [stack],
+        [_manifest()],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"num_iterations": 2, "variant": "t"},
+        ),
+        registry,
+    )
+
+    report = json.loads(qc_artifact.path.read_text())
+    assert report["mean_final_correlation"] >= report["starting_correlation_mean"]
+    assert not any("did not improve" in warning for warning in report["warnings"])

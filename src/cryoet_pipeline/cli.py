@@ -2878,7 +2878,9 @@ def average_particles(
     initial_low_pass_angstrom: Annotated[
         float,
         typer.Option(
-            min=0.0,
+            # No `min=0.0`: zero is not a resolution, and advertising it as the
+            # floor is how the search-step options came to promise a value the
+            # backend then refused. The backend states the real constraint.
             help="[fft-refinement] Resolution the reference is filtered to in the first "
             "iteration. Later iterations tighten it from the FSC between the two "
             "half-sets, and never loosen it past this value. 60 A is customary; pick it "

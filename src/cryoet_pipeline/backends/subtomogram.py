@@ -431,13 +431,23 @@ def _refine_half_sets_fft(
         else:
             references[subset] = torch.stack([aligned[index] for index in indices]).mean(dim=0)
 
-    # Against the reference each particle will actually face, which is now its
-    # own half's. The final correlation alone is a number without a scale; where
-    # it began is what turns it into a before and after.
+    # Against the reference each particle will actually face: its own half's, and
+    # FILTERED, because that is what the search is scored against. Comparing a
+    # start measured on an unfiltered reference with a finish measured on a
+    # filtered one is not a before and after, it is two different questions — and
+    # it reads as a refinement that made things worse.
+    starting_references = {
+        subset: low_pass_filter_volume(
+            reference,
+            cutoff_angstrom=initial_low_pass_angstrom,
+            pixel_spacing_angstrom=pixel_spacing_angstrom,
+        )
+        for subset, reference in references.items()
+    }
     starting_correlation_mean = float(
         np.mean(
             [
-                _normalized_correlation(aligned[index], references[subset])
+                _normalized_correlation(aligned[index], starting_references[subset])
                 for subset, indices in grouped.items()
                 for index in indices
             ]
@@ -889,6 +899,9 @@ class ConeSearchRefinementBackend:
             )
         box_size = combined.box_size
         pixel_spacing_angstrom = _pixel_spacing_angstrom(pairs[0][0])
+        initial_low_pass_angstrom = _positive_float_parameter(
+            context, "initial_low_pass_angstrom", default=60.0
+        )
         particle_diameter_angstrom = _positive_float_parameter(
             context,
             "particle_diameter_angstrom",
@@ -929,11 +942,19 @@ class ConeSearchRefinementBackend:
         # final correlation on its own is a number without a scale: it says
         # nothing about whether the refinement moved anything. Recording where
         # it began is what turns it into a before and after.
+        starting_references = [
+            low_pass_filter_volume(
+                reference,
+                cutoff_angstrom=initial_low_pass_angstrom,
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+            )
+            for reference in references
+        ]
         starting_correlation_mean = float(
             np.mean(
                 [
                     _normalized_correlation(
-                        aligned[record.index], references[record.class_number - 1]
+                        aligned[record.index], starting_references[record.class_number - 1]
                     )
                     for record in records
                 ]
@@ -963,10 +984,26 @@ class ConeSearchRefinementBackend:
 
             reassigned = 0
             new_aligned: list[torch.Tensor] = [torch.empty(0)] * particle_count
+            # Filtered every iteration, at a limit held constant. Joint refinement
+            # is not exempt from a reference imprinting its own noise on the
+            # particles that built it — an unfiltered reference lets every
+            # frequency imprint, including the ones a resolution would later be
+            # claimed at. Held constant rather than driven by an FSC because this
+            # path has no trustworthy one: the halves are refined together, and
+            # with several classes there is no defined pairing between half 1's
+            # class k and half 2's class k to compute one from.
+            filtered_references = [
+                low_pass_filter_volume(
+                    reference,
+                    cutoff_angstrom=initial_low_pass_angstrom,
+                    pixel_spacing_angstrom=pixel_spacing_angstrom,
+                )
+                for reference in references
+            ]
             for record in records:
                 candidate = _search_multi_reference(
                     raw_volumes[record.index],
-                    references,
+                    filtered_references,
                     record,
                     cone=offsets,
                     in_plane_offsets=in_plane_offsets,
