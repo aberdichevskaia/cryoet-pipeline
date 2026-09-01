@@ -26,10 +26,24 @@ If z_max does not clear z_1fp, no pick in that series is a detection. Clearing i
 is NOT the converse: the cut-off was placed to admit around a hundred expected
 false positives per tomogram, so some picks sit above the one-false-positive
 level whether or not anything is there. The verdict that matters is the
-observed-versus-null table, not the single number. For scale,
-published in-cell work on 80S ribosomes reports around 40 sigma, nuclear pore
-complexes around 10, and a 100 kDa tubulin dimer around 6 (Cruz-Leon et al. 2024,
-Nat Commun 15:3992) — so a ribosome ought to be unmissable, not marginal.
+observed-versus-null table, not the single number.
+
+For scale, use pytom-match-pick's OWN published benchmark, because it is the same
+sigma by construction: 80S ribosomes on EMPIAR-10985 at about 20 sigma, with a
+one-false-positive cut-off of 7.30 (docs/benchmarks in the pytom-match-pick
+repository). That is isolated particles in thin ice — the most favourable case
+there is — so it is a ceiling for in-cell lamellae, not a target.
+
+Do NOT compare against the ~40 sigma quoted from Cruz-Leon et al. 2024 (Nat
+Commun 15:3992). That paper defines z as (CC - mean)/sd over a score map already
+maximised across orientations, with the mean subtracted; pytom's sigma is the RMS
+of the per-orientation locally-normalised CC with no mean subtracted, over
+positions times orientations. The two are related by an affine map, not a ratio,
+so a "5x shortfall" computed between them is meaningless. Their 40 is also
+different data (Dictyostelium, in-house), and the "~6 sigma for a tubulin dimer"
+sometimes quoted alongside it is an axis tick read off a supplementary figure
+rather than a stated value. This paragraph exists because all three mistakes were
+made here first.
 
 The observed-versus-null table is the fuller answer: if the counts track the
 Gaussian null across the whole retained range, the picks ARE the tail. An excess
@@ -248,8 +262,12 @@ def main() -> int:
         )
 
     print()
-    print("For scale, published in-cell values: 80S ribosome ~40 sigma, nuclear pore")
-    print("~10, a 100 kDa tubulin dimer ~6 (Cruz-Leon et al. 2024, Nat Commun 15:3992).")
+    print("For scale, in pytom's OWN sigma (same definition by construction): 80S")
+    print("ribosomes on EMPIAR-10985 reach ~20 sigma at a 1-false-positive cut-off of")
+    print("7.30 - isolated particles in thin ice, so a ceiling for in-cell lamellae")
+    print("rather than a target. Values quoted from Cruz-Leon et al. 2024 are on a")
+    print("DIFFERENT sigma (mean-subtracted, max-over-orientations) and are not")
+    print("comparable to these numbers by any ratio.")
     print()
     print("Where the self-check above says consistent, absolute z can be read as")
     print("absolute: a pedestal from --random-phase-correction would have moved the")
