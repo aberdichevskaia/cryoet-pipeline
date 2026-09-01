@@ -284,6 +284,34 @@ settled separately; the candidates are matching with a mirrored or
 phase-randomised template, averaging the population just below the cut-off, and
 boxes at random coordinates.
 
+**Two things bit in one session for the same missing reason, and both are
+fingerprints.** Step 2 of the order in
+[database_design.md](database_design.md) — "split identity from naming: add
+fingerprints alongside the semantic ids" — stopped being an abstraction today.
+
+First: a particle stack was silently built from a different version of its picks.
+Picking was re-run after its parameters were fixed and found 179 particles where
+it had found 2; the extraction was not re-run, so the stack still held one
+particle. The extraction QC recorded `picks_id`, and that id was unchanged,
+because re-running picking overwrites in place. So the artifact chain said the
+stack came from those picks and it was true of the name and false of the content.
+Nothing in the registry could have revealed it. It surfaced only because an
+average printed its per-series counts and one series contributed 1 of 179 — which
+is to say, by luck and by a log line added an hour earlier.
+
+Second: `--output-variant` exists at all. `--variant` selects inputs and labels
+outputs with one string, so varying a parameter over fixed inputs either finds
+nothing or overwrites what it is being compared against. The flag splits the two
+jobs, and it is a workaround rather than a design: with fingerprints, two runs
+differing in a mask radius get different identities from their own parameters, and
+neither `--output-variant` nor `--variant` is needed to keep them apart.
+
+So the fingerprint is not only for the index. It is what makes "this artifact was
+built from that one" a checkable statement rather than a naming convention, and
+what lets a parameter sweep exist without an operator inventing labels for it.
+Both of today's failures were invisible in exactly the way a content hash is
+designed to prevent.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
