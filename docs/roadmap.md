@@ -312,6 +312,55 @@ what lets a parameter sweep exist without an operator inventing labels for it.
 Both of today's failures were invisible in exactly the way a content hash is
 designed to prevent.
 
+**The score volume is the expensive artefact and it is thrown away.** Template
+matching costs about 29 minutes of A100 per tilt-series and produces a
+correlation volume; extracting candidates from it takes seconds. This pipeline
+keeps the extracted candidates, the job JSON, the QC and the log, and discards
+the volume they came from. So every change to a cut-off, a false-positive budget,
+or a peak-exclusion distance costs a full re-match instead of seconds.
+
+At bin8 that volume is roughly a gigabyte per series, so not keeping it at
+fifty-series scale is right. During parameter tuning it is exactly backwards.
+The shape this wants is a retention policy on the artifact rather than a
+decision baked into the backend — `RetentionPolicy` already exists and the score
+volume is the clearest case for a `WORKING` role that a later sweep can delete.
+
+**Two models of mine were tested against the real data and both failed.** Worth
+recording as measurements, since each was about to be built on.
+
+The first: that the template mask being larger than the particle was costing
+significance, worth about 1.23x. Measured by rebuilding the template with a mask
+of 293 A instead of 333 A and re-matching one series: scores rose by a factor of
+1.16 to 1.22, and **sigma rose by 1.22 as well**, so z_max went from 7.54 to
+7.20 — slightly down. The normalised cross-correlation is already divided by the
+mask, so shrinking it lifts the signal and the noise scale together. The mask is
+not a lever on significance at all, and that term must come out of any
+decomposition of the sigma gap.
+
+The second, and this one cost more: that the excess of picks over the Gaussian
+null was the real evidence for the picks being genuine. With the over-large mask
+TS_0006 gave 192 picks against the ~100 the null predicts, an excess of +92. With
+the mask matched to the particle it gives 73, a **deficit of -27**. So the excess
+was being manufactured by the solvent shell inside the too-large mask correlating
+with something outside the particle, and it disappears when the mask is corrected.
+
+**What survives, measured on the 706-particle average**: at a threshold matched in
+units of each map's own spread, 87% of the above-threshold volume sits in one
+connected component, against 10% for an average of boxes cropped at peaks of
+band-limited noise, and 100% for the ribosome template. So the average is not
+noise. Its radial profile is a core plus a shell at 81-110 A rather than the
+template's solid body out to 137 A, and that profile reproduces between the two
+independent half-sets and survives with no filtering at all. Three mechanisms
+were guessed for it and all three were refuted by measurement.
+
+**A real defect found along the way.** pytom excludes further peaks within half
+the diameter it is given, which this repository's own docstring states. So
+`--pytom-particle-diameter 290` permits picks 145 A apart; the measured minimum
+across the five series is 147 A and 19% of picks have a neighbour closer than
+290 A — closer than two ribosome centres can physically be. The fix is the
+already-existing `--pytom-extract-particle-diameter`, set to twice the diameter.
+Testing it needs a re-match, which is the first paragraph above.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
