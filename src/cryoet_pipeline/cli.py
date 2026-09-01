@@ -2024,6 +2024,62 @@ def _echo_qc_warnings(report: dict[str, Any]) -> None:
         typer.echo(f"  warning: {warning}")
 
 
+def _echo_picks_summary(report: dict[str, Any]) -> None:
+    """Print how many particles were found, and how confident and how spread out.
+
+    The count is the number that decides whether half an hour of template
+    matching was worth anything, and it was not printed: a log ending in "QC
+    status: pass" could not distinguish two particles from two thousand. Which is
+    exactly the question an operator scrolling four series of output is asking.
+
+    The score range comes with it because a count alone cannot say whether the
+    picks are peaks or the tail of the noise distribution, and the spread in Z
+    because these are FIB lamellae — particles confined to a slab, so a spread
+    matching a uniform fill of the whole tomogram is worth seeing next to the
+    count rather than buried in a report nobody opens.
+    """
+
+    count = report.get("particle_count")
+    if count is None:
+        return
+    typer.echo(f"particles found: {count}")
+    minimum = report.get("minimum_score")
+    mean = report.get("mean_score")
+    maximum = report.get("maximum_score")
+    if None not in (minimum, mean, maximum):
+        typer.echo(f"score: {minimum:.4f} min, {mean:.4f} mean, {maximum:.4f} max")
+    observed = report.get("coordinate_z_sd")
+    uniform = report.get("uniform_z_sd")
+    median = report.get("coordinate_z_median")
+    if observed is not None and uniform is not None and median is not None:
+        typer.echo(
+            f"z spread: {observed:.1f} px sd about z={median:.0f}, "
+            f"against {uniform:.1f} px for a uniform fill"
+        )
+
+
+def _echo_extraction_summary(report: dict[str, Any]) -> None:
+    """Print what survived extraction and what did not, with the reason.
+
+    A stack silently smaller than its picks is the kind of thing that is noticed
+    three steps later, when a count does not match. Both drop reasons are already
+    recorded; neither was shown.
+    """
+
+    extracted = report.get("extracted_particle_count")
+    requested = report.get("requested_particle_count")
+    if extracted is None or requested is None:
+        return
+    typer.echo(f"particles extracted: {extracted} of {requested}")
+    dropped_edge = report.get("dropped_edge_count") or 0
+    dropped_score = report.get("dropped_score_count") or 0
+    if dropped_edge or dropped_score:
+        typer.echo(
+            f"  dropped: {dropped_edge} too close to the tomogram edge for the box, "
+            f"{dropped_score} below the score threshold"
+        )
+
+
 @app.command("prepare-template")
 def prepare_template(
     manifest: Annotated[
@@ -2521,9 +2577,12 @@ def pick_particles(
     artifact_registry.write(registry)
 
     picks, qc_report = artifacts
+    report = _read_qc_report(qc_report)
     typer.echo(f"wrote picks: {picks.path}")
+    _echo_picks_summary(report)
     typer.echo(f"wrote picking QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
+    _echo_qc_warnings(report)
     typer.echo(f"updated {registry}")
 
 
@@ -2653,9 +2712,12 @@ def extract_particles(
     artifact_registry.write(registry)
 
     particle_stack, qc_report = artifacts
+    report = _read_qc_report(qc_report)
     typer.echo(f"wrote particle stack: {particle_stack.path}")
+    _echo_extraction_summary(report)
     typer.echo(f"wrote extraction QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
+    _echo_qc_warnings(report)
     typer.echo(f"updated {registry}")
 
 
