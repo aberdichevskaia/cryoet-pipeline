@@ -2639,6 +2639,16 @@ def pick_particles(
         parameters["pytom_z_axis_symmetry"] = pytom_z_axis_symmetry
     if pytom_low_pass is not None:
         parameters["pytom_low_pass"] = pytom_low_pass
+    else:
+        derived, source = _derived_low_pass_angstrom(
+            artifact_registry, tilt_series_manifest, variant=variant
+        )
+        parameters["pytom_low_pass"] = derived
+        parameters["pytom_low_pass_derived_from"] = source
+        typer.echo(
+            f"low-pass: {derived:.1f} A, derived from a fine-alignment residual of "
+            f"{source} — pass --pytom-low-pass to override"
+        )
     if pytom_high_pass is not None:
         parameters["pytom_high_pass"] = pytom_high_pass
     if pytom_number_of_false_positives is not None:
@@ -3977,6 +3987,66 @@ def _fiducial_model_artifact(
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
     )
+
+
+def _derived_low_pass_angstrom(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
+) -> tuple[float, str]:
+    """The matching low-pass from this series' own alignment, or a refusal.
+
+    Nothing derived this before, so a run that omitted `--pytom-low-pass` matched
+    across the whole band out to Nyquist. That is not an error anywhere: it
+    produces a flat score volume, an extraction cut-off flush against its
+    maximum, and a pick list of two with `status: pass`. Deriving it removes the
+    guess; refusing when it cannot be derived removes the silence.
+
+    Refusing rather than falling back to Nyquist is the point. A default that
+    happens to be wrong is indistinguishable from one that happens to be right
+    until someone counts the picks, and by then half an hour of GPU is spent.
+    """
+
+    from cryoet_pipeline.resolution import low_pass_from_alignment_residual
+
+    try:
+        _fine_alignment_artifact(registry, manifest, variant=variant)
+    except typer.BadParameter as exc:
+        raise typer.BadParameter(
+            "--pytom-low-pass was not given and cannot be derived: no fine alignment "
+            f"is registered for {manifest.tilt_series_id} ({exc}). Matching across the "
+            "whole band to Nyquist is what returns a handful of picks from a flat "
+            "score volume, so pass --pytom-low-pass explicitly instead",
+            param_hint="pytom_low_pass",
+        ) from exc
+
+    # The residual lives in the QC report, and the alignment artifact does not
+    # carry a path to it — so it is found as its own artifact, by kind and type.
+    # Going through the registry rather than adding a `qc_path` parameter is what
+    # lets this work on projects already on disk, which is the whole point: five
+    # series are aligned already and nobody should re-run them for a field.
+    reports = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.QC)
+        if artifact.covers(manifest.tilt_series_id)
+        and artifact.parameters.get("qc_type") == "fine_alignment"
+    ]
+    residual = None
+    for candidate in reports:
+        if candidate.path.is_file():
+            value = json.loads(candidate.path.read_text()).get("residual_mean_nm")
+            if isinstance(value, (int, float)) and value > 0.0:
+                residual = value
+                break
+    if not isinstance(residual, (int, float)) or residual <= 0.0:
+        raise typer.BadParameter(
+            "--pytom-low-pass was not given and cannot be derived: the fine alignment "
+            f"for {manifest.tilt_series_id} records no usable residual_mean_nm. Pass "
+            "--pytom-low-pass explicitly",
+            param_hint="pytom_low_pass",
+        )
+    return low_pass_from_alignment_residual(float(residual)), f"{residual:.3f} nm"
 
 
 def _fine_alignment_artifact(
