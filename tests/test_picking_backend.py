@@ -14,6 +14,7 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
+    _extract_candidates_command,
     _included_z_values,
     _match_template_command,
     _PicksStatistics,
@@ -1060,3 +1061,66 @@ def _manifest() -> TiltSeriesManifest:
             ),
         ],
     )
+
+
+def test_a_zero_cut_off_means_no_threshold_rather_than_an_error() -> None:
+    """Taking the top N with no significance floor has to be expressible.
+
+    It is what the published work on EMPIAR-11538 did — top 800 candidates per
+    tomogram, then RELION classification found the real 13.8% among them — and it
+    is the opposite of what this pipeline did, which was to apply a floor, find
+    nothing above it, and read that as an absence of particles. A floor is a
+    decision rule, not a property of the data.
+
+    The CLI advertised `min=0.0` while the backend demanded strictly positive, so
+    a run that asked for zero failed after the arguments were parsed rather than
+    at them — the third instance of that same split in one day.
+    """
+
+    context = BackendContext(
+        output_dir=Path("/tmp"),
+        device=DevicePreference.CUDA,
+        parameters={
+            "pytom_number_of_particles": 800,
+            "pytom_cut_off": 0,
+            "pytom_extract_particle_diameter": 580.0,
+        },
+    )
+
+    command = _extract_candidates_command(
+        Path("/x/extract.py"),
+        context,
+        job_json_path=Path("/x/j.json"),
+        tomogram_mask_path=None,
+    )
+
+    assert "-c" in command
+    assert command[command.index("-c") + 1] == "0.000000"
+    # The two are alternatives: a hard cut-off replaces the false-positive budget.
+    assert "--number-of-false-positives" not in command
+    # And the exclusion is one true particle diameter, since pytom halves it.
+    assert command[command.index("--particle-diameter") + 1] == "580.000000"
+
+
+def test_a_negative_cut_off_is_still_refused() -> None:
+    """Zero is a setting; below zero is not a score any correlation reaches."""
+
+    context = BackendContext(
+        output_dir=Path("/tmp"),
+        device=DevicePreference.CUDA,
+        parameters={
+            "pytom_number_of_particles": 800,
+            "pytom_cut_off": -1.0,
+            # Supplied because extraction validates the diameter before it reads
+            # the cut-off, so without it the wrong error comes back first.
+            "pytom_extract_particle_diameter": 580.0,
+        },
+    )
+
+    with pytest.raises(ValueError, match="must be finite and not negative"):
+        _extract_candidates_command(
+            Path("/x/extract.py"),
+            context,
+            job_json_path=Path("/x/j.json"),
+            tomogram_mask_path=None,
+        )

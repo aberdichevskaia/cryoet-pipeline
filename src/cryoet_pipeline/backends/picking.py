@@ -727,7 +727,7 @@ def _extract_candidates_command(
         "-n",
         str(_required_positive_int_parameter(context, "pytom_number_of_particles")),
     ]
-    cut_off = _optional_positive_float_parameter(context, "pytom_cut_off")
+    cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off")
     if cut_off is not None:
         command.extend(["-c", f"{cut_off:.6f}"])
     else:
@@ -1130,6 +1130,34 @@ def _bool_parameter(context: BackendContext, key: str, *, default: bool) -> bool
     if not isinstance(value, bool):
         raise TypeError(f"context parameter {key!r} must be a bool")
     return value
+
+
+def _optional_non_negative_float_parameter(
+    context: BackendContext, key: str
+) -> float | None:
+    """Read an optional float for which zero is a setting, not a mistake.
+
+    A score cut-off of zero means "take the top N peaks with any positive
+    correlation, and apply no significance threshold" — which is what the
+    published work on EMPIAR-11538 did: top 800 per tomogram, then classification
+    found the real 13.8% among them. A threshold is a decision rule rather than a
+    property of the data, and refusing to express "no threshold" is how a real
+    minority gets discarded before anything can separate it.
+
+    The CLI already advertised `min=0.0` for this option, so the two sides
+    disagreed and a run that asked for zero failed after argument parsing rather
+    than at it.
+    """
+
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"context parameter {key!r} must be numeric")
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"context parameter {key!r} must be finite and not negative")
+    return normalized
 
 
 def _optional_positive_float_parameter(context: BackendContext, key: str) -> float | None:
