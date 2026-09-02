@@ -1160,3 +1160,47 @@ def test_the_before_and_after_correlations_are_measured_against_the_same_thing(
     report = json.loads(qc_artifact.path.read_text())
     assert report["mean_final_correlation"] >= report["starting_correlation_mean"]
     assert not any("did not improve" in warning for warning in report["warnings"])
+
+
+def test_the_agreement_trace_moves_where_the_crossing_cannot(tmp_path: Path) -> None:
+    """The crossing is quantised to shells; this is the continuous companion.
+
+    At box 48 with 9.784 A voxels the shells near 36 A are 2.6 A apart, so a real
+    refinement improving by a fraction of a shell records an identical crossing
+    every iteration — which is what a real run showed: five iterations of
+    36.12553992638221, byte-identical, next to a low-pass that had tightened from
+    60 to 31 A. That reads as "nothing happened" and cannot be told apart from
+    "improved by less than a shell". The mean correlation across shells can.
+    """
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (25.0, 15.0, -20.0), (-30.0, 45.0, 10.0), (60.0, -20.0, 35.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    _, qc_artifact = average_and_register(
+        FftRefinementAveragingBackend(),
+        [stack],
+        [_manifest()],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"num_iterations": 3, "variant": "t"},
+        ),
+        registry,
+    )
+
+    report = json.loads(qc_artifact.path.read_text())
+    agreement = report["half_set_agreement_trace"]
+    assert len(agreement) == 3
+    assert all(-1.0 <= value <= 1.0 for value in agreement)
+    # One entry per iteration, alongside the other two traces, so the three can
+    # be read together — which is the only way the loop is legible.
+    assert len(report["resolution_trace_angstrom"]) == len(agreement)
+    assert len(report["low_pass_trace_angstrom"]) == len(agreement)

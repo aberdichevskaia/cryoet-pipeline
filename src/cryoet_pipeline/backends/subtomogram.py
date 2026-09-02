@@ -294,6 +294,7 @@ class _HalfSetRefinement:
     starting_correlation_mean: float
     low_pass_trace: list[float]
     resolution_trace: list[float | None]
+    agreement_trace: list[float]
     half_counts: dict[int, int]
 
 
@@ -458,6 +459,7 @@ def _refine_half_sets_fft(
     low_pass = initial_low_pass_angstrom
     low_pass_trace: list[float] = []
     resolution_trace: list[float | None] = []
+    agreement_trace: list[float] = []
 
     for iteration in range(num_iterations):
         annealing = 2**iteration
@@ -501,6 +503,13 @@ def _refine_half_sets_fft(
             threshold=GOLD_STANDARD_FSC_THRESHOLD,
         )
         resolution_trace.append(curve.crossing_resolution_angstrom)
+        # The crossing is quantised to Fourier shells — at box 48 the steps near
+        # 36 A are 2.6 A wide — so a refinement improving by less than a shell
+        # reads as perfectly flat, which is what the first version of this trace
+        # showed. The mean correlation across shells moves continuously with
+        # agreement at any frequency, so it can tell "not improving" apart from
+        # "improving by less than a shell".
+        agreement_trace.append(float(np.mean(curve.correlation)))
         low_pass = next_low_pass_angstrom(
             curve,
             current_angstrom=low_pass,
@@ -522,6 +531,7 @@ def _refine_half_sets_fft(
         starting_correlation_mean=starting_correlation_mean,
         low_pass_trace=low_pass_trace,
         resolution_trace=resolution_trace,
+        agreement_trace=agreement_trace,
         half_counts=counts,
     )
 
@@ -750,6 +760,7 @@ class FftRefinementAveragingBackend:
             resolution_angstrom=resolution_angstrom,
             resolution_trace_angstrom=list(refinement.resolution_trace),
             low_pass_trace_angstrom=list(refinement.low_pass_trace),
+            half_set_agreement_trace=list(refinement.agreement_trace),
             resolution_is_interpretable=resolution_is_interpretable,
             status=status,
             warnings=warnings,

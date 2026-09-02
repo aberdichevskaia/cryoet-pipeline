@@ -2109,6 +2109,15 @@ def _echo_averaging_summary(report: dict[str, Any]) -> None:
     if len(trace) > 1:
         shown = ", ".join("none" if value is None else f"{value:.0f}" for value in trace)
         typer.echo(f"  resolution per iteration: {shown} A")
+    agreement = report.get("half_set_agreement_trace") or []
+    if len(agreement) > 1:
+        # The continuous one. A rising then levelling curve is a refinement that
+        # worked; a flat one next to a flat resolution means it genuinely did not
+        # improve, which the shell-quantised crossing alone cannot establish.
+        typer.echo(
+            "  half-set agreement:       "
+            + ", ".join(f"{value:+.3f}" for value in agreement)
+        )
     limits = report.get("low_pass_trace_angstrom") or []
     if len(limits) > 1:
         # Printed beside the resolution because the two ARE a feedback loop: the

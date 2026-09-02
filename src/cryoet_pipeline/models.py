@@ -893,6 +893,16 @@ class SubtomogramAveragingQc(BaseModel):
     that is overfitting shows it improving without pause, which is the signature
     worth being able to see rather than infer.
     """
+    half_set_agreement_trace: list[float] = Field(default_factory=list)
+    """Mean inter-half FSC across shells, per iteration — a continuous trajectory.
+
+    The crossing above is quantised to Fourier shells: at box 48 the steps near
+    36 angstrom are 2.6 angstrom wide, so a refinement that improves by less than
+    a shell records as perfectly flat. That is not a plateau and it is not a
+    failure, and the crossing alone cannot say which. This moves with agreement at
+    any frequency, so a refinement that is working shows it rising and then
+    levelling even when the crossing never budges.
+    """
     low_pass_trace_angstrom: list[float] = Field(default_factory=list)
     """The resolution limit the reference was filtered to, per iteration.
 
