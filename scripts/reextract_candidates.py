@@ -75,6 +75,51 @@ def _one_false_positive_z(search_space: float) -> float:
     return (low + high) / 2.0
 
 
+def _rebased_job(job: Path, work: Path, args) -> dict:
+    """The job with its temporary-directory paths pointed at what exists now.
+
+    The match ran in a temporary directory, so the job records three paths inside
+    it: the MRC copy of the tomogram, the output directory, and the whitening
+    filter. Moving the job out of that directory does not move them, which is why
+    re-extraction failed with `FileNotFoundError` on the tomogram.
+
+    The tomogram is rebuilt from the canonical Zarr rather than kept as a third
+    gigabyte. The output directory becomes this scratch. The whitening filter has
+    no fallback — if it was not kept, its absence is reported rather than worked
+    around, because dropping it silently would change the score scale and make
+    the comparison this script exists for meaningless.
+    """
+
+    payload = json.loads(job.read_text())
+    payload["output_dir"] = str(work)
+
+    recorded_tomogram = payload.get("tomogram")
+    if isinstance(recorded_tomogram, str) and not Path(recorded_tomogram).exists():
+        if args.tomogram is None:
+            raise SystemExit(
+                "the job points at an MRC copy of the tomogram that lived in the "
+                f"match's temporary directory and is gone:\n  {recorded_tomogram}\n"
+                "Pass --tomogram with the canonical Zarr and it will be rebuilt here."
+            )
+        from cryoet_pipeline.backends.picking import _write_zarr_to_mrc
+
+        rebuilt = work / Path(recorded_tomogram).name
+        print(f"  rebuilding {rebuilt.name} from {args.tomogram} ...", flush=True)
+        _write_zarr_to_mrc(
+            args.tomogram, rebuilt, voxel_spacing_angstrom=args.apix or 1.0
+        )
+        payload["tomogram"] = str(rebuilt)
+
+    whitening = payload.get("whitening_filter")
+    if isinstance(whitening, str) and not Path(whitening).exists():
+        print(
+            "  NOTE: the whitening filter was not kept. Extraction may recompute or "
+            "refuse it; if the scores come back on a different scale, this run is "
+            "not comparable with the original and needs one match with it retained."
+        )
+    return payload
+
+
 def _report_job_paths(job: Path) -> None:
     """Print the paths the job JSON holds, and whether they still exist.
 
@@ -118,6 +163,15 @@ def main() -> int:
     parser.add_argument("--number-of-particles", type=int, default=2000)
     parser.add_argument("--number-of-false-positives", type=float, default=100.0)
     parser.add_argument("--apix", type=float, default=None, help="For neighbour distances.")
+    parser.add_argument(
+        "--tomogram",
+        type=Path,
+        default=None,
+        help="Canonical tomogram Zarr. The job JSON points at an MRC copy that "
+        "lived in the match's temporary directory, so it is rebuilt here rather "
+        "than kept: the tomogram is already stored as Zarr and converting it is "
+        "cheap and deterministic, which is a gigabyte per series not spent.",
+    )
     args = parser.parse_args()
 
     job = args.job.resolve()
@@ -146,11 +200,13 @@ def main() -> int:
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)
             # Symlinked, not copied: these are about a gigabyte each.
-            for source in (job, *volumes):
+            for source in volumes:
                 (work / source.name).symlink_to(source)
+            job_copy = work / job.name
+            job_copy.write_text(json.dumps(_rebased_job(job, work, args)))
             command = [
                 str(args.executable),
-                "-j", str(work / job.name),
+                "-j", str(job_copy),
                 "-n", str(args.number_of_particles),
                 "--number-of-false-positives", f"{args.number_of_false_positives:.6f}",
                 "--particle-diameter", f"{diameter:.6f}",

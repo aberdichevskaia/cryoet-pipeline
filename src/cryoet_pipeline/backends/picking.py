@@ -243,6 +243,14 @@ class PytomMatchPickBackend:
                     ("_angles.mrc", paths.angles_volume),
                 ):
                     _replace_output(_find_output_file(destination_dir, suffix=suffix), destination)
+                # Kilobytes, and re-extraction is not comparable without it: the
+                # whitening filter sets the scale the scores are on. Keeping the
+                # volumes and not this is what made the first attempt at
+                # re-extraction useless. Optional because it only exists when
+                # spectral whitening was asked for.
+                whitening = sorted(destination_dir.rglob("*_whitening_filter.npy"))
+                if whitening:
+                    _replace_output(whitening[0], paths.whitening_filter)
 
         return Artifact(
             id=(
@@ -280,6 +288,9 @@ class PytomMatchPickBackend:
                 ),
                 "pytom_angles_volume_path": (
                     str(paths.angles_volume) if paths.angles_volume.is_file() else None
+                ),
+                "pytom_whitening_filter_path": (
+                    str(paths.whitening_filter) if paths.whitening_filter.is_file() else None
                 ),
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
@@ -421,6 +432,7 @@ class _PickingPaths:
         log: Path,
         scores_volume: Path,
         angles_volume: Path,
+        whitening_filter: Path,
     ) -> None:
         self.picks_dir = picks_dir
         self.qc_dir = qc_dir
@@ -430,6 +442,7 @@ class _PickingPaths:
         self.log = log
         self.scores_volume = scores_volume
         self.angles_volume = angles_volume
+        self.whitening_filter = whitening_filter
 
     @property
     def outputs(self) -> tuple[Path, ...]:
@@ -486,6 +499,7 @@ def _picking_paths(
         job_json=picks_dir / f"{prefix}_job.json",
         scores_volume=picks_dir / f"{prefix}_scores.mrc",
         angles_volume=picks_dir / f"{prefix}_angles.mrc",
+        whitening_filter=picks_dir / f"{prefix}_whitening_filter.npy",
         report=qc_dir / f"{prefix}_qc.json",
         log=picks_dir / f"{prefix}.log",
     )
