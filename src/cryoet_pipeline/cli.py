@@ -2671,8 +2671,15 @@ def pick_particles(
     )
     artifact_registry.write(registry)
 
-    picks, qc_report = artifacts
+    *match, picks, qc_report = artifacts
     report = _read_qc_report(qc_report)
+    if match:
+        typer.echo(f"registered template match: {match[0].id}")
+        if match[0].parameters.get("volumes_retained"):
+            typer.echo(
+                "  its score volume is kept, so extract-picks can re-read it at "
+                "another cut-off without matching again"
+            )
     typer.echo(f"wrote picks: {picks.path}")
     _echo_picks_summary(report)
     typer.echo(f"wrote picking QC: {qc_report.path}")

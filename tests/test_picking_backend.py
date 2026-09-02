@@ -111,11 +111,18 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
         supporting_artifacts=[segmentation],
     )
 
-    picks, qc_artifact = artifacts
+    match_artifact, picks, qc_artifact = artifacts
+    assert match_artifact.kind is ArtifactKind.TEMPLATE_MATCH
+    assert picks.parent_ids == [match_artifact.id]
     assert registry.get(picks.id) == picks
     assert registry.get(qc_artifact.id) == qc_artifact
     assert picks.kind == ArtifactKind.PICKS
-    assert picks.parent_ids == [tomogram.id, segmentation.id]
+    # The lineage gained a link rather than losing one: picks descend from the
+    # search, and the search from the tomogram and the segmentation that
+    # constrained it. Asserted as a chain, since that is what it now is.
+    assert match_artifact.parent_ids == [tomogram.id, segmentation.id]
+    assert registry.descends_from(picks.id, tomogram.id)
+    assert registry.descends_from(picks.id, segmentation.id)
     assert picks.shape == (2,)
     assert picks.pixel_spacing_angstrom == pytest.approx(13.5)
     assert picks.parameters["input_tomogram_id"] == tomogram.id

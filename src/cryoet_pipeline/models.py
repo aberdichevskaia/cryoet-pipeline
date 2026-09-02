@@ -39,6 +39,15 @@ class ArtifactKind(StrEnum):
     SEGMENTATION = "segmentation"
     TEMPLATE = "template"
     TEMPLATE_MASK = "template_mask"
+    TEMPLATE_MATCH = "template_match"
+    """The correlation search itself, separate from the picks read out of it.
+
+    The match is the expensive thing — half an hour of GPU — and the picks are one
+    cheap reading of it, at one cut-off with one peak separation. Registering the
+    match makes those choices explorable without paying for the search again, and
+    makes a pick list say which search it came from rather than restating the
+    search's parameters.
+    """
     PICKS = "picks"
     PARTICLE_STACK = "particle_stack"
     SUBTOMOGRAM_AVERAGE = "subtomogram_average"

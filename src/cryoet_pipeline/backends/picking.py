@@ -299,6 +299,63 @@ class PytomMatchPickBackend:
         )
 
 
+def _template_match_artifact(
+    picks: Artifact,
+    manifest: TiltSeriesManifest,
+    context: BackendContext,
+    *,
+    tomogram: Artifact,
+) -> Artifact | None:
+    """The search itself, as an artifact, from what the picks already recorded.
+
+    Its path is the job JSON, which is small and always kept; the correlation and
+    orientation volumes are recorded as parameters because they are about a
+    gigabyte each and keeping them is a choice. So the artifact always exists and
+    always says whether it can be re-read: a match without its volumes is still a
+    record of what was searched, and `extract-picks` refuses it with a reason
+    rather than failing to find a file.
+
+    Returns None when the backend recorded no job JSON, which is how a picking
+    backend that is not pytom stays unaffected.
+    """
+
+    job_json = picks.parameters.get("pytom_job_json_path")
+    if not isinstance(job_json, str):
+        return None
+    scores = picks.parameters.get("pytom_scores_volume_path")
+    angles = picks.parameters.get("pytom_angles_volume_path")
+    volumes_kept = isinstance(scores, str) and isinstance(angles, str)
+    return Artifact(
+        id=(
+            f"{manifest.tilt_series_id}:template_match:{picks.parameters['backend']}"
+            f"{variant_suffix(context)}"
+        ),
+        variant=variant_label(context),
+        kind=ArtifactKind.TEMPLATE_MATCH,
+        path=Path(job_json),
+        parent_ids=list(picks.parent_ids),
+        pixel_spacing_angstrom=picks.pixel_spacing_angstrom,
+        binning=tomogram.binning,
+        parameters={
+            "backend": picks.parameters["backend"],
+            "tilt_series_id": manifest.tilt_series_id,
+            "tomogram_branch": picks.parameters.get("tomogram_branch"),
+            "input_tomogram_id": tomogram.id,
+            "scores_volume_path": scores,
+            "angles_volume_path": angles,
+            "volumes_retained": volumes_kept,
+        },
+        storage_role=StorageRole.CANONICAL,
+        retention_policy=RetentionPolicy.KEEP,
+        can_recompute=True,
+        size_bytes=sum(
+            _path_size_bytes(Path(one))
+            for one in (job_json, scores, angles)
+            if isinstance(one, str)
+        ),
+    )
+
+
 def pick_and_register(
     backend: PickingBackend,
     tomogram: Artifact,
@@ -312,6 +369,15 @@ def pick_and_register(
     """Pick particles and register picks plus QC artifacts."""
 
     picks = backend.pick(tomogram, manifest, context, supporting_artifacts=supporting_artifacts)
+    match = _template_match_artifact(picks, manifest, context, tomogram=tomogram)
+    if match is not None:
+        # Picks descend from the search, and the search from the tomogram. Before
+        # this the search had no name, so a pick list restated the search's
+        # parameters instead of pointing at it — and re-reading the same search at
+        # another cut-off had nothing to point at either.
+        picks = Artifact.model_validate(
+            {**picks.model_dump(mode="json"), "parent_ids": [match.id]}
+        )
     qc_path = picks.parameters.get("qc_path")
     if not isinstance(qc_path, str):
         raise ValueError("picking backend must record qc_path")
@@ -336,7 +402,9 @@ def pick_and_register(
         can_recompute=True,
         size_bytes=Path(qc_path).stat().st_size,
     )
-    artifacts = [picks, qc]
+    # The match first: the registry refuses a child whose parent it has not seen,
+    # and picks are now the search's child rather than the tomogram's.
+    artifacts = [match, picks, qc] if match is not None else [picks, qc]
     registry.extend(artifacts, replace=replace_existing)
     return artifacts
 
