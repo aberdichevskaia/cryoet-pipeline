@@ -48,8 +48,26 @@ from cryoet_pipeline.rotations import (
 )
 
 
+def _resolve(stacks: list[Any], lengths: list[int], index: int) -> np.ndarray:
+    """The raw volume for a combined index, found across the stacks in order.
+
+    `ParticleRecord.index` is a position, not a name: in a refined STAR from a
+    cross-series average it is offset by every earlier stack's length. The
+    boundaries are the cumulative lengths, exactly the arithmetic
+    `_combine_particle_stacks` used to create the offsets.
+    """
+
+    start = 0
+    for stack, length in zip(stacks, lengths, strict=True):
+        if index < start + length:
+            return np.asarray(stack[index - start])
+        start += length
+    raise IndexError(f"combined index {index} is past the {start} particles given")
+
+
 def _aligned_slice(
-    stack: Any,
+    stacks: list[Any],
+    lengths: list[int],
     record: ParticleRecord,
     *,
     low_pass_angstrom: float,
@@ -64,7 +82,7 @@ def _aligned_slice(
     """
 
     volume = center_particle_volume(
-        torch.as_tensor(np.asarray(stack[record.index]), dtype=torch.float32)
+        torch.as_tensor(_resolve(stacks, lengths, record.index), dtype=torch.float32)
     )
     aligned = resample_volume_zyx(
         volume,
@@ -87,7 +105,15 @@ def _aligned_slice(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stack", required=True, type=Path, help="Particle stack Zarr.")
+    parser.add_argument(
+        "--stack",
+        required=True,
+        type=Path,
+        nargs="+",
+        help="Particle stack Zarr. Repeat it, in tilt-series id order, when the "
+        "STAR is the refined one from a cross-series average: its indices run "
+        "through every stack that was averaged, so one stack cannot resolve them.",
+    )
     parser.add_argument(
         "--metadata",
         required=True,
@@ -129,15 +155,25 @@ def main() -> int:
     if args.order == "score":
         records.sort(key=lambda one: (one.score is None, -(one.score or 0.0)))
 
-    stack = cast(Any, zarr.open(args.stack, mode="r"))
-    available = int(stack.shape[0])
+    stacks = [cast(Any, zarr.open(one, mode="r")) for one in args.stack]
+    lengths = [int(one.shape[0]) for one in stacks]
+    available = sum(lengths)
+    for path, length in zip(args.stack, lengths, strict=True):
+        print(f"  {length:>5} particles in {path.name}")
+    if available != len(records) and len(args.stack) > 1:
+        print(
+            f"\nthe stacks hold {available} particles and the STAR describes "
+            f"{len(records)}. A combined index only resolves if the stacks are the "
+            "ones that were averaged, given in tilt-series id order — the order "
+            "`average-particles` sorts them into. Check the list and its order."
+        )
     usable = [one for one in records if one.index < available]
     if len(usable) != len(records):
         print(
             f"{len(records) - len(usable)} of {len(records)} records index past the "
-            f"end of this stack ({available} particles). A refined STAR from a "
-            "cross-tilt-series average indexes every stack it averaged, so pair it "
-            "with the stack it was written for, or pass a single series' STAR."
+            f"end of what was given ({available} particles). A refined STAR from a "
+            "cross-series average indexes every stack it averaged; pass them all, "
+            "in tilt-series id order."
         )
     if not usable:
         return 1
@@ -145,7 +181,8 @@ def main() -> int:
 
     tiles = [
         _aligned_slice(
-            stack,
+            stacks,
+            lengths,
             record,
             low_pass_angstrom=args.low_pass_angstrom,
             pixel_spacing_angstrom=args.pixel_spacing_angstrom,
