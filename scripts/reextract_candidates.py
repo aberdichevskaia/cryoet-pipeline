@@ -75,6 +75,35 @@ def _one_false_positive_z(search_space: float) -> float:
     return (low + high) / 2.0
 
 
+def _report_job_paths(job: Path) -> None:
+    """Print the paths the job JSON holds, and whether they still exist.
+
+    The first suspect when re-extraction fails: the match ran in a temporary
+    directory, so a job JSON written there records paths inside it, and moving
+    the job to a project directory does not move what it points at. If these
+    read as gone, the saved volumes are not re-readable without rewriting the
+    job, and that is a defect in how the match is persisted rather than in this
+    script.
+    """
+
+    try:
+        payload = json.loads(job.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"    (could not read the job JSON: {exc})")
+        return
+    print("    paths recorded inside the job JSON:")
+    found = False
+    for key, value in sorted(payload.items()):
+        if not isinstance(value, str) or "/" not in value:
+            continue
+        found = True
+        state = "exists" if Path(value).exists() else "GONE"
+        print(f"      {key} = {value}  [{state}]")
+    if not found:
+        print("      (none — the job holds no path-like values at the top level)")
+        print(f"      top-level keys: {', '.join(sorted(payload))}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job", required=True, type=Path, help="Saved *_job.json.")
@@ -129,7 +158,16 @@ def main() -> int:
             result = subprocess.run(command, cwd=work, capture_output=True, text=True)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "no output").strip()
-                print(f"{diameter:>9.0f}  extraction failed: {detail[:120]}")
+                print(f"\n{diameter:>9.0f}  extraction FAILED. Command:")
+                print("    " + " ".join(command))
+                # The exception is on the LAST lines of a traceback, so showing
+                # the first 120 characters hides it — which is what the first
+                # version of this did, costing a round trip.
+                tail = detail.splitlines()[-12:]
+                for line in tail:
+                    print(f"    {line}")
+                _report_job_paths(job)
+                print()
                 continue
             stars = sorted(work.glob("*_particles.star"))
             if not stars:
