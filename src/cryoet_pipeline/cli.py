@@ -2108,7 +2108,20 @@ def _echo_averaging_summary(report: dict[str, Any]) -> None:
     trace = report.get("resolution_trace_angstrom") or []
     if len(trace) > 1:
         shown = ", ".join("none" if value is None else f"{value:.0f}" for value in trace)
-        typer.echo(f"  per iteration: {shown} A")
+        typer.echo(f"  resolution per iteration: {shown} A")
+    limits = report.get("low_pass_trace_angstrom") or []
+    if len(limits) > 1:
+        # Printed beside the resolution because the two ARE a feedback loop: the
+        # limit comes from the previous iteration's agreement, and the agreement
+        # is measured on a reference cut at that limit. A resolution that never
+        # moves while the limit never moves either says the loop is not running;
+        # a resolution better than the limit says the halves agree in a band the
+        # refinement never used, which is what template bias looks like.
+        typer.echo(
+            "  low-pass per iteration:   "
+            + ", ".join(f"{value:.0f}" for value in limits)
+            + " A"
+        )
 
 
 def _echo_extraction_summary(report: dict[str, Any]) -> None:
@@ -3160,6 +3173,18 @@ def compute_fsc_command(
             )
         volume_a = volume_a.to(torch_device)
         volume_b = volume_b.to(torch_device)
+        if volume_a.shape != volume_b.shape:
+            # Same voxel size, different box: the template is built at the size
+            # its density needs and the average at the extraction box, so these
+            # routinely differ — 39 against 48 for a ribosome here. Padding the
+            # smaller one centrally is the correct reconciliation because it
+            # leaves the pixel size, and therefore every shell's resolution,
+            # untouched; resampling either would not.
+            volume_a, volume_b, padded = _pad_to_common_box(volume_a, volume_b)
+            typer.echo(
+                f"padded the smaller map from {padded} to {tuple(volume_a.shape)} so the "
+                "shells line up; the voxel size is unchanged"
+            )
         resolved_pixel_spacing = (
             pixel_spacing_angstrom if pixel_spacing_angstrom is not None else voxel_size_a
         )
@@ -3728,6 +3753,43 @@ def _labelled(artifact: Artifact, variant: str) -> bool:
     return artifact.variant == variant or (
         artifact.variant is None and artifact.id.endswith(f":{variant}")
     )
+
+
+def _pad_to_common_box(first: Any, second: Any) -> tuple[Any, Any, tuple[int, ...]]:
+    # Annotated `Any` rather than `torch.Tensor` because this module imports torch
+    # lazily on purpose — a missing optional dependency must not break unrelated
+    # commands — and a module-level annotation would defeat that.
+    """Zero-pad the smaller cube to the larger, centred, and say which grew.
+
+    Centred so that a map whose density sits at the box centre — which both of
+    these do — stays at the centre. Zeros because outside a template's own box
+    there is no density, and because the maps are mean-centred before an FSC
+    anyway, so zero is the neutral value rather than an invented one.
+    """
+
+    import torch
+
+    if first.shape == second.shape:
+        return first, second, tuple(first.shape)
+    smaller, larger = (first, second) if first.shape[0] < second.shape[0] else (second, first)
+    original = tuple(smaller.shape)
+    target = larger.shape[0]
+    if any(size != smaller.shape[0] for size in smaller.shape) or any(
+        size != target for size in larger.shape
+    ):
+        raise typer.BadParameter(
+            f"only cubic boxes can be padded to match, got {tuple(first.shape)} and "
+            f"{tuple(second.shape)}",
+            param_hint="model_map",
+        )
+    pad = target - smaller.shape[0]
+    before = pad // 2
+    padded = torch.nn.functional.pad(
+        smaller, (before, pad - before) * 3, mode="constant", value=0.0
+    )
+    if first.shape[0] < second.shape[0]:
+        return padded, second, original
+    return first, padded, original
 
 
 def _select_variant(
