@@ -405,6 +405,28 @@ what the published work on this dataset did differently — most likely
 per-particle per-tilt geometry refinement, which is a different architecture
 rather than a missing step, but that is inference and not established.
 
+**A 2.9% pixel-size discrepancy with the published work, unresolved and cheap
+to bound.** The mdoc records `PixelSpacing = 1.223` and the stack header agrees,
+which is where this pipeline gets its number; Xing et al. state 1.188 for the
+same data. Two instrument records against one figure in a paper, so metadata
+reading is not the fault — most likely a calibrated value against SerialEM's
+calibration table.
+
+It is not free either. The template is resampled to the voxel size this pipeline
+attributes to the tomogram, so if 1.188 is the true scale a 290 A ribosome spans
+30.5 voxels in the data and 29.6 in the template. That displaces features at the
+particle's edge by 4.3 A, which combines with the 8.1 A alignment residual in
+quadrature to 9.2 A — a 13% worse effective error, a band of 41 A instead of 36,
+and **a factor of 1.20 in sigma**. Real, and not the factor of three that is
+missing.
+
+Settling it does not need to know which figure is right: rescale the template and
+see whether matching improves, one series, 29 minutes. Worth doing after the
+decisive test rather than instead of it. If 1.188 turns out to be correct then
+every derived number here shifts by 3% — voxel size, thickness, the residual in
+nm, the 36 A ceiling — which is a systematic worth knowing about even though
+nothing in the argument turns on it.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
