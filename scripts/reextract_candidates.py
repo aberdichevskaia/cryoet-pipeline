@@ -199,11 +199,18 @@ def main() -> int:
     for diameter in args.particle_diameter:
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)
-            # Symlinked, not copied: these are about a gigabyte each.
-            for source in volumes:
-                (work / source.name).symlink_to(source)
+            # The job is rebased first, because pytom derives the volume names
+            # from the TOMOGRAM's stem rather than from whatever we called the
+            # files — so the links can only be named once that stem is known.
+            payload = _rebased_job(job, work, args)
             job_copy = work / job.name
-            job_copy.write_text(json.dumps(_rebased_job(job, work, args)))
+            job_copy.write_text(json.dumps(payload))
+            stem = Path(payload["tomogram"]).stem
+            # Symlinked, not copied: these are about a gigabyte each.
+            for source, expected in zip(
+                volumes, (f"{stem}_scores.mrc", f"{stem}_angles.mrc"), strict=True
+            ):
+                (work / expected).symlink_to(source)
             command = [
                 str(args.executable),
                 "-j", str(job_copy),
