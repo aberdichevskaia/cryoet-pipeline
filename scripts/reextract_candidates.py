@@ -162,6 +162,17 @@ def main() -> int:
     )
     parser.add_argument("--number-of-particles", type=int, default=2000)
     parser.add_argument("--number-of-false-positives", type=float, default=100.0)
+    parser.add_argument(
+        "--cut-off",
+        type=float,
+        default=None,
+        help="Score floor, passed to pytom as -c. Set it low (or 0) to take the "
+        "top N peaks with NO significance threshold — which is what the published "
+        "work on this dataset did: top 800 per tomogram, then RELION "
+        "classification found the real 13.8% among them. A floor is a decision "
+        "rule, not a property of the data, and applying one is how a real "
+        "minority gets discarded before anything can separate it.",
+    )
     parser.add_argument("--apix", type=float, default=None, help="For neighbour distances.")
     parser.add_argument(
         "--tomogram",
@@ -215,9 +226,14 @@ def main() -> int:
                 str(args.executable),
                 "-j", str(job_copy),
                 "-n", str(args.number_of_particles),
-                "--number-of-false-positives", f"{args.number_of_false_positives:.6f}",
                 "--particle-diameter", f"{diameter:.6f}",
             ]
+            if args.cut_off is not None:
+                command.extend(["-c", f"{args.cut_off:.6f}"])
+            else:
+                command.extend(
+                    ["--number-of-false-positives", f"{args.number_of_false_positives:.6f}"]
+                )
             result = subprocess.run(command, cwd=work, capture_output=True, text=True)
             if result.returncode != 0:
                 detail = (result.stderr or result.stdout or "no output").strip()

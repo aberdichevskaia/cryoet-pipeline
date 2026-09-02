@@ -361,6 +361,50 @@ across the five series is 147 A and 19% of picks have a neighbour closer than
 already-existing `--pytom-extract-particle-diameter`, set to twice the diameter.
 Testing it needs a re-match, which is the first paragraph above.
 
+**Lane B: the pipeline is alignment-limited, and that is the finding.** Five
+tilt-series of EMPIAR-11538 ran end to end and template matching found no
+ribosome detections: in pytom's own sigma the best pick reaches 7.2 against a
+one-false-positive floor of 7.24, where pytom's own benchmark reaches ~20 for
+80S in thin ice. The cause is quantitative and it is upstream of everything this
+project can tune.
+
+The fine-alignment residual is 0.69 to 0.92 nm. An rms misalignment attenuates
+frequency `k` by `exp(-2 pi^2 delta^2 k^2)`, so at 35 A only 35% of the signal
+survives, at 25 A 12%, at 20 A 4%. Matching at 35 A is therefore correct and
+matching finer would add noise. Significance grows as the square root of the
+independent Fourier samples used and that count as `d^-3`, so a 20 A band would
+multiply sigma by 2.3 — turning 7.2 into 16.7, essentially the benchmark. Getting
+there needs a residual of 0.45 nm against the 0.79 median: a 1.8x improvement in
+the tilt-series alignment, which is the only lever.
+
+**Everything else was checked and cleared, and the list is the useful part.** The
+Zarr canonicalisation is voxel-exact against the IMOD `.rec` — verified on eight
+random voxels, `.rec` (928, 296, 960) as `[y, z, x]` to Zarr (296, 928, 960) as
+`[z, y, x]`. The tilt angles fed to pytom match the reconstruction, 59 of 59 with
+none dropped, so the missing wedge is modelled from the right set. The template's
+density extends 294/313/303 A, right for an 80S, and its contrast is inverted as
+the tomogram needs. The template mask and the peak-exclusion distance were both
+wrong and are both fixed. CTF is ruled out by arithmetic: the first zero sits at
+14 to 31 A across the fitted defocus range, so a 35 A band is inside the first
+pass band. Binning is ruled out too — bin8's Nyquist is 19.6 A against a 36 A
+ceiling, nearly a factor of two of headroom already unused, so finer sampling
+buys frequencies that hold nothing.
+
+**A supervisor's read, worth recording because it beat every metric here.** Shown
+the 706-particle average he said it looks like a ribosome shell and something is
+not right, and gave five checks. Three were already possible, two were not and
+were built (`--class-number`, and a particle gallery). One of his points
+reframed the whole question: significance tests ask "is any single pick a
+detection" and cannot see a minority, while classification asks "is there a
+subpopulation" — which is the better question for this data and the one still
+unanswered.
+
+**What still has no answer.** Whether a minority of real ribosomes hides among
+mostly-noise picks, which needs classification and a look at the classes. And
+what the published work on this dataset did differently — most likely
+per-particle per-tilt geometry refinement, which is a different architecture
+rather than a missing step, but that is inference and not established.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
