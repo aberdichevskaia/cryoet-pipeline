@@ -1204,3 +1204,101 @@ def test_the_agreement_trace_moves_where_the_crossing_cannot(tmp_path: Path) -> 
     # be read together — which is the only way the loop is legible.
     assert len(report["resolution_trace_angstrom"]) == len(agreement)
     assert len(report["low_pass_trace_angstrom"]) == len(agreement)
+
+
+def test_averaging_can_be_restricted_to_one_class(tmp_path: Path) -> None:
+    """The step between classifying and having a structure.
+
+    Classification writes `rlnClassNumber` per particle and, until this, nothing
+    read it: the workflow "classify into K, look at the K maps, refine the one
+    that is not junk" had no way to express its last step. Per-series counts come
+    back correct too, recovered by arithmetic over the original offsets rather
+    than from the records — a record cannot say which tilt-series it came from.
+    """
+
+    from cryoet_pipeline.backends.subtomogram import (
+        _CombinedParticles,
+        filter_combined_by_class,
+    )
+    from cryoet_pipeline.particles import ParticleRecord
+
+    def record(index: int, class_number: int) -> ParticleRecord:
+        return ParticleRecord(
+            index=index,
+            x_px=0.0,
+            y_px=0.0,
+            z_px=0.0,
+            rot_deg=0.0,
+            tilt_deg=0.0,
+            psi_deg=0.0,
+            shift_x_px=0.0,
+            shift_y_px=0.0,
+            shift_z_px=0.0,
+            score=0.5,
+            class_number=class_number,
+            random_subset=1 + (index % 2),
+        )
+
+    # Two series of three particles. Classes alternate so both series contribute.
+    classes = [1, 2, 1, 2, 1, 2]
+    combined = _CombinedParticles(
+        volumes=[f"volume-{index}" for index in range(6)],
+        records=[record(index, classes[index]) for index in range(6)],
+        box_size=8,
+        tilt_series_ids=["TS_A", "TS_B"],
+        stack_ids=["a", "b"],
+        counts=[3, 3],
+    )
+
+    only_one = filter_combined_by_class(combined, 1)
+
+    assert only_one.particle_count == 3
+    assert only_one.volumes == ["volume-0", "volume-2", "volume-4"]
+    # Re-indexed to positions in the new list, or every later subscript is wrong.
+    assert [one.index for one in only_one.records] == [0, 1, 2]
+    # Series 0 held indices 0,1,2 and contributed 0 and 2; series 1 held 3,4,5
+    # and contributed 4.
+    assert only_one.counts == [2, 1]
+    assert sum(only_one.counts) == only_one.particle_count
+    assert only_one.tilt_series_ids == ["TS_A", "TS_B"]
+
+    # The half-set assignment travels with each particle, unchanged.
+    assert [one.random_subset for one in only_one.records] == [1, 1, 1]
+
+
+def test_asking_for_a_class_nobody_is_in_says_which_classes_exist(tmp_path: Path) -> None:
+    """So a typo in --class-number does not read as "this class is empty"."""
+
+    from cryoet_pipeline.backends.subtomogram import (
+        _CombinedParticles,
+        filter_combined_by_class,
+    )
+    from cryoet_pipeline.particles import ParticleRecord
+
+    combined = _CombinedParticles(
+        volumes=["v"],
+        records=[
+            ParticleRecord(
+                index=0,
+                x_px=0.0,
+                y_px=0.0,
+                z_px=0.0,
+                rot_deg=0.0,
+                tilt_deg=0.0,
+                psi_deg=0.0,
+                shift_x_px=0.0,
+                shift_y_px=0.0,
+                shift_z_px=0.0,
+                score=0.5,
+                class_number=2,
+                random_subset=1,
+            )
+        ],
+        box_size=8,
+        tilt_series_ids=["TS_A"],
+        stack_ids=["a"],
+        counts=[1],
+    )
+
+    with pytest.raises(ValueError, match=r"classes \[2\]"):
+        filter_combined_by_class(combined, 5)

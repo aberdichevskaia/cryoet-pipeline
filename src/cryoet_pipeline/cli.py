@@ -3010,6 +3010,16 @@ def average_particles(
             "Averaging the same particles twice is what a parameter sweep is."
         ),
     ] = None,
+    class_number: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="[fft-refinement] Average only the particles classification put in "
+            "this class. The step between classifying into K classes and refining the "
+            "one that is not junk — without it the class assignment is written and "
+            "read by nothing.",
+        ),
+    ] = None,
 ) -> None:
     """Iteratively refine per-particle orientation/shift and average subtomograms."""
 
@@ -3044,6 +3054,7 @@ def average_particles(
         "low_pass_margin_shells": low_pass_margin_shells,
         "initial_reference_correlation_threshold": initial_reference_correlation_threshold,
         "num_classes": num_classes,
+        "class_number": class_number,
         "cone_range_deg": cone_range_deg,
         "cone_sampling_deg": cone_sampling_deg,
         "inplane_range_deg": inplane_range_deg,

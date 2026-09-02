@@ -600,6 +600,14 @@ class FftRefinementAveragingBackend:
         device = torch_device_for_preference(context.device)
 
         combined = _combine_particle_stacks(pairs, device=device)
+        # Refining one class is the step between classifying and having a
+        # structure: the assignment was written into the STAR and read by
+        # nothing. Only on this backend, because it is the one that refines
+        # the half-sets independently — a class picked out of a joint
+        # multi-class run should be refined on the gold-standard path.
+        only_class = _optional_positive_int_parameter(context, "class_number")
+        if only_class is not None:
+            combined = filter_combined_by_class(combined, only_class)
         scope = averaging_scope(combined.tilt_series_ids)
         paths = _averaging_paths(
             context.output_dir,
@@ -1796,6 +1804,56 @@ def averaging_scope(tilt_series_ids: Sequence[str]) -> str:
     return f"{tilt_series_ids[0]}_and_{len(tilt_series_ids) - 1}_more"
 
 
+def filter_combined_by_class(
+    combined: _CombinedParticles, class_number: int
+) -> _CombinedParticles:
+    """Keep only the particles classification assigned to one class.
+
+    The step the workflow needs and did not have: classify into K classes, look
+    at the K maps, then average or refine the one that is not junk. Without this
+    the class assignment is written into the STAR and read by nothing.
+
+    Per-series counts are recovered by arithmetic rather than from the records,
+    because a record cannot say which tilt-series it came from — the combined
+    index is positional. The original offsets are known from `counts`, so the
+    range each kept index falls in identifies its series. That is the recovery
+    the roadmap argues makes a per-particle identity column unnecessary for now,
+    and this is it being used rather than asserted.
+    """
+
+    boundaries: list[int] = []
+    running = 0
+    for count in combined.counts:
+        running += count
+        boundaries.append(running)
+
+    kept = [record for record in combined.records if record.class_number == class_number]
+    if not kept:
+        available = sorted({record.class_number for record in combined.records})
+        raise ValueError(
+            f"no particles are in class {class_number}; classification assigned "
+            f"{len(combined.records)} particles to classes {available}"
+        )
+
+    per_series = [0] * len(combined.counts)
+    for record in kept:
+        for position, boundary in enumerate(boundaries):
+            if record.index < boundary:
+                per_series[position] += 1
+                break
+
+    volumes = [combined.volumes[record.index] for record in kept]
+    records = [replace(record, index=position) for position, record in enumerate(kept)]
+    return _CombinedParticles(
+        volumes=volumes,
+        records=records,
+        box_size=combined.box_size,
+        tilt_series_ids=list(combined.tilt_series_ids),
+        stack_ids=list(combined.stack_ids),
+        counts=per_series,
+    )
+
+
 def _combine_particle_stacks(
     pairs: Sequence[tuple[Artifact, TiltSeriesManifest]],
     *,
@@ -1981,6 +2039,24 @@ def _optional_float_parameter(context: BackendContext, key: str) -> float | None
     if not math.isfinite(normalized):
         raise ValueError(f"context parameter {key!r} must be finite")
     return normalized
+
+
+def _optional_positive_int_parameter(context: BackendContext, key: str) -> int | None:
+    """Read an optional positive int, or None when it was not asked for.
+
+    The sibling of `_optional_float_parameter`; absent until a caller needed to
+    say "only this class" and have "no class filter" be a distinct answer from
+    "class zero".
+    """
+
+    value = context.parameters.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value <= 0:
+        raise ValueError(f"context parameter {key!r} must be greater than zero")
+    return value
 
 
 def _optional_path_parameter(context: BackendContext, key: str) -> Path | None:
