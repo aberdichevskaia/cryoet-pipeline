@@ -33,21 +33,40 @@ from typing import Any, cast
 import numpy as np
 
 
-def _slice_deviation(tomogram: Any, *, stride: int) -> np.ndarray:
-    """Standard deviation of every Z slice, from a subsample of each.
+def _profiles(tomogram: Any, *, stride: int, smooth: int) -> dict[str, np.ndarray]:
+    """Three per-slice statistics, because only one of them sees the specimen.
 
-    Subsampled because the volume is about a gigabyte and a slice's spread is
-    well estimated from a fraction of its voxels — the profile's shape is what
-    matters, not the fourth digit.
+    The first attempt used the raw per-slice standard deviation and found
+    nothing: it varied by 15% across a reconstruction whose specimen fills half.
+    Back-projection spreads noise through the whole volume, so vacuum is not
+    empty — it holds reconstruction noise of much the same amplitude, and
+    variance cannot tell the two apart.
+
+    What does tell them apart is correlation. Real density is smooth between
+    neighbouring voxels and noise is not, so blurring a slice keeps the specimen
+    and cancels the vacuum — which is exactly why the lamella becomes visible in
+    3dmod when ten slices are averaged. `smoothed` is that measurement.
+
+    `mean` is offered too because protein is dark, so a slice through the
+    specimen should sit lower than one through vacuum, and that needs no
+    assumption about correlation lengths at all.
     """
 
+    from scipy.ndimage import uniform_filter
+
     depth = tomogram.shape[0]
-    return np.array(
-        [
-            float(np.asarray(tomogram[index, ::stride, ::stride], dtype=np.float64).std())
-            for index in range(depth)
-        ]
-    )
+    raw, smoothed, means = [], [], []
+    for index in range(depth):
+        plane = np.asarray(tomogram[index, ::stride, ::stride], dtype=np.float64)
+        raw.append(float(plane.std()))
+        means.append(float(plane.mean()))
+        # Blur in-plane: what survives is what was spatially correlated.
+        smoothed.append(float(uniform_filter(plane, size=smooth).std()))
+    return {
+        "smoothed sd": np.array(smoothed),
+        "raw sd": np.array(raw),
+        "mean": -np.array(means),  # negated: protein is dark, so lower is more
+    }
 
 
 def _boundaries(profile: np.ndarray, *, fraction: float) -> tuple[int, int]:
@@ -74,6 +93,13 @@ def main() -> int:
     parser.add_argument("--tomogram", required=True, type=Path, help="Canonical Zarr.")
     parser.add_argument("--stride", type=int, default=4, help="Subsample within each slice.")
     parser.add_argument(
+        "--smooth-px",
+        type=int,
+        default=8,
+        help="In-plane blur before measuring spread. Larger keeps only coarser "
+        "structure, which is what distinguishes specimen from reconstruction noise.",
+    )
+    parser.add_argument(
         "--fraction",
         type=float,
         default=0.5,
@@ -97,18 +123,34 @@ def main() -> int:
     depth = int(tomogram.shape[0])
     print(f"{args.tomogram.name}: {tomogram.shape} at {apix or '?'} A/voxel\n")
 
-    profile = _slice_deviation(tomogram, stride=args.stride)
+    profiles = _profiles(tomogram, stride=args.stride, smooth=args.smooth_px)
+    step = max(depth // 40, 1)
+    contrasts: dict[str, float] = {}
+    for name, profile in profiles.items():
+        baseline = float(np.sort(profile)[: max(len(profile) // 10, 1)].mean())
+        span = float(profile.max()) - baseline
+        contrasts[name] = span / abs(baseline) if baseline else 0.0
+
+    print("contrast between the quietest slices and the peak, per statistic:")
+    for name, value in contrasts.items():
+        print(f"  {name:12} {value:+7.2%}")
+    chosen = max(contrasts, key=lambda name: contrasts[name])
+    print(f"\nusing {chosen!r} — the one that separates specimen from vacuum best.")
+    print("A statistic that shows a few percent is not seeing the specimen at all;")
+    print("compare the numbers above before trusting the boundary.\n")
+
+    profile = profiles[chosen]
     low, high = _boundaries(profile, fraction=args.fraction)
     low = max(low - args.margin_px, 0)
     high = min(high + args.margin_px, depth - 1)
 
-    peak = profile.max()
-    step = max(depth // 40, 1)
-    print("per-slice spread (specimen is the plateau):")
+    floor = float(profile.min())
+    peak = float(profile.max())
+    print(f"per-slice {chosen} (specimen is the plateau):")
     for index in range(0, depth, step):
         marker = "|" if low <= index <= high else " "
-        bar = "#" * int(profile[index] / peak * 46)
-        print(f"  z {index:4d} {marker} {bar}")
+        scaled = (profile[index] - floor) / (peak - floor) if peak > floor else 0.0
+        print(f"  z {index:4d} {marker} {'#' * int(scaled * 46)}")
 
     thickness = high - low + 1
     print(f"\nslab: z {low} to {high}, {thickness} of {depth} voxels "
