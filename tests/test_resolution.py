@@ -166,3 +166,48 @@ def test_an_alignment_without_a_usable_residual_is_refused_too(tmp_path) -> None
 
     with pytest.raises(typer.BadParameter, match="records no usable residual_mean_nm"):
         _derived_low_pass_angstrom(registry, _manifest())
+
+
+def test_picks_are_selected_by_variant_when_several_exist(tmp_path) -> None:
+    """The lookup that refused as soon as labelling outputs became possible.
+
+    `pick-particles --output-variant` makes a second pick list for one series on
+    purpose, to compare two settings. Extraction and the ChimeraX export then
+    both refused with "expected exactly one picks artifact, found 3" and no way
+    to choose, because this lookup ignored `--variant` while every neighbouring
+    lookup honoured it.
+    """
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.cli import _picks_artifact
+    from cryoet_pipeline.models import Artifact, ArtifactKind
+
+    registry = ArtifactRegistry.empty()
+    for label in (None, "bin8-tightmask", "bin8-mask16"):
+        suffix = f":{label}" if label else ""
+        registry.add(
+            Artifact(
+                id=f"TS_TEST:picks:full:pytom-match-pick{suffix}",
+                variant=label,
+                kind=ArtifactKind.PICKS,
+                path=tmp_path / f"picks{suffix or '-plain'}.star",
+                parameters={"tilt_series_id": "TS_TEST"},
+            )
+        )
+
+    import typer
+
+    assert _picks_artifact(registry, _manifest(), variant="bin8-mask16").variant == (
+        "bin8-mask16"
+    )
+
+    # Asked for nothing in particular with several to choose from, it refuses and
+    # names them, rather than silently preferring the unlabelled one — which is
+    # what every neighbouring lookup does and is the better behaviour: an
+    # ambiguous lane should be resolved by the caller, not guessed at.
+    with pytest.raises(typer.BadParameter, match="found 3 candidates for picks"):
+        _picks_artifact(registry, _manifest(), variant=None)
+
+    # A label nothing carries falls back to the shared unlabelled artifact, which
+    # is how a lane that diverges further down still finds its common inputs.
+    assert _picks_artifact(registry, _manifest(), variant="bin4").variant is None

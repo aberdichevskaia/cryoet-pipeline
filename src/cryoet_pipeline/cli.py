@@ -2717,7 +2717,7 @@ def export_chimerax(
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
     tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
-    picks = _picks_artifact(artifact_registry, tilt_series_manifest)
+    picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
 
     registered_template = _template_artifacts(
         artifact_registry, tilt_series_manifest, variant=variant
@@ -2788,7 +2788,7 @@ def extract_particles(
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
     tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
-    picks = _picks_artifact(artifact_registry, tilt_series_manifest)
+    picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     selected_backend = _particle_extraction_backend(backend)
     parameters: dict[str, object] = {
         "variant": variant,
@@ -3794,19 +3794,29 @@ def _tomogram_artifact(
 def _picks_artifact(
     registry: ArtifactRegistry,
     manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
 ) -> Artifact:
+    """The picks for this series, narrowed by variant like every other lookup.
+
+    This used to demand exactly one and ignore `--variant`, so the moment a
+    second labelled pick list existed for a series — which is what
+    `--output-variant` exists to produce — both extraction and the ChimeraX
+    export refused, with a count and no way to choose. Labelling an output is
+    only useful if something downstream can select by the label.
+    """
+
     matches = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.PICKS)
         if artifact.covers(manifest.tilt_series_id)
     ]
-    if len(matches) != 1:
-        raise typer.BadParameter(
-            f"expected exactly one picks artifact for {manifest.tilt_series_id}, "
-            f"found {len(matches)}",
-            param_hint="registry",
-        )
-    return matches[0]
+    return _select_variant(
+        matches,
+        what="picks",
+        tilt_series_id=manifest.tilt_series_id,
+        variant=variant,
+    )
 
 
 def _particle_stack_artifact(
