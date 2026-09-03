@@ -1001,6 +1001,21 @@ class SubtomogramClassificationQc(BaseModel):
     backend: str
     particle_stack_ids: list[str]
     particle_count: int = Field(ge=1)
+    particle_counts: list[int] = Field(default_factory=list)
+    """Particles taken from each stack, positionally matching
+    `particle_stack_ids` — the same field `SubtomogramAveragingQc` carries.
+
+    Missing here until a class had to be checked for tracking a tilt-series
+    rather than a structure. A class drawn mostly from one series is separating
+    microscope conditions, which reproduces across classification seeds exactly
+    as faithfully as a real population does and is invisible in the class map.
+    Nothing recorded the composition, so the question could not be asked of a
+    finished run: `particle_count` gives the total and `tilt_series_ids` gives
+    the names, and neither says how the total divides.
+
+    Defaulted rather than required, so reports already written stay readable —
+    they answer the question with an empty list, which is honest.
+    """
     num_classes: int = Field(ge=1)
     iterations_run: int = Field(ge=0)
     cone_range_deg: float = Field(ge=0.0)

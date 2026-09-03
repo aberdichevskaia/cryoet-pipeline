@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Do two classifications of the same particles agree, or did they partition noise?
 
-    python3 scripts/compare_classifications.py --first <seed1.star> --second <seed7.star>
+    python3 scripts/compare_classifications.py \\
+        --first <seed1.star> --second <seed7.star> \\
+        --qc <the seed-1 classification QC json> \\
+        --registry outputs/ribo/artifacts.json
 
 Classification of pure noise also produces classes, and each will look like
 something. The classic way to be fooled is to classify once, pick the class that
@@ -31,6 +34,7 @@ remember to check.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -129,7 +133,56 @@ def _empirical_null(
     return np.array(indices), np.array(best_shares), np.array(all_shares)
 
 
-def _class_profile(records, *, particle_counts: list[int] | None) -> None:
+def _series_composition(qc: Path, registry: Path | None) -> tuple[list[str], list[int]]:
+    """Series names and their particle counts, read rather than typed.
+
+    This took a list of counts on the command line for one version, and the
+    first use of it pasted the four CLASS sizes — which summed to the same 4000,
+    passed the only check there was, and produced a series column computed
+    against boundaries that do not exist. The run has five series, so five counts
+    were needed; nothing could tell.
+
+    So the counts are read from the run's own report instead. `particle_counts`
+    is recorded there now, and for reports written before that field existed the
+    counts are recovered from the registry, since every particle-stack artifact
+    records its own `particle_count` and the report lists the stacks in order.
+    """
+
+    payload = json.loads(qc.read_text())
+    names = [str(one) for one in payload.get("tilt_series_ids") or []]
+    stack_ids = [str(one) for one in payload.get("particle_stack_ids") or []]
+    counts = [int(one) for one in payload.get("particle_counts") or []]
+    if counts:
+        return names, counts
+
+    if registry is None:
+        raise SystemExit(
+            f"{qc.name} records no particle_counts — it predates that field. Pass\n"
+            "--registry outputs/<project>/artifacts.json and the counts will be\n"
+            "recovered from the particle-stack artifacts it names."
+        )
+    entries = {
+        str(one["id"]): one
+        for one in json.loads(registry.read_text()).get("artifacts") or []
+    }
+    recovered: list[int] = []
+    for stack_id in stack_ids:
+        entry = entries.get(stack_id)
+        if entry is None:
+            raise SystemExit(
+                f"{qc.name} names the particle stack {stack_id}, which is not in\n"
+                f"{registry}. Without it the per-series counts cannot be recovered."
+            )
+        value = (entry.get("parameters") or {}).get("particle_count")
+        if value is None:
+            raise SystemExit(f"{stack_id} records no particle_count")
+        recovered.append(int(value))
+    return names, recovered
+
+
+def _class_profile(
+    records, *, particle_counts: list[int] | None, series_names: list[str] | None
+) -> None:
     """What each class tracks besides shape, for the classes that reproduce.
 
     A class can reproduce across seeds without being a population of particles:
@@ -145,8 +198,12 @@ def _class_profile(records, *, particle_counts: list[int] | None) -> None:
     from a single series is separating microscope conditions.
     """
 
+    header = "           n      z mean     z sd    score mean"
+    if particle_counts:
+        names = series_names or [f"s{one}" for one in range(1, len(particle_counts) + 1)]
+        header += "".join(f"  {one[-7:]:>8}" for one in names)
     print("what the first run's classes hold, besides a shape:")
-    print("           n      z mean     z sd    score mean" + ("     series" if particle_counts else ""))
+    print(header)
     boundaries = np.cumsum(particle_counts) if particle_counts else None
     for number in sorted({record.class_number for record in records}):
         members = [record for record in records if record.class_number == number]
@@ -159,10 +216,12 @@ def _class_profile(records, *, particle_counts: list[int] | None) -> None:
             # A combined index is a position in the concatenated stacks, so the
             # cumulative per-series counts are the only thing that says which
             # series a record came from — `ParticleRecord` cannot.
-            which = np.searchsorted(boundaries, [record.index for record in members], side="right")
+            which = np.searchsorted(
+                boundaries, [record.index for record in members], side="right"
+            )
             shares = np.bincount(which, minlength=len(particle_counts))
-            composition = "   " + " ".join(
-                f"{100 * value / max(len(members), 1):.0f}%" for value in shares
+            composition = "".join(
+                f"  {100 * value / max(len(members), 1):>7.0f}%" for value in shares
             )
         mean_score = f"{scores.mean():11.4f}" if scores.size else "          -"
         print(
@@ -170,10 +229,12 @@ def _class_profile(records, *, particle_counts: list[int] | None) -> None:
             f"{depths.std():8.1f} {mean_score}{composition}"
         )
     if boundaries is not None:
-        print(
-            "  series shares are in the order the counts were given; even shares "
-            "mean the classes are not separating series."
-        )
+        # What even shares mean is worth stating, because the expected share is
+        # the series' share of the whole, not 1/n_series: the series contribute
+        # different numbers of particles.
+        total = float(sum(particle_counts))
+        expected = "  ".join(f"{100 * one / total:.0f}%" for one in particle_counts)
+        print(f"  a class that is not separating series would show {expected}")
     print()
 
 
@@ -182,11 +243,20 @@ def main() -> int:
     parser.add_argument("--first", required=True, type=Path, help="Refined STAR, run one.")
     parser.add_argument("--second", required=True, type=Path, help="Refined STAR, run two.")
     parser.add_argument(
-        "--particle-counts",
+        "--qc",
+        type=Path,
         default=None,
-        help="Per-series particle counts, comma-separated, in tilt-series id order "
-        "— the `particle_counts` list in the averaging QC. Without them a record "
-        "cannot say which series it came from, so the series column is skipped.",
+        help="The run's own QC JSON, for the per-series composition column. A "
+        "record cannot say which series it came from — only the per-series counts "
+        "can, and typing them by hand is how the four class sizes got pasted in "
+        "their place. Omit it and the column is skipped rather than guessed.",
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=None,
+        help="Needed only when --qc predates the particle_counts field, to recover "
+        "the counts from the particle-stack artifacts the report names.",
     )
     parser.add_argument(
         "--null-rounds",
@@ -240,19 +310,29 @@ def main() -> int:
     totals = "".join(f"{value:7d}" for value in table.sum(axis=0))
     print(f"  total  {totals} {table.sum():8d}\n")
 
-    counts = (
-        [int(one) for one in args.particle_counts.split(",")]
-        if args.particle_counts
-        else None
-    )
-    if counts and sum(counts) != len(shared):
-        print(
-            f"--particle-counts sums to {sum(counts)} but the STAR describes "
-            f"{len(shared)} particles, so the series column would be wrong. "
-            "Skipping it; take the list from the averaging QC's particle_counts.\n"
-        )
-        counts = None
-    _class_profile(shared, particle_counts=counts)
+    names: list[str] | None = None
+    counts: list[int] | None = None
+    if args.qc is not None:
+        names, counts = _series_composition(args.qc, args.registry)
+        if sum(counts) != len(shared):
+            # Refused rather than warned about: a composition computed against
+            # the wrong boundaries is not a weaker answer, it is a different
+            # question answered confidently.
+            print(
+                f"REFUSING the series column: {args.qc.name} accounts for "
+                f"{sum(counts)} particles across {len(counts)} series "
+                f"({', '.join(str(one) for one in counts)}) but these STARs "
+                f"describe {len(shared)}. The QC and the STARs are from "
+                "different runs.\n"
+            )
+            names, counts = None, None
+        elif len(names) != len(counts):
+            print(
+                f"{args.qc.name} lists {len(names)} series and {len(counts)} "
+                "counts; the columns will be numbered instead of named.\n"
+            )
+            names = None
+    _class_profile(shared, particle_counts=counts, series_names=names)
 
     index = _adjusted_rand_index(table)
     null_index, null_best, null_shares = _empirical_null(

@@ -1161,6 +1161,7 @@ class ConeSearchRefinementBackend:
             backend=self.name,
             particle_stack_ids=combined.stack_ids,
             particle_count=particle_count,
+            particle_counts=combined.counts,
             num_classes=num_classes,
             iterations_run=num_iterations,
             cone_range_deg=cone_range_deg,
