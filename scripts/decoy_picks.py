@@ -459,22 +459,38 @@ def main() -> int:
                     f"+/- {decoy_spread.std():.2f} over {decoy_spread.size} boxes"
                 )
                 print(f"  ratio decoy/real: {ratio:.3f}")
-                # The percentiles carry what the mean cannot. If a real minority
-                # of the picks holds a dense particle, it moves the upper tail
-                # while barely moving the mean: 14% of boxes -- the published
-                # fraction for this dataset -- shifts p90 and p99 and leaves the
-                # median where it was. A mean ratio near 1.0 says the control is
-                # fair; only the tails say whether anything was found.
+                # The percentiles are printed for the LEFT tail, not the right.
+                #
+                # They were added expecting the opposite: a minority of boxes
+                # holding a dense particle should lift p90 while barely moving the
+                # mean, so p90 looked like a way to see the published 14% among
+                # the top 800. On the real data p90 came back identical to 0.1 for
+                # both sets in all five series, and the reason is that this
+                # statistic has no headroom. A box is 110592 voxels, so its
+                # standard deviation estimates the LOCAL one closely, and in a
+                # bin8 tomogram that quantity is set by reconstruction noise
+                # rather than by biology — a ribosome occupies about a quarter of
+                # the box at a contrast far below the noise, and moves the box
+                # standard deviation by less than the spread between boxes.
+                #
+                # So this cannot detect particles, and no version of it can. What
+                # it does measure is the left tail: boxes that sit partly outside
+                # the specimen are genuinely quieter, and comparing p1 and p10
+                # says whether the two sets sample the same material. That is the
+                # question the control needs answered, and it is the only one
+                # answered here.
                 _describe(real_spread, "real ")
                 _describe(decoy_spread, "decoy")
-                upper = float(
-                    np.percentile(real_spread, 90) / np.percentile(decoy_spread, 90)
+                lower = float(
+                    np.percentile(real_spread, 10) / np.percentile(decoy_spread, 10)
                 )
                 print(
-                    f"  p90 real / p90 decoy: {upper:.3f} — above 1 is where a "
-                    "dense minority among the picks would appear"
+                    f"  p10 real / p10 decoy: {lower:.3f} — above 1 means the real "
+                    "picks avoid the emptiest boxes more than random positions do, "
+                    "which is template matching preferring material over vacuum "
+                    "and not evidence of a particle"
                 )
-                spread_summary["p90_ratio"] = upper
+                spread_summary["p10_ratio"] = lower
                 if 0.9 <= ratio <= 1.1:
                     print(
                         "  Within a tenth, so the control boxes hold as much "
