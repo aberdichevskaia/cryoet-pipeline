@@ -119,12 +119,25 @@ def main() -> int:
 
     by_index = {record.index: record.class_number for record in other}
     shared = [record for record in one if record.index in by_index]
-    if len(shared) != len(one) or len(one) != len(other):
+    if len(one) != len(other):
+        # Refused rather than warned about. The first version printed this and
+        # then printed the whole comparison anyway, so a reader who skimmed the
+        # warning got a confident "indistinguishable from chance" computed over
+        # unrelated particles — which is worse than no answer, because it looks
+        # like one. `ParticleRecord.index` is a position, not a name: index 0 in
+        # a 706-particle run and index 0 in a 4000-particle run are different
+        # objects, and nothing here can detect that beyond the count.
         print(
-            f"comparing the {len(shared)} particles present in both. A mismatch means "
-            "the two runs did not see the same particle stacks, in which case the "
-            "indices do not refer to the same particles and nothing below is valid.\n"
+            f"REFUSING: the two runs describe {len(one)} and {len(other)} particles.\n"
+            "\nA classification's indices are positions in the stacks it read, so two\n"
+            "runs are only comparable if they read the same stacks — which means the\n"
+            "same --variant. Comparing across variants pairs unrelated particles and\n"
+            "returns a number that looks like an answer.\n"
+            "\nPass the two seeds of ONE variant. In this project that is a pair like\n"
+            "  ..._bin8-top800-cls4-s1_particles.star\n"
+            "  ..._bin8-top800-cls4-s7_particles.star"
         )
+        return 1
     if not shared:
         print("no particles in common — check that both runs used the same --variant")
         return 1
