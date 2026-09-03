@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import mrcfile
@@ -1302,3 +1303,107 @@ def test_asking_for_a_class_nobody_is_in_says_which_classes_exist(tmp_path: Path
 
     with pytest.raises(ValueError, match=r"classes \[2\]"):
         filter_combined_by_class(combined, 5)
+
+
+def test_refining_one_class_reads_the_class_from_a_supplied_star(tmp_path: Path) -> None:
+    """End to end, because the component test passed while the path did not.
+
+    `--class-number` was built for "classify into K, then refine the one that is
+    not junk" and could not do it: extraction writes `class_number=1` for every
+    particle, classification writes the assignment into its own output STAR in
+    `averages/`, and the filter read the stacks. So the flag saw one class always.
+    The component test set the classes by hand on a `_CombinedParticles` and
+    therefore proved nothing about the path.
+    """
+
+    from cryoet_pipeline.particles import read_particle_star, write_particle_star
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (25.0, 15.0, -20.0), (-30.0, 45.0, 10.0), (60.0, -20.0, 35.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+
+    # What a classification would have written: the same particles, same indices,
+    # with an assignment the stacks know nothing about.
+    extracted = read_particle_star(Path(str(stack.parameters["metadata_path"])))
+    assert {one.class_number for one in extracted} == {1}, "extraction assigns one class"
+    classified = tmp_path / "classified.star"
+    # Split by halves of the list, NOT by parity: the half-set assignment is
+    # `1 + index % 2`, so a class following the same parity would put an entire
+    # class in one half-set and leave the other empty, which gold-standard
+    # refinement refuses. That is a real hazard of filtering by class — with a
+    # thousand particles per class it is vanishingly unlikely, and the refusal
+    # names it clearly if it happens.
+    write_particle_star(
+        classified,
+        [
+            replace(one, class_number=1 if index < 2 else 2)
+            for index, one in enumerate(extracted)
+        ],
+    )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    _, qc_artifact = average_and_register(
+        FftRefinementAveragingBackend(),
+        [stack],
+        [_manifest()],
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "num_iterations": 1,
+                "particle_metadata_path": classified,
+                "class_number": 2,
+                "variant": "class2",
+            },
+        ),
+        registry,
+    )
+
+    report = json.loads(qc_artifact.path.read_text())
+    # Two of the four particles were put in class 2, and only those were averaged.
+    assert report["particle_count"] == 2
+    assert report["particle_counts"] == [2]
+
+
+def test_a_supplied_star_that_does_not_match_the_stacks_is_refused(tmp_path: Path) -> None:
+    """A mismatch would address the wrong particle at every subscript, silently."""
+
+    from cryoet_pipeline.backends.subtomogram import (
+        _CombinedParticles,
+        replace_records_from_star,
+    )
+    from cryoet_pipeline.particles import read_particle_star, write_particle_star
+
+    box_size = 24
+    reference = _blob_reference(box_size)
+    angles = [(0.0, 0.0, 0.0), (25.0, 15.0, -20.0)]
+    stack, _ = _particle_stack_artifact(
+        tmp_path,
+        [_synthetic_particle(reference, true_angles=a) for a in angles],
+        angles,
+    )
+    extracted = read_particle_star(Path(str(stack.parameters["metadata_path"])))
+
+    short = tmp_path / "short.star"
+    write_particle_star(short, extracted[:1])
+    combined = _CombinedParticles(
+        volumes=["a", "b"],
+        records=extracted,
+        box_size=box_size,
+        tilt_series_ids=["TS_TEST"],
+        stack_ids=[stack.id],
+        counts=[2],
+    )
+    with pytest.raises(ValueError, match="describes 1 particles but the stacks hold 2"):
+        replace_records_from_star(combined, short)
+
+    gapped = tmp_path / "gapped.star"
+    write_particle_star(gapped, [replace(one, index=one.index + 5) for one in extracted])
+    with pytest.raises(ValueError, match="does not index the stacks contiguously"):
+        replace_records_from_star(combined, gapped)

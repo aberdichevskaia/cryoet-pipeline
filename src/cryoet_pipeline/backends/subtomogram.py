@@ -605,6 +605,9 @@ class FftRefinementAveragingBackend:
         # nothing. Only on this backend, because it is the one that refines
         # the half-sets independently — a class picked out of a joint
         # multi-class run should be refined on the gold-standard path.
+        supplied = _optional_path_parameter(context, "particle_metadata_path")
+        if supplied is not None:
+            combined = replace_records_from_star(combined, supplied)
         only_class = _optional_positive_int_parameter(context, "class_number")
         if only_class is not None:
             combined = filter_combined_by_class(combined, only_class)
@@ -1802,6 +1805,46 @@ def averaging_scope(tilt_series_ids: Sequence[str]) -> str:
     if len(tilt_series_ids) == 1:
         return tilt_series_ids[0]
     return f"{tilt_series_ids[0]}_and_{len(tilt_series_ids) - 1}_more"
+
+
+def replace_records_from_star(
+    combined: _CombinedParticles, metadata_path: Path
+) -> _CombinedParticles:
+    """Take the per-particle metadata from a supplied STAR instead of the stacks'.
+
+    The step that made `--class-number` usable. Classification writes the class it
+    assigned into its OWN output STAR, in `averages/`, and never back into the
+    particle stacks — whose extraction STAR says `class_number=1` for everything.
+    So a filter reading the stacks could only ever see one class, and the flag
+    built for "classify, then refine the good class" could not see the
+    classification.
+
+    Supplying the refined STAR carries the orientations with the classes, which is
+    what refining a chosen class should start from: the point classification left
+    it at, not the point extraction did.
+
+    The indices must line up exactly. A refined STAR from a cross-series average
+    holds combined indices over the same stacks in the same order, so it does —
+    and if it does not, every subsequent subscript would silently address the
+    wrong particle, which is why this is an error rather than a warning.
+    """
+
+    records = read_particle_star(metadata_path)
+    if len(records) != len(combined.volumes):
+        raise ValueError(
+            f"{metadata_path} describes {len(records)} particles but the stacks hold "
+            f"{len(combined.volumes)}. A supplied STAR has to be the one written for "
+            "these stacks, in this order — `average-particles` sorts them by "
+            "tilt-series id, so list them the same way it did"
+        )
+    positions = [record.index for record in records]
+    if positions != list(range(len(records))):
+        raise ValueError(
+            f"{metadata_path} does not index the stacks contiguously from zero, so "
+            "its rows cannot be paired with the particles. Use the refined STAR "
+            "written by average-particles over these same stacks"
+        )
+    return replace(combined, records=records)
 
 
 def filter_combined_by_class(

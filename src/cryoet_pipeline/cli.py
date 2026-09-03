@@ -3036,6 +3036,16 @@ def average_particles(
             "read by nothing.",
         ),
     ] = None,
+    particle_metadata: Annotated[
+        Path | None,
+        typer.Option(
+            help="[fft-refinement] Take per-particle metadata from this STAR instead "
+            "of the stacks' own. Point it at the refined STAR a classification "
+            "wrote to refine one of its classes: the class assignment lives there "
+            "and never in the stacks, whose extraction STAR says class 1 for "
+            "everything, so --class-number alone cannot see it.",
+        ),
+    ] = None,
 ) -> None:
     """Iteratively refine per-particle orientation/shift and average subtomograms."""
 
@@ -3071,6 +3081,7 @@ def average_particles(
         "initial_reference_correlation_threshold": initial_reference_correlation_threshold,
         "num_classes": num_classes,
         "class_number": class_number,
+        "particle_metadata_path": particle_metadata,
         "cone_range_deg": cone_range_deg,
         "cone_sampling_deg": cone_sampling_deg,
         "inplane_range_deg": inplane_range_deg,

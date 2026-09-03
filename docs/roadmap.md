@@ -427,6 +427,30 @@ every derived number here shifts by 3% — voxel size, thickness, the residual i
 nm, the 36 A ceiling — which is a systematic worth knowing about even though
 nothing in the argument turns on it.
 
+**The particle loop is serial and threads do not help it.** Measured on the
+classification search at box 48 with four references and a 30-degree cone: 161 ms
+per particle on one torch thread, 158 on two, 168 on four, 187 on eight. Eight
+threads are 14% *slower* than one. Each call resamples a 48-cubed volume — about
+110 thousand voxels — which is too small an operation for the thread pool to pay
+for itself, and torch parallelises within an operation rather than across the
+many small ones this loop issues.
+
+What would parallelise perfectly is the loop itself: `for record in records` in
+both averaging backends treats every particle independently, reading shared
+references and writing its own result, so there are no races to resolve. Four
+thousand particles at five iterations take about two hours serially and would
+take a quarter of an hour across sixteen cores.
+
+The one real care needed is that `records[record.index]` is reassigned inside the
+loop, so a worker must return its record rather than mutate the shared list —
+which is a small restructuring, not a redesign. Until then `--cpus-per-task` above
+about four is wasted on these jobs, and the practical speedup is to run
+independent invocations concurrently: two classification seeds are two jobs and
+exactly twice as fast.
+
+Worth doing before any classification at the scale the published work used —
+286,400 candidates rather than our 4,000 — where two hours becomes a week.
+
 **Do not build a batch mode for step 4.** A `--manifest-glob`, a worker pool inside
 the CLI, or any scheduling logic will be replaced by the controller in
 [pipeline_engine.md](pipeline_engine.md). A shell loop or a hand-written job array
