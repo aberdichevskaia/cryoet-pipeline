@@ -138,6 +138,59 @@ def _draw_positions(
     return kept[:found]
 
 
+def _nearest_neighbour(positions: np.ndarray) -> np.ndarray:
+    """Distance from each position to its closest other position.
+
+    Computed on the real list to set the control's exclusion, because guessing
+    it was wrong in a way that was invisible until it was printed. The first
+    version defaulted the exclusion to the box size, 48 voxels, on the reasoning
+    that two boxes closer than that are largely the same voxels. That reasoning
+    is fine and the number is still wrong here, twice over:
+
+    - It does not fit. 800 positions at 48 voxels apart in a 464 x 464 x ~260
+      volume is past the jamming limit of random sequential addition, so the
+      sampler saturated at about 425 and reported the shortfall — the real cause
+      being an impossible constraint, not an unlucky draw.
+    - It does not match. pytom removes further peaks within HALF the diameter it
+      is given, so the real list already contains pairs far closer than 48, and a
+      control held to 48 is more spread out than the thing it controls.
+
+    Measuring the real list settles both: an exclusion equal to its own minimum
+    separation is achievable by construction, and no control pair is closer than
+    any real pair.
+    """
+
+    if len(positions) < 2:
+        return np.zeros(0)
+    # Direct N^2 on a few thousand points: about 6e6 distances, well under a
+    # second, and it avoids a scipy dependency for one number.
+    distances = np.linalg.norm(
+        positions[:, None, :] - positions[None, :, :], axis=-1
+    )
+    np.fill_diagonal(distances, np.inf)
+    return distances.min(axis=1)
+
+
+def _describe(values: np.ndarray, label: str) -> None:
+    """Percentiles rather than mean and sd alone.
+
+    A mean cannot show a tail, and a tail is what a real minority among mostly
+    noise looks like: the published work on this dataset found about 14% real
+    among the top 800, and 14% of boxes holding a dense particle moves a mean by
+    almost nothing while moving the upper percentiles visibly.
+    """
+
+    if values.size == 0:
+        print(f"  {label}: nothing measured")
+        return
+    points = np.percentile(values, [1, 10, 50, 90, 99])
+    print(
+        f"  {label}: p1 {points[0]:.1f}  p10 {points[1]:.1f}  "
+        f"median {points[2]:.1f}  p90 {points[3]:.1f}  p99 {points[4]:.1f}  "
+        f"(n={values.size})"
+    )
+
+
 def _box_spread(
     tomogram_path: Path,
     positions: np.ndarray,
@@ -224,8 +277,10 @@ def main() -> int:
         "--minimum-separation-px",
         type=float,
         default=None,
-        help="Exclusion between control positions. Defaults to the box size, which "
-        "is the separation two boxes need to not be largely the same voxels.",
+        help="Exclusion between control positions. Defaults to the real list's own "
+        "minimum nearest-neighbour distance, which is achievable by construction "
+        "and leaves no control pair closer than any real pair. Setting it to the "
+        "box size instead is what saturated the sampler at 425 of 800.",
     )
     parser.add_argument(
         "--check-variance",
@@ -267,12 +322,31 @@ def main() -> int:
     print(f"{real.path.name}: {len(rows)} real picks in {series}")
     print(f"{tomogram_id}: {depth} x {height} x {width} (z, y, x)")
 
+    real_positions = np.array([[row.x_px, row.y_px, row.z_px] for row in rows])
+    real_neighbour = _nearest_neighbour(real_positions)
     half = args.box_size_px / 2.0
-    separation = (
-        args.minimum_separation_px
-        if args.minimum_separation_px is not None
-        else float(args.box_size_px)
+    if args.minimum_separation_px is not None:
+        separation = args.minimum_separation_px
+    elif real_neighbour.size:
+        separation = float(real_neighbour.min())
+    else:
+        separation = float(args.box_size_px)
+    print("\nnearest-neighbour distance among the real picks, in voxels:")
+    _describe(real_neighbour, "real ")
+    print(
+        f"  exclusion for the control: {separation:.1f} px"
+        + ("" if args.minimum_separation_px is None else " (given)")
     )
+    # `.size` first: np.percentile on an empty array does not return a value to
+    # compare against.
+    if real_neighbour.size and separation > float(np.percentile(real_neighbour, 1)):
+        closer = int((real_neighbour < separation).sum())
+        print(
+            f"  NOTE: {closer} of {len(real_neighbour)} real picks sit closer to a "
+            "neighbour than the control is allowed to, so the control is slightly "
+            "more spread out than the list it controls."
+        )
+
     # x/y first, matching the STAR's column order; z last.
     bounds = (
         (half, width - half),
@@ -284,7 +358,6 @@ def main() -> int:
             print(f"the {name} range is empty at box {args.box_size_px}: [{low}, {high}]")
             return 1
 
-    real_positions = np.array([[row.x_px, row.y_px, row.z_px] for row in rows])
     real_depths = real_positions[:, 2]
     depths = None
     if slab is None:
@@ -319,10 +392,18 @@ def main() -> int:
     )
     if len(positions) < len(rows):
         print(
-            f"\nonly {len(positions)} of {len(rows)} positions fit at {separation:.0f} px "
-            "separation. The control will have fewer boxes than the real run, which "
-            "weakens the comparison but does not invalidate it — lower "
-            "--minimum-separation-px to close the gap, and say which was used."
+            f"\nonly {len(positions)} of {len(rows)} positions fit at "
+            f"{separation:.1f} px separation. Past the jamming limit of random "
+            "sequential addition, the sampler cannot place more however long it "
+            "tries, so this is an impossible constraint rather than an unlucky "
+            "draw — lower --minimum-separation-px, and say which was used."
+        )
+    else:
+        _describe(_nearest_neighbour(positions), "decoy")
+        print(
+            "  A control whose neighbours are much further apart than the real "
+            "list's overlaps less between boxes, which is a second difference "
+            "besides centring. Compare the medians on the two lines above."
         )
 
     # Orientations and scores by row, so only position differs from the real list.
@@ -370,14 +451,30 @@ def main() -> int:
                     "ratio": ratio,
                 }
                 print(
-                    f"  real  picks: sd {real_spread.mean():.4f} "
-                    f"+/- {real_spread.std():.4f} over {real_spread.size} boxes"
+                    f"  real  picks: mean {real_spread.mean():.2f} "
+                    f"+/- {real_spread.std():.2f} over {real_spread.size} boxes"
                 )
                 print(
-                    f"  decoy picks: sd {decoy_spread.mean():.4f} "
-                    f"+/- {decoy_spread.std():.4f} over {decoy_spread.size} boxes"
+                    f"  decoy picks: mean {decoy_spread.mean():.2f} "
+                    f"+/- {decoy_spread.std():.2f} over {decoy_spread.size} boxes"
                 )
                 print(f"  ratio decoy/real: {ratio:.3f}")
+                # The percentiles carry what the mean cannot. If a real minority
+                # of the picks holds a dense particle, it moves the upper tail
+                # while barely moving the mean: 14% of boxes -- the published
+                # fraction for this dataset -- shifts p90 and p99 and leaves the
+                # median where it was. A mean ratio near 1.0 says the control is
+                # fair; only the tails say whether anything was found.
+                _describe(real_spread, "real ")
+                _describe(decoy_spread, "decoy")
+                upper = float(
+                    np.percentile(real_spread, 90) / np.percentile(decoy_spread, 90)
+                )
+                print(
+                    f"  p90 real / p90 decoy: {upper:.3f} — above 1 is where a "
+                    "dense minority among the picks would appear"
+                )
+                spread_summary["p90_ratio"] = upper
                 if 0.9 <= ratio <= 1.1:
                     print(
                         "  Within a tenth, so the control boxes hold as much "
