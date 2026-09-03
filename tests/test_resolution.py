@@ -211,3 +211,72 @@ def test_picks_are_selected_by_variant_when_several_exist(tmp_path) -> None:
     # A label nothing carries falls back to the shared unlabelled artifact, which
     # is how a lane that diverges further down still finds its common inputs.
     assert _picks_artifact(registry, _manifest(), variant="bin4").variant is None
+
+
+def test_the_tomogram_comes_from_the_picks_rather_than_a_second_lookup(tmp_path) -> None:
+    """One `--variant` cannot select two inputs whose labels legitimately differ.
+
+    A parameter sweep labels its picks `bin8-top800` while the tomogram they were
+    found in keeps the lane's `bin8`. Asking for one label found the picks and
+    lost the tomogram — "no full tomogram for TS_0005 with variant
+    'bin8-top800'" — which is the third time in one session that this overload
+    bit. Following the lineage the picks already record cannot mismatch the two,
+    and it removes a flag rather than adding one.
+    """
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.cli import _tomogram_from_picks
+    from cryoet_pipeline.models import Artifact, ArtifactKind
+
+    registry = ArtifactRegistry.empty()
+    registry.add(
+        Artifact(
+            id="TS_TEST:tomogram:fine:bin8",
+            variant="bin8",
+            kind=ArtifactKind.TOMOGRAM,
+            path=tmp_path / "tomo.zarr",
+            parameters={"tilt_series_id": "TS_TEST", "tomogram_branch": "full"},
+        )
+    )
+    picks = Artifact(
+        id="TS_TEST:picks:full:pytom-match-pick:bin8-top800",
+        variant="bin8-top800",
+        kind=ArtifactKind.PICKS,
+        path=tmp_path / "picks.star",
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "input_tomogram_id": "TS_TEST:tomogram:fine:bin8",
+        },
+    )
+    registry.add(picks)
+
+    found = _tomogram_from_picks(registry, picks, _manifest(), variant="bin8-top800")
+
+    assert found.id == "TS_TEST:tomogram:fine:bin8"
+
+
+def test_picks_naming_a_tomogram_that_is_gone_are_refused_with_the_reason(
+    tmp_path,
+) -> None:
+    """Cropping from the wrong volume would place every box wrongly and silently."""
+
+    import typer
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.cli import _tomogram_from_picks
+    from cryoet_pipeline.models import Artifact, ArtifactKind
+
+    registry = ArtifactRegistry.empty()
+    picks = Artifact(
+        id="TS_TEST:picks:full:pytom-match-pick",
+        kind=ArtifactKind.PICKS,
+        path=tmp_path / "picks.star",
+        parameters={
+            "tilt_series_id": "TS_TEST",
+            "input_tomogram_id": "TS_TEST:tomogram:that:vanished",
+        },
+    )
+    registry.add(picks)
+
+    with pytest.raises(typer.BadParameter, match="which is not in the registry"):
+        _tomogram_from_picks(registry, picks, _manifest())

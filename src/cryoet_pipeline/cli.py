@@ -2738,8 +2738,16 @@ def export_chimerax(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+    # The picks are found by label; the tomogram comes from what the picks
+    # themselves recorded rather than from a second lookup on the same label.
+    # One `--variant` cannot select both: picks made by a parameter sweep carry
+    # the sweep's label while the tomogram they were found in keeps the lane's,
+    # so asking for one label found the picks and lost the tomogram. Following
+    # the recorded lineage cannot mismatch them, and needs no extra flag.
     picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+    tomogram = _tomogram_from_picks(
+        artifact_registry, picks, tilt_series_manifest, variant=variant
+    )
 
     registered_template = _template_artifacts(
         artifact_registry, tilt_series_manifest, variant=variant
@@ -2809,8 +2817,16 @@ def extract_particles(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
-    tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+    # The picks are found by label; the tomogram comes from what the picks
+    # themselves recorded rather than from a second lookup on the same label.
+    # One `--variant` cannot select both: picks made by a parameter sweep carry
+    # the sweep's label while the tomogram they were found in keeps the lane's,
+    # so asking for one label found the picks and lost the tomogram. Following
+    # the recorded lineage cannot mismatch them, and needs no extra flag.
     picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+    tomogram = _tomogram_from_picks(
+        artifact_registry, picks, tilt_series_manifest, variant=variant
+    )
     selected_backend = _particle_extraction_backend(backend)
     parameters: dict[str, object] = {
         "variant": variant,
@@ -3871,6 +3887,35 @@ def _tomogram_artifact(
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
     )
+
+
+def _tomogram_from_picks(
+    registry: ArtifactRegistry,
+    picks: Artifact,
+    manifest: TiltSeriesManifest,
+    *,
+    variant: str | None = None,
+) -> Artifact:
+    """The tomogram these picks were found in, from the picks' own record.
+
+    Preferred over a second label-based lookup because the two cannot then
+    disagree: extraction crops from the volume the coordinates refer to, and any
+    other volume would put every box in the wrong place. Falls back to the label
+    only for picks written before the id was recorded.
+    """
+
+    recorded = picks.parameters.get("input_tomogram_id")
+    if isinstance(recorded, str):
+        try:
+            return registry.get(recorded)
+        except (KeyError, ValueError) as exc:
+            raise typer.BadParameter(
+                f"{picks.id} was found in tomogram {recorded!r}, which is not in the "
+                "registry. The coordinates refer to that volume, and cropping from "
+                "another would place every box wrongly",
+                param_hint="registry",
+            ) from exc
+    return _tomogram_artifact(registry, manifest, variant=variant)
 
 
 def _picks_artifact(
