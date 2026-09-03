@@ -1163,6 +1163,8 @@ class ConeSearchRefinementBackend:
             particle_count=particle_count,
             particle_counts=combined.counts,
             num_classes=num_classes,
+            seed=seed,
+            refine_factor=refine_factor,
             iterations_run=num_iterations,
             cone_range_deg=cone_range_deg,
             cone_sampling_deg=cone_sampling_deg,

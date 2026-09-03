@@ -1017,6 +1017,28 @@ class SubtomogramClassificationQc(BaseModel):
     they answer the question with an empty list, which is honest.
     """
     num_classes: int = Field(ge=1)
+    seed: int | None = None
+    """The seed that produced this partition.
+
+    Recorded because a classification is only meaningful next to another one, and
+    the comparison is between seeds. Reproducing a run from its report was
+    impossible without this: every other parameter was here, so a report looked
+    complete while being one integer short of reproducible — which surfaced when
+    a control had to be built to match an existing run and the command could not
+    be rebuilt from the report at all.
+
+    Optional so that reports already written stay readable; None means the run
+    predates the field, not that it had no seed.
+    """
+    refine_factor: float | None = None
+    """Divisor applied to every range and step each iteration.
+
+    The other half of what reproduction needs. `final_cone_sampling_deg` and
+    `cone_sampling_deg` imply it across `iterations_run`, so it was recoverable
+    by arithmetic — but a value that has to be back-solved from two others is not
+    recorded, it is inferable, and the two are not the same thing when the
+    formula changes.
+    """
     iterations_run: int = Field(ge=0)
     cone_range_deg: float = Field(ge=0.0)
     cone_sampling_deg: float = Field(gt=0.0)
