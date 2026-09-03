@@ -39,15 +39,21 @@ from cryoet_pipeline.particles import read_particle_star
 
 
 def _contingency(first: np.ndarray, second: np.ndarray) -> tuple[np.ndarray, list[int], list[int]]:
-    """How many particles each pair of classes shares."""
+    """How many particles each pair of classes shares.
+
+    Counted with `bincount` rather than a loop of masks, because a trustworthy
+    null needs hundreds of shuffles and the nested version made twenty the
+    practical limit — which is far too few to read a maximum off.
+    """
 
     left = sorted(set(first.tolist()))
     right = sorted(set(second.tolist()))
-    table = np.zeros((len(left), len(right)), dtype=np.int64)
-    for row, one in enumerate(left):
-        for column, other in enumerate(right):
-            table[row, column] = int(np.sum((first == one) & (second == other)))
-    return table, left, right
+    rows = np.searchsorted(np.array(left), first)
+    columns = np.searchsorted(np.array(right), second)
+    flat = np.bincount(
+        rows * len(right) + columns, minlength=len(left) * len(right)
+    )
+    return flat.reshape(len(left), len(right)).astype(np.int64), left, right
 
 
 def _adjusted_rand_index(table: np.ndarray) -> float:
@@ -87,29 +93,53 @@ def _best_pairing(table: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(rows.tolist(), columns.tolist(), strict=True))
 
 
-def _empirical_null(first: np.ndarray, second: np.ndarray, *, rounds: int) -> np.ndarray:
-    """What the index reaches when one partition is shuffled.
+def _empirical_null(
+    first: np.ndarray, second: np.ndarray, *, rounds: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """What the statistics reach when one partition is shuffled.
 
-    The adjusted index is already chance-corrected, so this should sit near zero.
-    Printed anyway because a corrected statistic is only trustworthy if its null
-    behaves, and because a reader needs a scale for the number above it.
+    Three distributions, because the per-class share needed one and did not have
+    it. The first version compared a share against `1 / K` — 25% for four
+    classes — and called anything under twice that chance. But the labels are
+    paired by whichever assignment maximises the overlap, and that selection
+    alone lifts the best share to about 28%, with 31% reachable in four hundred
+    shuffles. So an observed 36% read as "indistinguishable from chance" when no
+    shuffle had ever come near it.
+
+    The lesson is narrow and worth keeping: a statistic computed after choosing
+    the best of several needs a null computed the same way. Comparing it against
+    the null of an unselected statistic understates the evidence, and the
+    invented factor that papered over the gap hid a real result for an hour.
     """
 
     rng = np.random.default_rng(0)
     shuffled = second.copy()
-    values = []
+    indices, best_shares, all_shares = [], [], []
     for _ in range(rounds):
         rng.shuffle(shuffled)
         table, _, _ = _contingency(first, shuffled)
-        values.append(_adjusted_rand_index(table))
-    return np.array(values)
+        indices.append(_adjusted_rand_index(table))
+        sizes = table.sum(axis=1)
+        shares = [
+            table[row, column] / sizes[row] if sizes[row] else 0.0
+            for row, column in _best_pairing(table)
+        ]
+        best_shares.append(max(shares))
+        all_shares.extend(shares)
+    return np.array(indices), np.array(best_shares), np.array(all_shares)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--first", required=True, type=Path, help="Refined STAR, run one.")
     parser.add_argument("--second", required=True, type=Path, help="Refined STAR, run two.")
-    parser.add_argument("--null-rounds", type=int, default=20)
+    parser.add_argument(
+        "--null-rounds",
+        type=int,
+        default=400,
+        help="Shuffles used for the baselines. A maximum cannot be read "
+        "off twenty rounds, which is what the first version used.",
+    )
     args = parser.parse_args()
 
     one = read_particle_star(args.first)
@@ -156,61 +186,67 @@ def main() -> int:
     print(f"  total  {totals} {table.sum():8d}\n")
 
     index = _adjusted_rand_index(table)
-    null = _empirical_null(first, second, rounds=args.null_rounds)
+    null_index, null_best, null_shares = _empirical_null(
+        first, second, rounds=args.null_rounds
+    )
     print(f"adjusted Rand index: {index:+.3f}")
     print(
         f"shuffled null over {args.null_rounds} rounds: "
-        f"median {np.median(null):+.3f}, range [{null.min():+.3f}, {null.max():+.3f}]"
+        f"median {np.median(null_index):+.3f}, "
+        f"range [{null_index.min():+.3f}, {null_index.max():+.3f}]"
     )
 
-    print("\nper-class agreement, on the best pairing of labels:")
-    chance = 1.0 / max(len(right), 1)
+    # The baseline is what shuffling reaches, not 1/K. Pairing the labels by the
+    # assignment that maximises overlap lifts a share above 1/K on its own, and
+    # comparing against 1/K therefore understates every share by that much.
+    share_ceiling = float(null_shares.max())
+    best_ceiling = float(null_best.max())
+    print(
+        f"\nper-class agreement. Shuffling reaches {np.median(null_shares):.0%} for a "
+        f"class and at most {share_ceiling:.0%} in {args.null_rounds} rounds; the best "
+        f"class of a shuffled run reaches at most {best_ceiling:.0%}:"
+    )
     shares: list[tuple[float, int, int, int]] = []
     for row, column in _best_pairing(table):
         overlap = int(table[row, column])
         size = int(table[row].sum())
         share = overlap / size if size else 0.0
         shares.append((share, left[row], right[column], size))
+        verdict = "above every shuffle" if share > share_ceiling else "within chance"
         print(
             f"  s1/{left[row]} -> s2/{right[column]}: {overlap} of {size} particles "
-            f"stayed together ({share:.0%}, chance is about {chance:.0%})"
+            f"stayed together ({share:.0%}) — {verdict}"
         )
 
     best_share, best_left, best_right, best_size = max(shares)
+    reproducing = [one for one in shares if one[0] > share_ceiling]
     print()
     if not np.isfinite(index):
         print("The index is undefined — one run put everything in a single class.")
         return 0
 
-    # The per-class share is the sensitive statistic and the global index is not.
-    # One real class of 200 among 800, with the rest random, gives a per-class
-    # share of 100% and an adjusted Rand index of only 0.18 — because three
-    # chance-level classes dilute a global measure. So the verdict is read off the
-    # best class, with the index and the null only establishing that anything at
-    # all is above chance.
-    above_chance = index > max(0.05, float(null.max()))
-    strong_class = best_share > 2.0 * chance and best_size >= 30
+    # The per-class share decides, not the global index. One real class of 200
+    # among 800, with the rest random, gives a share of 100% and an adjusted Rand
+    # index of only 0.18 — three chance-level classes dilute any global measure.
+    # So the index is reported and the shares are read.
+    if not reproducing:
+        print("No class holds together beyond what shuffling reaches. These classes")
+        print("are a partition of noise, and one that looks like a particle is looking")
+        print("like one by accident. Do not refine it.")
+        return 0
 
-    if strong_class and above_chance:
-        print(f"Class s1/{best_left} reproduces: {best_share:.0%} of its "
-              f"{best_size} particles cluster together again from a different")
-        print(f"start, against a chance level of {chance:.0%}. That is a real")
-        print("population. Look at its map and its gallery, then refine it alone.")
-    elif strong_class:
-        print(f"Class s1/{best_left} holds together at {best_share:.0%} against a")
-        print(f"chance level of {chance:.0%}, but the partitions as a whole are not")
-        print("above chance. A minority class dilutes the global index, so this is")
-        print("the expected shape of a small real population — treat it as a lead")
-        print("and check its gallery before spending anything on it.")
-    elif above_chance:
-        print("The partitions agree beyond chance but no single class holds")
-        print("together, so what reproduces is a gradient rather than a group.")
-        print("Classifying into more classes may separate it; refining any one of")
-        print("these will not.")
-    else:
-        print("Indistinguishable from chance, and no class holds together. These")
-        print("classes are a partition of noise, and one that looks like a particle")
-        print("is looking like one by accident. Do not refine it.")
+    names = ", ".join(f"s1/{one[1]}" for one in sorted(reproducing, reverse=True))
+    print(f"Reproducing beyond every shuffle: {names}.")
+    print(
+        f"The strongest is s1/{best_left} at {best_share:.0%} of its {best_size} "
+        f"particles, against {best_ceiling:.0%} for the best class of a shuffled run."
+    )
+    print()
+    print("That is real structure: the same particles group together again from a")
+    print("different start. What it is remains open — look at these classes' maps")
+    print("and galleries before refining, because reproducible is not the same as")
+    print("ribosomal, and a shared artefact reproduces just as faithfully as a")
+    print("shared particle.")
     return 0
 
 
