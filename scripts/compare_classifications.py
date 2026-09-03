@@ -129,10 +129,65 @@ def _empirical_null(
     return np.array(indices), np.array(best_shares), np.array(all_shares)
 
 
+def _class_profile(records, *, particle_counts: list[int] | None) -> None:
+    """What each class tracks besides shape, for the classes that reproduce.
+
+    A class can reproduce across seeds without being a population of particles:
+    anything that varies between boxes and is stable per box reproduces
+    perfectly. Depth in the lamella, correlation score, and which tilt-series a
+    box came from are all of that kind, all plausible here, and none of them
+    makes a class ribosomal. They are also invisible in the map — a class split
+    by ice thickness looks exactly like a class split by nothing.
+
+    So this is printed next to the reproducibility verdict rather than instead of
+    it. A class whose mean z sits far from the others is separating depth; one
+    whose mean score does is separating the score it was selected on; one drawn
+    from a single series is separating microscope conditions.
+    """
+
+    print("what the first run's classes hold, besides a shape:")
+    print("           n      z mean     z sd    score mean" + ("     series" if particle_counts else ""))
+    boundaries = np.cumsum(particle_counts) if particle_counts else None
+    for number in sorted({record.class_number for record in records}):
+        members = [record for record in records if record.class_number == number]
+        depths = np.array([record.z_px for record in members])
+        scores = np.array(
+            [record.score for record in members if record.score is not None]
+        )
+        composition = ""
+        if boundaries is not None:
+            # A combined index is a position in the concatenated stacks, so the
+            # cumulative per-series counts are the only thing that says which
+            # series a record came from — `ParticleRecord` cannot.
+            which = np.searchsorted(boundaries, [record.index for record in members], side="right")
+            shares = np.bincount(which, minlength=len(particle_counts))
+            composition = "   " + " ".join(
+                f"{100 * value / max(len(members), 1):.0f}%" for value in shares
+            )
+        mean_score = f"{scores.mean():11.4f}" if scores.size else "          -"
+        print(
+            f"  {number:<3} {len(members):>6} {depths.mean():10.1f} "
+            f"{depths.std():8.1f} {mean_score}{composition}"
+        )
+    if boundaries is not None:
+        print(
+            "  series shares are in the order the counts were given; even shares "
+            "mean the classes are not separating series."
+        )
+    print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--first", required=True, type=Path, help="Refined STAR, run one.")
     parser.add_argument("--second", required=True, type=Path, help="Refined STAR, run two.")
+    parser.add_argument(
+        "--particle-counts",
+        default=None,
+        help="Per-series particle counts, comma-separated, in tilt-series id order "
+        "— the `particle_counts` list in the averaging QC. Without them a record "
+        "cannot say which series it came from, so the series column is skipped.",
+    )
     parser.add_argument(
         "--null-rounds",
         type=int,
@@ -184,6 +239,20 @@ def main() -> int:
         print(f"  s1/{name:<3} {counts} {table[row].sum():8d}")
     totals = "".join(f"{value:7d}" for value in table.sum(axis=0))
     print(f"  total  {totals} {table.sum():8d}\n")
+
+    counts = (
+        [int(one) for one in args.particle_counts.split(",")]
+        if args.particle_counts
+        else None
+    )
+    if counts and sum(counts) != len(shared):
+        print(
+            f"--particle-counts sums to {sum(counts)} but the STAR describes "
+            f"{len(shared)} particles, so the series column would be wrong. "
+            "Skipping it; take the list from the averaging QC's particle_counts.\n"
+        )
+        counts = None
+    _class_profile(shared, particle_counts=counts)
 
     index = _adjusted_rand_index(table)
     null_index, null_best, null_shares = _empirical_null(
