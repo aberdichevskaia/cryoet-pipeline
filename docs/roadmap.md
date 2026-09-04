@@ -279,10 +279,59 @@ a bias that entered before the split. `--random-phase-correction` corrects the
 score statistics used to place the cut-off; it does not touch orientations.
 
 **A control has to break the link between the template and the orientations**,
-not merely re-refine downstream of it. Which control that should be is being
-settled separately; the candidates are matching with a mirrored or
-phase-randomised template, averaging the population just below the cut-off, and
-boxes at random coordinates.
+not merely re-refine downstream of it. Three candidates were on the list:
+matching with a mirrored or phase-randomised template, averaging the population
+just below the cut-off, and boxes at random coordinates.
+
+**Settled: boxes at random coordinates.** It was run on EMPIAR-11538 and it
+answered the question the others cannot, so the choice is empirical rather than
+argued.
+
+Why it beats the other two. The shuffled-orientation control's failure mode is
+already recorded in section 4 below: the shuffle only breaks what the
+orientation *distribution* does not already fix, so a population sharing a tilt
+keeps the geometry the swap was meant to destroy. A phase-randomised or mirrored
+template breaks the template, but the picks' **positions** are still the ones
+template matching chose — and that selection is itself enough to put
+ribosome-sized central density in every box, which is exactly the confound that
+made a radial-concentration measurement unreadable until this control existed.
+Random coordinates break both links at once.
+
+What it established, on 4000 picks across five series against 4000 random-position
+boxes put through the identical chain with identical settings:
+
+| | class 1 | class 2 | class 3 | class 4 | shuffle ceiling |
+|---|---|---|---|---|---|
+| real, seed-to-seed agreement | 25% | **36%** | 27% | **33%** | 31% |
+| control | 27% | 26% | 27% | 30% | 30% |
+| real, RMS inside/outside the particle radius | 2.32 | 2.43 | 2.29 | 2.55 | — |
+| control, same measure | 1.00 | 1.04 | 0.99 | 1.00 | — |
+
+So two independent statistics separate the real picks from nothing, and both are
+properties of the pick positions rather than of the processing. The adjusted Rand
+index tells the same story: +0.010 real against +0.001 for the control, on a
+shuffled null of ±0.001. The control's radial ratio also landed on the
+independently computed geometric null for this box and this rotation scheme
+(1.001–1.006), which validates the measurement rather than only its result.
+
+Two limitations, both real. It establishes that something reproducible and
+spatially concentrated is there, **not what it is** — other large complexes,
+membrane fragments and ice or film edges all qualify. And it is post-hoc: it
+needs a finished real pick list to copy, so it cannot gate picking.
+
+**A control's parameters are copied from the real list, never chosen.** This is
+the transferable lesson and it cost most of a day. Every parameter picked by
+reasoning was wrong: an exclusion distance set to the box size, on the sound
+argument that two boxes closer than that are largely the same voxels, was past
+the jamming limit of random sequential addition and placed 425 of 800 positions
+— while also being *more* spread out than the list it controlled, since pytom
+excludes only within half the particle diameter. Every parameter measured off
+the real list was right: exclusion = its own minimum nearest-neighbour distance,
+depths = a permutation of its own depths, count = its own count. A control step
+should therefore have almost no knobs, and the fairness check in section 17 is
+what makes that safe rather than merely convenient.
+
+What this becomes as a pipeline step is section 17.
 
 **Two things bit in one session for the same missing reason, and both are
 fingerprints.** Step 2 of the order in
@@ -1178,3 +1227,68 @@ normally. Check it against what is already known — the accumulation must be
 monotone in acquisition order, and its total must equal `ExposureDose` times
 the view count — and refuse rather than guess when `DateTime` is missing or
 does not parse.
+
+## 17. A decoy control as a step, not a script
+
+`scripts/decoy_picks.py` settled which control to use (section on averaging
+above). It should become a first-class step, because the question it answers —
+*would this result have appeared with no particles in the boxes?* — is asked of
+every subtomogram average, not only of a pipeline under suspicion. It is the
+same category as gold-standard FSC, which is mandatory precisely because people
+got resolution from noise.
+
+The argument that it is general rather than debugging scaffolding is that
+nothing else answered it. Adjusted Rand index, per-class agreement, radial
+concentration, correlation before and after refinement, and box density all
+came back equally consistent with "weak but real" and with "nothing, processed".
+The control separated them in fourteen minutes of one A100.
+
+**`cryoet decoy-picks`** takes a real picks artifact and registers a sibling
+whose positions are random and whose everything else is copied — orientations
+row by row so the refinement starts from the same distribution, scores so any
+score-dependent behaviour is identical, depths as a permutation of the real
+depths so no estimate of where the specimen sits has to be trusted, count and
+exclusion measured off the real list per the principle above. It registers as
+`picking_method: random_positions` with `mirrors_picks_id`, storage role
+temporary and retention recompute: the whole control is a seed plus a source
+list, so keeping its particle stacks past the comparison stores a gigabyte a
+run that one command regenerates.
+
+**The fairness check is part of the step, not advice.** A control that samples
+different material is worse than no control, because it still looks like an
+answer. Comparing the density content of real and control boxes is what makes
+it credible — measured at 0.986–0.999 with equal medians across five series —
+and it belongs in QC with a status, so that an unfair control refuses to be
+used as one. Note which tail to read: box standard deviation saturates, since a
+48-voxel box estimates the local value closely and at bin8 that is set by
+reconstruction noise rather than by biology, so a particle moves it less than
+boxes differ from each other. The left tail is what carries information — real
+picks avoid the emptiest boxes slightly more than random positions do, which is
+matching preferring material over vacuum.
+
+**Record that no control was run, rather than being silent about it.** The
+pattern is already here in `gold_standard: bool = False` and
+`resolution_is_interpretable`: a field that says a check did not happen, so
+that its absence cannot read as its success. `decoy_controlled: bool = False`
+on the classification QC, and the seed-to-seed comparison recorded against the
+control's when one exists.
+
+Not proposed as a default. Running a decoy for every classification triples the
+averaging branch — real times two seeds, control times two seeds — and that is
+the user's call, not a default worth asserting. Cheap, available, and recorded
+when run is the whole of it.
+
+Two smaller items this produced, worth not losing:
+
+- `scripts/radial_profile.py` takes the box boundary as `box / 2`, but an even
+  box centres at `(box - 1) / 2`, so the true inscribed radius is 23.5 for a
+  48 box and 22% of the annulus it measures sits inside the attenuated zone.
+  Worth about half a percent on the null, so it changed no conclusion here.
+  Its docstring also claims the rotation artefact reaches "roughly a third of
+  the core value at the corners"; the corners are about 2%, and a third is
+  reached near the edge-midpoint radius of 33. Both are one-line fixes.
+- A step that runs for minutes to hours prints nothing until it finishes: there
+  are no `typer.echo` or `print` calls in `backends/subtomogram.py` at all. A
+  silent step cannot be told from a hung one, which cost a wasted allocation
+  here, and there are no checkpoints either, so a job that hits its wall clock
+  loses everything.
