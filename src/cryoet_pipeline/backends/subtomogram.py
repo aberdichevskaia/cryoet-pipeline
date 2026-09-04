@@ -1072,7 +1072,11 @@ class ConeSearchRefinementBackend:
                 pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
             )
             average_id = _class_average_id(
-                scope, self.name, class_number, num_classes=num_classes
+                scope,
+                self.name,
+                class_number,
+                num_classes=num_classes,
+                variant=variant_suffix(context),
             )
             member_correlations = [
                 correlations[record.index]
@@ -1428,10 +1432,36 @@ def _class_average_id(
     class_number: int,
     *,
     num_classes: int,
+    variant: str = "",
 ) -> str:
+    """The artifact id for one class average, INCLUDING the run's variant.
+
+    The variant was missing, and its absence made every classification after the
+    first collide: `_class_average_path` carries the label, because it derives
+    from `_averaging_paths`, whose prefix appends it — so the maps on disk were
+    correctly separated per run while their artifact ids were identical. Two runs
+    of the same scope and backend therefore produced the same four ids, and the
+    second refused with "duplicate artifact id:
+    <scope>:subtomogram_average:cone-search:class01".
+
+    Which made `--overwrite` look like the answer, and that is the damaging part:
+    it succeeds, both runs' maps sit side by side on disk, and the registry keeps
+    only the last one's entries — pointing at the last one's files. The registry
+    then claims one class01 average for a scope that has several, and nothing
+    says which run the surviving entry describes. That is exactly the confusion
+    a registry exists to prevent.
+
+    `variant` is a suffix already formatted by `variant_suffix`, matching how
+    every other backend builds an id, and it defaults to empty so that a caller
+    without a variant produces the ids that are already on disk.
+    """
+
     if num_classes == 1:
-        return f"{tilt_series_id}:subtomogram_average:{backend_name}"
-    return f"{tilt_series_id}:subtomogram_average:{backend_name}:class{class_number:02d}"
+        return f"{tilt_series_id}:subtomogram_average:{backend_name}{variant}"
+    return (
+        f"{tilt_series_id}:subtomogram_average:{backend_name}"
+        f"{variant}:class{class_number:02d}"
+    )
 
 
 def _class_average_path(
