@@ -39,13 +39,72 @@ def test_compute_fsc_curve_identical_volumes_stays_above_threshold() -> None:
     assert result.resolution_angstrom[0] == pytest.approx(16 * 2.0 / 1)
 
 
-def test_compute_fsc_curve_uncorrelated_noise_crosses_at_coarsest_shell() -> None:
+def test_uncorrelated_noise_reports_no_resolution_rather_than_the_coarsest_shell() -> None:
+    """This test previously asserted the bug, so it is worth saying what changed.
+
+    It required uncorrelated noise to report the COARSEST shell as its
+    resolution, on the reasoning that a curve below the threshold everywhere
+    crosses immediately. But "469.63 A" is a number and reads as an answer,
+    while the truth is that there is no resolution to report at all — and the
+    same first-dip scan then misread real data, returning 469.63, 469.63, 234.82
+    and 156.54 A for four class averages whose curves in fact peaked together
+    near 80 A and died together near 32 A. Those were the positions of
+    low-frequency wiggles, reported with `status: pass`.
+
+    The invariant asserted instead cannot be satisfied by that bug: the coarsest
+    shell is never a valid answer, because a resolution is the shell BEYOND which
+    agreement stops, and something has to have been above the threshold first.
+    """
+
     torch.manual_seed(0)
     a = torch.randn(16, 16, 16)
     b = torch.randn(16, 16, 16)
     result = compute_fsc_curve(a, b, pixel_spacing_angstrom=2.0, threshold=0.5)
 
-    assert result.crossing_resolution_angstrom == pytest.approx(result.resolution_angstrom[0])
+    if result.reaches_threshold:
+        # A handful of coefficients in the coarsest shells can correlate above
+        # any threshold by chance, so this is not asserted away — but even then
+        # the reported resolution must lie beyond the shell that was above it.
+        assert result.crossing_resolution_angstrom != pytest.approx(
+            result.resolution_angstrom[0]
+        )
+    else:
+        assert result.crossing_resolution_angstrom is None
+
+
+def test_a_curve_that_dips_at_low_frequency_and_recovers_says_so() -> None:
+    """Two maps that disagree at coarse scale and agree in the middle.
+
+    The real case is a compact template zero-padded into a larger particle box:
+    the padding makes the overall envelopes differ, which lands in the coarsest
+    shells, while the density itself still agrees at mid frequencies. Here a
+    strong low-frequency ramp of opposite sign does the same job on top of a
+    shared blob.
+
+    What must not happen is the dip being reported as the resolution. What should
+    happen is the final descent being reported, and the dip being flagged, since
+    it says which end of the curve to distrust.
+    """
+
+    size = 16
+    blob = _smooth_blob(size, seed=3)
+    axis = torch.arange(size, dtype=torch.float32) - (size - 1) / 2.0
+    ramp = axis.view(-1, 1, 1).expand(size, size, size) / axis.abs().max()
+
+    a = blob + 3.0 * ramp
+    b = blob - 3.0 * ramp
+    result = compute_fsc_curve(a, b, pixel_spacing_angstrom=2.0, threshold=0.5)
+
+    # Precondition, asserted so that a construction that stops producing the
+    # intended shape fails here rather than silently passing the real check.
+    assert result.correlation[0] < 0.5, result.correlation
+    assert any(value >= 0.5 for value in result.correlation[1:]), result.correlation
+
+    assert result.reaches_threshold
+    assert result.dips_before_crossing
+    assert result.crossing_resolution_angstrom != pytest.approx(
+        result.resolution_angstrom[0]
+    )
 
 
 def test_compute_fsc_curve_rejects_mismatched_shapes() -> None:

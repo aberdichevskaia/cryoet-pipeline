@@ -46,6 +46,19 @@ class FscCurve:
     correlation: list[float]
     threshold: float
     crossing_resolution_angstrom: float | None
+    reaches_threshold: bool = True
+    """Whether the curve is at or above the threshold on any shell at all.
+
+    False means there is no resolution to report — not a coarse one. The old code
+    had no way to say that: a curve entirely below the threshold returned its
+    first shell, which is a number and looks like an answer.
+    """
+    dips_before_crossing: bool = False
+    """Whether the curve fell below the threshold and came back before the end.
+
+    Diagnostic of a coarse-scale disagreement between the two volumes rather
+    than of a resolution limit.
+    """
 
 
 def compute_fsc_curve(
@@ -80,17 +93,49 @@ def compute_fsc_curve(
         for shell_index in range(1, len(all_shells))
     ]
 
-    crossing_resolution_angstrom = None
-    for value, resolution in zip(correlation, resolution_angstrom, strict=True):
-        if value < threshold:
-            crossing_resolution_angstrom = resolution
+    # The crossing is the FINAL descent through the threshold, not the first dip
+    # through it.
+    #
+    # The first-dip version read the coarsest shells, which are the least
+    # trustworthy part of an FSC: shell 1 of a 48 box holds a handful of Fourier
+    # coefficients, so its correlation is estimated from almost nothing and
+    # wanders. On four class averages of one real dataset it wandered across the
+    # threshold and the reported resolutions came back 469.63, 469.63, 234.82 and
+    # 156.54 A — exactly shells 1, 1, 2 and 3 — while all four curves in fact
+    # peaked together near 78 A and fell to zero together near 32 A. Every one of
+    # those numbers was the position of a low-frequency wiggle, reported as a
+    # resolution with `status: pass`.
+    #
+    # Scanning from the fine end for the last shell at or above the threshold
+    # ignores those wiggles and answers the question a resolution is asked for:
+    # beyond which shell does agreement stop. A curve that never reaches the
+    # threshold at all has no crossing to report, which the caller turns into a
+    # warning rather than a number.
+    last_above: int | None = None
+    for index in range(len(correlation) - 1, -1, -1):
+        if correlation[index] >= threshold:
+            last_above = index
             break
+
+    crossing_resolution_angstrom = None
+    if last_above is not None and last_above + 1 < len(correlation):
+        crossing_resolution_angstrom = resolution_angstrom[last_above + 1]
+
+    # Recorded because it is diagnostic rather than merely untidy: a curve that
+    # dips below the threshold and comes back has something wrong at coarse
+    # scale — most often two maps whose overall envelopes differ, such as a
+    # compact template zero-padded into a larger particle box.
+    dips_before_crossing = last_above is not None and any(
+        value < threshold for value in correlation[:last_above]
+    )
 
     return FscCurve(
         resolution_angstrom=resolution_angstrom,
         correlation=correlation,
         threshold=threshold,
         crossing_resolution_angstrom=crossing_resolution_angstrom,
+        reaches_threshold=last_above is not None,
+        dips_before_crossing=dips_before_crossing,
     )
 
 
@@ -155,11 +200,33 @@ def compute_and_write_fsc_report(
 
     warnings: list[str] = []
     status = QcStatus.PASS
-    if curve.crossing_resolution_angstrom is None:
+    if not curve.reaches_threshold:
+        status = QcStatus.WARNING
+        warnings.append(
+            f"correlation never reached threshold {threshold:.3f} on any shell, so "
+            "there is no resolution to report. The two volumes do not agree at any "
+            "scale sampled here — check that they are the maps intended, at the same "
+            "pixel size and the same handedness, before reading anything else"
+        )
+    elif curve.crossing_resolution_angstrom is None:
         status = QcStatus.WARNING
         warnings.append(
             f"correlation never dropped below threshold {threshold:.3f} across the "
             "sampled shells"
+        )
+    if curve.dips_before_crossing:
+        # Not a failure: it says which part of the curve to distrust. The
+        # coarsest shells hold few Fourier coefficients — shell 1 of a 48 box
+        # holds a handful — so they wander, and two maps whose overall envelopes
+        # differ disagree there for reasons that are not about resolution.
+        if status is QcStatus.PASS:
+            status = QcStatus.WARNING
+        warnings.append(
+            f"the curve fell below {threshold:.3f} and came back before its final "
+            "descent. The coarsest shells hold few coefficients and wander, and a "
+            "compact map padded into a larger box disagrees there by construction, "
+            "so read the reported resolution as the final descent and not the "
+            "low-frequency part of the curve"
         )
 
     report = FscQc(
