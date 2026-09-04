@@ -69,11 +69,17 @@ def compute_fsc_curve(
     threshold: float,
 ) -> FscCurve:
     """Compute the Fourier shell correlation curve between two same-shaped
-    real-space volumes, and the coarsest (lowest-Angstrom) shell at which the
-    curve first drops below `threshold` scanning from low to high frequency.
+    real-space volumes, and the shell just beyond the last one at or above
+    `threshold` — the curve's final descent through it.
 
     The DC shell (infinite resolution, trivially correlation 1.0) is omitted
     from the returned curve.
+
+    The previous wording said "the coarsest (lowest-Angstrom) shell at which the
+    curve first drops below threshold", which was self-contradictory as well as
+    describing the wrong scan: coarsest means HIGHEST angstroms, and the shell
+    reported is now the finest one at which agreement ends rather than the first
+    place the curve dips.
     """
 
     if a.shape != b.shape:

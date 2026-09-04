@@ -77,34 +77,71 @@ def test_a_curve_that_dips_at_low_frequency_and_recovers_says_so() -> None:
 
     The real case is a compact template zero-padded into a larger particle box:
     the padding makes the overall envelopes differ, which lands in the coarsest
-    shells, while the density itself still agrees at mid frequencies. Here a
-    strong low-frequency ramp of opposite sign does the same job on top of a
-    shared blob.
+    shells, while the density itself still agrees at mid frequencies.
 
-    What must not happen is the dip being reported as the resolution. What should
-    happen is the final descent being reported, and the dip being flagged, since
-    it says which end of the curve to distrust.
+    Three components build that shape deliberately, and the first attempt got it
+    wrong in a way worth recording. A linear ramp of opposite sign looked like a
+    low-frequency perturbation, but a ramp is discontinuous at the box edge, so
+    its spectrum falls off only as 1/k and never vanishes: at an amplitude large
+    enough to flip the coarsest shell it dominated every shell, and the curve
+    came back at -0.98 throughout rather than dipping and recovering.
+
+    A cosine at the box fundamental has no such tail. Sampled on the grid its
+    transform is two deltas at |k| = 1, so it perturbs shell 1 exactly and
+    nothing else, at any amplitude.
+
+    The decorrelating noise is high-passed for the same reason in reverse. Flat
+    noise would have to be large to swamp the blob's fine shells, and by then it
+    also eats the middle, leaving no band above the threshold and no descent to
+    find. Confining it past a stated cutoff puts the descent where this test
+    says it is rather than wherever two amplitudes happen to cross.
     """
 
+    from cryoet_pipeline.filters import low_pass_filter_volume
+
     size = 16
+    apix = 2.0
+    threshold = 0.5
     blob = _smooth_blob(size, seed=3)
-    axis = torch.arange(size, dtype=torch.float32) - (size - 1) / 2.0
-    ramp = axis.view(-1, 1, 1).expand(size, size, size) / axis.abs().max()
+    torch.manual_seed(11)
 
-    a = blob + 3.0 * ramp
-    b = blob - 3.0 * ramp
-    result = compute_fsc_curve(a, b, pixel_spacing_angstrom=2.0, threshold=0.5)
+    fundamental = torch.cos(
+        2.0 * torch.pi * torch.arange(size, dtype=torch.float32) / size
+    )
+    mode = fundamental.view(-1, 1, 1).expand(size, size, size)
 
-    # Precondition, asserted so that a construction that stops producing the
-    # intended shape fails here rather than silently passing the real check.
-    assert result.correlation[0] < 0.5, result.correlation
-    assert any(value >= 0.5 for value in result.correlation[1:]), result.correlation
+    def _fine_noise() -> torch.Tensor:
+        full = torch.randn(size, size, size)
+        # Everything the low-pass keeps is removed, so what is left lives only
+        # beyond the cutoff: 8 A in a 32 A box, which is shell 4 onward.
+        return full - low_pass_filter_volume(
+            full, cutoff_angstrom=8.0, pixel_spacing_angstrom=apix
+        )
 
+    a = blob + _fine_noise() + 5.0 * mode
+    b = blob + _fine_noise() - 5.0 * mode
+    result = compute_fsc_curve(a, b, pixel_spacing_angstrom=apix, threshold=threshold)
+
+    # Preconditions, asserted so that a construction which stops producing the
+    # intended shape fails here rather than silently passing the real checks
+    # below. This is how the ramp version was caught.
+    assert result.correlation[0] < threshold, result.correlation
+    above = [
+        index for index, value in enumerate(result.correlation) if value >= threshold
+    ]
+    assert above, result.correlation
+    assert above[0] > 0, result.correlation
+    assert above[-1] < len(result.correlation) - 1, result.correlation
+
+    # The dip is ignored and the final descent is reported.
     assert result.reaches_threshold
     assert result.dips_before_crossing
-    assert result.crossing_resolution_angstrom != pytest.approx(
-        result.resolution_angstrom[0]
+    assert result.crossing_resolution_angstrom == pytest.approx(
+        result.resolution_angstrom[above[-1] + 1]
     )
+    # And in particular NOT the coarsest shell, which is what the first-dip scan
+    # returned for exactly this shape on real data.
+    assert result.crossing_resolution_angstrom < result.resolution_angstrom[1]
 
 
 def test_compute_fsc_curve_rejects_mismatched_shapes() -> None:
