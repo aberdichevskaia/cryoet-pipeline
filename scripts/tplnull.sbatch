@@ -52,6 +52,7 @@ set -euo pipefail
 REPO=/lustre/groups/shared/users/peng_marr/a.berdichevskaia/cryoet-pipeline
 PROJECT=outputs/ribo
 SERIES=(TS_0005 TS_0006 TS_0007 TS_0008 TS_0009)
+BOX=48                    # the extraction box, configs/lanes/ribo-bin8.toml
 
 # Index 0 is the real lane, index 1 the control. Same everything else.
 VARIANTS=(bin8-top800 decoy)
@@ -75,11 +76,24 @@ echo "lane        $VARIANT -> $LABEL"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 echo
 
-# Both tasks must start from the SAME template, or the two sides of the
-# comparison are measuring agreement with different references.
-TPL=$(ls "$PROJECT"/templates/TS_0005/*_template.mrc | head -1)
+# Both tasks must start from the SAME reference, or the two sides of the
+# comparison measure agreement with different things.
+#
+# And it has to be the PADDED template. A prepared template is 39 voxels, the
+# particle box is 48, and the two commands that consume it disagree about whose
+# job the reconciliation is: compute-fsc pads centrally (cli.py:3805) while
+# _load_reference_mrc refuses outright (subtomogram.py:1616). Padding once into
+# a file makes --initial-reference here and --model-map later point at the same
+# object, which is easier to trust than two reconciliations agreeing.
+#
+# Not created here on purpose: both array tasks would write the same file at the
+# same moment. Make it once before submitting.
+RAW_TPL=$(ls "$PROJECT"/templates/TS_0005/*_template.mrc | head -1)
+TPL="${RAW_TPL%.mrc}_pad${BOX}.mrc"
 if [[ ! -f "$TPL" ]]; then
-    echo "no prepared template under $PROJECT/templates/TS_0005/" >&2
+    echo "no padded template at $TPL" >&2
+    echo "make it once, then resubmit:" >&2
+    echo "  python3 scripts/pad_map.py --map $RAW_TPL --box $BOX" >&2
     exit 1
 fi
 echo "template    $TPL"
