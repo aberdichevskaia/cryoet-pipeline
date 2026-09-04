@@ -3,10 +3,17 @@
 #SBATCH --output=slurm-ribo-tplnull-%a-%j.log
 #SBATCH --partition=gpu_p
 #SBATCH --qos=gpu_normal
-#SBATCH --gres=gpu:a100_3g.20gb:1
+#SBATCH --gres=gpu:1
+# NEEDS A FULL CARD, NOT A MIG SLICE. Measured on the running job with
+# nvidia-smi --query-gpu=memory.used: 27983 MiB. The 20 GB slice this script
+# first asked for (a100_3g.20gb:1, copied from ribo_pick.sbatch) would not have
+# fitted, and the run only survived because the scheduler handed out a full
+# A100-PCIE-40GB. See the memory note below for where the 28 GB goes.
+# Replace `gpu:1` with whatever this cluster calls a whole A100 if `gpu:1` can
+# hand back a slice.
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=8:00:00
+#SBATCH --time=16:00:00
 #SBATCH --array=0,1
 #
 # How much does a global orientation search against the template print the
@@ -39,13 +46,37 @@
 # itself introduced. That would need 6.9 deg, roughly ten times the orientations
 # and a day of GPU, and is only worth paying for if this pair comes out close.
 #
-# COST. A 180 degree cone at 15 deg is about 90 cone directions by 24 in-plane
-# angles, so ~2200 orientations per particle per iteration against ~25 in the
-# classification runs: about 26 million rotations of a 48^3 box rather than 2
-# million. Scaling the classification's measured 14 minutes gives roughly three
-# hours. That is a proportion, not a measurement — read the elapsed time below
-# and correct it. Nothing is written until the run finishes and there are no
-# checkpoints, so a job that hits the wall clock loses everything.
+# COST, counted from cone_offsets and _symmetric_offsets rather than estimated.
+# Per particle, summed over the three iterations:
+#
+#   iter 1  cone 180 deg @ 15.00  ->  106 directions x 25 in-plane =  2650
+#   iter 2  cone  90 deg @  7.50  ->  128            x 25          =  3200
+#   iter 3  cone  45 deg @  3.75  ->  133            x 25          =  3325
+#                                                       per particle  9175
+#
+# The count RISES across iterations: refine_factor halves the range and the step
+# together, but the ring count stays put while each ring's circumference is
+# sampled more finely, so narrowing the search does not make it cheaper here.
+#
+# MEMORY, measured at 27983 MiB rather than derived. The particle stack is the
+# small part: 4000 x 48^3 x 4 B is 1.77 GB, and the loop holds raw_volumes,
+# aligned and new_aligned at once for 5.3 GB. What an estimate from the inputs
+# misses is the SEARCH — 2650 orientations scored per particle in the first
+# iteration against 24 in a classification iteration, so the batch of rotated
+# volumes and its FFT workspace dwarf the stack, and torch's caching allocator
+# keeps the reservation at its high-water mark for the rest of the run.
+#
+# The transferable part: a GPU memory figure derived from the inputs is a lower
+# bound, and the width of the orientation search is what sets the peak.
+#
+# The classification runs cost 296 per particle by the same arithmetic (8 cone
+# directions x 3 in-plane x 4 classes for three iterations, then 1 x 1 once the
+# Crowther floor clamps), and one measured 14 minutes on an A100. So this is 31x
+# that, or about 7.2 hours.
+#
+# A first version of this script asked for 8 hours on a guess of "roughly three",
+# which left 48 minutes of margin on a job that writes nothing until it finishes
+# and takes no checkpoints: hitting the wall clock loses everything. Hence 16.
 
 set -euo pipefail
 
