@@ -1292,3 +1292,74 @@ Two smaller items this produced, worth not losing:
   silent step cannot be told from a hung one, which cost a wasted allocation
   here, and there are no checkpoints either, so a job that hits its wall clock
   loses everything.
+
+## 18. A step that runs for hours must be able to say how far it got
+
+The question to answer is "how much longer?", asked of an agent rather than of a
+log. That framing settles most of the design, and it rules out the obvious
+answer.
+
+**Not `print`.** Standard output goes to a SLURM log whose name carries a job id
+the agent was never told, and a step run interactively writes somewhere else
+again. A progress record has to live at a path that can be found without being
+told: `progress.jsonl` beside `step_timings.jsonl` at the project root, appended
+as whole lines so a killed job still leaves valid content. Appended rather than
+overwritten for the same reason — the moment you most want to know how far
+something got is when it died.
+
+**Backends stay printless.** There are zero `print` or `typer.echo` calls in
+`backends/`, and that is layering rather than an oversight: a backend returns
+artifacts and the CLI echoes them. So the mechanism is a callback on
+`BackendContext` — alongside `output_dir`, `device` and `parameters` — that the
+CLI wires to the file and to a throttled human line. A backend that ignores it
+keeps working, which is what makes it addable one step at a time.
+
+**The unit must be the atom of work, not the loop variable.** This is the part
+that is not obvious and that today's runs taught. Counting particles would give
+a wrong estimate for a cone-search run, because the cost per particle RISES
+across iterations: `refine_factor` halves the cone range and the step together,
+so the ring count in `cone_offsets` stays put while each ring's circumference is
+sampled more finely. For the template-null run that is 2650, 3200 and 3325
+orientations per particle over three iterations. A "particles done" counter would
+read as a steady slowdown and its extrapolation would be wrong by a third. The
+atom is the orientation evaluation.
+
+**The total has to be declared before the loop, and here it can be.** "Iteration
+3 of ?" answers nothing. `cone_offsets` and `_symmetric_offsets` are pure
+functions of the parameters, so the exact total — 9175 per particle, 36.7
+million for 4000 particles — is computable in three lines before any work
+starts. It was in fact computed by hand, after the fact, to find out whether a
+running job was stuck.
+
+**Throttle by time, not by iteration**, so a fast loop does not spend itself on
+I/O, and so a slow one still reports.
+
+### The half that makes the answer good rather than merely available
+
+Record the measured throughput in QC: units, elapsed, and the rate. Then "how
+long will this take" is answerable BEFORE starting, from what a comparable run
+actually did rather than from arithmetic about the inputs.
+
+That is worth stating because the alternative was tried twice in one day and
+failed twice. The same template-null run was estimated at three hours and then
+at 7.2 hours, and the GPU memory at 5.3 GB against a measured 27983 MiB. Both
+first figures were derived from the input sizes; both were wrong by between two
+and five times, because **the width of the orientation search sets the cost, not
+the size of the data**. The correction was only possible because one comparable
+run had been timed — a classification of the same 4000 particles at 296
+orientations each, which took 14 minutes on an A100 and gave the 31x ratio.
+
+`step_timings.jsonl` already records per-step wall time and disk delta, so half
+of this exists. What it cannot do is give a rate, because it records neither the
+unit nor how many of them there were. Adding those two fields to what it already
+writes is most of the work.
+
+### Adjacent, and worse
+
+A step that reports progress still loses everything at the wall clock: nothing
+is written until a run finishes and there are no checkpoints, so a 7-hour job
+that is stopped at 8 hours has produced nothing. Progress reporting makes that
+visible without fixing it. Writing the reference and the per-particle metadata
+at the end of every iteration would fix it, at the cost of one map and one STAR
+per iteration, and would also make a run resumable — which matters more here
+than the disk does.
