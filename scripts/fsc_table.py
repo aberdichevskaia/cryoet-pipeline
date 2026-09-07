@@ -58,15 +58,37 @@ def main() -> int:
         help="Fine end. Default is what the alignment residuals support; beyond "
         "it every curve is at zero and averaging over it only dilutes.",
     )
+    parser.add_argument(
+        "--search-blind-angstrom",
+        type=float,
+        default=47.8,
+        help="Where the orientation search stops being able to see, and so stops "
+        "being able to print. The cone-search references are low-passed at "
+        "initial_low_pass_angstrom (default 60 A) and filters.py gives that a "
+        "raised-cosine edge two shells wide, which for a 48 box at 9.784 A/voxel "
+        "reaches exactly zero at 47.8 A. The correlation numerator uses the "
+        "FILTERED reference, so orientation ranking is blind beyond this and a "
+        "template-printing artefact cannot reach here. Any difference between a "
+        "real curve and its control in these shells is therefore not printing.",
+    )
+    parser.add_argument(
+        "--shells",
+        action="store_true",
+        help="Print the curves shell by shell, and the difference when exactly "
+        "two reports are given. A band mean averages shells the search controls "
+        "together with shells it cannot touch, which hides the discriminating "
+        "part; this shows it.",
+    )
     args = parser.parse_args()
 
     print(
         f"{'report':<34} {'crossing':>10} {'band mean':>10} {'peak':>7} "
-        f"{'peak at':>9} {'shells':>7}"
+        f"{'peak at':>9} {'shells':>7} {'blind mean':>10}"
     )
-    print("-" * 84)
+    print("-" * 96)
 
     rows: list[tuple[float, str]] = []
+    curves: list[tuple[str, list[float], list[float]]] = []
     for path in args.reports:
         try:
             payload = json.loads(path.read_text())
@@ -97,9 +119,16 @@ def main() -> int:
         crossing_text = f"{crossing:.1f} A" if crossing is not None else "none"
 
         rows.append((band_mean, path.name))
+        curves.append((path.name, correlation, resolutions))
+        blind = [
+            value
+            for value, resolution in zip(correlation, resolutions, strict=True)
+            if args.band_fine_angstrom <= resolution < args.search_blind_angstrom
+        ]
+        blind_mean = sum(blind) / len(blind) if blind else float("nan")
         print(
             f"{path.name[-33:]:<34} {crossing_text:>10} {band_mean:>10.3f} "
-            f"{peak:>7.3f} {peak_at:>7.1f} A {len(in_band):>7}"
+            f"{peak:>7.3f} {peak_at:>7.1f} A {len(in_band):>7} {blind_mean:>10.4f}"
         )
 
         for warning in payload.get("warnings") or []:
@@ -107,6 +136,51 @@ def main() -> int:
 
     if not rows:
         return 1
+
+    if args.shells and curves:
+        print(
+            f"\nshell by shell. The search's reference is blind beyond "
+            f"{args.search_blind_angstrom:.1f} A, so nothing below that line can "
+            "have been printed by it:"
+        )
+        header = f"  {'shell':>5} {'A':>8}"
+        for name, _, _ in curves:
+            header += f" {name[:14]:>15}"
+        if len(curves) == 2:
+            header += f" {'difference':>12}"
+        print(header)
+        longest = max(len(one[1]) for one in curves)
+        crossed_the_line = False
+        for index in range(longest):
+            resolution = next(
+                (res[index] for _, _, res in curves if index < len(res)), None
+            )
+            if resolution is None:
+                continue
+            if not crossed_the_line and resolution < args.search_blind_angstrom:
+                print(
+                    f"  ----- {args.search_blind_angstrom:.1f} A: below here the "
+                    "orientation search has zero response -----"
+                )
+                crossed_the_line = True
+            line = f"  {index + 1:>5} {resolution:>8.1f}"
+            values: list[float] = []
+            for _, correlation, _ in curves:
+                if index < len(correlation):
+                    values.append(correlation[index])
+                    line += f" {correlation[index]:>15.4f}"
+                else:
+                    line += f" {'':>15}"
+            if len(curves) == 2 and len(values) == 2:
+                line += f" {values[0] - values[1]:>+12.4f}"
+            print(line)
+        print(
+            "\n  Read the difference column only BELOW the line. Above it both "
+            "curves\n  are partly painted by the same mechanism, so agreement "
+            "there is cheap;\n  below it the search could not rank orientations at "
+            "all, so a difference\n  is either real signal or noise — and its size "
+            "against the shells' own\n  scatter is what says which."
+        )
 
     print(
         f"\nband mean is over {args.band_coarse_angstrom:.0f} to "
