@@ -1363,3 +1363,83 @@ visible without fixing it. Writing the reference and the per-particle metadata
 at the end of every iteration would fix it, at the cost of one map and one STAR
 per iteration, and would also make a run resumable — which matters more here
 than the disk does.
+
+## 19. Membrane-relative geometry as an identity test — closed, with the reason
+
+Rejected rather than deferred, so that it is not proposed again.
+
+When every shape-based statistic in lane B turned out to be printed by the
+orientation search, positions were the only thing left that owes nothing to the
+template. The obvious test: a translating ER-bound ribosome sits with its exit
+tunnel at the translocon, so its centre is about one ribosome radius from the
+membrane — 100 to 180 A. A real population should show a bump there on top of a
+broad background, and random-position controls, which already exist, cannot
+produce one. `scripts/membrane_distance.py` implements it.
+
+**It will not be run, because its negative result would be uninterpretable.**
+The test's power depends on a substantial membrane-bound subpopulation existing.
+On these FIB-milled HEK293T lamellae few membranes are visible, and if most
+ribosomes here are free cytosolic then "no bump" follows whether or not the
+picks are ribosomes at all. A measurement whose negative outcome says nothing
+about the question is not worth the GPU time, however cheap.
+
+Two facts worth separating, because they were conflated when this was proposed:
+MemBrain-seg was never run on lane B's tomograms — there is no
+`segment-membranes` step in `scripts/run_series.py` and no segmentation section
+in `configs/lanes/ribo-bin8.toml`, and picking took its segmentation as
+optional (`_optional_segmentation_artifact`) and never received one. So this is
+untried rather than failed. And separately, membranes are not obvious by eye in
+these reconstructions — which is weak evidence about what MemBrain-seg would
+find, since it is trained to find what raw slices hide, but it is what makes the
+subpopulation prior low.
+
+The script stays: it is correct, its refusals are in place, and on a specimen
+with visible ER it is the right test. It is simply not a test for this one.
+
+**What this left on this dataset, and what it found.** One live measurement: the
+shell-resolved map-to-model FSC. The cone-search reference is low-passed at 60 A
+and `filters.py` gives it a raised-cosine edge two shells wide, which for a 48
+box at 9.784 A/voxel reaches exactly zero at 47.79 A — shells 10 and finer have
+zero response, and the correlation numerator uses the FILTERED reference, so
+orientation ranking is blind there and the printing mechanism cannot reach. A
+band mean over 200-35 A averaged those shells together with six the search
+fully controls, which is how the discriminating part came to be hidden.
+
+Read out with `scripts/fsc_table.py --shells`, against the same template, real
+against the random-position control:
+
+| shells | A | mean difference | note |
+|---|---|---|---|
+| 10-15 | 47.0-31.3 | **+0.031** | search blind, alignment permits signal |
+| 16-24 | 29.4-19.6 | **-0.0005** | search blind, alignment permits nothing |
+
+The second row is the calibration and it came out at zero, sd 0.0224, 3 of 9
+positive — which is what makes the first row readable: **+0.031 is 3.4 sigma**
+against that scatter. Both band edges were fixed before the readout existed, one
+from the filter arithmetic and one from the alignment residuals, so the band was
+predicted rather than chosen. Narrowing to the four coarsest shells gives
++0.052 at 4.6 sigma and is the best of all twelve sliding windows in the blind
+region, but that narrowing is post-hoc and 3.4 sigma is the number to quote.
+
+**The structural argument is stronger than the sigma.** A printed excess would
+have to STOP at 47.8 A, where the reference's response becomes zero. It does
+not: it persists four shells further and dies at 31-36 A. The sliding window
+shows the decay directly — 47.0-36.1 gives +0.052, 42.7-33.5 gives +0.041,
+39.1-31.3 gives +0.020, then flat near +0.010. The excess ends where the DATA
+runs out, not where the SEARCH runs out, and those are different frequencies.
+
+So lane B has one result that survives its own null. Three things it is not:
+one run per side, so 0.0224 is shell-to-shell scatter within a curve and not
+run-to-run variation; agreement with THIS template rather than ribosome
+identity, which a same-procedure run against an unrelated complex's map would
+test; and small in absolute terms, consistent with a minority population among
+mostly-junk picks — a reading that must not be propped up by fitting the
+published 13.8%, which is a different pipeline's purity figure.
+
+Beyond that the choice is between writing lane B up as a methodological result —
+a pipeline whose controls caught 0.914 FSC and 2.277 radial concentration
+produced from boxes containing no centred particle, and then found the one band
+where neither could reach — and moving validation to a dataset with deposited
+particle coordinates. EMPIAR-11538 holds only raw tilt-series and mdocs,
+verified against the EMPIAR API, so it cannot close a validation lane by itself:
+a published map is not ground truth for picking, coordinates are.
