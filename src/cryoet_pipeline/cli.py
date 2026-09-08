@@ -100,11 +100,11 @@ from cryoet_pipeline.backends.template import (
     PytomTemplateBackend,
     prepare_template_and_register,
 )
-from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
 from cryoet_pipeline.bypass_external_inputs import (
     import_external_picks_for_extraction,
     import_external_tomogram_for_extraction,
 )
+from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DEFAULT_EMPIAR_ID,
@@ -2872,7 +2872,7 @@ def extract_particles(
             picks = _picks_artifact(
                 artifact_registry, tilt_series_manifest, variant=variant
             )
-            
+
     selected_backend = _particle_extraction_backend(backend)
     parameters: dict[str, object] = {
         "variant": variant,
