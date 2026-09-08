@@ -33,7 +33,9 @@ from typing import Any, cast
 import numpy as np
 
 
-def _profiles(tomogram: Any, *, stride: int, smooth: int) -> dict[str, np.ndarray]:
+def _profiles(
+    tomogram: Any, *, stride: int, smooth: int, depth_average: int = 1
+) -> dict[str, np.ndarray]:
     """Three per-slice statistics, because only one of them sees the specimen.
 
     The first attempt used the raw per-slice standard deviation and found
@@ -50,14 +52,26 @@ def _profiles(tomogram: Any, *, stride: int, smooth: int) -> dict[str, np.ndarra
     `mean` is offered too because protein is dark, so a slice through the
     specimen should sit lower than one through vacuum, and that needs no
     assumption about correlation lengths at all.
+
+    Blurring within a slice turned out not to be enough on TS_0002: the profile
+    came out as scatter around a constant while the lamella was plainly visible
+    in 3dmod with Sum 10. Averaging *along depth* is what that Sum does, and it
+    is a different measurement — density persists across neighbouring slices and
+    back-projection noise does not, so the average keeps one and cancels the
+    other. `depth_average` blocks that many slices together and measures the
+    block, which costs boundary resolution of half a block and buys the contrast
+    that makes a boundary exist at all.
     """
 
     from scipy.ndimage import uniform_filter
 
     depth = tomogram.shape[0]
+    block_size = max(depth_average, 1)
     raw, smoothed, means = [], [], []
-    for index in range(depth):
-        plane = np.asarray(tomogram[index, ::stride, ::stride], dtype=np.float64)
+    for start in range(0, depth, block_size):
+        stop = min(start + block_size, depth)
+        block = np.asarray(tomogram[start:stop, ::stride, ::stride], dtype=np.float64)
+        plane = block[0] if stop - start == 1 else block.mean(axis=0)
         raw.append(float(plane.std()))
         means.append(float(plane.mean()))
         # Blur in-plane: what survives is what was spatially correlated.
@@ -114,7 +128,19 @@ def main() -> int:
         help="Widen the range by this much on each side, for a search that should "
         "not clip a particle whose centre sits near the boundary.",
     )
+    parser.add_argument(
+        "--depth-average",
+        type=int,
+        default=1,
+        help="Average this many neighbouring slices before measuring, the way "
+        "Sum in 3dmod does. 1 measures every slice and is the old behaviour; 10 "
+        "is what made the lamella visible by eye on TS_0002 when the per-slice "
+        "profile showed nothing. Boundaries are then known to within half a "
+        "block, which the margin covers anyway.",
+    )
     args = parser.parse_args()
+    if args.depth_average < 1:
+        raise SystemExit("--depth-average must be at least 1")
 
     import zarr
 
@@ -123,8 +149,15 @@ def main() -> int:
     depth = int(tomogram.shape[0])
     print(f"{args.tomogram.name}: {tomogram.shape} at {apix or '?'} A/voxel\n")
 
-    profiles = _profiles(tomogram, stride=args.stride, smooth=args.smooth_px)
-    step = max(depth // 40, 1)
+    profiles = _profiles(
+        tomogram,
+        stride=args.stride,
+        smooth=args.smooth_px,
+        depth_average=args.depth_average,
+    )
+    block = args.depth_average
+    if block > 1:
+        print(f"measuring blocks of {block} slices averaged together\n")
     contrasts: dict[str, float] = {}
     for name, profile in profiles.items():
         baseline = float(np.sort(profile)[: max(len(profile) // 10, 1)].mean())
@@ -140,17 +173,21 @@ def main() -> int:
     print("compare the numbers above before trusting the boundary.\n")
 
     profile = profiles[chosen]
-    low, high = _boundaries(profile, fraction=args.fraction)
-    low = max(low - args.margin_px, 0)
-    high = min(high + args.margin_px, depth - 1)
+    first_block, last_block = _boundaries(profile, fraction=args.fraction)
+    # Blocks back to slices: the first slice of the first block inside, the last
+    # slice of the last one.
+    low = max(first_block * block - args.margin_px, 0)
+    high = min(last_block * block + block - 1 + args.margin_px, depth - 1)
 
     floor = float(profile.min())
     peak = float(profile.max())
     print(f"per-slice {chosen} (specimen is the plateau):")
-    for index in range(0, depth, step):
-        marker = "|" if low <= index <= high else " "
+    print_step = max(len(profile) // 40, 1)
+    for index in range(0, len(profile), print_step):
+        slice_index = index * block
+        marker = "|" if low <= slice_index <= high else " "
         scaled = (profile[index] - floor) / (peak - floor) if peak > floor else 0.0
-        print(f"  z {index:4d} {marker} {'#' * int(scaled * 46)}")
+        print(f"  z {slice_index:4d} {marker} {'#' * int(scaled * 46)}")
 
     thickness = high - low + 1
     print(f"\nslab: z {low} to {high}, {thickness} of {depth} voxels "
