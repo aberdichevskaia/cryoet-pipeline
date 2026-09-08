@@ -1446,8 +1446,13 @@ def estimate_ctf(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
+    # Fitted on the stack built without a label, so that `correct-ctf` in any lane
+    # can fall back to the resulting model. Named lanes rebuild the same stage at
+    # their own binning, so without this the fit stack becomes unfindable as soon
+    # as one of them has run — and re-running the lane from fine alignment, when
+    # both stacks exist, could not get past this step.
     aligned_stack = _final_aligned_stack_artifact(
-        artifact_registry, tilt_series_manifest, variant=variant
+        artifact_registry, tilt_series_manifest, variant=variant, shared_fallback=True
     )
     alignment = _fine_alignment_artifact(
         artifact_registry, tilt_series_manifest, variant=variant
@@ -3891,6 +3896,7 @@ def _select_variant(
     what: str,
     tilt_series_id: str,
     variant: str | None,
+    shared_fallback: bool = False,
 ) -> Artifact:
     """Narrow a lookup to one artifact, using the variant label when it applies.
 
@@ -3905,11 +3911,25 @@ def _select_variant(
     a labelled rebuild could have produced. So the lookup prefers a labelled
     candidate and otherwise falls back to the unlabelled artifact every lane
     shares. It never falls back to another lane's, so lanes cannot be crossed.
+
+    `shared_fallback` extends that to a lookup carrying no label at all, for the
+    stage whose input is the shared artifact by design: CTF is fitted on a stack
+    built without a label so that any lane can use the model. Everywhere else,
+    several candidates and no label stays an error — that refusal is what lets a
+    second reconstruction coexist instead of being chosen by accident.
     """
 
     if variant is not None:
         labelled = [artifact for artifact in matches if _labelled(artifact, variant)]
         matches = labelled or [artifact for artifact in matches if _label_of(artifact) is None]
+    elif shared_fallback and len(matches) > 1:
+        # Only where an unlabelled lookup means the artifact every lane shares
+        # rather than "whichever one exists". Everywhere else two candidates and
+        # no label is a real ambiguity, and reporting it is what lets a second
+        # reconstruction coexist instead of being picked by accident.
+        shared = [artifact for artifact in matches if _label_of(artifact) is None]
+        if len(shared) == 1:
+            matches = shared
     if len(matches) == 1:
         return matches[0]
     if not matches:
@@ -4031,6 +4051,7 @@ def _final_aligned_stack_artifact(
     manifest: TiltSeriesManifest,
     *,
     variant: str | None = None,
+    shared_fallback: bool = False,
 ) -> Artifact:
     matches = [
         artifact
@@ -4043,6 +4064,7 @@ def _final_aligned_stack_artifact(
         what="final aligned stack",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
+        shared_fallback=shared_fallback,
     )
 
 

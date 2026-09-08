@@ -229,6 +229,56 @@ def test_select_variant_returns_the_only_match_without_a_label() -> None:
     )
 
 
+def test_shared_fallback_selects_the_artifact_every_lane_shares() -> None:
+    """A lane labelling its rebuild must not hide the artifact every lane shares.
+
+    The CTF fit stack carries no label on purpose, so that `correct-ctf --variant
+    bin8` can fall back to the model fitted from it. `estimate-ctf` therefore looks
+    it up with no label, and once `--variant bin8` had registered a stack beside
+    the shared one it saw two candidates and refused -- so the lane could not be
+    re-run from fine alignment, when both stacks exist by then.
+    """
+
+    shared = _seed(None)
+    lane = _seed("bin8")
+
+    assert (
+        _select_variant(
+            [shared, lane],
+            what="fiducial seed model",
+            tilt_series_id="TS_TEST",
+            variant=None,
+            shared_fallback=True,
+        )
+        is shared
+    )
+
+
+def test_shared_fallback_is_off_for_every_other_lookup() -> None:
+    """The refusal is what lets a second lane's tomogram coexist."""
+
+    with pytest.raises(typer.BadParameter, match="found 2 candidates"):
+        _select_variant(
+            [_seed(None), _seed("bin8")],
+            what="fiducial seed model",
+            tilt_series_id="TS_TEST",
+            variant=None,
+        )
+
+
+def test_shared_fallback_still_reports_two_lanes_and_no_baseline() -> None:
+    """Nothing shared to fall back to is a real ambiguity, fallback or not."""
+
+    with pytest.raises(typer.BadParameter, match="found 2 candidates"):
+        _select_variant(
+            [_seed("bin4"), _seed("bin8")],
+            what="fiducial seed model",
+            tilt_series_id="TS_TEST",
+            variant=None,
+            shared_fallback=True,
+        )
+
+
 def test_a_label_recorded_only_in_an_old_id_still_selects() -> None:
     """Registries written before the field must keep working.
 
