@@ -460,6 +460,52 @@ def test_parse_tiltalign_surface_analysis_reads_the_labelled_block_asked_for() -
     assert two.surfaces_analyzed == 2
 
 
+# What Tiltalign prints when it is actually asked for one plane: the one-plane
+# header, no two-surface header anywhere, and the section still closed by the
+# thickness and recentring lines, which describe all fiducials rather than either
+# fit. Transcribed from the TS_0002 run that this shape first failed on; every
+# other fixture here carries both headers, which is why it passed.
+_ONE_SURFACE_LOG = """
+ SURFACE ANALYSIS:
+
+ The following parameters are appropriate if fiducials are NOT on two surfaces:
+
+ Fit of one plane to all fiducials:
+ # of points =               25
+ Mean residual =           3.77
+ Adjusted slope =        0.1338
+ X axis tilt needed =     -3.00
+ Incremental tilt angle change =  -7.62
+ Total tilt angle change =        -7.62
+
+ Unbinned thickness needed to contain centers of all fiducials =         172
+ Incremental unbinned shift needed to center range of fiducials in Z =   -15.9
+ Total unbinned shift needed to center range of fiducials in Z =         -15.9
+"""
+
+
+def test_parse_tiltalign_surface_analysis_ends_one_plane_block_at_section_tail() -> None:
+    """With no second header, the block must end at the tail instead of the log.
+
+    Running to the end swallows the thickness line that closes the section, and
+    the single-plane guard then rejects the log for reporting a depth the fit
+    never measured -- refusing precisely the surface count that was requested.
+    """
+
+    summary = parse_tiltalign_surface_analysis(_ONE_SURFACE_LOG, surfaces=1)
+
+    assert summary is not None
+    assert summary.x_axis_tilt_deg == pytest.approx(-3.00)
+    assert summary.total_tilt_angle_deg == pytest.approx(-7.62)
+    assert summary.incremental_tilt_angle_deg == pytest.approx(-7.62)
+    # The tail belongs to no block, and coplanar points have no depth to report.
+    assert summary.unbinned_thickness_px is None
+    assert summary.unbinned_z_shift_px is None
+    assert summary.incremental_unbinned_z_shift_px is None
+    assert summary.surfaces_analyzed == 1
+    assert summary.surface_point_counts == ()
+
+
 def test_parse_tiltalign_surface_analysis_records_the_surface_split() -> None:
     """The point counts are what reveal a degenerate two-plane fit."""
 

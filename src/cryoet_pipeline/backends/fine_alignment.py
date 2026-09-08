@@ -768,7 +768,26 @@ def _positioning_block(text: str, *, surfaces: int) -> tuple[str | None, bool]:
     if surfaces == 1:
         if one_plane is None:
             return None, True
-        end = two_surface.start() if two_surface is not None else len(text)
+        if two_surface is not None:
+            return text[one_plane.end() : two_surface.start()], True
+        # Asked for one plane, Tiltalign prints no two-surface header, so there is
+        # nothing to bound the block with — but it still closes the section with
+        # the thickness and recentring lines, which describe all fiducials rather
+        # than either fit. Running to the end of the log swallows them, and the
+        # single-plane guard below then rejects a log that is exactly the one that
+        # was asked for.
+        end = min(
+            (
+                match.start()
+                for pattern in (
+                    _UNBINNED_THICKNESS_RE,
+                    _UNBINNED_Z_SHIFT_RE,
+                    _INCREMENTAL_UNBINNED_Z_SHIFT_RE,
+                )
+                if (match := pattern.search(text, one_plane.end())) is not None
+            ),
+            default=len(text),
+        )
         return text[one_plane.end() : end], True
     if two_surface is None:
         return None, True
