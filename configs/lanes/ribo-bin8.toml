@@ -112,6 +112,20 @@ patch_margin_px = 100     # binned pixels, not raw
 robust_fitting = true
 auto_prune_outliers = true
 
+# Patch points are coplanar, so the two-plane fit that suits gold beads has no
+# two surfaces to find. On TS_0002 it sorted 25 points into 11 and 14 and put the
+# planes 10 nm apart; the geometry it then recommended (X axis tilt -1.37 deg,
+# tilt angle change -9.34) is a fit to that non-existent split, and the one-plane
+# fit on the same points said -3.00 and -7.62 instead. Those are the numbers the
+# reconstruction is positioned with, so this is not a reporting detail.
+#
+# It does NOT fix the recommended thickness. "Thickness needed to contain centers
+# of all fiducials" was 172 unbinned px = 21 nm under either fit, because
+# coplanar points have no depth to measure — a bead pair on two faces does. So
+# reconstruction thickness stays an explicit number for every patch-tracked
+# series; see [reconstruct].
+surfaces_to_analyze = 1
+
 # The 0.02 default was set for bead tracking, where an outlier is a stray point.
 # With a 5x5 patch grid over 59 views there are 1475 points and one patch that
 # fails everywhere is 59 of them — 4.0% — so a single bad patch already exceeds
@@ -129,7 +143,15 @@ auto_prune_outliers = true
 # Only raise this after checking that the outliers really are concentrated in one
 # or two contours in the initial tiltalign log. Scattered across many patches
 # means the alignment is poor and a higher limit would hide it.
-# max_pruned_fraction = 0.08
+#
+# Checked on TS_0002 before setting it: 24 of the 30 worst projection points
+# belonged to contours 13 and 23, both failing on views 1-13 where the tilt is
+# -51 to -28 deg, and the 3-D point table put those two at 3.8 and 5.0 nm against
+# 0.6-1.6 nm for the other twenty-three. Two whole patches, which is what this
+# limit is sized for. It was not free to leave at 0.02: the run's largest
+# residual was 20.95 px, above the 20 px failure threshold, so without pruning
+# fine alignment ends in `fail` rather than merely refusing to prune.
+max_pruned_fraction = 0.08
 
 [ctf]
 voltage_kv = 300.0
@@ -151,8 +173,18 @@ min_defocus_angstrom = 10000
 max_defocus_angstrom = 50000
 
 [reconstruct]
-# Left unset: thickness is derived. Set explicitly if the lamella depth is known.
-# thickness = 400
+# NOT left unset, and not a preference. Derived thickness comes from Tiltalign's
+# "thickness needed to contain centers of all fiducials", which measures specimen
+# depth only when the fiducials sample it — gold beads on two faces do, patches
+# do not. On TS_0002 it derived 25 bin8 px: a 24 nm box for a FIB lamella, and
+# reconstruction reported `pass` on it. find_slab then found the specimen filling
+# 84% of the box with 10% contrast, which is its own "not seeing the specimen"
+# band: there was no vacuum in the volume to find an edge against.
+#
+# 320 is a generous first pass, the value TS_0005 used for a 177 px lamella. Snug
+# it per series from find_slab once the reconstruction actually contains vacuum:
+# lamella + ~25 px for residual X axis tilt across a 512 px field + edge margin.
+thickness = 320
 
 [template]
 emdb_id = "EMD-16721"     # human 80S ribosome, untreated cells, same data

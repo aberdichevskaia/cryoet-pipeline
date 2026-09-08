@@ -202,7 +202,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             ["fine-align-tilt-series", *common,
              *flag("robust-fitting", fine.get("robust_fitting")),
              *flag("auto-prune-outliers", fine.get("auto_prune_outliers")),
-             *flag("max-pruned-fraction", fine.get("max_pruned_fraction"))],
+             *flag("max-pruned-fraction", fine.get("max_pruned_fraction")),
+             # One plane for patch tracking, two for beads. Left to the config
+             # rather than derived from the tracking backend, because the two are
+             # separate choices and a lane comparing backends needs to say so.
+             *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze"))],
         ),
         # The CTF fit stack carries NO variant label, so that correct-ctf in any
         # lane can fall back to the model built from it.
