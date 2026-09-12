@@ -267,9 +267,13 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
              *flag("variant", lane)],
         ),
+        # Look at the picks before spending the extraction on them: this writes
+        # the tomogram with its picks for both ChimeraX and 3dmod. It registers
+        # nothing, so it is the one step here that can be skipped or re-run at
+        # any time without changing what the rest of the chain sees.
         (
-            "export-chimerax",
-            ["export-chimerax", *common, *flag("variant", lane)],
+            "visualize-picks",
+            ["visualize-picks", *common, *flag("variant", lane)],
         ),
         (
             "extract-particles",

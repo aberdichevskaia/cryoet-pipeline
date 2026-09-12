@@ -23,7 +23,8 @@ tomograms cannot be averaged together at all.
 **Parallel runs are unsafe at any scale.** `ArtifactRegistry` does
 read-modify-write of one JSON document with no locking, so two series finishing
 at the same time lose one another's entries. This bites at five series, not at
-five hundred.
+five hundred. Observed since, and worse than this paragraph says: parallel
+picking does not quietly lose entries, it brings the runs down — section 20.
 
 The database is not first because its design needs the scale-up as input. Several
 of the open questions in [database_design.md](database_design.md) — the
@@ -48,7 +49,8 @@ Order:
    particle-set concept that references several tomograms, and QC models carrying
    a list. This is what unblocks cross-tilt-series averaging.
 3. **Per-series registries or per-run records**, so parallel runs stop clobbering
-   each other.
+   each other. Promoted by section 20: parallel picking crashes rather than only
+   clobbering, so this gates step 4 instead of tidying it.
 4. **Run at scale** — on the order of fifty series through to a cross-series
    average. This produces the inputs the database design is missing: per-step
    durations for later resource profiles, real failure modes, the natural run
@@ -561,17 +563,40 @@ Notes worth keeping:
   requested inversion and warns on a mismatch, because getting this wrong finds
   nothing rather than erroring.
 
-## 3. Inspect picks in ChimeraX + ArtiaX — done
+## 3. Inspect picks in ChimeraX + ArtiaX, and in 3dmod — done
 
-`export-chimerax` writes a matched tomogram MRC plus picks STAR and a `.cxc`
-script, so checking a result is one command.
+`visualize-picks` writes a matched tomogram MRC plus picks STAR and a `.cxc`
+script, and converts the same picks into an IMOD model with `point2model`, so
+checking a result is one command for either viewer. Both halves share the one
+tomogram conversion, which is the largest file involved.
 
-The trap here: ArtiaX registers **two** readers for `.star` — "RELION STAR file"
-(RELION 3.1 conventions, `rlnCoordinateX/Y/Z` in pixels, which is what
-pytom-match-pick writes) and "RELION5 STAR file" (centered coordinates in
-Angstrom). Both claim the suffix and both answer to the nickname `star`, so the
-generated script pins `format relion` explicitly rather than letting ChimeraX
-choose.
+Two viewers because they answer different questions. ChimeraX with ArtiaX shows
+the whole set at once, each pick drawn as the template at the orientation found
+for it, over the segmentation surface: that is where a systematically wrong
+orientation, or a lattice picked as a cloud, shows up. 3dmod shows one slice
+with the picks drawn on it, which is the only way to answer whether a particular
+pick sits on density. Neither substitutes for the other, and the earlier
+`export-chimerax` only offered the first.
+
+Both viewers disagree with the pipeline about what a coordinate means, and both
+disagreements are silent — nothing errors, the picks are simply in the wrong
+places.
+
+ArtiaX registers **two** readers for `.star` — "RELION STAR file" (RELION 3.1
+conventions, `rlnCoordinateX/Y/Z` in pixels, which is what pytom-match-pick
+writes) and "RELION5 STAR file" (centered coordinates in Angstrom). Both claim
+the suffix and both answer to the nickname `star`, so the generated script pins
+`format relion` explicitly rather than letting ChimeraX choose.
+
+IMOD model coordinates run from 0 to NX in X and Y but from **-0.5 to NZ - 0.5
+in Z**, so the centre of voxel `i` is at `i + 0.5` in X and Y and at `i` in Z,
+while a pick is a voxel index in all three. The conversion therefore adds half a
+voxel in X and Y and nothing in Z. Stated by IMOD's own binary model spec and
+checked against the library rather than the prose: painting the written model
+onto the tomogram with `imodmop` puts the paint on the voxels the picks name,
+and dropping the offset moves every sphere half a voxel in X and Y while leaving
+Z alone — which is what makes it worth a line here, since half a voxel is
+invisible on a screenshot.
 
 ## 4. Refinement and classification — partly done
 
@@ -916,8 +941,9 @@ A scheduling fact that bears on this, found by trying to be clever about it:
 import time; on a CPU node that raises `cudaErrorInsufficientDriver` before any
 work starts. So the schedulable boundary is pytom rather than the shape of the
 computation: `template.py`, `picking.py` and `subtomogram.py` need a GPU
-allocation, while `export-chimerax` and `extract-particles` import nothing from
-pytom and can run anywhere. Worth knowing before writing resource profiles for
+allocation, while `visualize-picks` and `extract-particles` import nothing from
+pytom and can run anywhere (`visualize-picks` does need IMOD on the node, for
+`point2model`). Worth knowing before writing resource profiles for
 the controller, and an argument for this section: if the match cannot be
 re-entered cheaply, every downstream re-try drags a GPU allocation with it.
 
@@ -1443,3 +1469,45 @@ where neither could reach — and moving validation to a dataset with deposited
 particle coordinates. EMPIAR-11538 holds only raw tilt-series and mdocs,
 verified against the EMPIAR API, so it cannot close a validation lane by itself:
 a published map is not ground truth for picking, coordinates are.
+
+## 20. Picking several tilt-series in parallel crashes
+
+Observed on the cluster and recorded as observed: launching `pick-particles`
+concurrently for several tilt-series — one process per GPU, which is the whole
+reason to ask for a multi-GPU node — brings the runs down. `pytom_gpu_ids` is a
+per-run parameter, so one process per GPU is expressible and was the obvious way
+to run; it is the concurrency that is new, not the placement.
+
+**The first work item is to capture a failure, not to fix one.** What the report
+does not carry is the traceback, how many processes were in flight, whether all
+of them die or one survives, and whether the crash lands inside the match or in
+the registry write at the end of it. Two processes on different GPUs against the
+same project, with both stderrs kept, is minutes of GPU time and it separates
+mechanisms that need different fixes: a crash inside pytom or the CUDA runtime is
+another repository's problem, while a crash in the registry is step 3 of the
+order of work above.
+
+**What is verified in the code, offered as a candidate and not as a diagnosis.**
+Every command loads the whole `ArtifactRegistry`, mutates it, and writes it back
+through `path.write_text` — no lock, and no temp-file-and-rename, so the write is
+not atomic and a concurrent reader can see a partial document. `load` goes
+through `model_validate_json`, which raises on malformed JSON. `add` raises on a
+duplicate id, and `_validate_parent_ids` raises when a parent is absent from the
+document that was just loaded — which is what a lost write looks like to the next
+process. So there are at least three routes from concurrent writers to an
+exception rather than to silent loss, which is why the order of work above
+understates this. Whether any of them is what actually fired here is unknown
+until there is a traceback.
+
+**Why this is not cosmetic.** The workaround is the serial shell loop, and at the
+measured 29 minutes of A100 per series a fifty-series run is about 24 hours
+serially against roughly 6 on four GPUs. Step 4 of the order of work is a
+fifty-series run, so the crash sits directly in front of the milestone the whole
+order was built to reach.
+
+**The fix shape is already chosen** — per-series registries or per-run records
+plus a merge, as step 3 records, which is also the file-first shape the database
+will index. An atomic write plus a lock is the smaller intermediate step and
+would be tempting to do first; it is worth doing anyway for the non-atomic write,
+but it should not be sold as the fix for this until the traceback says the
+registry is where the crash is.

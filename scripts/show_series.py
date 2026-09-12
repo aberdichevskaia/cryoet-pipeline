@@ -189,7 +189,7 @@ _EXPECTED: tuple[tuple[str, str, str], ...] = (
     ("coarse-aligned preview", "qc:coarse_alignment:preview", "qc-coarse-alignment"),
     ("fine-aligned stack", "aligned_tilt_stack:final", "build-final-aligned-stack"),
     ("tomogram", "tomogram", "reconstruct-tomogram"),
-    ("picks in ChimeraX", "chimerax_script", "export-chimerax"),
+    ("picks for ChimeraX and 3dmod", "picks_view", "visualize-picks"),
     ("particle stack", "particle_stack", "extract-particles"),
     ("average", "subtomogram_average", "average-particles"),
 )
@@ -258,10 +258,24 @@ def viewable(project: Path, series: str, artifacts: list[dict[str, Any]]) -> Non
                 for axis, slice_path in sorted(slices.items()):
                     print(f"      central slice {axis}: {slice_path}")
 
+    # One directory serves both viewers, and both are named because neither
+    # answers the other's question: ChimeraX shows the whole set at once, each
+    # pick at the orientation found for it, while 3dmod draws the picks on the
+    # slices, which is the only way to see whether one sits on real density.
     for script in sorted((project).rglob(f"{series}_open_in_chimerax.cxc")):
         print(f"  chimerax {script}")
         print("      picks over their tomogram (pins the RELION reader)")
-        found.add("chimerax_script")
+        found.add("picks_view")
+
+        # The same MRC the ChimeraX script opens, plus the IMOD model built
+        # from the same picks. Printed only when both are there: 3dmod given a
+        # missing model opens the tomogram alone and shows no picks at all,
+        # which reads as a bad pick run rather than a missing file.
+        volume = script.parent / f"{series}.mrc"
+        model = script.parent / f"{series}_picks.mod"
+        if volume.is_file() and model.is_file():
+            print(f"  3dmod {volume} {model}")
+            print("      the same picks as spheres on the slices they fall in")
 
     for label, token, command in _EXPECTED:
         if token not in found:

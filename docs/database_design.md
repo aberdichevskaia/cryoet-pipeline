@@ -577,7 +577,8 @@ where silent corruption lives — origin versus centre, handedness, pixels versu
 angstrom, axis order — and a plausible-looking wrong converter is not detected
 until a structure fails to refine. The two `.star` readers ArtiaX registers for
 the same suffix, already documented in [roadmap.md](roadmap.md) section 3, are
-the canonical example.
+the canonical example; IMOD models in the same section are the smaller one, half
+a voxel in X and Y and none in Z, which no viewer will ever complain about.
 
 The long tail — exotic formats, one-off exports, a CSV for a plot — can be
 generated on demand by an agent, under two conditions: it composes the tested

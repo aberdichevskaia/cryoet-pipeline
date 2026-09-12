@@ -8,7 +8,6 @@ from typing import Annotated, Any, cast
 
 import typer
 
-from cryoet_pipeline.artiax_export import export_picks_for_artiax
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import (
     ImodTiltXcorrAlignmentBackend,
@@ -122,6 +121,10 @@ from cryoet_pipeline.fsc import (
     plot_fsc_curve,
 )
 from cryoet_pipeline.models import Artifact, ArtifactKind, ProjectConfig, TiltSeriesManifest
+from cryoet_pipeline.picks_visualization import (
+    resolve_sphere_radius,
+    write_picks_visualization,
+)
 from cryoet_pipeline.project import initialize_project
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
@@ -2719,8 +2722,8 @@ def pick_particles(
     typer.echo(f"updated {registry}")
 
 
-@app.command("export-chimerax")
-def export_chimerax(
+@app.command("visualize-picks")
+def visualize_picks(
     manifest: Annotated[
         Path,
         typer.Option(help="Tilt-series manifest JSON written by init."),
@@ -2730,6 +2733,22 @@ def export_chimerax(
         typer.Option(help="Artifact registry JSON to read."),
     ],
     out: Annotated[Path, typer.Option(help="Output directory for the export.")],
+    sphere_radius_px: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Radius, in tomogram voxels, to draw each pick at in 3dmod. "
+            "Defaults to the radius the template mask was built with.",
+        ),
+    ] = None,
+    imod_dir: Annotated[
+        Path | None,
+        typer.Option(help="IMOD installation directory when it is not configured."),
+    ] = None,
+    point2model_executable: Annotated[
+        Path | None,
+        typer.Option(help="IMOD point2model executable when it is not on PATH."),
+    ] = None,
     overwrite: Annotated[
         bool,
         typer.Option(help="Overwrite an existing export."),
@@ -2743,7 +2762,7 @@ def export_chimerax(
         ),
     ] = None,
 ) -> None:
-    """Export a tomogram and its picks for inspection in ChimeraX with ArtiaX."""
+    """Export a tomogram and its picks for inspection in ChimeraX and in 3dmod."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
@@ -2761,7 +2780,24 @@ def export_chimerax(
     registered_template = _template_artifacts(
         artifact_registry, tilt_series_manifest, variant=variant
     )
-    export = export_picks_for_artiax(
+    parameters: dict[str, Any] = {}
+    if imod_dir is not None:
+        parameters["imod_dir"] = imod_dir
+    if point2model_executable is not None:
+        parameters["point2model_executable"] = point2model_executable
+    # point2model is a converter, not a compute step: the device is only here
+    # because every backend context carries one.
+    context = BackendContext(
+        output_dir=out,
+        device=resolve_device("cpu"),
+        parameters=parameters,
+    )
+    sphere_radius = resolve_sphere_radius(
+        requested_px=sphere_radius_px,
+        template_mask=registered_template[1] if registered_template else None,
+        voxel_size_angstrom=tomogram.pixel_spacing_angstrom,
+    )
+    export = write_picks_visualization(
         template=registered_template[0] if registered_template else None,
         segmentation=_optional_segmentation_artifact(
             artifact_registry, tilt_series_manifest, variant=variant
@@ -2769,6 +2805,8 @@ def export_chimerax(
         tomogram=tomogram,
         picks=picks,
         out=out,
+        context=context,
+        sphere_radius=sphere_radius,
         overwrite=overwrite,
     )
 
@@ -2778,8 +2816,14 @@ def export_chimerax(
         typer.echo(f"wrote template: {export.template_path}")
     if export.segmentation_path is not None:
         typer.echo(f"wrote segmentation: {export.segmentation_path}")
-    typer.echo(f"wrote ChimeraX script: {export.script_path}")
-    typer.echo(f"open with: chimerax {export.script_path}")
+    typer.echo(f"wrote ChimeraX script: {export.chimerax_script_path}")
+    typer.echo(f"wrote IMOD model: {export.imod_model_path}")
+    typer.echo(
+        f"  {export.pick_count} picks, drawn as spheres of "
+        f"{export.sphere_radius.px} px — {export.sphere_radius.source}"
+    )
+    typer.echo(f"open with: chimerax {export.chimerax_script_path}")
+    typer.echo(f"open with: 3dmod {export.tomogram_path} {export.imod_model_path}")
 
 
 @app.command("extract-particles")

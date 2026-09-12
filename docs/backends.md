@@ -39,8 +39,15 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `average-particles` | `cone-search` | ✓ | — | Cone search + multi-reference classification. |
 | | `fft-refinement` | | — | Simple per-Euler-angle baseline. |
 
-`compute-fsc`, `export-chimerax`, `import-tilt-stack` and `download-empiar`
-have no backend choice.
+`compute-fsc`, `visualize-picks`, `import-tilt-stack` and `download-empiar`
+have no backend choice. That is not the same as needing nothing installed:
+`visualize-picks` calls IMOD's `point2model` to turn the picks into a model
+3dmod can draw on the tomogram, and finds it with the same
+`resolve_imod_executable` helper and the same `BackendContext` the IMOD
+backends use, so `--imod-dir` and `--point2model-executable` behave there as
+their equivalents do elsewhere. What is absent is the stage `Protocol`: the
+conversion is fixed, there is no second way to do it, and so there is no
+`--backend` flag and nothing to compare.
 
 ## Choosing between backends
 
@@ -233,8 +240,8 @@ question.
 
 ## Contrast conventions
 
-Two places silently produce nothing rather than failing when the convention is
-wrong, so both are explicit and checked:
+The wrong contrast convention silently produces nothing rather than failing, so
+the one place it is decided is explicit and checked:
 
 - **Template contrast.** EMDB maps have bright density; particles in a tomogram
   are dark. `prepare-template --template-invert` (on by default) multiplies the
@@ -323,11 +330,33 @@ reach pytom as parallel lists with nothing tying them together.
 `--pytom-number-of-particles` caps how many candidates extraction returns.
 pytom requires it. Everything extraction will refuse is checked before the GPU
 match starts rather than after it.
+
+## Coordinate conventions in the two viewers
+
+`visualize-picks` writes one directory for two viewers, and neither of them
+reads a coordinate the way the pipeline writes one. Both disagreements are
+silent — nothing errors, the picks are simply drawn somewhere other than where
+they were found — so the command states the convention instead of letting the
+viewer pick it:
+
 - **STAR flavour in ChimeraX.** ArtiaX registers two readers for `.star`:
   RELION 3.1 (`rlnCoordinateX/Y/Z` in pixels, which is what pytom-match-pick
   writes) and RELION 5 (centered coordinates in Ångström). Both claim the suffix
   and both answer to the nickname `star`, so the script written by
-  `export-chimerax` pins `format relion` rather than letting ChimeraX choose.
+  `visualize-picks` pins `format relion` rather than letting ChimeraX choose.
+- **Half a voxel in the IMOD model.** IMOD model coordinates run from 0 to NX in
+  X and 0 to NY in Y, but from -0.5 to NZ - 0.5 in Z, so the centre of voxel `i`
+  is at `i + 0.5` in X and Y and at `i` in Z. pytom-match-pick writes picks as
+  voxel indices, so the point list handed to `point2model` adds half a voxel in
+  X and Y and adds nothing in Z. This is the kind of error that never announces
+  itself: get it wrong and the model still loads onto the tomogram, every sphere
+  still lands on the slice it belongs to, and the whole set is displaced by half
+  a voxel in XY — a fraction of the radius the picks are drawn at, and the same
+  fraction for all of them, so nothing looks inconsistent. It surfaces only as
+  picks sitting slightly off their density, which is the very judgement 3dmod
+  was opened to make. The offset is stated by IMOD's own binary model spec and
+  was confirmed against the library rather than the prose, by painting a model
+  sphere onto a volume with `imodmop` and checking which voxels took the paint.
 
 ## Adding a backend
 

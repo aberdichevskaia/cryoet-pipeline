@@ -256,7 +256,7 @@ cryoet restore-tomogram --manifest ... --registry ... --out outputs/dev \
 ## Particle picking and subtomogram averaging
 
 Fetch a reference map from EMDB and build a matching template and mask, pick
-against it, then check the result in ChimeraX before committing to averaging:
+against it, then look at the picks before committing to averaging:
 
 ```bash
 cryoet prepare-template \
@@ -273,11 +273,12 @@ cryoet pick-particles \
   --pytom-particle-diameter 250 \
   --device cuda
 
-cryoet export-chimerax \
+cryoet visualize-picks \
   --manifest outputs/dev/manifests/TS_01.json \
   --registry outputs/dev/artifacts.json \
   --out outputs/dev
 # then: chimerax <the printed .cxc file>
+#   or: 3dmod <the printed .mrc file> <the printed .mod file>
 ```
 
 `prepare-template` caches the downloaded map under `<out>/emdb-cache`, resamples
@@ -286,6 +287,15 @@ it to the tomogram's voxel size, and registers the template and mask so
 of `--emdb-id` to use a local map. Contrast inversion is on by default, since
 EMDB maps are bright and tomogram particles are dark; the QC report warns if the
 produced template does not look inverted as requested.
+
+`visualize-picks` writes one directory that both viewers read, since they answer
+different questions and neither answers the other's. ChimeraX with ArtiaX shows
+the whole set in 3D, each pick drawn as the template at the orientation found
+for it, which is where a systematically wrong orientation or a lattice picked as
+a cloud becomes visible. 3dmod shows one slice at a time with the picks drawn on
+it, which is how you answer whether a given pick sits on real density. Use
+`--sphere-radius-px` to change the size the picks are drawn at in 3dmod; it
+defaults to the radius the template mask was built with.
 
 Then extract subvolumes, refine and classify them, and estimate resolution:
 
