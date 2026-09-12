@@ -214,3 +214,68 @@ def test_cone_search_composes_onto_an_existing_orientation() -> None:
     )
 
     assert separation == pytest.approx(10.0, abs=1e-9)
+
+
+@pytest.mark.parametrize("azimuth", [0.0, 90.0, 180.0, 213.0, 359.0])
+@pytest.mark.parametrize("in_plane", [0.0, -10.0, 15.0])
+def test_zero_polar_offset_has_no_azimuth_spin(azimuth: float, in_plane: float) -> None:
+    # At the cone pole the azimuth is undefined, not an extra in-plane rotation.
+    np.testing.assert_allclose(
+        perturbation_matrix(0.0, azimuth, in_plane),
+        relion_euler_to_matrix(in_plane, 0.0, 0.0),
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("polar", [0.001, 10.0, 45.0])
+@pytest.mark.parametrize("azimuth", [0.0, 90.0, 154.28571428571428, 213.0])
+@pytest.mark.parametrize("in_plane", [0.0, -10.0, 15.0])
+def test_cone_perturbation_is_minimal_tilt_then_in_plane_spin(
+    polar: float, azimuth: float, in_plane: float
+) -> None:
+    # Independent axis-angle construction of the shortest tilt. The signs follow
+    # RELION's passive rotation convention: azimuth 0 tilts +Z towards -X.
+    azimuth_rad = np.radians(azimuth)
+    axis = np.array([-np.sin(azimuth_rad), -np.cos(azimuth_rad), 0.0])
+    x, y, z = axis
+    cross = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
+    angle = np.radians(polar)
+    tilt = (
+        np.cos(angle) * np.eye(3)
+        + (1 - np.cos(angle)) * np.outer(axis, axis)
+        + np.sin(angle) * cross
+    )
+    expected = tilt @ relion_euler_to_matrix(in_plane, 0.0, 0.0)
+    actual = perturbation_matrix(polar, azimuth, in_plane)
+    np.testing.assert_allclose(actual, expected, atol=1e-12)
+    np.testing.assert_allclose(actual.T @ actual, np.eye(3), atol=1e-12)
+    assert np.linalg.det(actual) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_czii_cone_grid_bounds_the_full_rotation_not_only_axis_tilt() -> None:
+    from cryoet_pipeline.backends.subtomogram import (
+        _symmetric_offsets,
+        crowther_angular_increment_deg,
+    )
+
+    # Reproduce the five-iteration CZII schedule, including its sampling floor.
+    # The old mapping offered a 164.345887-degree move in the first local search.
+    current = relion_euler_to_matrix(31.0, 64.0, -12.0)
+    floor = crowther_angular_increment_deg(300.0, 35.0)
+    for iteration in range(5):
+        scale = 2**iteration
+        sampling = max(10.0 / scale, floor)
+        for polar, azimuth in cone_offsets(30.0 / scale, sampling):
+            for in_plane in _symmetric_offsets(30.0 / scale, sampling):
+                candidate = current @ perturbation_matrix(polar, azimuth, in_plane)
+                relative = current.T @ candidate
+                cosine = (np.trace(relative) - 1.0) / 2.0
+                # Orthogonal tilt and spin axes give this azimuth-independent angle.
+                expected_cosine = (
+                    2 * (np.cos(np.radians(polar) / 2) * np.cos(np.radians(in_plane) / 2)) ** 2
+                    - 1
+                )
+                assert cosine == pytest.approx(expected_cosine, abs=1e-12)
+                full_angle = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+                assert full_angle <= polar + abs(in_plane) + 2e-6
+                assert full_angle <= 30.0 / scale + 2e-6

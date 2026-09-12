@@ -99,14 +99,19 @@ def cone_offsets(
 
 
 def perturbation_matrix(polar_deg: float, azimuth_deg: float, in_plane_deg: float) -> np.ndarray:
-    """Build a perturbation whose reference z-axis tilts by `polar_deg`.
+    """Build a minimal cone tilt plus the requested in-plane spin.
 
-    In this convention `psi` carries the azimuth of the tilted axis and `rot`
-    the rotation about it, so a perturbation's polar deviation is exactly
-    `polar_deg` regardless of the other two angles.
+    With RELION's passive convention this is
+    ``Rz(-azimuth) @ Ry(-polar) @ Rz(azimuth) @ Rz(-in_plane)``.
+    Conjugating the tilt by the azimuth changes its direction without adding
+    a spin: at zero polar offset only the requested in-plane rotation remains.
+
+    Passing `in_plane` straight through as `rot` instead would leave an extra
+    azimuth rotation. A local cone could then offer near-180-degree moves even
+    though its z-axis tilt and explicit in-plane range were both small.
     """
 
-    return relion_euler_to_matrix(in_plane_deg, polar_deg, azimuth_deg)
+    return relion_euler_to_matrix(in_plane_deg - azimuth_deg, polar_deg, azimuth_deg)
 
 
 def resample_volume_zyx(

@@ -132,6 +132,16 @@ pixel size into the flip.
   which is what makes it classification rather than plain averaging. Set
   `--num-classes`.
 
+The cone azimuth chooses the direction of a minimal tilt; it is not an extra
+in-plane spin. For a sampled tilt `p` and in-plane offset `s`, the full relative
+rotation is at most `p + abs(s)`. Both range flags specify full widths, so this
+bound is half the cone aperture plus half the in-plane range **per iteration**,
+not a cap on the accumulated change from the original pick. The former
+azimuth-to-Euler mapping omitted the compensating rotation and could offer
+164-degree moves on the CZII 30-degree local-search grid. Results made with
+that mapping need a new refinement run; changing the code does not repair
+stored poses or averages. Preserve old results under their existing label.
+
 Ranges and their sampling shrink together each iteration by `--refine-factor`
 (two to three is usual), but the angular step stops at the Crowther increment,
 

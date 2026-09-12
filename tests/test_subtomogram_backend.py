@@ -644,6 +644,35 @@ def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: P
     )
 
 
+def test_cone_search_cannot_take_an_out_of_range_spin_even_if_reference_rewards_it() -> None:
+    from cryoet_pipeline.backends.subtomogram import _search_multi_reference
+    from cryoet_pipeline.particles import ParticleRecord
+    from cryoet_pipeline.rotations import cone_offsets
+
+    device = torch.device("cpu")
+    raw = _blob_reference(20)
+    current = relion_euler_to_matrix(31.0, 64.0, -12.0)
+    # This is the exact accidental 164-degree candidate from the CZII grid,
+    # constructed without perturbation_matrix so fixing the helper cannot alter it.
+    remote = current @ relion_euler_to_matrix(10.0, 10.0, 154.28571428571428)
+    misleading_reference = resample_volume_zyx(raw, remote, np.zeros(3), device=device)
+    record = ParticleRecord(
+        index=0, x_px=0.0, y_px=0.0, z_px=0.0,
+        rot_deg=31.0, tilt_deg=64.0, psi_deg=-12.0,
+        shift_x_px=0.0, shift_y_px=0.0, shift_z_px=0.0,
+        score=0.5, class_number=1, random_subset=1,
+    )
+    candidate = _search_multi_reference(
+        raw, [misleading_reference], record,
+        cone=cone_offsets(30.0, 10.0), in_plane_offsets=[0.0, 10.0, -10.0],
+        max_shift_px=0.0, device=device,
+    )
+    cosine = (np.trace(current.T @ candidate.matrix) - 1.0) / 2.0
+    full_angle = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+    # The sampled grid has at most a 10-degree tilt and a 10-degree spin.
+    assert full_angle <= 20.0 + 1e-6
+
+
 def test_cone_search_refinement_separates_two_distinct_species(tmp_path: Path) -> None:
     box_size = 20
     axis = torch.arange(box_size, dtype=torch.float32) - (box_size - 1) / 2.0
