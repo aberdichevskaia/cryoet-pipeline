@@ -644,6 +644,84 @@ def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: P
     )
 
 
+@pytest.mark.parametrize("perturbed", [False, True], ids=["preserve-correct-pose", "recover-known-rotation"])
+def test_cone_angular_search_recovers_analytic_ground_truth(perturbed: bool) -> None:
+    """A bounded geometry gate, not a noisy-particle parameter sweep.
+
+    A noiseless asymmetric phantom has an independently specified orientation.
+    Test the two contracts missing from a mere correlation-improvement check:
+    preserve that orientation, or recover it from one exact on-grid offset.
+    Use the CZII first-iteration angular grid and 60 A reference low-pass,
+    but freeze shifts to isolate angular search. Passing rules out a basic
+    geometry/search failure here; it does not validate noisy CZII refinement.
+    """
+    from cryoet_pipeline.backends.subtomogram import _search_multi_reference
+    from cryoet_pipeline.filters import low_pass_filter_volume
+    from cryoet_pipeline.particles import ParticleRecord
+    from cryoet_pipeline.rotations import (
+        center_particle_volume,
+        cone_offsets,
+        matrix_to_relion_euler,
+    )
+
+    def rodrigues(axis: tuple[float, float, float], degrees: float) -> np.ndarray:
+        # Independent active XYZ rotation; no production Euler/perturbation helper.
+        vector = np.asarray(axis, dtype=np.float64)
+        x, y, z = vector / np.linalg.norm(vector)
+        skew = np.array([[0, -z, y], [z, 0, -x], [-y, x, 0]])
+        angle = np.deg2rad(degrees)
+        return np.eye(3) + np.sin(angle) * skew + (1 - np.cos(angle)) * skew @ skew
+
+    def phantom(xyz: np.ndarray) -> torch.Tensor:
+        # Evaluate the density in continuous coordinates, without image resampling.
+        values = np.zeros(xyz.shape[:-1], dtype=np.float64)
+        for amplitude, centre, width in (
+            (1.0, (8, 3, -4), 2.5),
+            (0.7, (-5, 7, 3), 3.0),
+            (0.5, (-2, -7, 5), 2.0),
+            (0.4, (-7, -4, -5), 2.5),
+        ):
+            values -= amplitude * np.exp(-np.sum((xyz - centre) ** 2, axis=-1) / (2 * width**2))
+        return center_particle_volume(torch.from_numpy(values.astype(np.float32)))
+
+    axis = np.arange(48, dtype=np.float64) - 23.5
+    z, y, x = np.meshgrid(axis, axis, axis, indexing="ij")
+    xyz = np.stack((x, y, z), axis=-1)
+    truth = rodrigues((1, 2, -1), 67.0)
+    # q_lab = truth @ q_reference; row-coordinate arrays therefore use xyz @ truth.
+    raw = phantom(xyz @ truth)
+    reference = low_pass_filter_volume(
+        phantom(xyz), cutoff_angstrom=60.0, pixel_spacing_angstrom=10.012
+    )
+    azimuth = 2 * 360.0 / 7
+    correction = (
+        rodrigues((0, 0, 1), -azimuth)
+        @ rodrigues((0, 1, 0), -10.0)
+        @ rodrigues((0, 0, 1), azimuth)
+        @ rodrigues((0, 0, 1), -10.0)
+    )
+    # This 14.13-degree error has an exact inverse in the specified search grid.
+    start = truth @ correction.T if perturbed else truth
+    rot, tilt, psi = matrix_to_relion_euler(start)
+    record = ParticleRecord(
+        index=0, x_px=0.0, y_px=0.0, z_px=0.0,
+        rot_deg=rot, tilt_deg=tilt, psi_deg=psi,
+        shift_x_px=0.0, shift_y_px=0.0, shift_z_px=0.0,
+        score=0.5, class_number=1, random_subset=1,
+    )
+    candidate = _search_multi_reference(
+        raw, [reference], record,
+        cone=cone_offsets(30.0, 10.0), in_plane_offsets=[0.0, 10.0, -10.0],
+        max_shift_px=0.0, device=torch.device("cpu"),
+    )
+    error_deg = float(np.degrees(np.arccos(np.clip(
+        (np.trace(candidate.matrix @ truth.T) - 1.0) / 2.0, -1.0, 1.0
+    ))))
+    # Tolerance is for matrix floating-point error, not an allowed fraction of the grid step.
+    assert error_deg < 1e-4, f"angular search selected a pose {error_deg:.6f} deg from truth"
+    np.testing.assert_array_equal(candidate.shift, np.zeros(3))
+
+
 def test_cone_search_cannot_take_an_out_of_range_spin_even_if_reference_rewards_it() -> None:
     from cryoet_pipeline.backends.subtomogram import _search_multi_reference
     from cryoet_pipeline.particles import ParticleRecord

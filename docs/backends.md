@@ -119,7 +119,11 @@ pixel size into the flip.
 
 ### Averaging: `cone-search` versus `fft-refinement`
 
-`cone-search` is the one to use. `fft-refinement` remains as a minimal baseline.
+`cone-search` provides cone sampling and multi-reference classification.
+`fft-refinement` remains a minimal baseline and supports fixed-pose controls.
+Neither backend's internal correlation alone establishes an improvement in
+structural quality; the CZII GT-positive control deteriorated after cone
+refinement even though that correlation increased.
 
 `cone-search` differs in three ways that matter:
 
@@ -157,6 +161,33 @@ located at whole-pixel accuracy.
 
 Despite the name, `cone-search` is a native torch implementation modelled on
 DYNAMO's approach. It does not call DYNAMO or MATLAB.
+
+#### Bounded angular-search geometry check
+
+`test_cone_angular_search_recovers_analytic_ground_truth` checks exactly two
+contracts: preserve an already correct pose and recover a known 14.13-degree
+on-grid error. A nontrivially oriented, asymmetric noiseless density is evaluated
+analytically in continuous XYZ coordinates using independent Rodrigues matrices;
+the production resampler does not generate the input particle. Search uses the
+CZII first-iteration cone/in-plane grid, a 48-pixel box, 10.012 A pixels and a
+60 A low-pass reference. Shifts are frozen in the search kernel.
+
+The acceptance criterion is a full rotation-matrix error below 0.0001 degrees,
+not merely a better correlation. Both cases passed on CPU on 2026-09-14.
+Temporarily reinstating the former azimuth-spin bug in memory made recovery
+fail with a 10-degree error; no production file was reverted. The related
+rotation/subtomogram suite passed all 140 cases.
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest -q \
+  tests/test_subtomogram_backend.py -k analytic_ground_truth
+```
+
+This closes the basic on-grid geometry hypothesis for this controlled case,
+not the CZII quality problem. It does not test whether the score selects useful
+poses in noisy, incompletely sampled data or during joint reference updates.
+Do not expand this into parameter sweeps without a specific falsifiable failure
+hypothesis. No additional cluster run is required for this check.
 
 ## Comparing runs side by side
 
