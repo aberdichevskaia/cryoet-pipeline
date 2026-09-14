@@ -3034,6 +3034,15 @@ def average_particles(
             "Nyquist limit of the particle pixel size.",
         ),
     ] = None,
+    alignment_mask_diameter_angstrom: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Enable reference-frame weighted NCC inside a soft sphere "
+            "of this diameter in A (flat to 80% radius, cosine edge). Default: no mask. "
+            "The mask plus shift window must fit inside the box. Output maps are not masked.",
+        ),
+    ] = None,
     seed: Annotated[
         int,
         typer.Option(help="[cone-search] Seed for the initial random class partition."),
@@ -3146,6 +3155,11 @@ def average_particles(
 
     if not manifest:
         raise typer.BadParameter("at least one --manifest is required", param_hint="manifest")
+    if alignment_mask_diameter_angstrom is not None and backend != "cone-search":
+        raise typer.BadParameter(
+            "alignment mask is supported only by cone-search",
+            param_hint="alignment-mask-diameter-angstrom",
+        )
     tilt_series_manifests = [
         TiltSeriesManifest.model_validate_json(path.read_text()) for path in manifest
     ]
@@ -3184,6 +3198,7 @@ def average_particles(
         "shift_range_px": shift_range_px,
         "refine_factor": refine_factor,
         "seed": seed,
+        "alignment_mask_diameter_angstrom": alignment_mask_diameter_angstrom,
     }
     if particle_diameter_angstrom is not None:
         parameters["particle_diameter_angstrom"] = particle_diameter_angstrom

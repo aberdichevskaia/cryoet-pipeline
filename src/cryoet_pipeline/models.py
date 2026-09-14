@@ -993,7 +993,10 @@ class SubtomogramClassificationQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 2
+    schema_version: int = 3
+    alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
+    alignment_mask_flat_radius_fraction: float | None = Field(default=None, gt=0.0, lt=1.0)
+    alignment_score: str = "whole-box-ncc"
     tilt_series_ids: list[str]
     """Every tilt-series that contributed particles, for the same reason
     `SubtomogramAveragingQc` carries a list: classifying particles from several

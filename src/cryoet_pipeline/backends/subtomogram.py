@@ -11,6 +11,11 @@ import numpy as np
 import torch
 import zarr
 
+from cryoet_pipeline.alignment import (
+    best_masked_shift_and_correlation,
+    prepare_masked_ncc,
+    soft_spherical_alignment_mask,
+)
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.protocols import (
     BackendContext,
@@ -576,6 +581,8 @@ class FftRefinementAveragingBackend:
             key=lambda pair: pair[1].tilt_series_id,
         )
         num_iterations = _positive_int_parameter(context, "num_iterations", default=5)
+        if _optional_float_parameter(context, "alignment_mask_diameter_angstrom") is not None:
+            raise ValueError("alignment_mask_diameter_angstrom is supported only by cone-search")
         initial_angular_step_deg = _non_negative_float_parameter(
             context, "initial_angular_step_deg", default=6.0
         )
@@ -847,8 +854,8 @@ class ConeSearchRefinementBackend:
     - Orientations are searched on a *cone* plus an in-plane sweep, rather than
       by nudging each Euler angle independently. Independent Euler nudges sample
       orientation space unevenly and degenerate near zero tilt.
-    - Shifts come from the cross-correlation peak, so the whole allowed shift
-      range is explored by one FFT instead of a grid of resamplings.
+    - Shifts come from FFT cross-correlations instead of a grid of resamplings;
+      the optional masked scorer also evaluates shift-dependent local moments.
     - Several references can be refined at once, with each particle hard-assigned
       to its best-scoring class, which is what makes this classification rather
       than plain averaging.
@@ -937,6 +944,20 @@ class ConeSearchRefinementBackend:
         minimum_sampling_deg = crowther_angular_increment_deg(
             particle_diameter_angstrom, target_resolution_angstrom
         )
+        mask_diameter = _optional_float_parameter(context, "alignment_mask_diameter_angstrom")
+        alignment_mask = None
+        if mask_diameter is not None:
+            alignment_mask = soft_spherical_alignment_mask(
+                box_size,
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+                diameter_angstrom=mask_diameter,
+                device=device,
+            )
+        score_parameters = {
+            "alignment_mask_diameter_angstrom": mask_diameter,
+            "alignment_mask_flat_radius_fraction": 0.8 if alignment_mask is not None else None,
+            "alignment_score": "weighted-ncc" if alignment_mask is not None else "whole-box-ncc",
+        }
         records = combined.records
         raw_volumes = combined.volumes
         aligned = [
@@ -975,8 +996,17 @@ class ConeSearchRefinementBackend:
         starting_correlation_mean = float(
             np.mean(
                 [
-                    _normalized_correlation(
-                        aligned[record.index], starting_references[record.class_number - 1]
+                    (
+                        _normalized_correlation(
+                            aligned[record.index], starting_references[record.class_number - 1]
+                        )
+                        if alignment_mask is None
+                        else _best_shift_and_correlation(
+                            aligned[record.index],
+                            starting_references[record.class_number - 1],
+                            max_shift_px=0,
+                            alignment_mask=alignment_mask,
+                        )[1]
                     )
                     for record in records
                 ]
@@ -1031,6 +1061,7 @@ class ConeSearchRefinementBackend:
                     in_plane_offsets=in_plane_offsets,
                     max_shift_px=iteration_shift_range,
                     device=device,
+                    alignment_mask=alignment_mask,
                 )
                 if candidate.class_number != record.class_number:
                     reassigned += 1
@@ -1119,6 +1150,7 @@ class ConeSearchRefinementBackend:
                         "shift_range_px": shift_range_px,
                         "metadata_path": str(paths.particle_metadata),
                         "qc_path": str(paths.report),
+                        **score_parameters,
                     },
                     software_versions={"torch": _package_version("torch")},
                     storage_role=StorageRole.CANONICAL,
@@ -1161,6 +1193,7 @@ class ConeSearchRefinementBackend:
             status = QcStatus.WARNING
 
         report = SubtomogramClassificationQc(
+            **score_parameters,
             tilt_series_ids=combined.tilt_series_ids,
             backend=self.name,
             particle_stack_ids=combined.stack_ids,
@@ -1231,6 +1264,7 @@ def _search_multi_reference(
     in_plane_offsets: Sequence[float],
     max_shift_px: float,
     device: torch.device,
+    alignment_mask: torch.Tensor | None = None,
 ) -> _MultiReferenceCandidate:
     """Score one particle against every reference over the cone, keeping the best."""
 
@@ -1241,14 +1275,26 @@ def _search_multi_reference(
     best_matrix = current_matrix
     best_shift = current_shift
     best_correlation = -math.inf
+    masked_references = (
+        [prepare_masked_ncc(reference, alignment_mask) for reference in references]
+        if alignment_mask is not None
+        else None
+    )
     for polar, azimuth in cone:
         for in_plane in in_plane_offsets:
             candidate_matrix = current_matrix @ perturbation_matrix(polar, azimuth, in_plane)
             rotated = resample_volume_zyx(raw, candidate_matrix, current_shift, device=device)
             for class_number, reference in enumerate(references, start=1):
-                delta, correlation = _best_shift_and_correlation(
-                    rotated, reference, max_shift_px=max_shift_px
-                )
+                if masked_references is None:
+                    delta, correlation = _best_shift_and_correlation(
+                        rotated, reference, max_shift_px=max_shift_px
+                    )
+                else:
+                    delta, correlation = best_masked_shift_and_correlation(
+                        rotated,
+                        masked_references[class_number - 1],
+                        max_shift_px=max_shift_px,
+                    )
                 if correlation > best_correlation:
                     best_correlation = correlation
                     best_class = class_number
@@ -1270,6 +1316,7 @@ def _best_shift_and_correlation(
     reference: torch.Tensor,
     *,
     max_shift_px: float,
+    alignment_mask: torch.Tensor | None = None,
 ) -> tuple[np.ndarray, float]:
     """Return the best shift within `max_shift_px` and its correlation.
 
@@ -1278,6 +1325,13 @@ def _best_shift_and_correlation(
     The returned shift is in reference-frame `(x, y, z)` and is meant to be
     folded into an existing sampling shift as `shift + matrix @ delta`.
     """
+
+    if alignment_mask is not None:
+        return best_masked_shift_and_correlation(
+            candidate,
+            prepare_masked_ncc(reference, alignment_mask),
+            max_shift_px=max_shift_px,
+        )
 
     centered_candidate = (candidate - candidate.mean()).to(torch.float32)
     centered_reference = (reference - reference.mean()).to(torch.float32)

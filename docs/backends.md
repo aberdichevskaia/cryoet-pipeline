@@ -130,8 +130,8 @@ refinement even though that correlation increased.
 - Orientations are searched on a cone plus an in-plane sweep. Nudging each Euler
   angle independently, as `fft-refinement` does, samples orientation space
   unevenly and degenerates near zero tilt.
-- Shifts come from the cross-correlation peak, so the whole allowed range costs
-  one FFT instead of a grid of resamplings.
+- Shifts come from FFT cross-correlations instead of a grid of resamplings;
+  masked scoring also evaluates the local normalization over that range.
 - Several references are refined at once with hard per-particle assignment,
   which is what makes it classification rather than plain averaging. Set
   `--num-classes`.
@@ -161,6 +161,38 @@ located at whole-pixel accuracy.
 
 Despite the name, `cone-search` is a native torch implementation modelled on
 DYNAMO's approach. It does not call DYNAMO or MATLAB.
+
+#### Optional soft alignment mask
+
+`--alignment-mask-diameter-angstrom 300` enables weighted Pearson NCC in
+`cone-search`. The default remains the original unmasked scorer, so historical
+runs and fixed-pose `fft-refinement` controls retain their behavior. Supplying
+this option to another backend is rejected rather than silently ignored.
+
+The reference-frame spherical weight is flat to 80% of its radius and has a
+cosine falloff to zero at the requested radius (120/150 A for a 300 A diameter).
+Each orientation and class uses the same weight. For each allowed shift,
+candidate and reference means, covariance and variances are evaluated with
+this weight **once**, not by treating zeros outside a mask as observations or
+by inadvertently squaring the soft weights. Candidate mean and variance are
+shift-dependent; FFT correlations evaluate these moments over the shift window.
+
+The positive mask support plus the integer shift window must fit inside the
+rotated box. This is checked explicitly: FFT periodic wraparound must not
+introduce density from the opposite edge, and the scored samples must agree
+with the final resampling. An empty mask, blank reference, or undefined masked
+score fails rather than producing a spurious high correlation.
+
+Mask diameter, fixed taper fraction and `alignment_score` are recorded in the
+average artifact and classification QC (schema 3). Old reports remain readable.
+Starting and final internal scores use the same objective within a masked run,
+but do not compare their magnitudes to whole-box NCC from an unmasked run.
+
+Only pose/class selection changes. The original crop volumes, reference
+low-pass schedule, reference averaging, particle counts, and full output maps
+are not masked or otherwise changed. This is not particle rejection, wedge
+compensation, training, or proof of improved structural quality. In particular,
+a geometric mask may exclude real particle density if the crop is off-center.
 
 #### Bounded angular-search geometry check
 
