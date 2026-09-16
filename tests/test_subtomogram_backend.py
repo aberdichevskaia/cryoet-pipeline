@@ -644,6 +644,157 @@ def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: P
     )
 
 
+def _wedge_limited_particles(
+    box_size: int, poses: list[tuple[float, float, float]]
+) -> list[torch.Tensor]:
+    """Particles built like `_synthetic_particle`, then stripped of their wedge.
+
+    The wedge is applied in the LAB frame, after the rotation, because it is a
+    property of the reconstruction rather than of the particle's pose — which is
+    the whole reason it biases a pose search.
+    """
+
+    from cryoet_pipeline.wedge import WedgeGeometry, wedge_present_mask_rfft
+
+    present = wedge_present_mask_rfft(
+        box_size, WedgeGeometry(-60.0, 60.0), device=torch.device("cpu")
+    )
+    reference = _blob_reference(box_size)
+    volumes = []
+    for angles in poses:
+        lab = _synthetic_particle(reference, true_angles=angles)
+        volumes.append(
+            torch.fft.irfftn(
+                torch.fft.rfftn(lab) * present, s=(box_size, box_size, box_size)
+            )
+        )
+    return volumes
+
+
+def test_wedge_weighting_reaches_the_scorer_and_is_recorded(tmp_path: Path) -> None:
+    """A wiring test: the unit tests pin the score, this pins that it is used.
+
+    Without it a mis-wired backend would keep scoring the whole box while every
+    test of `cryoet_pipeline.wedge` still passed.
+    """
+
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0), (-10.0, 6.0, 9.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    artifacts = average_and_register(
+        ConeSearchRefinementBackend(),
+        [particles],
+        [_manifest()],
+        _cone_search_context(tmp_path, missing_wedge=True),
+        registry,
+        replace_existing=True,
+    )
+
+    report = json.loads(artifacts[-1].path.read_text())
+    assert report["missing_wedge_weighting"] is True
+    assert report["alignment_score"] == "wedge-constrained-ncc"
+    # Taken from the manifest's own tilt angles, which span -60 to 60.
+    assert report["wedge_tilt_ranges_deg"] == [[-60.0, 60.0]]
+    assert report["wedge_tilt_axis_deg"] == 0.0
+    assert report["schema_version"] == 4
+    # And the default still says, in the report, that it is the unweighted score.
+    assert "missing wedge" not in " ".join(report["warnings"])
+
+
+def test_the_report_says_when_the_score_ignores_the_missing_wedge(tmp_path: Path) -> None:
+    """The default is the measured-worse score, so the report has to admit it."""
+
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0), (-10.0, 6.0, 9.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    artifacts = average_and_register(
+        ConeSearchRefinementBackend(),
+        [particles],
+        [_manifest()],
+        _cone_search_context(tmp_path),
+        registry,
+        replace_existing=True,
+    )
+
+    report = json.loads(artifacts[-1].path.read_text())
+    assert report["missing_wedge_weighting"] is False
+    assert report["alignment_score"] == "whole-box-ncc"
+    assert report["wedge_tilt_ranges_deg"] == []
+    assert report["status"] == QcStatus.WARNING.value
+    assert any("missing wedge" in warning for warning in report["warnings"])
+
+
+def test_a_wedge_and_an_alignment_mask_are_refused_together(tmp_path: Path) -> None:
+    """Refused rather than approximated: see the backend's own comment."""
+
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        average_and_register(
+            ConeSearchRefinementBackend(),
+            [particles],
+            [_manifest()],
+            _cone_search_context(
+                tmp_path, missing_wedge=True, alignment_mask_diameter_angstrom=120.0
+            ),
+            registry,
+        )
+
+
+def test_a_wedge_range_without_the_flag_is_refused(tmp_path: Path) -> None:
+    """A parameter that would be read by nothing is a mistake, not a default."""
+
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    with pytest.raises(ValueError, match="read by nothing"):
+        average_and_register(
+            ConeSearchRefinementBackend(),
+            [particles],
+            [_manifest()],
+            _cone_search_context(tmp_path, wedge_min_tilt_deg=-50.0),
+            registry,
+        )
+
+
+def test_fft_refinement_refuses_wedge_weighting(tmp_path: Path) -> None:
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0)]
+    particles = _write_particle_stack(tmp_path, _wedge_limited_particles(20, poses), poses)
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CPU,
+        parameters={"num_iterations": 1, "missing_wedge": True},
+    )
+    with pytest.raises(ValueError, match="only by cone-search"):
+        average_and_register(
+            FftRefinementAveragingBackend(), [particles], [_manifest()], context, registry
+        )
+
+
 @pytest.mark.parametrize("perturbed", [False, True], ids=["preserve-correct-pose", "recover-known-rotation"])
 def test_cone_angular_search_recovers_analytic_ground_truth(perturbed: bool) -> None:
     """A bounded geometry gate, not a noisy-particle parameter sweep.

@@ -993,10 +993,27 @@ class SubtomogramClassificationQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 3
+    schema_version: int = 4
     alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
     alignment_mask_flat_radius_fraction: float | None = Field(default=None, gt=0.0, lt=1.0)
     alignment_score: str = "whole-box-ncc"
+    missing_wedge_weighting: bool = False
+    """Whether the alignment score was restricted to the measured frequencies.
+
+    Defaulted to False so that reports written before this existed stay
+    readable, and because False is what they describe: they were produced by the
+    whole-box score. Worth reading as a caveat rather than a setting — see the
+    warning the backend emits when it is off, and `cryoet_pipeline.wedge` for the
+    measurement behind it.
+    """
+    wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    """The distinct `[min, max]` tilt ranges the contributing series supplied.
+
+    A list because particles averaged from several series can carry different
+    wedges, and one range would have to be a guess about which series mattered.
+    Empty when wedge weighting was off.
+    """
+    wedge_tilt_axis_deg: float | None = None
     tilt_series_ids: list[str]
     """Every tilt-series that contributed particles, for the same reason
     `SubtomogramAveragingQc` carries a list: classifying particles from several

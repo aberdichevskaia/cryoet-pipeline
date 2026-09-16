@@ -631,14 +631,55 @@ Still outstanding:
   estimate rather than an optimistic one. Target design: keep the *initial*
   reference common, then run the alignment and reference-update loop fully
   independently per half.
-- Missing-wedge and CTF weighting in the alignment correlation.
-  `_normalized_correlation` and `_best_shift_and_correlation` both score
-  unweighted, which their docstrings say outright. This is tolerable while
-  orientations are spread, because each particle's wedge then points somewhere
-  different in the reference frame and they cancel. It stops being tolerable
-  when the orientations cluster — see section 9 — since the wedge then averages
-  coherently and can build layers of its own that look like structure.
+- CTF weighting in the alignment correlation. Still unweighted, and a per-particle
+  CTF weight needs a defocus per particle that this pipeline does not carry yet;
+  `estimate-ctf` fits per tilt-series.
+- **Fourier compensation during averaging.** `_recompute_references` takes a
+  plain real-space mean of wedge-limited particles, so the reference carries
+  whatever coverage that set of orientations happened to give. The alignment
+  score is now constrained to each particle's own wedge, which removes the
+  candidate-dependent part of the problem, but the reference itself is still not
+  equalised: accumulating `sum(W_i * F_i) / sum(W_i)` with a floor is the fix and
+  is not built.
+- Combining wedge weighting with an alignment mask. Refused rather than
+  approximated today: one restricts the Fourier support and the other weights
+  real space, and applying both is not their exact combination.
 - Symmetry.
+
+**Missing-wedge weighting in the alignment correlation is done for
+`cone-search`** — `average-particles --missing-wedge` — and the reason given here
+for tolerating its absence **was wrong, so it is withdrawn rather than edited.**
+It read: "tolerable while orientations are spread, because each particle's wedge
+then points somewhere different in the reference frame and they cancel." That is
+the exact case that was then measured, uniformly random orientations, and it does
+not hold. The wedges cancel in the *average*; they do not cancel in the *score*,
+and the score is what moves the poses.
+
+What was measured, with the control that makes it a measurement. Seeded with
+exactly correct orientations and no noise, the whole-box score moved 100% of
+particles by a mean of 5.90 degrees and dropped the average's agreement with the
+known phantom from 0.9717 to 0.9112; the identical loop on the identical
+particles with the wedge removed moved nothing (0.00 degrees, 0.9883 unchanged).
+The loss is high-frequency-first — agreement at the 32.6 A shell fell 0.989 to
+0.946 while the 456-114 A shells lost 0.004-0.008 — which is why a refined map
+looks smoother than the one it started from. The mechanism is visible directly:
+the orientation tensor of the lab tilt axis expressed in the reference frame
+climbed 0.496 to 0.568 to 0.615 to 0.638 over three iterations with the wedge
+(0.333 is isotropic) and only to 0.511 without, so the refinement was
+co-aligning wedges instead of structure.
+
+Two things that were tried first and did not fix it, both worth keeping so they
+are not tried again: a soft alignment mask (8.28 vs 6.12 degrees mean error at
+SNR 0.1) and a finer reference low-pass (identical to three decimals at 19 A).
+And one sharpening of the mechanism, because it changes what else to fix: against
+a clean unwedged reference the whole-box and constrained scores behave
+identically (2.21 vs 2.21 degrees, 80% of poses held either way). The bias needs
+the reference to be a wedge-limited average, which is why Fourier compensation
+above attacks the same defect from the other side.
+
+The default is still the unweighted score, so that runs already on disk stay
+comparable; `SubtomogramClassificationQc` records which score was used and the
+report carries a warning whenever it was the unweighted one.
 
 A trap worth keeping, found while deciding whether an average had converged.
 **A mean-per-slice profile taken over the whole box says nothing.** Rotating a

@@ -3043,6 +3043,39 @@ def average_particles(
             "The mask plus shift window must fit inside the box. Output maps are not masked.",
         ),
     ] = None,
+    missing_wedge: Annotated[
+        bool,
+        typer.Option(
+            "--missing-wedge/--no-missing-wedge",
+            help="[cone-search] Restrict the alignment score to the frequencies each "
+            "particle actually measured, at the candidate orientation. Default: off, "
+            "which is the whole-box score that was MEASURED to move exactly-correct "
+            "orientations by a mean of 5.9 deg on noiseless wedge-limited particles. "
+            "Off is the default only so that runs already on disk stay comparable; the "
+            "QC report says so either way. Cannot be combined with an alignment mask.",
+        ),
+    ] = False,
+    wedge_min_tilt_deg: Annotated[
+        float | None,
+        typer.Option(
+            help="[cone-search] Override the lowest tilt angle used, in degrees. "
+            "Defaults to the minimum in each series' manifest, which includes views "
+            "that alignment may later have excluded.",
+        ),
+    ] = None,
+    wedge_max_tilt_deg: Annotated[
+        float | None,
+        typer.Option(help="[cone-search] Override the highest tilt angle used, in degrees."),
+    ] = None,
+    wedge_tilt_axis_deg: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="[cone-search] Tilt-axis direction in the tomogram xy plane, measured "
+            "from y. An IMOD-aligned stack puts the axis on y, so zero; it is a flag "
+            "rather than an assumption because a tomogram from elsewhere need not.",
+        ),
+    ] = 0.0,
     seed: Annotated[
         int,
         typer.Option(help="[cone-search] Seed for the initial random class partition."),
@@ -3160,6 +3193,18 @@ def average_particles(
             "alignment mask is supported only by cone-search",
             param_hint="alignment-mask-diameter-angstrom",
         )
+    if missing_wedge and backend != "cone-search":
+        raise typer.BadParameter(
+            "missing-wedge weighting is supported only by cone-search",
+            param_hint="missing-wedge",
+        )
+    if (
+        wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None
+    ) and not missing_wedge:
+        raise typer.BadParameter(
+            "a wedge tilt range is read only when --missing-wedge is given",
+            param_hint="wedge-min-tilt-deg",
+        )
     tilt_series_manifests = [
         TiltSeriesManifest.model_validate_json(path.read_text()) for path in manifest
     ]
@@ -3199,7 +3244,13 @@ def average_particles(
         "refine_factor": refine_factor,
         "seed": seed,
         "alignment_mask_diameter_angstrom": alignment_mask_diameter_angstrom,
+        "missing_wedge": missing_wedge,
+        "wedge_tilt_axis_deg": wedge_tilt_axis_deg,
     }
+    if wedge_min_tilt_deg is not None:
+        parameters["wedge_min_tilt_deg"] = wedge_min_tilt_deg
+    if wedge_max_tilt_deg is not None:
+        parameters["wedge_max_tilt_deg"] = wedge_max_tilt_deg
     if particle_diameter_angstrom is not None:
         parameters["particle_diameter_angstrom"] = particle_diameter_angstrom
     if target_resolution_angstrom is not None:

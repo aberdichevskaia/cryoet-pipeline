@@ -54,6 +54,12 @@ from cryoet_pipeline.rotations import (
     resample_volume_zyx,
 )
 from cryoet_pipeline.runtime import DevicePreference
+from cryoet_pipeline.wedge import (
+    WedgeGeometry,
+    constrained_shift_and_correlation,
+    hermitian_weights_rfft,
+    wedge_present_mask_rfft,
+)
 
 
 @dataclass(frozen=True)
@@ -583,6 +589,8 @@ class FftRefinementAveragingBackend:
         num_iterations = _positive_int_parameter(context, "num_iterations", default=5)
         if _optional_float_parameter(context, "alignment_mask_diameter_angstrom") is not None:
             raise ValueError("alignment_mask_diameter_angstrom is supported only by cone-search")
+        if _bool_parameter(context, "missing_wedge", default=False):
+            raise ValueError("missing_wedge is supported only by cone-search")
         initial_angular_step_deg = _non_negative_float_parameter(
             context, "initial_angular_step_deg", default=6.0
         )
@@ -953,10 +961,66 @@ class ConeSearchRefinementBackend:
                 diameter_angstrom=mask_diameter,
                 device=device,
             )
-        score_parameters = {
+        missing_wedge = _bool_parameter(context, "missing_wedge", default=False)
+        wedge_tilt_axis_deg = _nonnegative_float_parameter(
+            context, "wedge_tilt_axis_deg", default=0.0
+        )
+        wedge_min_tilt_deg = _optional_float_parameter(context, "wedge_min_tilt_deg")
+        wedge_max_tilt_deg = _optional_float_parameter(context, "wedge_max_tilt_deg")
+        if not missing_wedge and (
+            wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None
+        ):
+            raise ValueError(
+                "a wedge tilt range was given but missing_wedge is off, so it would be "
+                "read by nothing; pass missing_wedge to use it"
+            )
+        if missing_wedge and alignment_mask is not None:
+            # Not a limitation to work around silently. The masked score is a
+            # real-space weighted correlation and the constrained score is a
+            # restriction of the Fourier support; combining them exactly is not
+            # a matter of applying both, and the approximation (wedge-filter the
+            # reference, then score inside the mask) is untested here. The mask
+            # was also measured NOT to address the wedge bias — mean error 8.28
+            # vs 6.12 degrees with it — so there is nothing to be gained by
+            # guessing at the combination.
+            raise ValueError(
+                "missing_wedge and alignment_mask_diameter_angstrom cannot be combined yet: "
+                "one restricts the Fourier support and the other weights real space, and "
+                "their exact combination is not implemented. Run them separately"
+            )
+        wedge_geometries: list[WedgeGeometry] | None = None
+        hermitian_weights: torch.Tensor | None = None
+        if missing_wedge:
+            wedge_geometries = _wedge_geometry_per_particle(
+                pairs,
+                combined,
+                min_tilt_override=wedge_min_tilt_deg,
+                max_tilt_override=wedge_max_tilt_deg,
+                tilt_axis_deg=wedge_tilt_axis_deg,
+            )
+            hermitian_weights = hermitian_weights_rfft(box_size, device)
+        distinct_ranges = sorted(
+            {
+                (geometry.min_tilt_deg, geometry.max_tilt_deg)
+                for geometry in (wedge_geometries or [])
+            }
+        )
+        if alignment_mask is not None:
+            alignment_score = "weighted-ncc"
+        elif missing_wedge:
+            alignment_score = "wedge-constrained-ncc"
+        else:
+            alignment_score = "whole-box-ncc"
+        # Annotated because it is splatted into a pydantic model: without it the
+        # inferred value union is compared field by field and every field
+        # mismatches the union rather than its own entry.
+        score_parameters: dict[str, Any] = {
             "alignment_mask_diameter_angstrom": mask_diameter,
             "alignment_mask_flat_radius_fraction": 0.8 if alignment_mask is not None else None,
-            "alignment_score": "weighted-ncc" if alignment_mask is not None else "whole-box-ncc",
+            "alignment_score": alignment_score,
+            "missing_wedge_weighting": missing_wedge,
+            "wedge_tilt_ranges_deg": [list(one) for one in distinct_ranges],
+            "wedge_tilt_axis_deg": wedge_tilt_axis_deg if missing_wedge else None,
         }
         records = combined.records
         raw_volumes = combined.volumes
@@ -993,20 +1057,34 @@ class ConeSearchRefinementBackend:
             )
             for reference in references
         ]
+        starting_reference_spectra = (
+            [torch.fft.rfftn(one - one.mean()) for one in starting_references]
+            if missing_wedge
+            else None
+        )
         starting_correlation_mean = float(
             np.mean(
                 [
-                    (
-                        _normalized_correlation(
-                            aligned[record.index], starting_references[record.class_number - 1]
-                        )
-                        if alignment_mask is None
-                        else _best_shift_and_correlation(
-                            aligned[record.index],
-                            starting_references[record.class_number - 1],
-                            max_shift_px=0,
-                            alignment_mask=alignment_mask,
-                        )[1]
+                    _correlation_at_current_pose(
+                        aligned[record.index],
+                        starting_references[record.class_number - 1],
+                        (
+                            starting_reference_spectra[record.class_number - 1]
+                            if starting_reference_spectra is not None
+                            else None
+                        ),
+                        matrix=relion_euler_to_matrix(
+                            record.rot_deg, record.tilt_deg, record.psi_deg
+                        ),
+                        alignment_mask=alignment_mask,
+                        geometry=(
+                            wedge_geometries[record.index]
+                            if wedge_geometries is not None
+                            else None
+                        ),
+                        hermitian=hermitian_weights,
+                        box_size=box_size,
+                        device=device,
                     )
                     for record in records
                 ]
@@ -1052,7 +1130,22 @@ class ConeSearchRefinementBackend:
                 )
                 for reference in references
             ]
+            iteration_reference_spectra = (
+                [torch.fft.rfftn(one - one.mean()) for one in filtered_references]
+                if missing_wedge
+                else None
+            )
             for record in records:
+                wedge_scoring = None
+                if wedge_geometries is not None:
+                    assert hermitian_weights is not None
+                    assert iteration_reference_spectra is not None
+                    wedge_scoring = _WedgeScoring(
+                        geometry=wedge_geometries[record.index],
+                        hermitian=hermitian_weights,
+                        reference_spectra=iteration_reference_spectra,
+                        box_size=box_size,
+                    )
                 candidate = _search_multi_reference(
                     raw_volumes[record.index],
                     filtered_references,
@@ -1062,6 +1155,7 @@ class ConeSearchRefinementBackend:
                     max_shift_px=iteration_shift_range,
                     device=device,
                     alignment_mask=alignment_mask,
+                    wedge=wedge_scoring,
                 )
                 if candidate.class_number != record.class_number:
                     reassigned += 1
@@ -1189,6 +1283,17 @@ class ConeSearchRefinementBackend:
                 f"{starting_correlation_mean:.3f} and ended at {mean_correlation:.3f}. "
                 "The search found nothing better than the orientations it was given"
             )
+        if not missing_wedge:
+            status = QcStatus.WARNING
+            warnings.append(
+                "the alignment score ignores the missing wedge. Measured on this "
+                "pipeline's own code with a control: on wedge-limited particles seeded "
+                "with exactly correct orientations and no noise, this score moved 100% of "
+                "them by a mean of 5.90 deg and dropped the average's agreement with the "
+                "known truth from 0.972 to 0.911, while the same loop on the same "
+                "particles with the wedge removed moved nothing. Pass missing_wedge to "
+                "restrict the score to the frequencies each particle measured"
+            )
         if warnings and status is QcStatus.PASS:
             status = QcStatus.WARNING
 
@@ -1255,6 +1360,22 @@ class _MultiReferenceCandidate:
     aligned_volume: torch.Tensor
 
 
+@dataclass(frozen=True)
+class _WedgeScoring:
+    """Everything the constrained score needs that does not change per candidate.
+
+    `geometry` is the particle's OWN wedge, so this is built per particle: two
+    stacks averaged together can come from series with different tilt ranges,
+    and scoring one series' particles against the other's wedge would reintroduce
+    exactly the mismatch the constraint exists to remove.
+    """
+
+    geometry: WedgeGeometry
+    hermitian: torch.Tensor
+    reference_spectra: Sequence[torch.Tensor]
+    box_size: int
+
+
 def _search_multi_reference(
     raw: torch.Tensor,
     references: Sequence[torch.Tensor],
@@ -1265,8 +1386,16 @@ def _search_multi_reference(
     max_shift_px: float,
     device: torch.device,
     alignment_mask: torch.Tensor | None = None,
+    wedge: _WedgeScoring | None = None,
 ) -> _MultiReferenceCandidate:
-    """Score one particle against every reference over the cone, keeping the best."""
+    """Score one particle against every reference over the cone, keeping the best.
+
+    With `wedge` the score is restricted to the frequencies this particle
+    actually measured, at the candidate's own orientation. Without it the score
+    is the whole box, which on this pipeline's own measurement moves 100% of
+    exactly-correct orientations off the truth on wedge-limited data — see
+    `cryoet_pipeline.wedge` for the numbers and the control.
+    """
 
     current_matrix = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
     current_shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
@@ -1284,8 +1413,28 @@ def _search_multi_reference(
         for in_plane in in_plane_offsets:
             candidate_matrix = current_matrix @ perturbation_matrix(polar, azimuth, in_plane)
             rotated = resample_volume_zyx(raw, candidate_matrix, current_shift, device=device)
+            if wedge is not None:
+                # One mask and one transform per candidate orientation, shared by
+                # every class: the support depends on the pose, not on which
+                # reference the pose is being compared against.
+                present = wedge_present_mask_rfft(
+                    wedge.box_size,
+                    wedge.geometry,
+                    matrix=candidate_matrix,
+                    device=device,
+                )
+                candidate_spectrum = torch.fft.rfftn(rotated - rotated.mean())
             for class_number, reference in enumerate(references, start=1):
-                if masked_references is None:
+                if wedge is not None:
+                    delta, correlation = constrained_shift_and_correlation(
+                        candidate_spectrum,
+                        wedge.reference_spectra[class_number - 1],
+                        present,
+                        wedge.hermitian,
+                        size=wedge.box_size,
+                        max_shift_px=max_shift_px,
+                    )
+                elif masked_references is None:
                     delta, correlation = _best_shift_and_correlation(
                         rotated, reference, max_shift_px=max_shift_px
                     )
@@ -1309,6 +1458,94 @@ def _search_multi_reference(
         correlation=best_correlation,
         aligned_volume=aligned_volume,
     )
+
+
+def _correlation_at_current_pose(
+    aligned_volume: torch.Tensor,
+    reference: torch.Tensor,
+    reference_spectrum: torch.Tensor | None,
+    *,
+    matrix: np.ndarray,
+    alignment_mask: torch.Tensor | None,
+    geometry: WedgeGeometry | None,
+    hermitian: torch.Tensor | None,
+    box_size: int,
+    device: torch.device,
+) -> float:
+    """The score of the pose a particle already has, by whichever rule is in use.
+
+    Exists so that the recorded start and the recorded finish are the same
+    question. They were not once before — the start was measured against an
+    unfiltered reference while the search faced a filtered one — and a
+    refinement that made things worse read as an improvement. Adding a third
+    scoring rule was the point at which a shared helper became cheaper than a
+    third branch inlined in the caller.
+    """
+
+    if geometry is not None:
+        if hermitian is None or reference_spectrum is None:
+            raise ValueError("a wedge-constrained score needs the weights and the spectrum")
+        _, correlation = constrained_shift_and_correlation(
+            torch.fft.rfftn(aligned_volume - aligned_volume.mean()),
+            reference_spectrum,
+            wedge_present_mask_rfft(box_size, geometry, matrix=matrix, device=device),
+            hermitian,
+            size=box_size,
+            max_shift_px=0,
+        )
+        return correlation
+    if alignment_mask is not None:
+        return _best_shift_and_correlation(
+            aligned_volume, reference, max_shift_px=0, alignment_mask=alignment_mask
+        )[1]
+    return _normalized_correlation(aligned_volume, reference)
+
+
+def _wedge_geometry_per_particle(
+    pairs: Sequence[tuple[Artifact, TiltSeriesManifest]],
+    combined: _CombinedParticles,
+    *,
+    min_tilt_override: float | None,
+    max_tilt_override: float | None,
+    tilt_axis_deg: float,
+) -> list[WedgeGeometry]:
+    """One wedge per particle, taken from the series the particle came from.
+
+    A record cannot say which tilt-series it belongs to — the combined index is
+    positional, as `ParticleRecord.index` states — so the series is recovered
+    from `counts`, the same arithmetic `filter_combined_by_class` uses.
+
+    The range defaults to the extremes of the manifest's tilt angles, which is
+    the honest default and wrong in one knowable way: views excluded during
+    alignment are still in the manifest, so a series that lost its extreme views
+    gets a wedge slightly narrower than the truth. The overrides exist for that,
+    and for data that entered mid-pipeline without a manifest worth trusting.
+    """
+
+    geometries: list[WedgeGeometry] = []
+    for (_, manifest), count in zip(pairs, combined.counts, strict=True):
+        angles = manifest.tilt_angles_deg
+        if not angles and (min_tilt_override is None or max_tilt_override is None):
+            raise ValueError(
+                f"{manifest.tilt_series_id} records no tilt angles, so its missing wedge "
+                "cannot be derived; pass wedge_min_tilt_deg and wedge_max_tilt_deg"
+            )
+        geometry = WedgeGeometry(
+            min_tilt_deg=(
+                min_tilt_override if min_tilt_override is not None else float(min(angles))
+            ),
+            max_tilt_deg=(
+                max_tilt_override if max_tilt_override is not None else float(max(angles))
+            ),
+            tilt_axis_deg=tilt_axis_deg,
+        )
+        geometries.extend([geometry] * count)
+    if len(geometries) != combined.particle_count:
+        raise ValueError(
+            f"built {len(geometries)} wedges for {combined.particle_count} particles; "
+            "the per-series counts do not cover the combined stack"
+        )
+    return geometries
 
 
 def _best_shift_and_correlation(

@@ -135,6 +135,29 @@ refinement even though that correlation increased.
 - Several references are refined at once with hard per-particle assignment,
   which is what makes it classification rather than plain averaging. Set
   `--num-classes`.
+- `--missing-wedge` restricts the alignment score to the frequencies each
+  particle actually measured, evaluated at the candidate orientation, and
+  normalises over that shared support rather than over the whole box. The tilt
+  range comes from each contributing series' own manifest — so particles averaged
+  from series with different ranges get different wedges — and
+  `--wedge-min-tilt-deg` / `--wedge-max-tilt-deg` override it, which matters
+  because a manifest still lists views that alignment later excluded.
+  `--wedge-tilt-axis-deg` says where the tilt axis lies in the tomogram `xy`
+  plane; zero (along `y`) is the IMOD-aligned convention and is a flag rather
+  than an assumption.
+
+  Default off, and that default is the score measured to be worse: seeded with
+  exactly correct orientations and no noise, the whole-box score moved 100% of
+  wedge-limited particles by a mean of 5.9 degrees while the same loop with the
+  wedge removed from the data moved nothing. Off only so that runs already on
+  disk stay comparable — the QC report records which score was used and warns
+  when it was the unweighted one. See `cryoet_pipeline.wedge` and
+  [roadmap.md](roadmap.md) section 4 for the numbers and the control.
+
+  Cannot be combined with `--alignment-mask-diameter-angstrom`: one restricts the
+  Fourier support and the other weights real space, and applying both is not
+  their exact combination, so the pair is refused rather than approximated. The
+  mask was separately measured not to address the wedge bias.
 
 The cone azimuth chooses the direction of a minimal tilt; it is not an extra
 in-plane spin. For a sampled tilt `p` and in-plane offset `s`, the full relative
@@ -184,9 +207,17 @@ with the final resampling. An empty mask, blank reference, or undefined masked
 score fails rather than producing a spurious high correlation.
 
 Mask diameter, fixed taper fraction and `alignment_score` are recorded in the
-average artifact and classification QC (schema 3). Old reports remain readable.
-Starting and final internal scores use the same objective within a masked run,
-but do not compare their magnitudes to whole-box NCC from an unmasked run.
+average artifact and classification QC, alongside `missing_wedge_weighting`,
+`wedge_tilt_ranges_deg` and `wedge_tilt_axis_deg` (schema 4). Old reports remain
+readable: every added field carries a default, and `False`/empty is what those
+reports in fact describe.
+
+Starting and final internal scores use the same objective within a run — a
+wedge-constrained run measures its start the same way, as a masked run already
+did — but do not compare magnitudes ACROSS objectives. Whole-box NCC, masked NCC
+and wedge-constrained NCC are three different quantities, and the last is
+computed over a support that changes with the candidate orientation, so it is not
+on the scale of the other two.
 
 Only pose/class selection changes. The original crop volumes, reference
 low-pass schedule, reference averaging, particle counts, and full output maps
