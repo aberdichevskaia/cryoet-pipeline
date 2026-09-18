@@ -993,7 +993,7 @@ class SubtomogramClassificationQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 4
+    schema_version: int = 5
     alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
     alignment_mask_flat_radius_fraction: float | None = Field(default=None, gt=0.0, lt=1.0)
     alignment_score: str = "whole-box-ncc"
@@ -1014,6 +1014,17 @@ class SubtomogramClassificationQc(BaseModel):
     Empty when wedge weighting was off.
     """
     wedge_tilt_axis_deg: float | None = None
+    fourier_compensation: bool = False
+    """Whether each reference was built as `sum(W*F) / sum(W)` instead of a mean."""
+    wedge_coverage_floor_fraction: float | None = None
+    """The coverage below which a frequency was attenuated rather than divided."""
+    wedge_coverage: dict[str, float] | None = None
+    """Minimum, median and floored fraction of the last class's Fourier coverage.
+
+    The number that says whether compensation had anything to do: an orientation
+    set that happens to cover Fourier space evenly gives a flat denominator, and
+    then the compensated reference is the plain mean by another route.
+    """
     tilt_series_ids: list[str]
     """Every tilt-series that contributed particles, for the same reason
     `SubtomogramAveragingQc` carries a list: classifying particles from several

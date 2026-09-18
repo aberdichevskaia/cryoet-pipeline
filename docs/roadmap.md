@@ -634,13 +634,13 @@ Still outstanding:
 - CTF weighting in the alignment correlation. Still unweighted, and a per-particle
   CTF weight needs a defocus per particle that this pipeline does not carry yet;
   `estimate-ctf` fits per tilt-series.
-- **Fourier compensation during averaging.** `_recompute_references` takes a
-  plain real-space mean of wedge-limited particles, so the reference carries
-  whatever coverage that set of orientations happened to give. The alignment
-  score is now constrained to each particle's own wedge, which removes the
-  candidate-dependent part of the problem, but the reference itself is still not
-  equalised: accumulating `sum(W_i * F_i) / sum(W_i)` with a floor is the fix and
-  is not built.
+- The per-voxel count of real real-space contributions. `_recompute_references`
+  still divides by the member count although a rotated box contributes zeros
+  where the rotation reached outside it. Measured on this geometry — a 300 A
+  particle in a box 48 at 10 A/voxel — the real-contribution fraction is exactly
+  1.0000 out to r = 22 voxels while the density lives inside r = 15, so this
+  touches only the corners and cannot move a resolution. It makes the written
+  map honest at the periphery, and it is one extra `grid_sample` per particle.
 - Combining wedge weighting with an alignment mask. Refused rather than
   approximated today: one restricts the Fourier support and the other weights
   real space, and applying both is not their exact combination.
@@ -676,6 +676,63 @@ a clean unwedged reference the whole-box and constrained scores behave
 identically (2.21 vs 2.21 degrees, 80% of poses held either way). The bias needs
 the reference to be a wedge-limited average, which is why Fourier compensation
 above attacks the same defect from the other side.
+
+**How much the fix buys depends strongly on the tilt range, and the numbers above
+are for +-60 degrees.** Measured at box 24 with 40 particles and two seeds,
+seeded at the true poses with no noise, counting poses held exactly:
+
+| range | reference | whole-box | wedge-constrained |
+|---|---|---|---|
+| +-60 (70% of Fourier space measured) | plain mean | 9/40 | 22-28/40 |
+| +-60 | Fourier-compensated | 12/40 | 31/40 |
+| +-45 (48% measured) | plain mean | 2-3/40 | 10/40 |
+| +-45 | Fourier-compensated | 1/40 | 14-15/40 |
+
+So the constraint helps at both ranges — 3 to 5 times more poses held at +-45 —
+but the absolute level at +-45 is about a quarter against 55-70% at +-60, and
+compensation adds roughly half again on top. At the narrower range compensation
+stops being a refinement of the fix and becomes part of it. Sample size matters
+here: at 8 particles the same measurement put +-45 below the WIDER +-30 wedge,
+which is scatter and not a property of the range, so do not read small-N runs of
+this comparison.
+
+**Fourier compensation is built** — `average-particles --missing-wedge
+--fourier-compensation` — and is the "compensated" row above: each reference is
+`sum(W_i * F_i) / max(sum(W_i), floor)` over the particles' own wedges, with the
+floor at 0.25 of the contributing particles and the realised coverage reported in
+QC. Default off, like the wedge score.
+
+**What the wedge score did on real CZII data, and the line that now governs
+this section.** At the CZII tilt range of +-45 degrees, on 223 GT-matched
+ribosome picks, the map-to-template FSC crossing went 45.05 A (whole box) to
+41.59 A (constrained) against 28.46 A for the fixed initial poses — the
+constrained curve is above the unweighted one at every one of the 20 informative
+shells, recovering a median 24% of the lost agreement, but the recovery decays
+from 68% at the coarsest shells to 2-6% below 33 A. Refinement therefore still
+makes this map worse than not refining at all. A stopping criterion was agreed
+before the compensated control was run: the compensated map must cross finer than
+28.46 A, or this line closes and the remaining hypothesis is taken up instead —
+that per-particle refinement at this binning cannot beat template-matching poses,
+and that the per-tilt geometry refinement used by the published work on similar
+data is the different architecture that can.
+
+Two other things the real run made measurable, both unaddressed. The angular
+schedule is dead after iteration 2: with the Crowther clamp at 6.68 degrees for a
+300 A particle at 35 A, the per-iteration candidate counts are 24, 24, 1, 1, 1,
+so three of five iterations can only move shifts. And the shift drift is
+anisotropic along the beam axis in BOTH arms — per-axis standard deviations
+0.643/0.852/1.716 unweighted and 0.664/0.770/1.906 constrained, i.e. 2.3x and
+2.7x the in-plane spread — reaching 93 A at the worst particle, with nothing
+bounding it. The constraint loosens it slightly, which is expected: restricting
+the score to the measured support leaves even less to say about the one direction
+the wedge does not measure. An anisotropic shift bound is the companion this
+change needs.
+
+One normalisation alternative was tested and rejected: dropping the
+reference-energy term from the denominator, or replacing it with a
+model-energy penalty, is worse at every wedge size tried (+-60, +-45, +-30). The
+implemented form — normalising both operands over the shared support — was the
+best of the three, reaching 8/8 against an oracle reference at +-60.
 
 The default is still the unweighted score, so that runs already on disk stay
 comparable; `SubtomogramClassificationQc` records which score was used and the

@@ -701,7 +701,12 @@ def test_wedge_weighting_reaches_the_scorer_and_is_recorded(tmp_path: Path) -> N
     # Taken from the manifest's own tilt angles, which span -60 to 60.
     assert report["wedge_tilt_ranges_deg"] == [[-60.0, 60.0]]
     assert report["wedge_tilt_axis_deg"] == 0.0
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
+    # Wedge weighting alone does not compensate the reference; that is a separate
+    # change and the report has to say which of the two it describes.
+    assert report["fourier_compensation"] is False
+    assert report["wedge_coverage_floor_fraction"] is None
+    assert report["wedge_coverage"] is None
     # And the default still says, in the report, that it is the unweighted score.
     assert "missing wedge" not in " ".join(report["warnings"])
 
@@ -774,6 +779,55 @@ def test_a_wedge_range_without_the_flag_is_refused(tmp_path: Path) -> None:
             [particles],
             [_manifest()],
             _cone_search_context(tmp_path, wedge_min_tilt_deg=-50.0),
+            registry,
+        )
+
+
+def test_fourier_compensation_is_recorded_with_its_coverage(tmp_path: Path) -> None:
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0), (-10.0, 6.0, 9.0), (40.0, 70.0, 20.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    artifacts = average_and_register(
+        ConeSearchRefinementBackend(),
+        [particles],
+        [_manifest()],
+        _cone_search_context(tmp_path, missing_wedge=True, fourier_compensation=True),
+        registry,
+        replace_existing=True,
+    )
+
+    report = json.loads(artifacts[-1].path.read_text())
+    assert report["fourier_compensation"] is True
+    assert report["missing_wedge_weighting"] is True
+    assert report["wedge_coverage_floor_fraction"] == pytest.approx(0.25)
+    coverage = report["wedge_coverage"]
+    # The coverage is what says whether the denominator was flat; with four
+    # particles and a +-60 wedge it cannot be, so the numbers have to be inside
+    # the unit interval and the minimum strictly below the median.
+    assert 0.0 <= coverage["minimum"] < coverage["median"] <= 1.0
+    assert 0.0 <= coverage["fraction_on_the_floor"] <= 1.0
+
+
+def test_compensation_needs_a_wedge_to_divide_by(tmp_path: Path) -> None:
+    box_size = 20
+    poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0)]
+    particles = _write_particle_stack(
+        tmp_path, _wedge_limited_particles(box_size, poses), poses
+    )
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    with pytest.raises(ValueError, match="needs missing_wedge"):
+        average_and_register(
+            ConeSearchRefinementBackend(),
+            [particles],
+            [_manifest()],
+            _cone_search_context(tmp_path, fourier_compensation=True),
             registry,
         )
 

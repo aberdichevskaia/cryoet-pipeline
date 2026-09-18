@@ -158,6 +158,27 @@ refinement even though that correlation increased.
   Fourier support and the other weights real space, and applying both is not
   their exact combination, so the pair is refused rather than approximated. The
   mask was separately measured not to address the wedge bias.
+- `--fourier-compensation` builds each reference as
+  `sum(W_i * F_i) / max(sum(W_i), floor)` over the particles' own wedges instead
+  of a plain real-space mean, so a frequency measured by few particles is not
+  left attenuated relative to one measured by many. Requires `--missing-wedge`,
+  since without a wedge model nothing says which frequencies a particle
+  measured. Default off.
+
+  The coverage floor is 0.25 of the contributing particles, hardcoded: dividing
+  by a near-empty denominator amplifies whatever noise reached that frequency.
+  It comes from the synthetic measurements in [roadmap.md](roadmap.md) section 4
+  and has not been tuned against real data. `wedge_coverage` in the QC reports
+  the minimum, median and floored fraction of the coverage actually seen, which
+  is the number that says whether compensation had anything to do: an
+  orientation set that happens to cover Fourier space evenly gives a flat
+  denominator, and then this is the plain mean by another route.
+
+  The written map is the compensated reference — the change is to how the
+  average is built, so the average changes. Note what is NOT included: the
+  per-voxel count of real real-space contributions is still not divided out, and
+  on a 300 A particle in a box 48 at 10 A/voxel that touches only the box
+  corners, where the density is not.
 
 The cone azimuth chooses the direction of a minimal tilt; it is not an extra
 in-plane spin. For a sampled tilt `p` and in-plane offset `s`, the full relative
@@ -208,7 +229,8 @@ score fails rather than producing a spurious high correlation.
 
 Mask diameter, fixed taper fraction and `alignment_score` are recorded in the
 average artifact and classification QC, alongside `missing_wedge_weighting`,
-`wedge_tilt_ranges_deg` and `wedge_tilt_axis_deg` (schema 4). Old reports remain
+`wedge_tilt_ranges_deg`, `wedge_tilt_axis_deg`, `fourier_compensation`,
+`wedge_coverage_floor_fraction` and `wedge_coverage` (schema 5). Old reports remain
 readable: every added field carries a default, and `False`/empty is what those
 reports in fact describe.
 

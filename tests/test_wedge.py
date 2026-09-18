@@ -598,6 +598,89 @@ def test_the_wedge_blind_score_walks_off_correct_poses_and_the_constrained_one_h
     )
 
 
+def test_compensation_recovers_the_truth_that_a_plain_mean_leaves_attenuated() -> None:
+    """The claim behind Fourier compensation, with the control that makes it one.
+
+    Particles at KNOWN poses, wedge-limited, no noise. A plain real-space mean
+    leaves each frequency attenuated by how few particles measured it; dividing
+    by that count should recover the phantom more closely.
+
+    The control is an exact identity rather than a second comparison, because
+    the obvious second comparison does not exist: there is NO tilt range whose
+    coverage is flat. Present requires some tilt with
+    `kx sin t + kz cos t = 0`, so the whole `kx = 0` plane away from `kz = 0`
+    needs `t = +-90` and is never measured however wide the range is — a first
+    attempt at this test used +-89 degrees expecting a flat denominator and was
+    wrong for exactly that reason.
+
+    What is testable exactly: on a bin every particle measured, the denominator
+    IS the particle count, so the compensated spectrum must equal the plain
+    mean's there, bin for bin. And it must differ where coverage is partial, or
+    the division is doing nothing. Those two together say the code divides out
+    coverage and nothing else.
+    """
+
+    from cryoet_pipeline.backends.subtomogram import _compensated_reference, _Compensation
+
+    size = 24
+    geometry = WedgeGeometry(-45.0, 45.0)
+    phantom = _granular_phantom(size)
+    generator = np.random.default_rng(5)
+    poses = [relion_euler_to_matrix(*generator.uniform(-180, 180, size=3)) for _ in range(24)]
+
+    present = wedge_present_mask_rfft(size, geometry, device=_DEVICE)
+    aligned = []
+    for pose in poses:
+        lab = resample_volume_zyx(phantom, pose.T, np.zeros(3), device=_DEVICE)
+        lab = torch.fft.irfftn(torch.fft.rfftn(lab) * present, s=(size,) * 3)
+        aligned.append(resample_volume_zyx(lab, pose, np.zeros(3), device=_DEVICE))
+
+    compensation = _Compensation(
+        geometries=[geometry] * len(poses), box_size=size, device=_DEVICE
+    )
+    compensated, coverage = _compensated_reference(
+        aligned, poses, compensation, [geometry] * len(poses)
+    )
+    # Each volume's own mean removed, matching what _compensated_reference does,
+    # so the comparison below is about coverage and not about the DC term.
+    plain = torch.stack([volume - volume.mean() for volume in aligned]).mean(dim=0)
+
+    truth = phantom - phantom.mean()
+
+    def correlation(volume: torch.Tensor) -> float:
+        centred = volume - volume.mean()
+        norm = torch.sqrt((centred * centred).sum() * (truth * truth).sum())
+        return float((centred * truth).sum() / norm)
+
+    assert 0.0 <= float(coverage.min()) <= float(coverage.max()) <= 1.0
+    assert correlation(compensated) > correlation(plain), (
+        "compensation did not improve agreement with the truth on wedge-limited "
+        f"particles: {correlation(compensated):.4f} against {correlation(plain):.4f}"
+    )
+
+    plain_spectrum = torch.fft.rfftn(plain)
+    compensated_spectrum = torch.fft.rfftn(compensated)
+    fully_covered = coverage >= 1.0 - 1e-6
+    partly_covered = (coverage > 0.0) & (coverage < 1.0 - 1e-6)
+    assert bool(fully_covered.any()) and bool(partly_covered.any()), (
+        "this geometry gives no mix of full and partial coverage, so neither half "
+        "of the identity below is being exercised"
+    )
+    assert torch.allclose(
+        compensated_spectrum[fully_covered],
+        plain_spectrum[fully_covered],
+        atol=1e-4,
+        rtol=1e-3,
+    ), "on a frequency every particle measured, compensation must change nothing"
+    partial_difference = float(
+        (compensated_spectrum[partly_covered] - plain_spectrum[partly_covered]).abs().max()
+    )
+    assert partial_difference > 1e-3, (
+        f"compensation changed nothing where coverage is partial (max {partial_difference:.2e}), "
+        "so it is not dividing out coverage at all"
+    )
+
+
 def test_the_backend_holds_correct_poses_with_the_wedge_and_loses_them_without(
     tmp_path: Path,
 ) -> None:

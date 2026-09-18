@@ -3076,6 +3076,16 @@ def average_particles(
             "rather than an assumption because a tomogram from elsewhere need not.",
         ),
     ] = 0.0,
+    fourier_compensation: Annotated[
+        bool,
+        typer.Option(
+            "--fourier-compensation/--no-fourier-compensation",
+            help="[cone-search] Build each reference as sum(W*F)/sum(W) over the "
+            "particles' own wedges instead of a plain mean, so a frequency measured by "
+            "few particles is not left attenuated relative to one measured by many. "
+            "Requires --missing-wedge. Default: off.",
+        ),
+    ] = False,
     seed: Annotated[
         int,
         typer.Option(help="[cone-search] Seed for the initial random class partition."),
@@ -3198,6 +3208,16 @@ def average_particles(
             "missing-wedge weighting is supported only by cone-search",
             param_hint="missing-wedge",
         )
+    if fourier_compensation and backend != "cone-search":
+        raise typer.BadParameter(
+            "Fourier compensation is supported only by cone-search",
+            param_hint="fourier-compensation",
+        )
+    if fourier_compensation and not missing_wedge:
+        raise typer.BadParameter(
+            "Fourier compensation divides by the wedges, so it needs --missing-wedge",
+            param_hint="fourier-compensation",
+        )
     if (
         wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None
     ) and not missing_wedge:
@@ -3246,6 +3266,7 @@ def average_particles(
         "alignment_mask_diameter_angstrom": alignment_mask_diameter_angstrom,
         "missing_wedge": missing_wedge,
         "wedge_tilt_axis_deg": wedge_tilt_axis_deg,
+        "fourier_compensation": fourier_compensation,
     }
     if wedge_min_tilt_deg is not None:
         parameters["wedge_min_tilt_deg"] = wedge_min_tilt_deg

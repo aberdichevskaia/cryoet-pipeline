@@ -988,8 +988,16 @@ class ConeSearchRefinementBackend:
                 "one restricts the Fourier support and the other weights real space, and "
                 "their exact combination is not implemented. Run them separately"
             )
+        fourier_compensation = _bool_parameter(context, "fourier_compensation", default=False)
+        if fourier_compensation and not missing_wedge:
+            raise ValueError(
+                "fourier_compensation needs missing_wedge: the compensation divides each "
+                "frequency by how many particles measured it, and without a wedge model "
+                "there is nothing that says which frequencies those are"
+            )
         wedge_geometries: list[WedgeGeometry] | None = None
         hermitian_weights: torch.Tensor | None = None
+        compensation: _Compensation | None = None
         if missing_wedge:
             wedge_geometries = _wedge_geometry_per_particle(
                 pairs,
@@ -999,6 +1007,10 @@ class ConeSearchRefinementBackend:
                 tilt_axis_deg=wedge_tilt_axis_deg,
             )
             hermitian_weights = hermitian_weights_rfft(box_size, device)
+            if fourier_compensation:
+                compensation = _Compensation(
+                    geometries=wedge_geometries, box_size=box_size, device=device
+                )
         distinct_ranges = sorted(
             {
                 (geometry.min_tilt_deg, geometry.max_tilt_deg)
@@ -1021,6 +1033,10 @@ class ConeSearchRefinementBackend:
             "missing_wedge_weighting": missing_wedge,
             "wedge_tilt_ranges_deg": [list(one) for one in distinct_ranges],
             "wedge_tilt_axis_deg": wedge_tilt_axis_deg if missing_wedge else None,
+            "fourier_compensation": fourier_compensation,
+            "wedge_coverage_floor_fraction": (
+                compensation.floor_fraction if compensation is not None else None
+            ),
         }
         records = combined.records
         raw_volumes = combined.volumes
@@ -1041,6 +1057,8 @@ class ConeSearchRefinementBackend:
             initial_reference_path=initial_reference_path,
             box_size=box_size,
             device=device,
+            records=records,
+            compensation=compensation,
         )
         for record, class_number in zip(records, assignments, strict=True):
             records[record.index] = replace(record, class_number=class_number)
@@ -1094,6 +1112,7 @@ class ConeSearchRefinementBackend:
         warnings: list[str] = []
         correlations = [math.nan] * particle_count
         reassignment_fraction: float | None = None
+        wedge_coverage: dict[str, float] | None = None
         final_cone_sampling_deg = cone_sampling_deg
         clamped_sampling = False
         for iteration in range(num_iterations):
@@ -1175,9 +1194,21 @@ class ConeSearchRefinementBackend:
 
             aligned = new_aligned
             reassignment_fraction = reassigned / particle_count
-            references, empty_classes = _recompute_references(
-                aligned, records, references, num_classes=num_classes
+            references, empty_classes, coverage = _recompute_references(
+                aligned,
+                records,
+                references,
+                num_classes=num_classes,
+                compensation=compensation,
             )
+            if coverage is not None:
+                assert compensation is not None
+                floor = max(compensation.floor_fraction, 1.0 / particle_count)
+                wedge_coverage = {
+                    "minimum": float(coverage.min()),
+                    "median": float(coverage.median()),
+                    "fraction_on_the_floor": float((coverage < floor).to(torch.float32).mean()),
+                }
             for class_number in empty_classes:
                 warnings.append(
                     f"class {class_number} kept no particles in iteration {iteration + 1}; "
@@ -1322,6 +1353,7 @@ class ConeSearchRefinementBackend:
             mean_final_correlation=mean_correlation,
             minimum_final_correlation=minimum_correlation,
             reassignment_fraction_last_iteration=reassignment_fraction,
+            wedge_coverage=wedge_coverage,
             status=status,
             warnings=warnings,
         )
@@ -1651,6 +1683,93 @@ def _symmetric_offsets(range_deg: float, sampling_deg: float) -> list[float]:
     return offsets
 
 
+@dataclass(frozen=True)
+class _Compensation:
+    """What Fourier compensation needs to build a reference.
+
+    Why it exists. `_recompute_references` takes a plain real-space mean of
+    wedge-limited particles, so the reference carries whatever Fourier coverage
+    that particular set of orientations happened to give — frequencies measured
+    by few particles come out attenuated relative to frequencies measured by
+    many. Constraining the SCORE to each particle's own support removed the part
+    of the bias that depended on the candidate; this removes the part that lives
+    in the reference itself, by dividing each frequency by how many particles
+    actually measured it.
+
+    Measured on synthetic data at the CZII tilt range of +-45 degrees, seeded at
+    the true poses: poses held went 10/40 with a plain mean to 14-15/40 with
+    compensation, both scored by the constrained correlation. At +-60 it was
+    22-28/40 to 31/40.
+    """
+
+    geometries: Sequence[WedgeGeometry]
+    box_size: int
+    device: torch.device
+    floor_fraction: float = 0.25
+    """Coverage below which a frequency is attenuated instead of amplified.
+
+    Dividing by a near-empty denominator amplifies whatever noise reached that
+    frequency, so the division is floored. A quarter of the contributing
+    particles is the value the synthetic measurements above were made with and
+    it has NOT been tuned against any real data; at +-45 degrees it left 12.6%
+    of bins on the floor rather than divided. It is recorded in QC so a reader
+    can see how much of the spectrum it touched.
+    """
+
+
+def _compensated_reference(
+    volumes: Sequence[torch.Tensor],
+    matrices: Sequence[np.ndarray],
+    compensation: _Compensation,
+    geometries: Sequence[WedgeGeometry],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """`sum(W_i * F_i) / max(sum(W_i), floor)`, plus the coverage map.
+
+    The coverage map is returned rather than discarded because it is the only
+    thing that says whether compensation had anything to do: a set of
+    orientations that happens to cover Fourier space evenly gives a flat
+    denominator, and then this is the plain mean by another route.
+    """
+
+    size = compensation.box_size
+    numerator: torch.Tensor | None = None
+    denominator: torch.Tensor | None = None
+    for volume, matrix, geometry in zip(volumes, matrices, geometries, strict=True):
+        present = wedge_present_mask_rfft(
+            size, geometry, matrix=matrix, device=compensation.device
+        )
+        spectrum = torch.fft.rfftn(volume - volume.mean())
+        numerator = present * spectrum if numerator is None else numerator + present * spectrum
+        denominator = present if denominator is None else denominator + present
+    if numerator is None or denominator is None:
+        raise ValueError("a compensated reference needs at least one particle")
+    count = len(volumes)
+    # Never divide by less than one contribution, however small the fraction is.
+    floor = max(compensation.floor_fraction * count, 1.0)
+    reference = torch.fft.irfftn(
+        numerator / denominator.clamp_min(floor), s=(size, size, size)
+    )
+    return reference, denominator / count
+
+
+def _class_reference(
+    volumes: Sequence[torch.Tensor],
+    records: Sequence[ParticleRecord],
+    compensation: _Compensation | None,
+) -> torch.Tensor:
+    """One class's reference, compensated or not, from the records that name it."""
+
+    if compensation is None:
+        return torch.stack(list(volumes)).mean(dim=0)
+    matrices = [
+        relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
+        for record in records
+    ]
+    geometries = [compensation.geometries[record.index] for record in records]
+    reference, _ = _compensated_reference(volumes, matrices, compensation, geometries)
+    return reference
+
+
 def _initial_references(
     aligned: Sequence[torch.Tensor],
     *,
@@ -1659,6 +1778,8 @@ def _initial_references(
     initial_reference_path: Path | None,
     box_size: int,
     device: torch.device,
+    records: Sequence[ParticleRecord] | None = None,
+    compensation: _Compensation | None = None,
 ) -> tuple[list[torch.Tensor], list[int]]:
     """Seed references and the starting class assignment.
 
@@ -1672,6 +1793,10 @@ def _initial_references(
             reference = _load_reference_mrc(
                 initial_reference_path, expected_box_size=box_size, device=device
             )
+        elif compensation is not None:
+            if records is None:
+                raise ValueError("a compensated initial reference needs the records")
+            reference = _class_reference(aligned, records, compensation)
         else:
             reference = torch.stack(list(aligned)).mean(dim=0)
         return [reference], [1] * len(aligned)
@@ -1685,14 +1810,23 @@ def _initial_references(
         if class_number not in assignments:
             assignments[class_number - 1] = class_number
 
+    if compensation is not None and records is None:
+        raise ValueError("a compensated initial reference needs the records")
     references = []
     for class_number in range(1, num_classes + 1):
-        members = [
-            volume
-            for volume, assigned in zip(aligned, assignments, strict=True)
+        chosen = [
+            position
+            for position, assigned in enumerate(assignments)
             if assigned == class_number
         ]
-        references.append(torch.stack(members).mean(dim=0))
+        members = [aligned[position] for position in chosen]
+        if compensation is None:
+            references.append(torch.stack(members).mean(dim=0))
+        else:
+            assert records is not None
+            references.append(
+                _class_reference(members, [records[position] for position in chosen], compensation)
+            )
     return references, assignments
 
 
@@ -1702,19 +1836,38 @@ def _recompute_references(
     previous: Sequence[torch.Tensor],
     *,
     num_classes: int,
-) -> tuple[list[torch.Tensor], list[int]]:
+    compensation: _Compensation | None = None,
+) -> tuple[list[torch.Tensor], list[int], torch.Tensor | None]:
+    """The new references, plus the Fourier coverage the last one was built from.
+
+    The coverage is returned only when compensating, and only for the last class
+    computed — it is a QC summary, not a per-class product, and reporting one
+    class's is enough to say whether the denominator was flat.
+    """
+
     references: list[torch.Tensor] = []
     empty_classes: list[int] = []
+    coverage: torch.Tensor | None = None
     for class_number in range(1, num_classes + 1):
-        members = [
-            aligned[record.index] for record in records if record.class_number == class_number
-        ]
-        if members:
-            references.append(torch.stack(members).mean(dim=0))
-        else:
+        chosen = [record for record in records if record.class_number == class_number]
+        members = [aligned[record.index] for record in chosen]
+        if not members:
             empty_classes.append(class_number)
             references.append(previous[class_number - 1])
-    return references, empty_classes
+            continue
+        if compensation is None:
+            references.append(torch.stack(members).mean(dim=0))
+            continue
+        matrices = [
+            relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
+            for record in chosen
+        ]
+        geometries = [compensation.geometries[record.index] for record in chosen]
+        reference, coverage = _compensated_reference(
+            members, matrices, compensation, geometries
+        )
+        references.append(reference)
+    return references, empty_classes, coverage
 
 
 def _class_average_id(
