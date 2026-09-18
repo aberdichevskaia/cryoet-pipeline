@@ -711,15 +711,63 @@ shells, recovering a median 24% of the lost agreement, but the recovery decays
 from 68% at the coarsest shells to 2-6% below 33 A. Refinement therefore still
 makes this map worse than not refining at all. A stopping criterion was agreed
 before the compensated control was run: the compensated map must cross finer than
-28.46 A, or this line closes and the remaining hypothesis is taken up instead —
-that per-particle refinement at this binning cannot beat template-matching poses,
-and that the per-tilt geometry refinement used by the published work on similar
-data is the different architecture that can.
+28.46 A, or this line closes.
 
-Two other things the real run made measurable, both unaddressed. The angular
-schedule is dead after iteration 2: with the Crowther clamp at 6.68 degrees for a
-300 A particle at 35 A, the per-iteration candidate counts are 24, 24, 1, 1, 1,
-so three of five iterations can only move shifts. And the shift drift is
+**It was not met, and the line is closed.** Compensation helped, and by more
+than the score did — 41.59 to 36.04 A, two Fourier shells against one, closing
+30% of the gap the wedge arm still had, and above the wedge curve at every shell
+finer than 67 A. Poses moved less (9.95 against 11.08 degrees mean) and drifted
+less (1.68 against 1.80 px). The coverage it divided by was far from flat —
+minimum 0.350, median 0.502, nothing on the floor — so the negative result is
+not "there was nothing to compensate". It still lands 7.6 A short of not
+refining at all.
+
+Do not sweep the coverage floor, the tilt range, the axis, the low-pass or the
+iteration count against this. The arithmetic says why: by the Crowther criterion
+a 300 A particle needs 5.4 degrees of pose accuracy to support 28.46 A, and the
+mean pose CHANGE the search introduces is 9.95 degrees — error, since the map
+gets worse for it. The search is running about twice as coarse as the resolution
+it would have to beat, and three separate measurements point the same way: the
+fraction of particles left where they started is 5.8% against 4.2% for a blind
+draw from the 24-candidate grid, the shift drift is anisotropic along the beam
+axis in both arms (2.3x and 2.7x the in-plane spread), and the schedule offers a
+single candidate after iteration 2. That is an information budget, not a list of
+unfinished features.
+
+What remains is a choice of a different line rather than a continuation of this
+one: a finer voxel spacing, which is this benchmark's own parameter rather than a
+property of the data (`fetch_czii.py --voxel-spacing`, default 10.012, and the
+raw tilt-series spacing is recorded alongside); more than 223 particles, noting
+that `gt-initial`'s half-sets never even crossed 0.143 so none of these maps has
+an independent resolution; or per-tilt geometry refinement, which scores against
+the 2D projections with per-tilt CTF and dose instead of correlating inside a
+wedge-limited volume. The last is a hypothesis about what the published work on
+similar data did, not an established fact.
+
+Two other things the real run made measurable. The angular schedule is dead
+after iteration 2: with the Crowther clamp at 6.68 degrees for a 300 A particle
+at 35 A, the per-iteration candidate counts are 24, 24, 1, 1, 1, so three of
+five iterations can only move shifts.
+
+**Fixing that schedule was tried and is measured to make things worse, so do not
+try it again.** `cone_offsets` places rings at integer multiples of the sampling,
+which both empties the cap when the range falls below one step and never reaches
+the requested cap; rounding the ring count instead, never letting it fall below
+one, and spreading the rings to land on the cap gives a live schedule at every
+iteration — 48, 27, 5, 3, 2 candidates. It also raises the total from 51 to 85,
+and on this repository's own regression test the constrained score then held 2 of
+8 exactly-correct poses instead of 6 of 8. That is the order-statistic effect
+measured at the start of this work — 24 candidates held the truth in 62% of
+trials against 19% at 200 — reappearing: a search whose scoring differences are
+smaller than its noise gets worse the more candidates it is offered. A denser
+cone is not a correctness fix here, it is a second way of losing poses, and it
+would have to be paired with a move-acceptance margin to be worth anything.
+
+One thing that does NOT need to change with the voxel spacing: the Crowther clamp
+depends on the particle diameter and the target resolution, not on the grid, so a
+finer reconstruction leaves the angular schedule identical. The information a
+finer grid adds is frequencies in the particle and the reference, not orientation
+sampling. And the shift drift is
 anisotropic along the beam axis in BOTH arms — per-axis standard deviations
 0.643/0.852/1.716 unweighted and 0.664/0.770/1.906 constrained, i.e. 2.3x and
 2.7x the in-plane spread — reaching 93 A at the worst particle, with nothing

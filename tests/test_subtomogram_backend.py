@@ -783,6 +783,110 @@ def test_a_wedge_range_without_the_flag_is_refused(tmp_path: Path) -> None:
         )
 
 
+def test_pose_change_measures_rotations_not_euler_differences() -> None:
+    from cryoet_pipeline.backends.subtomogram import pose_change_summary
+    from cryoet_pipeline.particles import ParticleRecord
+
+    def record(angles: tuple[float, float, float], shift: tuple[float, float, float]):
+        return ParticleRecord(
+            index=0,
+            x_px=0.0,
+            y_px=0.0,
+            z_px=0.0,
+            rot_deg=angles[0],
+            tilt_deg=angles[1],
+            psi_deg=angles[2],
+            shift_x_px=shift[0],
+            shift_y_px=shift[1],
+            shift_z_px=shift[2],
+            score=None,
+            class_number=1,
+            random_subset=1,
+        )
+
+    start = (12.0, 34.0, -56.0, 0.0, 0.0, 0.0)
+    unchanged = pose_change_summary([start], [record((12.0, 34.0, -56.0), (0.0, 0.0, 0.0))])
+    assert unchanged["rotation_deg_mean"] == pytest.approx(0.0, abs=1e-9)
+    assert unchanged["unmoved_fraction"] == 1.0
+    assert unchanged["shift_px_max"] == 0.0
+
+    # A pure in-plane change of 20 degrees is a 20 degree rotation.
+    spun = pose_change_summary([start], [record((12.0, 34.0, -36.0), (0.0, 0.0, 0.0))])
+    assert spun["rotation_deg_mean"] == pytest.approx(20.0, abs=1e-6)
+
+    # The case that makes Euler differences useless: at tilt zero only rot+psi
+    # is defined, so these two triples are the SAME orientation while their
+    # numbers differ by 80 degrees apiece. A summary that subtracted Eulers
+    # would report a huge move for a particle that did not turn at all.
+    degenerate_start = (40.0, 0.0, -40.0, 0.0, 0.0, 0.0)
+    same = pose_change_summary(
+        [degenerate_start], [record((-40.0, 0.0, 40.0), (0.0, 0.0, 0.0))]
+    )
+    # Not exactly zero, and the tolerance says why: acos is ill conditioned near
+    # one, so an unmoved pose comes back at about 1e-6 degrees. That is also why
+    # `unmoved_fraction` thresholds at a millidegree rather than at zero.
+    assert same["rotation_deg_mean"] == pytest.approx(0.0, abs=1e-4)
+    assert same["unmoved_fraction"] == 1.0
+
+    moved = pose_change_summary(
+        [start, start],
+        [
+            record((12.0, 34.0, -56.0), (0.0, 0.0, 0.0)),
+            record((12.0, 34.0, -56.0), (3.0, 4.0, 0.0)),
+        ],
+    )
+    assert moved["shift_px_mean"] == pytest.approx(2.5)
+    assert moved["shift_px_max"] == pytest.approx(5.0)
+    assert moved["unmoved_fraction"] == 1.0, "a shift is not a rotation"
+
+
+def test_the_report_warns_when_the_search_saturates_its_own_range(tmp_path: Path) -> None:
+    """The check the correlations could not make.
+
+    Particles are handed poses and a cone wide enough that the search can spend
+    most of it. What is asserted is not a resolution but that the report says
+    how far the poses went and complains when that is most of what was on offer
+    — the failure mode that went unreported twice on real data.
+    """
+
+    box_size = 20
+    reference = _blob_reference(box_size)
+    true_angles = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0), (-10.0, 6.0, 9.0)]
+    # Seeded far from the truth, so the search has every reason to move them.
+    picked = [(70.0, 40.0, -50.0)] * 3
+    volumes = [_synthetic_particle(reference, true_angles=angles) for angles in true_angles]
+    particles = _write_particle_stack(tmp_path, volumes, picked)
+    registry = ArtifactRegistry.empty()
+    registry.add(particles)
+
+    artifacts = average_and_register(
+        ConeSearchRefinementBackend(),
+        [particles],
+        [_manifest()],
+        _cone_search_context(
+            tmp_path, cone_range_deg=60.0, inplane_range_deg=60.0, num_iterations=1
+        ),
+        registry,
+        replace_existing=True,
+    )
+    report = json.loads(artifacts[-1].path.read_text())
+    change = report["pose_change"]
+    assert set(change) == {
+        "rotation_deg_mean",
+        "rotation_deg_median",
+        "rotation_deg_max",
+        "unmoved_fraction",
+        "shift_px_mean",
+        "shift_px_max",
+    }
+    assert change["rotation_deg_max"] >= change["rotation_deg_mean"] >= 0.0
+    assert 0.0 <= change["unmoved_fraction"] <= 1.0
+    if change["rotation_deg_mean"] > 0.0:
+        assert any("saturating its bounds" in one for one in report["warnings"]) or (
+            change["rotation_deg_mean"] <= 0.5 * 2 * 30.0
+        )
+
+
 def test_fourier_compensation_is_recorded_with_its_coverage(tmp_path: Path) -> None:
     box_size = 20
     poses = [(0.0, 0.0, 0.0), (12.0, 8.0, -6.0), (-10.0, 6.0, 9.0), (40.0, 70.0, 20.0)]

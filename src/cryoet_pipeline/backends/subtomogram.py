@@ -1039,6 +1039,25 @@ class ConeSearchRefinementBackend:
             ),
         }
         records = combined.records
+        # Copied before the loop mutates `records` in place. This is the only
+        # number in the report that a harder search cannot inflate: how far the
+        # poses ended up from the ones they were given. The correlations cannot
+        # do that job — the start is one evaluation at the given pose and the
+        # finish a maximum over the whole candidate set against a reference the
+        # particles were just fitted into, so the comparison reads as an
+        # improvement even when every pose has moved away from the truth. It did
+        # read that way, twice, on real data, while the map got worse.
+        starting_poses = [
+            (
+                record.rot_deg,
+                record.tilt_deg,
+                record.psi_deg,
+                record.shift_x_px,
+                record.shift_y_px,
+                record.shift_z_px,
+            )
+            for record in records
+        ]
         raw_volumes = combined.volumes
         aligned = [
             resample_volume_zyx(
@@ -1314,6 +1333,38 @@ class ConeSearchRefinementBackend:
                 f"{starting_correlation_mean:.3f} and ended at {mean_correlation:.3f}. "
                 "The search found nothing better than the orientations it was given"
             )
+        pose_change = pose_change_summary(starting_poses, records)
+        # The widest single move the schedule ever offered, summed over the
+        # iterations that offered one. A mean approaching it says the search
+        # saturated its own bounds rather than converging inside them, which no
+        # correlation in this report can tell you.
+        available = 0.0
+        for iteration in range(num_iterations):
+            scale = refine_factor**iteration
+            sampling = max(cone_sampling_deg / scale, minimum_sampling_deg)
+            in_plane_sampling = max(inplane_sampling_deg / scale, minimum_sampling_deg)
+            candidates = [
+                perturbation_matrix(polar, azimuth, spin)
+                for polar, azimuth in cone_offsets(cone_range_deg / scale, sampling)
+                for spin in _symmetric_offsets(inplane_range_deg / scale, in_plane_sampling)
+            ]
+            available += max(
+                math.degrees(
+                    math.acos(max(-1.0, min(1.0, (float(np.trace(matrix)) - 1.0) / 2.0)))
+                )
+                for matrix in candidates
+            )
+        if available > 0.0 and pose_change["rotation_deg_mean"] > 0.5 * available:
+            status = QcStatus.WARNING
+            warnings.append(
+                f"the mean pose moved {pose_change['rotation_deg_mean']:.2f} deg against "
+                f"{available:.2f} deg of total movement the schedule offered, and only "
+                f"{pose_change['unmoved_fraction']:.0%} of particles stayed put. A search "
+                "that spends most of its own range is saturating its bounds rather than "
+                "converging inside them; the correlations cannot show this, because the "
+                "recorded start is one evaluation and the finish a maximum over the "
+                "candidate set"
+            )
         if not missing_wedge:
             status = QcStatus.WARNING
             warnings.append(
@@ -1354,6 +1405,7 @@ class ConeSearchRefinementBackend:
             minimum_final_correlation=minimum_correlation,
             reassignment_fraction_last_iteration=reassignment_fraction,
             wedge_coverage=wedge_coverage,
+            pose_change=pose_change,
             status=status,
             warnings=warnings,
         )
@@ -1490,6 +1542,56 @@ def _search_multi_reference(
         correlation=best_correlation,
         aligned_volume=aligned_volume,
     )
+
+
+def pose_change_summary(
+    starting_poses: Sequence[tuple[float, float, float, float, float, float]],
+    records: Sequence[ParticleRecord],
+) -> dict[str, float]:
+    """How far the refinement moved the poses it was given.
+
+    The one quantity in the report that searching harder cannot inflate, and the
+    one that was missing when a refinement that degraded a real map reported
+    itself as an improvement twice. A search that moves every particle by about
+    the width of its own candidate grid is describing its own failure, and the
+    maximum tells you whether it is saturating the schedule rather than
+    converging inside it.
+
+    Angles are compared as the rotation between the two orientations, not as
+    Euler differences: `(rot, tilt, psi)` is not a metric space, and at tilt near
+    zero a pose can change its numbers wholesale without moving at all.
+    """
+
+    angles: list[float] = []
+    shifts: list[float] = []
+    for start, record in zip(starting_poses, records, strict=True):
+        before = relion_euler_to_matrix(start[0], start[1], start[2])
+        after = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
+        cosine = (float(np.trace(before.T @ after)) - 1.0) / 2.0
+        angles.append(math.degrees(math.acos(max(-1.0, min(1.0, cosine)))))
+        shifts.append(
+            float(
+                np.linalg.norm(
+                    [
+                        record.shift_x_px - start[3],
+                        record.shift_y_px - start[4],
+                        record.shift_z_px - start[5],
+                    ]
+                )
+            )
+        )
+    return {
+        "rotation_deg_mean": float(np.mean(angles)),
+        "rotation_deg_median": float(np.median(angles)),
+        "rotation_deg_max": float(np.max(angles)),
+        # A thousandth of a degree, not machine epsilon: `acos` is ill
+        # conditioned near one, so a pose that did not move at all comes back at
+        # around 1e-6 degrees, and a threshold at numerical zero would count it
+        # as moved. Nothing physical turns by a millidegree either way.
+        "unmoved_fraction": float(np.mean([angle <= 1e-3 for angle in angles])),
+        "shift_px_mean": float(np.mean(shifts)),
+        "shift_px_max": float(np.max(shifts)),
+    }
 
 
 def _correlation_at_current_pose(

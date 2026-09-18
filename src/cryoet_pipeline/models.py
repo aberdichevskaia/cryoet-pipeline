@@ -1018,6 +1018,18 @@ class SubtomogramClassificationQc(BaseModel):
     """Whether each reference was built as `sum(W*F) / sum(W)` instead of a mean."""
     wedge_coverage_floor_fraction: float | None = None
     """The coverage below which a frequency was attenuated rather than divided."""
+    pose_change: dict[str, float] | None = None
+    """How far the refinement moved the poses it was given.
+
+    The only quantity here that searching harder cannot inflate. The two
+    correlations cannot serve: the start is a single evaluation at the supplied
+    pose and the finish a maximum over the whole candidate set against a
+    reference the particles were just fitted into, so a refinement that moved
+    every pose away from the truth still reports an improvement — which is what
+    happened, twice, on real data. Carries the mean, median and maximum rotation
+    in degrees, the fraction of particles left exactly where they started, and
+    the mean and maximum shift in pixels.
+    """
     wedge_coverage: dict[str, float] | None = None
     """Minimum, median and floored fraction of the last class's Fourier coverage.
 
