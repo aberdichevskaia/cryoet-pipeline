@@ -24,9 +24,10 @@ from cryoet_pipeline.backends.protocols import (
     variant_label,
     variant_suffix,
 )
-from cryoet_pipeline.filters import low_pass_filter_volume
+from cryoet_pipeline.filters import low_pass_filter_volume, low_pass_response_rfft
 from cryoet_pipeline.fsc import FscCurve, compute_fsc_curve
 from cryoet_pipeline.models import (
+    AlignmentFrame,
     Artifact,
     ArtifactKind,
     AxisOrder,
@@ -600,6 +601,11 @@ class FftRefinementAveragingBackend:
             raise ValueError("alignment_mask_diameter_angstrom is supported only by cone-search")
         if _bool_parameter(context, "missing_wedge", default=False):
             raise ValueError("missing_wedge is supported only by cone-search")
+        if (
+            AlignmentFrame(context.parameters.get("alignment_frame", "reference"))
+            is not AlignmentFrame.REFERENCE
+        ):
+            raise ValueError("particle-frame scoring is supported only by cone-search")
         initial_angular_step_deg = _non_negative_float_parameter(
             context, "initial_angular_step_deg", default=6.0
         )
@@ -920,6 +926,14 @@ class ConeSearchRefinementBackend:
             context, "inplane_sampling_deg", default=10.0
         )
         shift_range_px = _nonnegative_float_parameter(context, "shift_range_px", default=2.0)
+        alignment_frame = AlignmentFrame(context.parameters.get("alignment_frame", "reference"))
+        if alignment_frame is AlignmentFrame.PARTICLE:
+            if shift_range_px != 0:
+                raise ValueError("particle-frame scoring currently requires shift_range_px=0")
+            if not _bool_parameter(context, "missing_wedge", default=False):
+                raise ValueError("particle-frame scoring requires missing_wedge")
+            if context.parameters.get("alignment_mask_diameter_angstrom") is not None:
+                raise ValueError("particle-frame scoring does not support an alignment mask")
         refine_factor = _positive_float_parameter(context, "refine_factor", default=2.0)
         seed = _int_parameter(context, "seed", default=0)
         initial_reference_path = _optional_path_parameter(context, "initial_reference_path")
@@ -947,6 +961,16 @@ class ConeSearchRefinementBackend:
         pixel_spacing_angstrom = _pixel_spacing_angstrom(pairs[0][0])
         initial_low_pass_angstrom = _positive_float_parameter(
             context, "initial_low_pass_angstrom", default=60.0
+        )
+        particle_frame_response = (
+            low_pass_response_rfft(
+                (box_size,) * 3,
+                cutoff_angstrom=initial_low_pass_angstrom,
+                pixel_spacing_angstrom=pixel_spacing_angstrom,
+                device=device,
+            )
+            if alignment_frame is AlignmentFrame.PARTICLE
+            else None
         )
         particle_diameter_angstrom = _positive_float_parameter(
             context,
@@ -1026,7 +1050,9 @@ class ConeSearchRefinementBackend:
                 for geometry in (wedge_geometries or [])
             }
         )
-        if alignment_mask is not None:
+        if alignment_frame is AlignmentFrame.PARTICLE:
+            alignment_score = "particle-frame-wedge-ncc"
+        elif alignment_mask is not None:
             alignment_score = "weighted-ncc"
         elif missing_wedge:
             alignment_score = "wedge-constrained-ncc"
@@ -1039,6 +1065,8 @@ class ConeSearchRefinementBackend:
             "alignment_mask_diameter_angstrom": mask_diameter,
             "alignment_mask_flat_radius_fraction": 0.8 if alignment_mask is not None else None,
             "alignment_score": alignment_score,
+            "alignment_frame": alignment_frame.value,
+            "alignment_low_pass_angstrom": initial_low_pass_angstrom,
             "missing_wedge_weighting": missing_wedge,
             "wedge_tilt_ranges_deg": [list(one) for one in distinct_ranges],
             "wedge_tilt_axis_deg": wedge_tilt_axis_deg if missing_wedge else None,
@@ -1108,34 +1136,61 @@ class ConeSearchRefinementBackend:
             if missing_wedge
             else None
         )
-        starting_correlation_mean = float(
-            np.mean(
-                [
-                    _correlation_at_current_pose(
-                        aligned[record.index],
-                        starting_references[record.class_number - 1],
-                        (
-                            starting_reference_spectra[record.class_number - 1]
-                            if starting_reference_spectra is not None
-                            else None
-                        ),
-                        matrix=relion_euler_to_matrix(
-                            record.rot_deg, record.tilt_deg, record.psi_deg
-                        ),
-                        alignment_mask=alignment_mask,
-                        geometry=(
-                            wedge_geometries[record.index]
-                            if wedge_geometries is not None
-                            else None
-                        ),
-                        hermitian=hermitian_weights,
-                        box_size=box_size,
-                        device=device,
-                    )
-                    for record in records
-                ]
+        if particle_frame_response is None:
+            starting_correlation_mean = float(
+                np.mean(
+                    [
+                        _correlation_at_current_pose(
+                            aligned[record.index],
+                            starting_references[record.class_number - 1],
+                            (
+                                starting_reference_spectra[record.class_number - 1]
+                                if starting_reference_spectra is not None
+                                else None
+                            ),
+                            matrix=relion_euler_to_matrix(
+                                record.rot_deg, record.tilt_deg, record.psi_deg
+                            ),
+                            alignment_mask=alignment_mask,
+                            geometry=(
+                                wedge_geometries[record.index]
+                                if wedge_geometries is not None
+                                else None
+                            ),
+                            hermitian=hermitian_weights,
+                            box_size=box_size,
+                            device=device,
+                        )
+                        for record in records
+                    ]
+                )
             )
-        )
+        else:
+            assert wedge_geometries is not None and hermitian_weights is not None
+            # Use the very same scorer and unfiltered reference as the search.
+            # The low-pass is applied after projection to the particle grid.
+            starting_correlation_mean = float(
+                np.mean(
+                    [
+                        _search_multi_reference(
+                            raw_volumes[record.index],
+                            [references[record.class_number - 1]],
+                            record,
+                            cone=[(0.0, 0.0)],
+                            in_plane_offsets=[0.0],
+                            max_shift_px=0.0,
+                            device=device,
+                            particle_frame=_ParticleFrameScoring(
+                                wedge_geometries[record.index],
+                                hermitian_weights,
+                                particle_frame_response,
+                                box_size,
+                            ),
+                        ).correlation
+                        for record in records
+                    ]
+                )
+            )
 
         warnings: list[str] = []
         correlations = [math.nan] * particle_count
@@ -1186,7 +1241,16 @@ class ConeSearchRefinementBackend:
             )
             for record in records:
                 wedge_scoring = None
-                if wedge_geometries is not None:
+                particle_scoring = None
+                if particle_frame_response is not None:
+                    assert wedge_geometries is not None and hermitian_weights is not None
+                    particle_scoring = _ParticleFrameScoring(
+                        wedge_geometries[record.index],
+                        hermitian_weights,
+                        particle_frame_response,
+                        box_size,
+                    )
+                elif wedge_geometries is not None:
                     assert hermitian_weights is not None
                     assert iteration_reference_spectra is not None
                     wedge_scoring = _WedgeScoring(
@@ -1197,7 +1261,7 @@ class ConeSearchRefinementBackend:
                     )
                 candidate = _search_multi_reference(
                     raw_volumes[record.index],
-                    filtered_references,
+                    references if particle_scoring is not None else filtered_references,
                     record,
                     cone=offsets,
                     in_plane_offsets=in_plane_offsets,
@@ -1205,6 +1269,7 @@ class ConeSearchRefinementBackend:
                     device=device,
                     alignment_mask=alignment_mask,
                     wedge=wedge_scoring,
+                    particle_frame=particle_scoring,
                 )
                 if candidate.class_number != record.class_number:
                     reassigned += 1
@@ -1471,6 +1536,94 @@ class _WedgeScoring:
     box_size: int
 
 
+@dataclass(frozen=True)
+class _ParticleFrameScoring:
+    """Fixed particle-grid support and matched-band angular-only scoring.
+
+    References supplied to the search must be UNFILTERED. Both observation and
+    forward prediction receive this response exactly once on the lab grid.
+    """
+
+    geometry: WedgeGeometry
+    hermitian: torch.Tensor
+    low_pass_response: torch.Tensor
+    box_size: int
+
+
+def _search_particle_frame(
+    raw: torch.Tensor,
+    references: Sequence[torch.Tensor],
+    record: ParticleRecord,
+    *,
+    cone: Sequence[tuple[float, float]],
+    in_plane_offsets: Sequence[float],
+    scoring: _ParticleFrameScoring,
+    device: torch.device,
+) -> _MultiReferenceCandidate:
+    """Choose an angle by predicting an observation on the untouched raw grid.
+
+    The native pose convention is aligned(x) = raw(A x + s). Its forward model
+    is prediction(u) = reference(A.T (u - s)), hence the inverse sampling shift
+    is -A.T @ s, NOT -s. The existing shifts are held exactly fixed in lab XYZ.
+    Only the reference is trilinearly resampled, with zero exterior values.
+    Finite-box interpolation remains an approximation, not an invertible map.
+
+    Mean subtraction, the same radial filter and the particle's fixed wedge
+    precede a Hermitian-weighted Fourier NCC of BOTH operands. No reference-
+    frame low-pass or rotated/discretised wedge is applied first. Spatial masks
+    and shift search are intentionally outside this first bounded version.
+    """
+
+    if not references or tuple(raw.shape) != (scoring.box_size,) * 3:
+        raise ValueError("particle-frame scoring needs references and a matching cubic particle")
+    if any(one.shape != raw.shape for one in references):
+        raise ValueError("particle and reference shapes must match")
+    if not torch.isfinite(raw).all() or any(not torch.isfinite(one).all() for one in references):
+        raise ValueError("particle-frame scoring requires finite particle and reference voxels")
+    matrix = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
+    shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
+    if not np.isfinite(matrix).all() or not np.isfinite(shift).all():
+        raise ValueError("particle-frame scoring requires finite poses")
+    present = wedge_present_mask_rfft(scoring.box_size, scoring.geometry, device=device)
+    observed = torch.fft.rfftn(raw - raw.mean()) * scoring.low_pass_response
+    best_correlation = -math.inf
+    best_matrix = matrix
+    best_class = record.class_number
+    for polar, azimuth in cone:
+        for in_plane in in_plane_offsets:
+            candidate_matrix = matrix @ perturbation_matrix(polar, azimuth, in_plane)
+            for class_number, reference in enumerate(references, start=1):
+                prediction = resample_volume_zyx(
+                    reference, candidate_matrix.T, -candidate_matrix.T @ shift, device=device
+                )
+                predicted = (
+                    torch.fft.rfftn(prediction - prediction.mean()) * scoring.low_pass_response
+                )
+                _, correlation = constrained_shift_and_correlation(
+                    observed,
+                    predicted,
+                    present,
+                    scoring.hermitian,
+                    size=scoring.box_size,
+                    max_shift_px=0.0,
+                )
+                if correlation > best_correlation:
+                    best_correlation = correlation
+                    best_matrix = candidate_matrix
+                    best_class = class_number
+    if not math.isfinite(best_correlation):
+        raise ValueError("particle-frame search needs at least one finite candidate score")
+    # Alignment for the final average always starts from raw, never from a
+    # filtered observation or a previously resampled particle.
+    return _MultiReferenceCandidate(
+        class_number=best_class,
+        matrix=best_matrix,
+        shift=shift,
+        correlation=best_correlation,
+        aligned_volume=resample_volume_zyx(raw, best_matrix, shift, device=device),
+    )
+
+
 def _search_multi_reference(
     raw: torch.Tensor,
     references: Sequence[torch.Tensor],
@@ -1482,6 +1635,7 @@ def _search_multi_reference(
     device: torch.device,
     alignment_mask: torch.Tensor | None = None,
     wedge: _WedgeScoring | None = None,
+    particle_frame: _ParticleFrameScoring | None = None,
 ) -> _MultiReferenceCandidate:
     """Score one particle against every reference over the cone, keeping the best.
 
@@ -1491,6 +1645,19 @@ def _search_multi_reference(
     exactly-correct orientations off the truth on wedge-limited data — see
     `cryoet_pipeline.wedge` for the numbers and the control.
     """
+
+    if particle_frame is not None:
+        if max_shift_px != 0 or alignment_mask is not None or wedge is not None:
+            raise ValueError("particle-frame scoring requires frozen shifts and no other scorer")
+        return _search_particle_frame(
+            raw,
+            references,
+            record,
+            cone=cone,
+            in_plane_offsets=in_plane_offsets,
+            scoring=particle_frame,
+            device=device,
+        )
 
     current_matrix = relion_euler_to_matrix(record.rot_deg, record.tilt_deg, record.psi_deg)
     current_shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])

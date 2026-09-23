@@ -120,7 +120,13 @@ from cryoet_pipeline.fsc import (
     load_mrc_volume,
     plot_fsc_curve,
 )
-from cryoet_pipeline.models import Artifact, ArtifactKind, ProjectConfig, TiltSeriesManifest
+from cryoet_pipeline.models import (
+    AlignmentFrame,
+    Artifact,
+    ArtifactKind,
+    ProjectConfig,
+    TiltSeriesManifest,
+)
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
@@ -3043,6 +3049,15 @@ def average_particles(
             "The mask plus shift window must fit inside the box. Output maps are not masked.",
         ),
     ] = None,
+    alignment_frame: Annotated[
+        AlignmentFrame,
+        typer.Option(
+            help="[cone-search] Scoring grid: reference (legacy) or particle (opt-in). "
+            "Particle keeps the raw data and wedge fixed and rotates an unfiltered "
+            "reference before matched-band scoring. Requires --missing-wedge and "
+            "--shift-range-px 0; spatial masks are not supported in this mode.",
+        ),
+    ] = AlignmentFrame.REFERENCE,
     missing_wedge: Annotated[
         bool,
         typer.Option(
@@ -3198,6 +3213,16 @@ def average_particles(
 
     if not manifest:
         raise typer.BadParameter("at least one --manifest is required", param_hint="manifest")
+    if alignment_frame is AlignmentFrame.PARTICLE:
+        if backend != "cone-search" or not missing_wedge or shift_range_px != 0:
+            raise typer.BadParameter(
+                "particle frame requires cone-search, --missing-wedge and --shift-range-px 0",
+                param_hint="alignment-frame",
+            )
+        if alignment_mask_diameter_angstrom is not None:
+            raise typer.BadParameter(
+                "particle frame does not support an alignment mask", param_hint="alignment-frame"
+            )
     if alignment_mask_diameter_angstrom is not None and backend != "cone-search":
         raise typer.BadParameter(
             "alignment mask is supported only by cone-search",
@@ -3264,6 +3289,7 @@ def average_particles(
         "refine_factor": refine_factor,
         "seed": seed,
         "alignment_mask_diameter_angstrom": alignment_mask_diameter_angstrom,
+        "alignment_frame": alignment_frame.value,
         "missing_wedge": missing_wedge,
         "wedge_tilt_axis_deg": wedge_tilt_axis_deg,
         "fourier_compensation": fourier_compensation,

@@ -76,8 +76,42 @@ def low_pass_filter_volume(
         raise ValueError(f"edge width cannot be negative, got {edge_width_shells}")
 
     shape = (int(volume.shape[0]), int(volume.shape[1]), int(volume.shape[2]))
+    response = low_pass_response_rfft(
+        shape,
+        cutoff_angstrom=cutoff_angstrom,
+        pixel_spacing_angstrom=pixel_spacing_angstrom,
+        edge_width_shells=edge_width_shells,
+        device=volume.device,
+    )
+    spectrum = torch.fft.rfftn(volume.to(torch.float32))
+    filtered = torch.fft.irfftn(spectrum * response, s=shape)
+    return filtered.to(volume.dtype)
+
+
+def low_pass_response_rfft(
+    shape: tuple[int, int, int],
+    *,
+    cutoff_angstrom: float,
+    pixel_spacing_angstrom: float,
+    device: torch.device,
+    edge_width_shells: float = 2.0,
+) -> torch.Tensor:
+    """The same raised-cosine response used by `low_pass_filter_volume`.
+
+    Exposed so a scorer can apply exactly one identical filter to the observed
+    particle and its prediction, after putting both on the particle's grid.
+    """
+
+    if len(shape) != 3 or any(size < 1 for size in shape):
+        raise ValueError(f"expected a positive 3D shape, got {shape}")
+    if not math.isfinite(cutoff_angstrom) or cutoff_angstrom <= 0:
+        raise ValueError("cutoff must be finite and positive")
+    if not math.isfinite(pixel_spacing_angstrom) or pixel_spacing_angstrom <= 0:
+        raise ValueError("pixel spacing must be finite and positive")
+    if not math.isfinite(edge_width_shells) or edge_width_shells < 0:
+        raise ValueError("edge width must be finite and nonnegative")
     frequency = _radial_frequency_cycles_per_angstrom(
-        shape, pixel_spacing_angstrom=pixel_spacing_angstrom, device=volume.device
+        shape, pixel_spacing_angstrom=pixel_spacing_angstrom, device=device
     )
 
     pass_frequency = 1.0 / cutoff_angstrom
@@ -93,6 +127,4 @@ def low_pass_filter_volume(
         response[in_edge] = 0.5 * (1.0 + torch.cos(math.pi * position))
     response[frequency >= stop_frequency] = 0.0
 
-    spectrum = torch.fft.rfftn(volume.to(torch.float32))
-    filtered = torch.fft.irfftn(spectrum * response, s=shape)
-    return filtered.to(volume.dtype)
+    return response

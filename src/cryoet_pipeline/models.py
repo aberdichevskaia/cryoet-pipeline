@@ -11,6 +11,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from cryoet_pipeline.runtime import DevicePreference, normalize_device
 
 
+class AlignmentFrame(StrEnum):
+    """The grid on which cone-search compares the particle and reference."""
+
+    REFERENCE = "reference"
+    PARTICLE = "particle"
+
+
 class AxisOrder(StrEnum):
     """Known array axis conventions used by this pipeline."""
 
@@ -993,10 +1000,12 @@ class SubtomogramClassificationQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 5
+    schema_version: int = 6
     alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
     alignment_mask_flat_radius_fraction: float | None = Field(default=None, gt=0.0, lt=1.0)
     alignment_score: str = "whole-box-ncc"
+    alignment_frame: AlignmentFrame = AlignmentFrame.REFERENCE
+    alignment_low_pass_angstrom: float | None = Field(default=None, gt=0.0)
     missing_wedge_weighting: bool = False
     """Whether the alignment score was restricted to the measured frequencies.
 

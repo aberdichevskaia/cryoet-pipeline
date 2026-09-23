@@ -786,7 +786,8 @@ def test_wedge_weighting_reaches_the_scorer_and_is_recorded(tmp_path: Path) -> N
     # Taken from the manifest's own tilt angles, which span -60 to 60.
     assert report["wedge_tilt_ranges_deg"] == [[-60.0, 60.0]]
     assert report["wedge_tilt_axis_deg"] == 0.0
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 6
+    assert report["alignment_frame"] == "reference"
     # Wedge weighting alone does not compensate the reference; that is a separate
     # change and the report has to say which of the two it describes.
     assert report["fourier_compensation"] is False
