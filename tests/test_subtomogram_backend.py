@@ -141,7 +141,11 @@ def test_cubic_crop_extraction_writes_particle_stack_and_drops_bad_rows(
     assert records[0].rot_deg == pytest.approx(10.0)
     assert records[0].tilt_deg == pytest.approx(20.0)
     assert records[0].psi_deg == pytest.approx(30.0)
-    assert records[0].shift_x_px == 0.0
+    assert records[0].shift_x_px == 0.5
+    assert records[0].shift_y_px == 0.5
+    assert records[0].shift_z_px == 0.5
+    assert particle_stack.parameters["extraction_pose_convention"] == "geometric-center-v1"
+    assert stack.attrs["extraction_pose_convention"] == "geometric-center-v1"
     assert records[0].score == pytest.approx(0.5)
 
     report = json.loads(qc_artifact.path.read_text())
@@ -177,6 +181,52 @@ def test_cubic_crop_extraction_fails_when_all_particles_dropped(tmp_path: Path) 
     assert particle_stack.shape == (0, _BOX_SIZE, _BOX_SIZE, _BOX_SIZE)
     report = json.loads(qc_artifact.path.read_text())
     assert report["status"] == QcStatus.FAIL.value
+
+
+@pytest.mark.parametrize("box_size", [5, 6])
+@pytest.mark.parametrize("xyz", [(10.0, 10.0, 10.0), (10.25, 9.625, 10.5)])
+def test_extraction_preserves_the_pick_center_in_the_sampling_pose(tmp_path, box_size, xyz):
+    """Even/odd boxes and rounded fractional picks use the same physical centre."""
+    tomogram = _tomogram_artifact(tmp_path)
+    picks = _picks_artifact(tmp_path, tomogram)
+    text = picks.path.read_text()
+    header = text[:text.index("10 10 10 10.0")]
+    picks.path.write_text(header + " ".join(map(str, xyz)) + " 17 31 -23 0.5\n")
+    stack, _ = CubicCropExtractionBackend().extract(
+        tomogram, picks, _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "out", device=DevicePreference.CPU,
+            parameters={"box_size_px": box_size},
+        ),
+    )
+    record = read_particle_star(Path(stack.parameters["metadata_path"]))[0]
+    start_xyz = np.rint(xyz).astype(int) - box_size // 2
+    shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
+    np.testing.assert_allclose(start_xyz + (box_size - 1) / 2 + shift, xyz)
+    assert (record.x_px, record.y_px, record.z_px) == xyz
+    assert (record.rot_deg, record.tilt_deg, record.psi_deg) == (17, 31, -23)
+    x, y, z = start_xyz
+    crop = torch.as_tensor(np.asarray(zarr.open(stack.path, mode="r")[0]))
+    np.testing.assert_array_equal(
+        crop.numpy(), zarr.open(tomogram.path, mode="r")[
+            z:z + box_size, y:y + box_size, x:x + box_size
+        ],
+    )
+    # The input is an affine intensity ramp. Linear interpolation is exact in
+    # the interior, letting us check the sampling sign/frame independently of
+    # the implementation for both identity and a nontrivial rotation.
+    axis = np.arange(box_size) - (box_size - 1) / 2
+    zz, yy, xx = np.meshgrid(axis, axis, axis, indexing="ij")
+    offsets = np.stack([xx, yy, zz], axis=-1)
+    for angles in [(0, 0, 0), (17, 31, -23)]:
+        matrix = relion_euler_to_matrix(*angles)
+        moved = resample_volume_zyx(crop, matrix, shift, device=torch.device("cpu"))
+        sample_xyz = offsets @ matrix.T + np.asarray(xyz)
+        expected = sample_xyz[..., 2] * 400 + sample_xyz[..., 1] * 20 + sample_xyz[..., 0]
+        local_xyz = sample_xyz - start_xyz
+        interior = np.all((local_xyz >= 0.01) & (local_xyz <= box_size - 1.01), axis=-1)
+        assert interior.sum() >= 20
+        np.testing.assert_allclose(moved[interior], expected[interior], atol=0.002)
 
 
 def test_cubic_crop_extraction_rejects_mismatched_tomogram(tmp_path: Path) -> None:
@@ -604,6 +654,41 @@ def test_crowther_increment_matches_the_published_formula() -> None:
         crowther_angular_increment_deg(0.0, 20.0)
     with pytest.raises(ValueError, match="resolution"):
         crowther_angular_increment_deg(300.0, 0.0)
+
+
+@pytest.mark.parametrize("missing_wedge", [False, True])
+@pytest.mark.parametrize("shift_range", [0.0, 1.0])
+def test_cone_backend_respects_zero_shift_window(tmp_path, missing_wedge, shift_range):
+    """Test the backend schedule, not just the kernel's already-correct zero case."""
+    from cryoet_pipeline.particles import write_particle_star
+
+    reference = _blob_reference(20)
+    particles = _write_particle_stack(
+        tmp_path, [torch.roll(reference, 1, dims=2)] * 2, [(0, 0, 0)] * 2,
+    )
+    metadata = Path(particles.parameters["metadata_path"])
+    # Freezing means preserving the supplied shifts, not resetting them to zero.
+    write_particle_star(metadata, [
+        replace(record, shift_x_px=0.25)
+        for record in read_particle_star(metadata)
+    ])
+    reference_path = tmp_path / "reference.mrc"
+    with mrcfile.new(reference_path) as mrc:
+        mrc.set_data(reference.numpy())
+        mrc.voxel_size = 10.0
+    artifacts = ConeSearchRefinementBackend().average(
+        [particles], [_manifest()],
+        _cone_search_context(
+            tmp_path, num_iterations=2, cone_range_deg=0.0, inplane_range_deg=0.0,
+            shift_range_px=shift_range, initial_reference_path=str(reference_path),
+            missing_wedge_weighting=missing_wedge,
+        ),
+    )
+    records = read_particle_star(Path(artifacts[0].parameters["metadata_path"]))
+    for record in records:
+        assert [record.shift_x_px, record.shift_y_px, record.shift_z_px] == [
+            0.25 + shift_range, 0, 0,
+        ]
 
 
 def test_cone_search_refinement_improves_alignment_of_a_single_class(tmp_path: Path) -> None:

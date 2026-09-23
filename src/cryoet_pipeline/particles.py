@@ -14,6 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+CROP_POSE_CONVENTION = "geometric-center-v1"
+"""Raw crops are unchanged; STAR shifts retain pick offsets from (size - 1) / 2.
+
+Older cubic-crop artifacts have no marker and wrote zero initial shifts,
+discarding the rounding residual and the half-voxel offset of even boxes.
+Reading an old STAR never silently upgrades those poses.
+"""
+
 
 @dataclass(frozen=True)
 class ParticleRecord:

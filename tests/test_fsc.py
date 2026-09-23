@@ -18,6 +18,59 @@ from cryoet_pipeline.fsc import (
 from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 
 
+@pytest.mark.parametrize("sizes", [(32, 37), (33, 38), (32, 38), (33, 37)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_common_box_padding_preserves_geometric_center(sizes, reverse):
+    from cryoet_pipeline.cli import _pad_to_common_box
+
+    def density(size):
+        axis = torch.arange(size, dtype=torch.float64) - (size - 1) / 2
+        z, y, x = torch.meshgrid(axis, axis, axis, indexing="ij")
+        # Off-centre anisotropic density catches axis swaps and translation sign.
+        return torch.exp(-((x - 0.25)**2 / 8 + (y + 0.5)**2 / 10 + (z - 0.75)**2 / 12))
+
+    small, large = (density(size) for size in sizes)
+    first, second = (large, small) if reverse else (small, large)
+    a, b, original = _pad_to_common_box(first, second)
+    assert original == (sizes[0],) * 3
+    assert a.shape == b.shape == large.shape
+    assert (a if reverse else b) is large
+    assert (a if not reverse else b).dtype == small.dtype
+    torch.testing.assert_close(a, b, atol=2e-7, rtol=2e-6)
+
+
+def test_common_box_same_parity_is_exact_zero_padding():
+    from cryoet_pipeline.cli import _pad_to_common_box
+
+    small = torch.randn(8, 8, 8, generator=torch.Generator().manual_seed(3))
+    large = torch.zeros(12, 12, 12)
+    padded, untouched, _ = _pad_to_common_box(small, large)
+    assert untouched is large
+    assert torch.equal(padded, torch.nn.functional.pad(small, (2,) * 6))
+    a, b, _ = _pad_to_common_box(small, small)
+    assert a is small and b is small
+
+
+@pytest.mark.parametrize("target", [11, 12])
+def test_half_voxel_padding_preserves_fourier_amplitudes_except_nyquist(target):
+    from cryoet_pipeline.cli import _pad_to_common_box
+
+    small = torch.randn(
+        target - 3, target - 3, target - 3,
+        generator=torch.Generator().manual_seed(3), dtype=torch.float64,
+    )
+    integer_padded = torch.nn.functional.pad(small, (1, 2) * 3)
+    centered, _, _ = _pad_to_common_box(small, torch.zeros((target,) * 3))
+    before, after = torch.fft.fftn(integer_padded), torch.fft.fftn(centered)
+    supported = torch.ones((target,) * 3, dtype=torch.bool)
+    if target % 2 == 0:
+        supported[target // 2, :, :] = False
+        supported[:, target // 2, :] = False
+        supported[:, :, target // 2] = False
+        assert after[~supported].abs().max() < 1e-10
+    torch.testing.assert_close(before[supported].abs(), after[supported].abs())
+
+
 def _smooth_blob(size: int, *, seed: int) -> torch.Tensor:
     generator = torch.Generator().manual_seed(seed)
     axis = torch.arange(size, dtype=torch.float32) - (size - 1) / 2.0

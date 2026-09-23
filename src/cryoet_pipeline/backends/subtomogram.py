@@ -40,6 +40,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.particles import (
+    CROP_POSE_CONVENTION,
     ParticleRecord,
     read_particle_star,
     read_star_loop,
@@ -135,9 +136,13 @@ class CubicCropExtractionBackend:
                 dtype=np.float32,
             ),
         )
-        particle_stack.attrs.update({"axis_order": AxisOrder.NZYX.value})
+        particle_stack.attrs.update({
+            "axis_order": AxisOrder.NZYX.value,
+            "extraction_pose_convention": CROP_POSE_CONVENTION,
+        })
 
         records: list[ParticleRecord] = []
+        geometric_center = (box_size - 1) / 2.0
         for output_index, (row, (z_start, y_start, x_start)) in enumerate(kept):
             crop = np.asarray(
                 tomogram_array[
@@ -157,9 +162,12 @@ class CubicCropExtractionBackend:
                     rot_deg=row.rot_deg,
                     tilt_deg=row.tilt_deg,
                     psi_deg=row.psi_deg,
-                    shift_x_px=0.0,
-                    shift_y_px=0.0,
-                    shift_z_px=0.0,
+                    # The resampler reads raw(R @ p + shift), with p relative
+                    # to the geometric box centre, not the rounded pick voxel.
+                    # Keep raw voxels untouched and carry that offset in STAR.
+                    shift_x_px=row.x_px - x_start - geometric_center,
+                    shift_y_px=row.y_px - y_start - geometric_center,
+                    shift_z_px=row.z_px - z_start - geometric_center,
                     score=row.lccmax,
                     class_number=1,
                     random_subset=1 + (output_index % 2),
@@ -217,6 +225,7 @@ class CubicCropExtractionBackend:
                 "input_tomogram_id": tomogram.id,
                 "picks_id": picks.id,
                 "box_size_px": box_size,
+                "extraction_pose_convention": CROP_POSE_CONVENTION,
                 "particle_count": particle_count,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
@@ -1146,9 +1155,11 @@ class ConeSearchRefinementBackend:
 
             offsets = cone_offsets(cone_range_deg / scale, cone_sampling)
             in_plane_offsets = _symmetric_offsets(inplane_range_deg / scale, inplane_sampling)
-            # Shifts are found at whole-pixel accuracy from the correlation peak,
-            # so never close the window below a single pixel.
-            iteration_shift_range = max(shift_range_px / scale, 1.0)
+            # Preserve the whole-pixel floor for enabled shift searches, but
+            # an explicit zero freezes the supplied shifts at every iteration.
+            iteration_shift_range = (
+                max(shift_range_px / scale, 1.0) if shift_range_px > 0 else 0.0
+            )
 
             reassigned = 0
             new_aligned: list[torch.Tensor] = [torch.empty(0)] * particle_count

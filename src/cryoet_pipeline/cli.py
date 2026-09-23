@@ -3407,13 +3407,18 @@ def compute_fsc_command(
             # its density needs and the average at the extraction box, so these
             # routinely differ — 39 against 48 for a ribosome here. Padding the
             # smaller one centrally is the correct reconciliation because it
-            # leaves the pixel size, and therefore every shell's resolution,
-            # untouched; resampling either would not.
+            # leaves the pixel size untouched. Across odd/even parity a
+            # half-voxel translation also puts both geometric centres together.
             volume_a, volume_b, padded = _pad_to_common_box(volume_a, volume_b)
             typer.echo(
                 f"padded the smaller map from {padded} to {tuple(volume_a.shape)} so the "
                 "shells line up; the voxel size is unchanged"
             )
+            if (volume_a.shape[0] - padded[0]) % 2:
+                typer.echo(
+                    "centred-grid correction: translated the smaller map by +0.5 voxel "
+                    "on each axis using Fourier phases (real Nyquist convention)"
+                )
         resolved_pixel_spacing = (
             pixel_spacing_angstrom if pixel_spacing_angstrom is not None else voxel_size_a
         )
@@ -3988,12 +3993,15 @@ def _pad_to_common_box(first: Any, second: Any) -> tuple[Any, Any, tuple[int, ..
     # Annotated `Any` rather than `torch.Tensor` because this module imports torch
     # lazily on purpose — a missing optional dependency must not break unrelated
     # commands — and a module-level annotation would defeat that.
-    """Zero-pad the smaller cube to the larger, centred, and say which grew.
+    """Pad the smaller cube onto the larger cube's centred grid; say which grew.
 
     Centred so that a map whose density sits at the box centre — which both of
     these do — stays at the centre. Zeros because outside a template's own box
     there is no density, and because the maps are mean-centred before an FSC
-    anyway, so zero is the neutral value rather than an invented one.
+    anyway, so zero is the neutral value rather than an invented one. An odd
+    size difference needs a half-voxel translation after integer padding. Use
+    Fourier phases, not linear interpolation (which would low-pass the map).
+    This is a grid-origin correction, not a fitted registration to the template.
     """
 
     import torch
@@ -4016,6 +4024,21 @@ def _pad_to_common_box(first: Any, second: Any) -> tuple[Any, Any, tuple[int, ..
     padded = torch.nn.functional.pad(
         smaller, (before, pad - before) * 3, mode="constant", value=0.0
     )
+    if pad % 2:
+        # Integer padding leaves the density centre half a voxel below the
+        # target centre on each axis. Translate by +0.5 on the padded grid.
+        spectrum = torch.fft.fftn(padded)
+        frequencies = torch.fft.fftfreq(target, device=padded.device, dtype=padded.dtype)
+        phase = torch.exp(-1j * torch.pi * frequencies)
+        if target % 2 == 0:
+            # The unpaired Nyquist coefficient must stay real. At a half-pixel
+            # offset its cosine sample is zero; do not create complex density.
+            phase[target // 2] = 0
+        for axis in range(3):
+            shape = [1, 1, 1]
+            shape[axis] = target
+            spectrum = spectrum * phase.reshape(shape)
+        padded = torch.fft.ifftn(spectrum).real
     if first.shape[0] < second.shape[0]:
         return padded, second, original
     return first, padded, original

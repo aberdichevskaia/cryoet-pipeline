@@ -1657,3 +1657,56 @@ will index. An atomic write plus a lock is the smaller intermediate step and
 would be tempting to do first; it is worth doing anyway for the non-atomic write,
 but it should not be sold as the fix for this until the traceback says the
 registry is where the crash is.
+
+## 21. Every average is rotated about a point half a voxel off its own centre
+
+**Confirmed, not yet fixed, and deliberately so.** Fixing it moves the 10.012 Å
+do-nothing baseline, and that baseline is currently the only fixed point the
+voxel-control investigation is measured against. Fix it as its own change, with
+its own control, once that investigation has a number.
+
+Extraction puts the pick at local index `box_size // 2` —
+`subtomogram.py:111` sets `half = box_size // 2` and `_crop_start` returns
+`int(round(row.z_px)) - half`, so the pick lands at index `half`: 24 in a box of
+48, 49 in a box of 98. The resampler rotates about `(size - 1) / 2`
+(`rotations.py:147-149`): 23.5 and 48.5. Every particle's density is therefore
+offset from the rotation centre by half a voxel on each axis before its pose is
+applied, and the pose scatters that 0.866-voxel offset into a direction that
+differs per particle.
+
+Verified on real arrays through the pipeline's own code: a blob cropped by the
+`_crop_start` rule sits at local index [49, 49, 49] in a 98 box, and a 180°
+turn through `resample_volume_zyx` moves it to [48, 49, 48] — a full one-voxel
+move that a correct centre would not produce.
+
+**Size, and which way it cuts.** 0.5·√3 = 0.866 voxels, which is 8.67 Å at
+10.012 Å/voxel and 4.32 Å at 4.99. It is in *every* subtomogram average this
+pipeline has written, and it penalises the coarse grid twice as hard as the
+fine one. Monte-Carlo over 600 random orientations puts the coherent signal
+retention at 45 Å at 0.758 for the coarse arm against 0.918 for the fine one —
+so the 28.46 Å the coarse do-nothing average reached is itself depressed by
+roughly a factor 0.76 at that shell and would improve if this were fixed.
+
+Odd boxes are unaffected: 109 gives 54 either way, which is why the template
+side of the FSC has never shown it.
+
+**Two smaller relatives in the same chain**, worth fixing in the same pass:
+
+- `cli.py:4014` pads the smaller map to the larger with `before = pad // 2`,
+  which cannot centre across a parity change. 48 → 54 (difference 6) lands
+  exactly; 98 → 109 (difference 11) puts the average's centre at 53.5 against
+  the template's 54.0. Measured cost through `compute_fsc_curve` on a noiseless
+  matched pair: 0.947 at 45 Å, 1.000 with the half voxel put back. No integer
+  padding can centre this, so the fix is to resample or to compare in a common
+  box, not to round the other way.
+- `subtomogram.py:161-163` writes `shift_x_px=0.0` into every extraction record
+  while the crop was taken at `round(x_px)`. The sub-voxel part of the pick
+  position is information extraction already has and throws away, worth ±0.5
+  voxel of avoidable spread.
+
+**How this was found.** Not by a test — by asking why a fixed-pose average on a
+4.99 Å grid disagreed with its template past 60 Å when the same particles at
+10.012 Å reached 28.46 Å. See `VOXEL_GT_CONTROL.md` section 7 in the
+benchmarking repository. None of these three is the main cause there; they were
+turned up while looking for it, and the search is what makes them measured
+rather than suspected.
