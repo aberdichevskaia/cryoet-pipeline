@@ -82,6 +82,48 @@ def test_spline_reflection_jump_guard_and_unrestricted_neighbors():
     assert value == pytest.approx(peak)
 
 
+@pytest.mark.parametrize(
+    "triplet,expected_peak,expected_offset",
+    [
+        pytest.param(
+            [0.703947723, 0.710783482, 0.708505571],
+            0.71172756049485464,
+            0.292932524424224,
+            id="czii-tag-53",
+        ),
+        pytest.param(
+            [0.732130229, 0.738079, 0.736096263],
+            0.73890043501006974,
+            0.29290517464018029,
+            id="czii-tag-170",
+        ),
+    ],
+)
+def test_measured_single_precision_spline_regression(triplet, expected_peak, expected_offset):
+    # Measured Z neighbours from dynamo_peak_audit_53_170.json (2026-09-24).
+    # Expected values are Dynamo's double-precision fit of the same rounded
+    # single samples, NOT its historical full-search winners. In single,
+    # tag 53 produced a spurious offset -1 and peak 0.75; tag 170 is nearby.
+    samples = np.asarray(triplet, dtype=np.float32)
+    expected = (expected_peak, expected_offset)
+    assert core._spline_peak(*samples) == pytest.approx(expected, rel=0, abs=1e-10)
+
+    # Promote AFTER quantizing: both calls must fit exactly the same samples.
+    double_samples = samples.astype(np.float64)
+    assert core._spline_peak(*double_samples) == pytest.approx(expected, rel=0, abs=1e-10)
+    centered_peak, centered_offset = core._spline_peak(*(double_samples - double_samples[1]))
+    assert (centered_peak + double_samples[1], centered_offset) == pytest.approx(
+        expected, rel=0, abs=1e-10
+    )
+
+    # Exercise the public ZYX-grid -> XYZ-shift path with the measured Z line.
+    cc = np.full((6, 6, 6), -1, dtype=np.float32)
+    cc[2:5, 3, 3] = samples
+    shift, peak = core.restricted_peak(cc, [0, 0, 0], 1)
+    np.testing.assert_allclose(shift, [0, 0, expected_offset], rtol=0, atol=1e-10)
+    assert peak == pytest.approx(expected_peak, rel=0, abs=1e-10)
+
+
 def test_fourier_filter_radii_wedge_support_and_normalization():
     shell = core.bandpass(48, 2, 16)
     assert shell[24, 24, 24] == pytest.approx(np.exp(-1), abs=1e-7)
