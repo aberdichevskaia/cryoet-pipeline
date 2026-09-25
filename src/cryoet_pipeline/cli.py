@@ -28,6 +28,7 @@ from cryoet_pipeline.backends.defocus_hint import (
     Ctffind5DefocusHintBackend,
     estimate_defocus_hint_and_register,
 )
+from cryoet_pipeline.backends.dynamo_search import DynamoSearchRefinementBackend
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
@@ -2992,56 +2993,98 @@ def average_particles(
     backend: Annotated[
         str,
         typer.Option(
-            help="Subtomogram averaging backend: cone-search (cone orientation search, "
-            "multi-reference classification) or fft-refinement (simple baseline)."
+            help="Subtomogram averaging backend: dynamo-search (Dynamo's local search, "
+            "this pipeline's Fourier-compensated averaging; one class), cone-search (cone "
+            "orientation search, multi-reference classification) or fft-refinement "
+            "(simple baseline)."
         ),
-    ] = "cone-search",
+    ] = "dynamo-search",
     num_classes: Annotated[
         int,
         typer.Option(min=1, help="[cone-search] Number of references to refine simultaneously."),
     ] = 1,
     cone_range_deg: Annotated[
-        float,
+        float | None,
         typer.Option(
             min=0.0,
-            help="[cone-search] Full aperture of the orientation cone searched in the first "
-            "iteration. Start near the angular step used for template matching.",
+            help="[cone-search, dynamo-search] Full aperture of the orientation cone searched "
+            "first. Start near the angular step used for template matching. Default: 30 "
+            "(cone-search), 15 (dynamo-search).",
         ),
-    ] = 30.0,
+    ] = None,
     cone_sampling_deg: Annotated[
-        float,
-        typer.Option(min=0.0, help="[cone-search] Step within the cone, first iteration."),
-    ] = 10.0,
-    inplane_range_deg: Annotated[
-        float,
-        typer.Option(min=0.0, help="[cone-search] In-plane search range, first iteration."),
-    ] = 30.0,
-    inplane_sampling_deg: Annotated[
-        float,
-        typer.Option(min=0.0, help="[cone-search] In-plane step, first iteration."),
-    ] = 10.0,
-    shift_range_px: Annotated[
-        float,
+        float | None,
         typer.Option(
             min=0.0,
-            help="[cone-search] Shift search half-width in pixels; never closes below 1 px, "
-            "since the correlation peak is located at whole-pixel accuracy.",
+            help="[cone-search, dynamo-search] Step within the cone, first iteration or "
+            "level. Default: 10 (cone-search), 5 (dynamo-search).",
         ),
-    ] = 2.0,
+    ] = None,
+    inplane_range_deg: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search, dynamo-search] Full in-plane search range. Default: 30 "
+            "(cone-search), 15 (dynamo-search).",
+        ),
+    ] = None,
+    inplane_sampling_deg: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search, dynamo-search] In-plane step. Default: 10 (cone-search), "
+            "5 (dynamo-search).",
+        ),
+    ] = None,
+    shift_range_px: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[cone-search, dynamo-search] Shift search half-width in pixels. cone-search "
+            "(default 2) never closes it below 1 px; dynamo-search (default 3) re-centres "
+            "it on each refinement level's winner, as Dynamo does.",
+        ),
+    ] = None,
     refine_factor: Annotated[
-        float,
+        float | None,
         typer.Option(
             min=1.0,
-            help="[cone-search] Divisor applied to every range and step each iteration. "
-            "Two to three is the usual choice.",
+            help="[cone-search, dynamo-search] Divisor applied to the ranges and steps each "
+            "iteration (cone-search) or refinement level (dynamo-search). Default: 2.",
         ),
-    ] = 2.0,
+    ] = None,
+    refine_levels: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            max=4,
+            help="[dynamo-search] Refinement levels per iteration after the first grid. "
+            "Default: 2.",
+        ),
+    ] = None,
+    search_highpass_px: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[dynamo-search] High-pass radius of the search band in Fourier pixels "
+            "(box * spacing / radius is the resolution in A). Default: 2.",
+        ),
+    ] = None,
+    search_lowpass_px: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[dynamo-search] Low-pass radius of the search band in Fourier pixels; "
+            "at most half the box. Default: 16 (30 A for a 48-voxel box at 10.012 A).",
+        ),
+    ] = None,
     particle_diameter_angstrom: Annotated[
         float | None,
         typer.Option(
             min=0.0,
             help="[cone-search] Particle diameter in A, used for the Crowther angular "
-            "increment degrees(resolution / diameter). Defaults to the full box.",
+            "increment degrees(resolution / diameter). [dynamo-search] The default search "
+            "mask diameter. Defaults to the full box.",
         ),
     ] = None,
     target_resolution_angstrom: Annotated[
@@ -3058,7 +3101,9 @@ def average_particles(
             min=0.0,
             help="[cone-search] Enable reference-frame weighted NCC inside a soft sphere "
             "of this diameter in A (flat to 80% radius, cosine edge). Default: no mask. "
-            "The mask plus shift window must fit inside the box. Output maps are not masked.",
+            "The mask plus shift window must fit inside the box. [dynamo-search] Diameter "
+            "of the binary search mask; default: the particle diameter. Output maps are "
+            "not masked.",
         ),
     ] = None,
     alignment_frame: Annotated[
@@ -3118,9 +3163,12 @@ def average_particles(
         typer.Option(help="[cone-search] Seed for the initial random class partition."),
     ] = 0,
     num_iterations: Annotated[
-        int,
-        typer.Option(min=1, help="Number of coarse-to-fine refinement iterations."),
-    ] = 5,
+        int | None,
+        typer.Option(
+            min=1,
+            help="Number of refinement iterations. Default: 1 (dynamo-search), 5 (others).",
+        ),
+    ] = None,
     initial_angular_step_deg: Annotated[
         float,
         typer.Option(
@@ -3235,10 +3283,17 @@ def average_particles(
             raise typer.BadParameter(
                 "particle frame does not support an alignment mask", param_hint="alignment-frame"
             )
-    if alignment_mask_diameter_angstrom is not None and backend != "cone-search":
+    searching = backend in ("cone-search", "dynamo-search")
+    if alignment_mask_diameter_angstrom is not None and not searching:
         raise typer.BadParameter(
-            "alignment mask is supported only by cone-search",
+            "an alignment mask is supported only by cone-search and dynamo-search",
             param_hint="alignment-mask-diameter-angstrom",
+        )
+    if backend == "dynamo-search" and (missing_wedge or fourier_compensation):
+        raise typer.BadParameter(
+            "dynamo-search always models the wedge and always averages with Fourier "
+            "compensation; drop --missing-wedge and --fourier-compensation",
+            param_hint="missing-wedge",
         )
     if missing_wedge and backend != "cone-search":
         raise typer.BadParameter(
@@ -3250,16 +3305,33 @@ def average_particles(
             "Fourier compensation is supported only by cone-search",
             param_hint="fourier-compensation",
         )
+    dynamo_only = {
+        "refine-levels": refine_levels,
+        "search-highpass-px": search_highpass_px,
+        "search-lowpass-px": search_lowpass_px,
+    }
+    for hint, value in dynamo_only.items():
+        if value is not None and backend != "dynamo-search":
+            raise typer.BadParameter(
+                f"--{hint} is read only by dynamo-search", param_hint=hint
+            )
+    if backend == "dynamo-search" and num_classes != 1:
+        raise typer.BadParameter(
+            "dynamo-search refines one class; use cone-search to classify",
+            param_hint="num-classes",
+        )
     if fourier_compensation and not missing_wedge:
         raise typer.BadParameter(
             "Fourier compensation divides by the wedges, so it needs --missing-wedge",
             param_hint="fourier-compensation",
         )
     if (
-        wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None
-    ) and not missing_wedge:
+        (wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None)
+        and not missing_wedge
+        and backend != "dynamo-search"
+    ):
         raise typer.BadParameter(
-            "a wedge tilt range is read only when --missing-wedge is given",
+            "a wedge tilt range is read only by dynamo-search, or with --missing-wedge",
             param_hint="wedge-min-tilt-deg",
         )
     tilt_series_manifests = [
@@ -3284,7 +3356,6 @@ def average_particles(
         # to label what it writes, so the two can differ.
         "variant": output_variant if output_variant is not None else variant,
         "overwrite": overwrite,
-        "num_iterations": num_iterations,
         "initial_angular_step_deg": initial_angular_step_deg,
         "initial_shift_step_px": initial_shift_step_px,
         "initial_low_pass_angstrom": initial_low_pass_angstrom,
@@ -3293,12 +3364,6 @@ def average_particles(
         "num_classes": num_classes,
         "class_number": class_number,
         "particle_metadata_path": particle_metadata,
-        "cone_range_deg": cone_range_deg,
-        "cone_sampling_deg": cone_sampling_deg,
-        "inplane_range_deg": inplane_range_deg,
-        "inplane_sampling_deg": inplane_sampling_deg,
-        "shift_range_px": shift_range_px,
-        "refine_factor": refine_factor,
         "seed": seed,
         "alignment_mask_diameter_angstrom": alignment_mask_diameter_angstrom,
         "alignment_frame": alignment_frame.value,
@@ -3306,6 +3371,22 @@ def average_particles(
         "wedge_tilt_axis_deg": wedge_tilt_axis_deg,
         "fourier_compensation": fourier_compensation,
     }
+    # Passed only when given, so each backend applies its own defaults: a grid
+    # tuned for cone-search is not a default for Dynamo's search.
+    for key, value in {
+        "num_iterations": num_iterations,
+        "cone_range_deg": cone_range_deg,
+        "cone_sampling_deg": cone_sampling_deg,
+        "inplane_range_deg": inplane_range_deg,
+        "inplane_sampling_deg": inplane_sampling_deg,
+        "shift_range_px": shift_range_px,
+        "refine_factor": refine_factor,
+        "refine_levels": refine_levels,
+        "search_highpass_px": search_highpass_px,
+        "search_lowpass_px": search_lowpass_px,
+    }.items():
+        if value is not None:
+            parameters[key] = value
     if wedge_min_tilt_deg is not None:
         parameters["wedge_min_tilt_deg"] = wedge_min_tilt_deg
     if wedge_max_tilt_deg is not None:
@@ -3963,10 +4044,12 @@ def _subtomogram_averaging_backend(name: str) -> SubtomogramAveragingBackend:
         return FftRefinementAveragingBackend()
     if normalized == "cone-search":
         return ConeSearchRefinementBackend()
+    if normalized == "dynamo-search":
+        return DynamoSearchRefinementBackend()
 
     raise typer.BadParameter(
         f"unsupported subtomogram averaging backend {name!r}; "
-        "expected: cone-search, fft-refinement",
+        "expected: dynamo-search, cone-search, fft-refinement",
         param_hint="backend",
     )
 

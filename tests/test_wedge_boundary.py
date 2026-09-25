@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from cryoet_pipeline.dynamo_core import euler_matrix
+from cryoet_pipeline.backends.dynamo_search import euler_matrix
 from cryoet_pipeline.rotations import relion_euler_to_matrix
 from cryoet_pipeline.wedge import (
     WedgeGeometry,

@@ -1148,6 +1148,54 @@ class SubtomogramClassificationQc(BaseModel):
         return self
 
 
+class DynamoSearchQc(BaseModel):
+    """Machine-readable statistics for the `dynamo-search` refinement backend."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    backend: str
+    tilt_series_ids: list[str]
+    particle_stack_ids: list[str]
+    particle_count: int = Field(ge=1)
+    particle_counts: list[int] = Field(default_factory=list)
+    """Particles taken from each stack, positionally matching `particle_stack_ids`."""
+    iterations_run: int = Field(ge=1)
+    cone_aperture_deg: float = Field(ge=0.0)
+    cone_sampling_deg: float = Field(gt=0.0)
+    inplane_range_deg: float = Field(ge=0.0)
+    inplane_sampling_deg: float = Field(gt=0.0)
+    refine_levels: int = Field(ge=0)
+    refine_factor: float = Field(gt=1.0)
+    search_highpass_px: float = Field(gt=0.0)
+    search_lowpass_px: float = Field(gt=0.0)
+    shift_limit_px: float = Field(gt=0.0)
+    alignment_mask_diameter_angstrom: float = Field(gt=0.0)
+    grid_reach_deg: float = Field(ge=0.0)
+    """The widest rotation one iteration's candidate levels can compose to."""
+    wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    wedge_boundary_policy: str
+    wedge_coverage_floor_fraction: float = Field(gt=0.0, le=1.0)
+    wedge_coverage: dict[str, float] | None = None
+    initial_reference: str
+    gold_standard: bool = False
+    """Always false: every particle is searched against an average containing it."""
+    mean_final_correlation: float | None = None
+    minimum_final_correlation: float | None = None
+    iterations: list[dict[str, float]] = Field(default_factory=list)
+    """Per iteration: mean and minimum CC, and how far the poses moved in it."""
+    pose_change: dict[str, float] | None = None
+    """How far the whole run moved the poses it was given; see the classification QC."""
+    beyond_grid_count: int = Field(default=0, ge=0)
+    """Particles that moved further than `grid_reach_deg` times the iterations.
+
+    Dynamo's legacy in-plane seed can do this near singular directions; the move
+    is kept, as in Dynamo, and counted here rather than hidden.
+    """
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FscQc(BaseModel):
     """Machine-readable Fourier shell correlation report."""
 

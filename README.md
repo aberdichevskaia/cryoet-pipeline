@@ -310,28 +310,26 @@ cryoet average-particles \
   --manifest outputs/dev/manifests/TS_01.json \
   --registry outputs/dev/artifacts.json \
   --out outputs/dev \
-  --num-classes 1 \
-  --cone-range-deg 12 --cone-sampling-deg 6 \
   --particle-diameter-angstrom 250 \
   --device cuda
 
 cryoet compute-fsc \
   --mode half-set \
   --particle-stack outputs/dev/particles/TS_01/TS_01_cubic-crop_particles.zarr \
-  --metadata outputs/dev/averages/TS_01/TS_01_cone-search_particles.star \
+  --metadata outputs/dev/averages/TS_01/TS_01_dynamo-search_particles.star \
   --pixel-spacing-angstrom 9.504 \
   --out outputs/dev/qc/TS_01/fsc_half_set.json \
   --plot outputs/dev/qc/TS_01/fsc_half_set.png \
   --device cuda
 ```
 
-`average-particles` defaults to the `cone-search` backend, which searches
-orientations on a cone, finds shifts from the cross-correlation peak, and
-refines several references at once when `--num-classes` is above one. Angular
-sampling shrinks each iteration but stops at the Crowther increment for the
-given particle diameter and target resolution; see
-[docs/backends.md](docs/backends.md) for the details and for the alternative
-`fft-refinement` baseline.
+`average-particles` defaults to the `dynamo-search` backend: Dynamo's local
+search, adapted to NumPy and validated against Dynamo itself, with this
+pipeline's Fourier-compensated averaging, one class, one iteration unless
+`--num-iterations` says otherwise; see [docs/dynamo_search.md](docs/dynamo_search.md).
+`--backend cone-search` searches orientations on a cone and refines several
+references at once when `--num-classes` is above one; see
+[docs/backends.md](docs/backends.md) for it and for the `fft-refinement` baseline.
 
 `compute-fsc` also runs in `--mode map-to-model` to compare the average against
 the template. Both modes accept `--mask` so background noise outside the
