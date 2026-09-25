@@ -45,6 +45,11 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+# How `wedge_present_mask_rfft` decides a bin that lies exactly on the wedge
+# boundary. Consumers record it, so a map says which rule built it: the strict
+# sign test used before this name existed decided such bins by roundoff.
+WEDGE_BOUNDARY_POLICY = "float64-relative-roundoff-v1"
+
 
 @dataclass(frozen=True)
 class WedgeGeometry:
@@ -134,10 +139,23 @@ def wedge_present_mask_rfft(
     Written as `f(t) = kx sin t + kz cos t`, this has at most one zero in
     `(-90, 90)` — the interval is shorter than a period — so `f(min) * f(max) <= 0`
     holds precisely when that zero lies inside the range. That is the test used
-    here: it needs no division, handles an asymmetric range directly, is exact on
-    the `kx = 0` plane (never measured, since no stage reaches +-90 degrees), and
-    passes `kx = kz = 0` (measured at every tilt). It is also invariant under
+    here: it needs no division, handles an asymmetric range directly, is exact
+    on the `kx = 0` plane (never measured, since no stage reaches +-90 degrees),
+    and passes `kx = kz = 0` (measured at every tilt). It is also invariant under
     `k -> -k`, as a mask on the transform of real data has to be.
+
+    The range is closed, and has to stay closed in floating point. A bin on the
+    tilt axis is measured at every tilt and a bin on an endpoint plane by the
+    extreme view, but both reach the test as residuals of either sign instead of
+    zeros, so a strict sign test decided them by roundoff. Measured before the
+    allowance existed: two equivalent matrices for one CZII particle (tag 222,
+    tilt 90) disagreed on all 47 non-DC bins of its tilt axis, which alone moved
+    a 223-particle compensated average by 0.16%; and an exact +-45.0 degree lab
+    wedge lost its whole `|kx| = |kz|` boundary, 2256 of 57600 bins at box 48,
+    to the rounding of sin and cos of 45 degrees. Endpoint values within a
+    float64 roundoff allowance of zero therefore count as zero. The allowance is
+    relative to the frequency, not a fitted angle: a bin 1e-8 degrees outside the
+    range stays out.
 
     For a symmetric range this reduces to the familiar `|kz| <= tan(a) |kx|`,
     i.e. a wedge of half-angle `90 - a` about the BEAM axis `kz`. Worth stating
@@ -161,6 +179,27 @@ def wedge_present_mask_rfft(
     to the outermost shell, where `irfftn` symmetrises whatever it is handed.
     """
 
+    at_minimum, at_maximum, tolerance = _wedge_boundary_values_rfft(
+        size, geometry, matrix=matrix, device=device
+    )
+    return (
+        (torch.minimum(at_minimum, at_maximum) <= tolerance)
+        & (torch.maximum(at_minimum, at_maximum) >= -tolerance)
+    ).to(torch.float32)
+
+
+def _wedge_boundary_values_rfft(
+    size: int,
+    geometry: WedgeGeometry,
+    *,
+    matrix: np.ndarray | torch.Tensor | None = None,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Beam dot products and their frequency-relative roundoff allowance.
+
+    Kept separate so a benchmark can audit the former strict sign rule without
+    exposing a production option to restore that numerically unstable policy.
+    """
     if size < 2:
         raise ValueError(f"a wedge mask needs a box of at least 2 voxels, got {size}")
 
@@ -197,7 +236,16 @@ def wedge_present_mask_rfft(
     maximum = math.radians(geometry.max_tilt_deg)
     at_minimum = rotated_x * math.sin(minimum) + rotated_z * math.cos(minimum)
     at_maximum = rotated_x * math.sin(maximum) + rotated_z * math.cos(maximum)
-    return (at_minimum * at_maximum <= 0.0).to(torch.float32)
+    # A frequency on the tilt axis is measured at every tilt. Its two beam
+    # dot products are mathematically zero, but equivalent Euler/matrix paths
+    # can leave residuals of either sign (below 1e-16, at most 3.4% of the
+    # allowance, in the tag-222 regression).
+    # Allow accumulated float64 error in rotation, axis change and endpoint
+    # projection. Scale by the ORIGINAL frequency, not its cancelled x/z
+    # components. Sixteen eps is a conservative small-operation allowance,
+    # not an angular resolution, voxel dilation or data-tuned threshold.
+    tolerance = 16 * torch.finfo(torch.float64).eps * (grid_x.abs() + grid_y.abs() + grid_z.abs())
+    return at_minimum, at_maximum, tolerance
 
 
 def hermitian_weights_rfft(size: int, device: torch.device) -> torch.Tensor:
