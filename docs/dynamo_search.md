@@ -16,6 +16,13 @@ Measured on 223 CZII ribosomes, identical particles, pytom poses and extraction
   by, which no internal control had seen (`particles.CROP_POSE_CONVENTION`).
 - With the same poses, this pipeline's averaging beat Dynamo's by about 7 A.
 
+The module itself, not only its kernel, reproduces Dynamo: run through the
+CLI on refine223's stacks, reference and mask, it returned its kernel's poses
+for all 223 particles to the STAR's six decimals, and Dynamo's for 211. The
+other twelve are the kernel's two replay failures and ten particles whose
+answer Dynamo's five-digit starting table changes (benchmark:
+`DYNAMO_MODULE_PARITY.md`).
+
 Once that extraction offset is fixed, the search itself adds little on those
 particles (0.3 A); the case for it is that it does not degrade them and that it
 can repair a systematic pose error. Template FSC there is reference-biased.
@@ -84,10 +91,15 @@ are kept, as Dynamo keeps them, and reported as a warning.
 
 ## Speed
 
-The kernel is NumPy on the CPU, one particle after another: about 7 s of one
-core per particle and iteration at box 48 with the defaults, so 223 particles
-take about half an hour per iteration (the replay's 446 s used four worker
-processes). The averaging runs on `--device`.
+The kernel is NumPy on the CPU: 4 to 7 s of one core per particle and
+iteration at box 48 with the defaults (measured on the Mac: 3.9 to 4.5 s on a
+free core, 7.4 s while it was busy), about Dynamo's own 4.4 core-seconds
+(refine223: 246 s of search on four processes). Per particle that is 221
+candidate orientations, each a rotation of the reference and mask and about
+seven 48^3 FFTs. A cluster CPU core is slower: 223 particles took 2195 s on
+`cpusrv19`, 9.8 s each. The backend runs one particle after another, so that
+is the time per iteration where Dynamo's four processes took four minutes.
+The averaging runs on `--device`.
 
 ## Source behavior retained deliberately
 
