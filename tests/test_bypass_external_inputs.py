@@ -469,3 +469,19 @@ def test_a_missing_picks_star_is_refused(tmp_path: Path) -> None:
             tomogram=tomogram,
             tilt_series_id="TS_TEST",
         )
+
+
+def test_imported_picks_record_the_template_box_stated_for_them(tmp_path: Path) -> None:
+    # An external STAR has no pytom job; the box stated at import is what tells
+    # a later extraction of these same picks where their centres are.
+    tomogram = _registry_tomogram(tmp_path)
+    star = tmp_path / "external.star"
+    star.write_text("data_particles\n")
+    stated = import_external_picks_for_extraction(
+        star_path=star, tomogram=tomogram, tilt_series_id="TS_TEST", template_box_px=48
+    )
+    assert stated.parameters["pick_template_box_px"] == 48
+    unstated = import_external_picks_for_extraction(
+        star_path=star, tomogram=tomogram, tilt_series_id="TS_TEST"
+    )
+    assert "pick_template_box_px" not in unstated.parameters

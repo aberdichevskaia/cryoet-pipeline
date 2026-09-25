@@ -73,7 +73,11 @@ def _tomogram_artifact(tmp_path: Path) -> Artifact:
     )
 
 
-def _picks_artifact(tmp_path: Path, tomogram: Artifact) -> Artifact:
+def _picks_artifact(tmp_path: Path, tomogram: Artifact, *, template_box: int = 8) -> Artifact:
+    # The picking step records pytom's job JSON; its template_shape fixes where
+    # each pick's particle centre is. Even here, as in production.
+    job_json = tmp_path / "picks_job.json"
+    job_json.write_text(json.dumps({"template_shape": [template_box] * 3}))
     path = tmp_path / "picks.star"
     path.write_text(
         "data_particles\n\n"
@@ -98,6 +102,7 @@ def _picks_artifact(tmp_path: Path, tomogram: Artifact) -> Artifact:
         parameters={
             "tilt_series_id": "TS_TEST",
             "input_tomogram_id": tomogram.id,
+            "pytom_job_json_path": str(job_json),
         },
     )
 
@@ -141,11 +146,16 @@ def test_cubic_crop_extraction_writes_particle_stack_and_drops_bad_rows(
     assert records[0].rot_deg == pytest.approx(10.0)
     assert records[0].tilt_deg == pytest.approx(20.0)
     assert records[0].psi_deg == pytest.approx(30.0)
-    assert records[0].shift_x_px == 0.5
-    assert records[0].shift_y_px == 0.5
-    assert records[0].shift_z_px == 0.5
-    assert particle_stack.parameters["extraction_pose_convention"] == "geometric-center-v1"
-    assert stack.attrs["extraction_pose_convention"] == "geometric-center-v1"
+    # An integral pick from an even template, cropped into an even box: the
+    # pick's +0.5 above its centre and the box's +0.5 offset cancel exactly.
+    assert records[0].shift_x_px == 0.0
+    assert records[0].shift_y_px == 0.0
+    assert records[0].shift_z_px == 0.0
+    assert particle_stack.parameters["extraction_pose_convention"] == "rotation-center-v2"
+    assert stack.attrs["extraction_pose_convention"] == "rotation-center-v2"
+    assert particle_stack.parameters["pick_template_box_px"] == 8
+    assert particle_stack.parameters["pick_center_offset_px"] == 0.5
+    assert stack.attrs["pick_center_offset_px"] == 0.5
     assert records[0].score == pytest.approx(0.5)
 
     report = json.loads(qc_artifact.path.read_text())
@@ -183,12 +193,19 @@ def test_cubic_crop_extraction_fails_when_all_particles_dropped(tmp_path: Path) 
     assert report["status"] == QcStatus.FAIL.value
 
 
+@pytest.mark.parametrize("template_box", [8, 7])
 @pytest.mark.parametrize("box_size", [5, 6])
 @pytest.mark.parametrize("xyz", [(10.0, 10.0, 10.0), (10.25, 9.625, 10.5)])
-def test_extraction_preserves_the_pick_center_in_the_sampling_pose(tmp_path, box_size, xyz):
-    """Even/odd boxes and rounded fractional picks use the same physical centre."""
+def test_extraction_centres_the_pick_rotation_centre_in_the_sampling_pose(
+    tmp_path, template_box, box_size, xyz
+):
+    """Even/odd crops, even/odd templates and fractional picks share one centre.
+
+    That centre is the pick minus pytom's template-parity offset, not the pick.
+    """
     tomogram = _tomogram_artifact(tmp_path)
-    picks = _picks_artifact(tmp_path, tomogram)
+    picks = _picks_artifact(tmp_path, tomogram, template_box=template_box)
+    centre = np.asarray(xyz) - (0.5 if template_box % 2 == 0 else 0.0)
     text = picks.path.read_text()
     header = text[:text.index("10 10 10 10.0")]
     picks.path.write_text(header + " ".join(map(str, xyz)) + " 17 31 -23 0.5\n")
@@ -202,7 +219,7 @@ def test_extraction_preserves_the_pick_center_in_the_sampling_pose(tmp_path, box
     record = read_particle_star(Path(stack.parameters["metadata_path"]))[0]
     start_xyz = np.rint(xyz).astype(int) - box_size // 2
     shift = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
-    np.testing.assert_allclose(start_xyz + (box_size - 1) / 2 + shift, xyz)
+    np.testing.assert_allclose(start_xyz + (box_size - 1) / 2 + shift, centre)
     assert (record.x_px, record.y_px, record.z_px) == xyz
     assert (record.rot_deg, record.tilt_deg, record.psi_deg) == (17, 31, -23)
     x, y, z = start_xyz
@@ -221,7 +238,7 @@ def test_extraction_preserves_the_pick_center_in_the_sampling_pose(tmp_path, box
     for angles in [(0, 0, 0), (17, 31, -23)]:
         matrix = relion_euler_to_matrix(*angles)
         moved = resample_volume_zyx(crop, matrix, shift, device=torch.device("cpu"))
-        sample_xyz = offsets @ matrix.T + np.asarray(xyz)
+        sample_xyz = offsets @ matrix.T + centre
         expected = sample_xyz[..., 2] * 400 + sample_xyz[..., 1] * 20 + sample_xyz[..., 0]
         local_xyz = sample_xyz - start_xyz
         interior = np.all((local_xyz >= 0.01) & (local_xyz <= box_size - 1.01), axis=-1)

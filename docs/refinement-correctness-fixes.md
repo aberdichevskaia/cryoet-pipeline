@@ -4,6 +4,28 @@ These are contract/geometry fixes, not a change of alignment scorer or a claim
 that refinement now improves the CZII maps. No training, dataset rerun, search
 parameter sweep, or automatic migration of old results is part of this change.
 
+## 2026-09-25 — the extraction premise was wrong for pytom picks
+
+The extraction fix below took a pytom pick as the particle's centre. It is not.
+pytom-match-pick reports where its template's voxel `T // 2` lands, but voltools
+rotates the template about `(T - 1) / 2`; for an even template box the pick sits
+half a voxel above the rotation centre along every lab axis, whatever the pose.
+Initial shifts are now `pick - offset - crop_start - (box_size - 1) / 2`, with
+`offset = particles.pick_center_offset_px(T)`: 0.5 for an even template, 0 for
+an odd one. `T` comes from the pytom job the picking step records, or from
+`--pick-template-box-px` for external picks; extraction refuses to guess. The
+crop is unchanged. The marker is `rotation-center-v2`, and stacks also record
+`pick_template_box_px` and `pick_center_offset_px`.
+
+Measured on CZII, template 48 and crop 48: `geometric-center-v1` left every
+particle half a voxel off in the lab frame. A Dynamo search moved them by
+(-0.47, -0.45, -0.48) voxels, and zero shifts alone reproduced its map (26.70 A
+against 30.04 A). The unmarked zero-shift extraction was right by cancellation,
+the two boxes having the same parity, so its fixed-pose map is a correctly
+centred baseline: the advice below not to compare against it is withdrawn.
+`tests/test_pick_center_convention.py` pins pytom's convention with a numpy
+replica of its paste, correlation, flip and roll, end to end through extraction.
+
 ## Corrected behavior
 
 - **Zero cone-search shift range:** `shift_range_px=0` preserves the supplied
@@ -28,8 +50,9 @@ parameter sweep, or automatic migration of old results is part of this change.
 
 ## Existing projects
 
-New cubic-crop artifacts and Zarr attributes carry
-`extraction_pose_convention = "geometric-center-v1"`. Missing markers mean
+Cubic-crop artifacts from this fix carry
+`extraction_pose_convention = "geometric-center-v1"`, superseded above by
+`rotation-center-v2`. Missing markers mean
 legacy/unknown extraction, not an invitation to change the artifact label.
 Old STARs are still read as written: no half-voxel shift is secretly added at
 load time, and already-refined shifts must not be corrected a second time.
@@ -37,7 +60,9 @@ load time, and already-refined shifts must not be corrected a second time.
 Keep historical projects unchanged. A corrected extraction establishes a new
 baseline: compare fixed-pose averaging and refinement using the **same newly
 extracted stacks and initial STARs**. Do not compare a new refined average to
-an old zero-shift baseline as if only refinement changed. PyTom matching and
+an old zero-shift baseline as if only refinement changed. (Withdrawn
+2026-09-25: that sentence kept the zero-shift baseline out of every comparison,
+and it was the correctly centred one.) PyTom matching and
 GT selection need not be repeated to reuse the same picks.
 
 Old FSC JSON remains historical. When comparing different-parity maps, recompute

@@ -2855,6 +2855,15 @@ def extract_particles(
         float | None,
         typer.Option(help="Drop picks with rlnLCCmax below this value."),
     ] = None,
+    pick_template_box_px: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Template box pytom matched with, for picks that do not record their "
+            "pytom job (external STAR files). An even box puts each pick half a voxel "
+            "above its particle's centre; extraction corrects that and will not guess it.",
+        ),
+    ] = None,
     tomogram_mrc: Annotated[
         Path | None,
         typer.Option(
@@ -2921,6 +2930,7 @@ def extract_particles(
                 star_path=picks_star,
                 tomogram=tomogram,
                 tilt_series_id=tilt_series_manifest.tilt_series_id,
+                template_box_px=pick_template_box_px,
             )
             artifact_registry.add(picks, replace=overwrite)
         else:
@@ -2936,6 +2946,8 @@ def extract_particles(
     }
     if minimum_score is not None:
         parameters["minimum_score"] = minimum_score
+    if pick_template_box_px is not None:
+        parameters["pick_template_box_px"] = pick_template_box_px
     context = BackendContext(
         output_dir=out,
         device=resolve_device(device),

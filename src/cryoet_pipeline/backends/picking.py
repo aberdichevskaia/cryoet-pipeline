@@ -35,6 +35,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
     TomogramBranch,
 )
+from cryoet_pipeline.particles import pytom_template_shape
 from cryoet_pipeline.runtime import DevicePreference
 
 
@@ -943,24 +944,10 @@ def _search_statistics(job_json: Path) -> _SearchStatistics | None:
 
 
 def _template_box_px(job_json: Path) -> int | None:
-    """The template box size pytom actually used, from the job it wrote.
+    """The largest side of the template box pytom actually used, from its job."""
 
-    Taken from there rather than measured off the template file because that is
-    the number the match was run with, and because a box read back from disk
-    could have been rebuilt since.
-    """
-
-    try:
-        payload = json.loads(job_json.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    shape = payload.get("template_shape")
-    if not isinstance(shape, list) or not shape:
-        return None
-    sizes = [item for item in shape if isinstance(item, int) and item > 0]
-    if len(sizes) != len(shape):
-        return None
-    return max(sizes)
+    shape = pytom_template_shape(job_json)
+    return max(shape) if shape is not None else None
 
 
 def _z_spread_verdict(

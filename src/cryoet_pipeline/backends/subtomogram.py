@@ -43,6 +43,8 @@ from cryoet_pipeline.models import (
 from cryoet_pipeline.particles import (
     CROP_POSE_CONVENTION,
     ParticleRecord,
+    pick_center_offset_px,
+    pytom_template_shape,
     read_particle_star,
     read_star_loop,
     write_particle_star,
@@ -92,6 +94,8 @@ class CubicCropExtractionBackend:
 
         tomogram_shape = _validate_tomogram(tomogram, manifest)
         _validate_picks(picks, tomogram, manifest)
+        template_box = _pick_template_box_px(picks, context)
+        center_offset = pick_center_offset_px(template_box)
         box_size = _positive_int_parameter(context, "box_size_px")
         minimum_score = _optional_float_parameter(context, "minimum_score")
         overwrite = _bool_parameter(context, "overwrite", default=False)
@@ -140,6 +144,8 @@ class CubicCropExtractionBackend:
         particle_stack.attrs.update({
             "axis_order": AxisOrder.NZYX.value,
             "extraction_pose_convention": CROP_POSE_CONVENTION,
+            "pick_template_box_px": template_box,
+            "pick_center_offset_px": center_offset,
         })
 
         records: list[ParticleRecord] = []
@@ -165,10 +171,12 @@ class CubicCropExtractionBackend:
                     psi_deg=row.psi_deg,
                     # The resampler reads raw(R @ p + shift), with p relative
                     # to the geometric box centre, not the rounded pick voxel.
-                    # Keep raw voxels untouched and carry that offset in STAR.
-                    shift_x_px=row.x_px - x_start - geometric_center,
-                    shift_y_px=row.y_px - y_start - geometric_center,
-                    shift_z_px=row.z_px - z_start - geometric_center,
+                    # The crop stays on the rounded pick, so raw voxels are
+                    # untouched; the shift carries that rounding and the pick's
+                    # offset above its rotation centre (CROP_POSE_CONVENTION).
+                    shift_x_px=row.x_px - center_offset - x_start - geometric_center,
+                    shift_y_px=row.y_px - center_offset - y_start - geometric_center,
+                    shift_z_px=row.z_px - center_offset - z_start - geometric_center,
                     score=row.lccmax,
                     class_number=1,
                     random_subset=1 + (output_index % 2),
@@ -227,6 +235,8 @@ class CubicCropExtractionBackend:
                 "picks_id": picks.id,
                 "box_size_px": box_size,
                 "extraction_pose_convention": CROP_POSE_CONVENTION,
+                "pick_template_box_px": template_box,
+                "pick_center_offset_px": center_offset,
                 "particle_count": particle_count,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
@@ -2411,6 +2421,51 @@ def _validate_picks(picks: Artifact, tomogram: Artifact, manifest: TiltSeriesMan
         raise ValueError("picks were generated from a different tomogram")
     if not picks.path.is_file():
         raise FileNotFoundError(f"picks STAR file not found: {picks.path}")
+
+
+def _pick_template_box_px(picks: Artifact, context: BackendContext) -> int:
+    """The template box the picks were matched with, which fixes where their centres are.
+
+    Read from the pytom job the picking step recorded; for picks made elsewhere,
+    from the box stated when they were imported or given for this extraction.
+    Every source present must agree. Refused rather than assumed when none says:
+    a wrong parity puts every particle half a voxel off, and nothing downstream
+    shows it.
+    """
+
+    explicit = _optional_positive_int_parameter(context, "pick_template_box_px")
+    recorded: int | None = None
+    job_json = picks.parameters.get("pytom_job_json_path")
+    if job_json is not None:
+        shape = pytom_template_shape(Path(str(job_json)))
+        if shape is not None:
+            if len(set(shape)) != 1:
+                raise ValueError(f"pytom matched with a non-cubic template {shape}")
+            recorded = shape[0]
+    declared = picks.parameters.get("pick_template_box_px")
+    if declared is not None and (type(declared) is not int or declared < 1):
+        raise ValueError(f"picks declare an invalid template box {declared!r}")
+    sources = {
+        "pick_template_box_px": explicit,
+        "the pytom job": recorded,
+        "the imported picks": declared,
+    }
+    known = {name: value for name, value in sources.items() if value is not None}
+    if len(set(known.values())) > 1:
+        raise ValueError(
+            "the template box contradicts itself: "
+            + ", ".join(f"{name} says {value}" for name, value in known.items())
+        )
+    box = next(iter(known.values()), None)
+    if box is None:
+        where = (
+            f"their pytom job {job_json} is unreadable" if job_json else "they record no pytom job"
+        )
+        raise ValueError(
+            f"cannot tell where these picks' particle centres are: {where}; pass the "
+            "template box pytom matched with as pick_template_box_px"
+        )
+    return box
 
 
 def _validate_particle_stack(particles: Artifact, manifest: TiltSeriesManifest) -> None:

@@ -62,27 +62,36 @@ def import_external_tomogram_for_extraction(
 
 
 def import_external_picks_for_extraction(
-    *, star_path: Path, tomogram: Artifact, tilt_series_id: str
+    *,
+    star_path: Path,
+    tomogram: Artifact,
+    tilt_series_id: str,
+    template_box_px: int | None = None,
 ) -> Artifact:
     """Wrap an externally-produced pytom-match-pick STAR file as an ad-hoc
     PICKS artifact, referencing it directly with no format conversion.
 
     Temporary bypass for testing `extract-particles` against picks made
-    outside this pipeline (no registry entry exists yet).
+    outside this pipeline (no registry entry exists yet). An external STAR
+    carries no pytom job, so the template box it was matched with, which fixes
+    where each pick's particle centre is, is recorded when the caller states it.
     """
 
     if not star_path.is_file():
         raise FileNotFoundError(f"picks STAR file not found: {star_path}")
+    parameters: dict[str, object] = {
+        "tilt_series_id": tilt_series_id,
+        "input_tomogram_id": tomogram.id,
+        "backend": "external-bypass",
+    }
+    if template_box_px is not None:
+        parameters["pick_template_box_px"] = template_box_px
     return Artifact(
         id=f"{tilt_series_id}:picks:external-bypass",
         kind=ArtifactKind.PICKS,
         path=star_path,
         parent_ids=[tomogram.id],
-        parameters={
-            "tilt_series_id": tilt_series_id,
-            "input_tomogram_id": tomogram.id,
-            "backend": "external-bypass",
-        },
+        parameters=parameters,
         storage_role=StorageRole.SOURCE,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=False,

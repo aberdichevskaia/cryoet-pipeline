@@ -11,16 +11,63 @@ So the layering runs downhill from here: particles -> fsc -> backends.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
-CROP_POSE_CONVENTION = "geometric-center-v1"
-"""Raw crops are unchanged; STAR shifts retain pick offsets from (size - 1) / 2.
+CROP_POSE_CONVENTION = "rotation-center-v2"
+"""Raw crops are unchanged; STAR shifts put each pick's rotation centre at (size - 1) / 2.
 
-Older cubic-crop artifacts have no marker and wrote zero initial shifts,
-discarding the rounding residual and the half-voxel offset of even boxes.
-Reading an old STAR never silently upgrades those poses.
+A pytom-match-pick coordinate is not that centre. pytom pastes its template so
+that voxel `T // 2` lands on the reported peak (`matching.py`: a centred paste,
+then `roll(flip(scores), V // 2 + 1)`), but rotates the template with voltools
+about `(T - 1) / 2`, the one point every orientation leaves in place. For an
+even template box the pick is therefore half a voxel above the particle's
+centre along every lab axis, whatever the pose: `pick_center_offset_px`.
+
+Measured before this marker existed, on 223 CZII ribosomes (template 48, crop
+48). `geometric-center-v1` took the pick as the centre and left every particle
+half a voxel off. A Dynamo search, which shares none of these conventions,
+moved them by (-0.47, -0.45, -0.48) voxels, and zero shifts alone reproduced
+that search's map: 26.70 A against 30.04 A.
+
+Reading an old STAR never silently upgrades its poses. `geometric-center-v1`
+shifts are half a voxel off for even templates. Unmarked cubic-crop artifacts
+wrote zero shifts, which is right only for an integral pick whose template and
+crop boxes have the same parity.
 """
+
+
+def pytom_template_shape(job_json: Path) -> tuple[int, ...] | None:
+    """The template box pytom actually matched with, from the job JSON it wrote.
+
+    Taken from there rather than measured off the template file because that is
+    the number the match was run with, and because a box read back from disk
+    could have been rebuilt since.
+    """
+
+    try:
+        payload = json.loads(job_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    shape = payload.get("template_shape")
+    if not isinstance(shape, list) or not shape:
+        return None
+    if not all(type(item) is int and item > 0 for item in shape):
+        return None
+    return tuple(shape)
+
+
+def pick_center_offset_px(template_box_px: int) -> float:
+    """How far a pytom pick lies above its particle's rotation centre, per axis.
+
+    Half a voxel for an even template box, where `T // 2` and `(T - 1) / 2`
+    differ; nothing for an odd one, where they coincide.
+    """
+
+    if type(template_box_px) is not int or template_box_px < 1:
+        raise ValueError(f"template box must be a positive int, got {template_box_px!r}")
+    return 0.5 if template_box_px % 2 == 0 else 0.0
 
 
 @dataclass(frozen=True)
