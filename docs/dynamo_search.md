@@ -45,14 +45,17 @@ average that contains it.
 | `--refine-levels` | 2 | levels after the first; each shrinks by `--refine-factor` (2) |
 | `--search-highpass-px`, `--search-lowpass-px` | 2, 16 | search band in Fourier pixels |
 | `--shift-range-px` | 3 | shift sphere radius, re-centred each level |
-| `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask |
+| `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask, a sphere about `(N - 1) / 2` |
 
-The defaults are Dynamo's `refine223` project on CZII: a 48-voxel box at
-10.012 A, where 16 Fourier pixels is 30 A. The band is in Fourier pixels, so a
-different box needs its own `--search-lowpass-px`. The wedge is always modelled
-and the average always compensated, so `--missing-wedge` and
-`--fourier-compensation` are refused; `--wedge-min-tilt-deg` and
-`--wedge-max-tilt-deg` override the manifests. The tilt axis must be y.
+The grid, band and shift defaults are Dynamo's `refine223` project on CZII: a
+48-voxel box at 10.012 A, where 16 Fourier pixels is 30 A. The band is in
+Fourier pixels, so a different box needs its own `--search-lowpass-px`. That
+project's mask was a 390.468 A (39 px) sphere, which
+`--alignment-mask-diameter-angstrom 390.468` reproduces voxel for voxel and the
+particle-diameter default does not. The wedge is always modelled and the
+average always compensated, so `--missing-wedge` and `--fourier-compensation`
+are refused; `--wedge-min-tilt-deg` and `--wedge-max-tilt-deg` override the
+manifests. The tilt axis must be y.
 
 ## Conventions
 
@@ -62,6 +65,13 @@ Native poses use `x_in = cN + A (x_out - cN) + s` with `cN = (N - 1) / 2`. The
 backend converts with `native_to_dynamo` / `dynamo_to_native`: `M = A.T`,
 `d = s + (A - I) (cD - cN)`, exact Euler angles (not Dynamo's 1e-4 pole
 tolerance). The kernel never sees a native pose. Even cubes only.
+
+The search mask is centred on `cN`, where native poses put the particle, not
+on the kernel's rotation centre; the kernel rotates it with the reference. A
+mask about `N / 2` sits (0.5, 0.5, 0.5) voxels off the particle. On 25 of
+refine223's particles, with Dynamo's own reference and mask diameter, that
+alone moved all 25 poses off Dynamo's, by a median of one finest-level step
+(1.25 degrees).
 
 ## QC
 
@@ -74,9 +84,10 @@ are kept, as Dynamo keeps them, and reported as a warning.
 
 ## Speed
 
-The kernel is NumPy on the CPU: about 2 s per particle and iteration at box 48
-with the defaults (the 223-particle replay took 446 s). The averaging runs on
-`--device`.
+The kernel is NumPy on the CPU, one particle after another: about 7 s of one
+core per particle and iteration at box 48 with the defaults, so 223 particles
+take about half an hour per iteration (the replay's 446 s used four worker
+processes). The averaging runs on `--device`.
 
 ## Source behavior retained deliberately
 

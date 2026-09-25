@@ -255,9 +255,13 @@ def test_exact_dynamo_angles_hold_at_and_near_the_poles(tilt):
 def test_search_mask_and_grid_reach():
     mask = core.search_mask(16, 10.0)
     assert mask[8, 8, 8] == 1 and mask[0, 0, 0] == 0
-    # A sphere about the kernel's centre N/2: symmetric under i -> N - i.
-    np.testing.assert_array_equal(mask[1:, 1:, 1:], mask[1:, 1:, 1:][::-1, ::-1, ::-1])
+    # A sphere about the particle's centre (N - 1) / 2, where native poses put
+    # it, not the kernel's N / 2: symmetric under the whole reversal i -> N - 1 - i.
+    np.testing.assert_array_equal(mask, mask[::-1, ::-1, ::-1])
     assert abs(mask.sum() - 4 / 3 * math.pi * 5**3) / mask.sum() < 0.1
+    # Dynamo's refine223 alignment mask, read from that project: 30976 voxels,
+    # the same count this sphere has about 23.5 and not about 24 (31103).
+    assert core.search_mask(48, 390.468 / 10.012).sum() == 30976
     with pytest.raises(ValueError, match="fit"):
         core.search_mask(16, 17.0)
     # refine223: 7.5 + 7.5, then 5 + 5, then 2.5 + 2.5 degrees.

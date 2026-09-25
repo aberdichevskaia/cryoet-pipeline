@@ -573,15 +573,22 @@ def dynamo_to_native(angles, shift, box: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def search_mask(box: int, diameter_px: float) -> np.ndarray:
-    """The binary alignment mask, a sphere about the kernel's own centre `N / 2`.
+    """The binary alignment mask, a sphere about the particle's centre `(N - 1) / 2`.
 
-    Dynamo thresholds its alignment mask at >0.5 before searching; a sphere is
-    what that leaves of the soft mask this pipeline would otherwise build.
+    Native poses put the particle at `cN`, so that is where the reference holds
+    it; the kernel rotates the mask with the reference, which keeps the two
+    together. A sphere about the kernel's rotation centre `N / 2` would sit
+    (0.5, 0.5, 0.5) voxels off the particle: on 25 of refine223's particles,
+    with Dynamo's reference, that alone moved all 25 poses off Dynamo's, by a
+    median of one finest-level step. refine223's own mask is this sphere at
+    39 px, voxel for voxel. Dynamo thresholds its alignment mask at >0.5 before
+    searching; a binary sphere is what that leaves.
     """
     if not 0 < diameter_px <= box:
         raise ValueError(f"alignment mask diameter {diameter_px:.2f} px must fit in a {box} px box")
-    radius = np.sqrt(np.sum(_xyz(box).astype(float) ** 2, axis=0))
-    return (radius < diameter_px / 2).astype(float)
+    offset = np.arange(box) - (box - 1) / 2
+    z, y, x = np.meshgrid(offset, offset, offset, indexing="ij")
+    return (np.sqrt(x * x + y * y + z * z) < diameter_px / 2).astype(float)
 
 
 def grid_reach_deg(settings: SearchSettings) -> float:
