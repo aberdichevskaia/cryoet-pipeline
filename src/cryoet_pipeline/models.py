@@ -1161,6 +1161,8 @@ class DynamoSearchQc(BaseModel):
     particle_counts: list[int] = Field(default_factory=list)
     """Particles taken from each stack, positionally matching `particle_stack_ids`."""
     iterations_run: int = Field(ge=1)
+    workers: int = Field(default=1, ge=1)
+    """Processes that searched particles; the poses do not depend on it."""
     cone_aperture_deg: float = Field(ge=0.0)
     cone_sampling_deg: float = Field(gt=0.0)
     inplane_range_deg: float = Field(ge=0.0)

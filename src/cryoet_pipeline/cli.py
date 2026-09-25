@@ -3078,6 +3078,15 @@ def average_particles(
             "at most half the box. Default: 16 (30 A for a 48-voxel box at 10.012 A).",
         ),
     ] = None,
+    workers: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="[dynamo-search] Processes that search particles in parallel; the poses "
+            "do not depend on it. Default: the CPUs this job was given "
+            "(SLURM_CPUS_PER_TASK, else the process's CPU affinity).",
+        ),
+    ] = None,
     particle_diameter_angstrom: Annotated[
         float | None,
         typer.Option(
@@ -3309,6 +3318,7 @@ def average_particles(
         "refine-levels": refine_levels,
         "search-highpass-px": search_highpass_px,
         "search-lowpass-px": search_lowpass_px,
+        "workers": workers,
     }
     for hint, value in dynamo_only.items():
         if value is not None and backend != "dynamo-search":
@@ -3384,6 +3394,7 @@ def average_particles(
         "refine_levels": refine_levels,
         "search_highpass_px": search_highpass_px,
         "search_lowpass_px": search_lowpass_px,
+        "workers": workers,
     }.items():
         if value is not None:
             parameters[key] = value

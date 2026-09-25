@@ -62,7 +62,11 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  2111-1307 USA
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+import multiprocessing
+import os
+from collections.abc import Iterable, Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
@@ -479,6 +483,98 @@ def refine_particle(
     return SearchResult(best_angles.copy(), best_shift.copy(), best_score, tuple(trace))
 
 
+_SINGLE_THREADED = {
+    name: "1"
+    for name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+}
+_WORKER_INPUTS: tuple | None = None
+
+
+def available_cpus() -> int:
+    """The CPUs this process was given: SLURM's allocation, else its affinity mask.
+
+    SLURM first because a node that does not bind tasks to cores reports every
+    core in the affinity mask, and a job would then start one process per core
+    of a machine it shares.
+    """
+    allocated = os.environ.get("SLURM_CPUS_PER_TASK", "")
+    if allocated.isdigit() and int(allocated) > 0:
+        return int(allocated)
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+@contextmanager
+def _single_threaded_children() -> Iterator[None]:
+    """Spawned workers read these at start-up; N workers should be N cores."""
+    saved = {name: os.environ.get(name) for name in _SINGLE_THREADED}
+    os.environ.update(_SINGLE_THREADED)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _initialize_worker(reference, mask, settings) -> None:
+    global _WORKER_INPUTS
+    _WORKER_INPUTS = (reference, mask, settings)
+
+
+def _search(task, reference, mask, settings):
+    result = refine_particle(task[0], reference, mask, *task[1:], settings)
+    return result.angles, result.shift, result.correlation
+
+
+def _search_task(task):
+    return _search(task, *_WORKER_INPUTS)
+
+
+def search_particles(particles, reference, mask, starts, tilt_ranges, settings, *, workers=1):
+    """`refine_particle` for every particle against one fixed reference, in order.
+
+    The reference does not change until every particle is searched, so the
+    particles are independent and can be shared among processes. Each is still
+    searched by the same code on the same float64 inputs, and nothing in the
+    search sums across threads (the rotation is elementwise, NumPy's FFT is
+    single-threaded), so the result does not depend on `workers`. Workers are
+    spawned, not forked, because a fork after torch has started its thread pools
+    can deadlock; a script that reaches this with `workers > 1` therefore needs
+    an `if __name__ == "__main__":` guard, as spawned workers import it again.
+    """
+    tasks = [
+        (particle, angles, shift, tilt_range)
+        for particle, (angles, shift), tilt_range in zip(
+            particles, starts, tilt_ranges, strict=True
+        )
+    ]
+    if workers < 1:
+        raise ValueError(f"workers must be at least 1, got {workers}")
+    if workers == 1 or len(tasks) < 2:
+        return [_search(task, reference, mask, settings) for task in tasks]
+    workers = min(workers, len(tasks))
+    with (
+        _single_threaded_children(),
+        ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_initialize_worker,
+            initargs=(reference, mask, settings),
+        ) as pool,
+    ):
+        return list(pool.map(_search_task, tasks, chunksize=max(1, len(tasks) // (4 * workers))))
+
+
 def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_ranges, mask):
     """Raw-data average and Fourier compensation; no search/interpolation reuse.
 
@@ -657,6 +753,7 @@ class DynamoSearchRefinementBackend:
             if context.parameters.get(key) is not None:
                 raise ValueError(f"dynamo-search does not read {key}; start from the stack's poses")
         num_iterations = _positive_int_parameter(context, "num_iterations", default=1)
+        workers = _positive_int_parameter(context, "workers", default=available_cpus())
         settings = SearchSettings(
             cone_aperture=_nonnegative_float_parameter(
                 context, "cone_range_deg", default=DEFAULT_SETTINGS.cone_aperture
@@ -755,19 +852,18 @@ class DynamoSearchRefinementBackend:
         for iteration in range(num_iterations):
             fixed = reference.detach().cpu().numpy().astype(np.float64)
             before = [matrix.copy() for matrix in matrices], [shift.copy() for shift in shifts]
-            for index, geometry in enumerate(geometries):
-                angles, shift = native_to_dynamo(matrices[index], shifts[index], box)
-                result = refine_particle(
-                    raw[index],
-                    fixed,
-                    mask,
-                    angles,
-                    shift,
-                    (geometry.min_tilt_deg, geometry.max_tilt_deg),
-                    settings,
-                )
-                matrices[index], shifts[index] = dynamo_to_native(result.angles, result.shift, box)
-                correlations[index] = result.correlation
+            results = search_particles(
+                raw,
+                fixed,
+                mask,
+                [native_to_dynamo(m, s, box) for m, s in zip(matrices, shifts, strict=True)],
+                [(g.min_tilt_deg, g.max_tilt_deg) for g in geometries],
+                settings,
+                workers=workers,
+            )
+            for index, (angles, shift, correlation) in enumerate(results):
+                matrices[index], shifts[index] = dynamo_to_native(angles, shift, box)
+                correlations[index] = correlation
             reference, coverage = _compensated_average(
                 volumes, matrices, shifts, compensation, geometries, device
             )
@@ -841,6 +937,7 @@ class DynamoSearchRefinementBackend:
             particle_count=len(records),
             particle_counts=combined.counts,
             iterations_run=num_iterations,
+            workers=workers,
             cone_aperture_deg=settings.cone_aperture,
             cone_sampling_deg=settings.cone_sampling,
             inplane_range_deg=settings.inplane_range,
@@ -895,6 +992,7 @@ class DynamoSearchRefinementBackend:
                 "num_classes": 1,
                 "particle_count": len(records),
                 "iterations_run": num_iterations,
+                "workers": workers,
                 "cone_aperture_deg": settings.cone_aperture,
                 "cone_sampling_deg": settings.cone_sampling,
                 "inplane_range_deg": settings.inplane_range,

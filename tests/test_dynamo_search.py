@@ -2,6 +2,7 @@
 
 import json
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -414,6 +415,44 @@ def test_dynamo_search_holds_true_poses_to_its_information_limit(tmp_path):
     )
 
 
+def test_particles_searched_in_parallel_land_exactly_where_one_process_puts_them(
+    tmp_path, monkeypatch
+):
+    """The same STAR bytes, map and QC from three processes as from one."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "7")
+    truth, perturbed = _true_and_perturbed(6, 10.0)
+    runs = {}
+    for workers in (1, 3):
+        folder = tmp_path / f"workers-{workers}"
+        folder.mkdir()
+        stack = _wedged_particles(folder, perturbed, truth=truth)
+        average, qc = _run(folder, stack, workers=workers)
+        runs[workers] = (
+            Path(average.parameters["metadata_path"]).read_bytes(),
+            mrcfile.read(average.path),
+            json.loads(qc.path.read_text()),
+        )
+    (star, volume, report), (parallel_star, parallel_volume, parallel_report) = runs[1], runs[3]
+    assert parallel_star == star
+    np.testing.assert_array_equal(parallel_volume, volume)
+    assert (report["workers"], parallel_report["workers"]) == (1, 3)
+    assert parallel_report == {**report, "workers": 3}
+    assert report["pose_change"]["rotation_deg_mean"] > 1.0  # the search did move them
+    assert os.environ["OMP_NUM_THREADS"] == "7"  # the workers' setting did not leak
+
+
+def test_worker_default_is_the_jobs_allocation(monkeypatch):
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "3")
+    assert core.available_cpus() == 3
+    for value in ("", "0", "two"):
+        monkeypatch.setenv("SLURM_CPUS_PER_TASK", value)
+        assert core.available_cpus() >= 1
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK")
+    assert core.available_cpus() >= 1
+    with pytest.raises(ValueError, match="at least 1"):
+        core.search_particles([], None, None, [], [], core.DEFAULT_SETTINGS, workers=0)
+
+
 @pytest.mark.parametrize(
     ("parameters", "match"),
     [
@@ -467,15 +506,23 @@ def _cli(tmp_path, monkeypatch, *arguments):
 def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path, monkeypatch):
     result, captured = _cli(tmp_path / "default", monkeypatch)
     assert isinstance(captured["backend"], core.DynamoSearchRefinementBackend), result.output
-    for key in ("num_iterations", "cone_range_deg", "shift_range_px", "refine_levels"):
+    for key in ("num_iterations", "cone_range_deg", "shift_range_px", "refine_levels", "workers"):
         assert key not in captured["parameters"]
     result, captured = _cli(tmp_path / "cone", monkeypatch, "--backend", "cone-search")
     assert "cone_range_deg" not in captured["parameters"], result.output
     result, captured = _cli(
-        tmp_path / "given", monkeypatch, "--cone-range-deg", "12", "--refine-levels", "1"
+        tmp_path / "given",
+        monkeypatch,
+        "--cone-range-deg",
+        "12",
+        "--refine-levels",
+        "1",
+        "--workers",
+        "2",
     )
     assert captured["parameters"]["cone_range_deg"] == 12.0
     assert captured["parameters"]["refine_levels"] == 1
+    assert captured["parameters"]["workers"] == 2
 
 
 @pytest.mark.parametrize(
@@ -485,6 +532,8 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
         ("--num-classes", "2"),
         ("--backend", "cone-search", "--refine-levels", "1"),
         ("--backend", "fft-refinement", "--search-lowpass-px", "8"),
+        ("--backend", "cone-search", "--workers", "2"),
+        ("--workers", "0"),
     ],
 )
 def test_cli_refuses_options_the_chosen_backend_would_not_read(tmp_path, monkeypatch, arguments):

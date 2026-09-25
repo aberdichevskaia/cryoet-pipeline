@@ -53,6 +53,7 @@ average that contains it.
 | `--search-highpass-px`, `--search-lowpass-px` | 2, 16 | search band in Fourier pixels |
 | `--shift-range-px` | 3 | shift sphere radius, re-centred each level |
 | `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask, a sphere about `(N - 1) / 2` |
+| `--workers` | the job's CPUs | processes searching particles in parallel; the poses do not depend on it |
 
 The grid, band and shift defaults are Dynamo's `refine223` project on CZII: a
 48-voxel box at 10.012 A, where 16 Fourier pixels is 30 A. The band is in
@@ -97,9 +98,18 @@ free core, 7.4 s while it was busy), about Dynamo's own 4.4 core-seconds
 (refine223: 246 s of search on four processes). Per particle that is 221
 candidate orientations, each a rotation of the reference and mask and about
 seven 48^3 FFTs. A cluster CPU core is slower: 223 particles took 2195 s on
-`cpusrv19`, 9.8 s each. The backend runs one particle after another, so that
-is the time per iteration where Dynamo's four processes took four minutes.
-The averaging runs on `--device`.
+`cpusrv19`, 9.8 s each, one after another.
+
+So the particles are searched in parallel, as Dynamo's CPU project does it:
+the reference stays fixed until all of them are done, so each is independent,
+and `--workers` processes share them. The default is the CPUs the job was
+given, `SLURM_CPUS_PER_TASK` or else the process's affinity mask. Every
+particle is still searched by the same code on the same float64 inputs, and
+nothing in the search sums across threads, so the poses do not depend on the
+worker count; a test holds the STAR to the same bytes. Workers are spawned, so
+a script that calls the backend directly needs the usual
+`if __name__ == "__main__":` guard; the CLI has one. The averaging runs on
+`--device`.
 
 ## Source behavior retained deliberately
 
