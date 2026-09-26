@@ -98,7 +98,7 @@ free core, 7.4 s while it was busy), about Dynamo's own 4.4 core-seconds
 (refine223: 246 s of search on four processes). Per particle that is 221
 candidate orientations, each a rotation of the reference and mask and about
 seven 48^3 FFTs. A cluster CPU core is slower: 223 particles took 2195 s on
-`cpusrv19`, 9.8 s each, one after another.
+`cpusrv19`, 9.8 s each, one after another, and 373 s in 16 processes.
 
 So the particles are searched in parallel, as Dynamo's CPU project does it:
 the reference stays fixed until all of them are done, so each is independent,
