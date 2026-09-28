@@ -45,7 +45,9 @@ The first reference is that same average of the initial poses, or
 a reference Dynamo has already transformed, which would be prepared twice.
 Without step 1 the search differed from Dynamo's on every one of 25 refine223
 particles (median 1.25 degrees, one finest-level step); the module parity runs
-before 2026-09-28 fed Dynamo's transformed reference and are unaffected. `--num-iterations` defaults to 1, the protocol that was
+before 2026-09-28 fed Dynamo's transformed reference and are unaffected, and
+parity v3, from Dynamo's raw template with this preparation, wrote the same
+STAR byte for byte. `--num-iterations` defaults to 1, the protocol that was
 validated. K = 1, and not gold-standard: every particle is scored against an
 average that contains it.
 
