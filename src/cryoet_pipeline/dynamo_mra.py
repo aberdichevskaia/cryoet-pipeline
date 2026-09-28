@@ -1,0 +1,286 @@
+"""Dynamo 1.1.511's multireference alignment (MRA), ported for replay before integration.
+
+Standalone, as the search kernel was before it became `backends/dynamo_search`:
+nothing in the pipeline calls this yet. It is to be checked against a real
+Dynamo MRA project first (benchmark `DYNAMO_MRA.md`), then wired in.
+
+What one iteration does, read from Dynamo's CPU project path
+(`+dpkmulticore/run.m`, `+dpkproject/preprocessReferences.m`,
+`dynamo_plugin_post_multireference_tutorial.m`, `dynamo_average.m`):
+
+1. Every live channel's starting reference is prepared as the iteration setup
+   prepares it: the project bandpass, then normalization over the alignment mask
+   thresholded at 0.5 (`prepare_reference`).
+2. Every live channel searches every particle, each channel from its own poses
+   of the previous iteration, with the ordinary search (`search_particles`).
+3. Every particle goes to the channel with the highest search CC, the lowest
+   channel number on a tie (`assign`).
+4. Every channel that received particles averages them at its own poses the
+   way the MRA plugin calls `dynamo_average` (`average_class`); that average is
+   the channel's next reference. A channel that received none dies.
+
+Scope, refused rather than guessed: the classification mask equal to the
+alignment mask (so the CC compared is the search's own, table column 10), the
+search kernel's own scope (`use_CC = 1`, `localnc = 1`, C1, no resizing),
+no thresholding, `fmin` counting particles (no `fminFraction`), no compensation
+smoothing, references updated from the weighted average. Dynamo can also stop
+early when every reference saturates; that check is not ported.
+
+Numerical adaptation of the Dynamo routines named above. The BSD option of the
+following original joint notice is selected for these adaptations; this does
+not relicense any other Dynamo component.
+
+Author: Daniel Castano-Diez, April 2012 (daniel.castano@unibas.ch)
+Copyright (c) 2012 Daniel Castano-Diez and Henning Stahlberg
+Center for Cellular Imaging and Nano Analytics
+Biocenter, University of Basel
+
+This software is issued under a joint BSD/GNU license. You may use the
+source code in this file under either license. However, note that the
+complete Dynamo software packages have some GPL dependencies,
+so you are responsible for compliance with the licenses of these packages
+if you opt to use BSD licensing. The warranty disclaimer below holds
+in either instance.
+
+This complete copyright notice must be included in any revised version of the
+source code. Additional authorship citations may be added, but existing
+author citations must be preserved.
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  2111-1307 USA
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+import numpy as np
+
+from cryoet_pipeline.backends.dynamo_search import (
+    DEFAULT_SETTINGS,
+    SearchSettings,
+    _cube,
+    _triple,
+    apply_filter,
+    bandpass,
+    normalize_roi,
+    resample,
+    search_particles,
+    wedge,
+)
+
+
+@dataclass(frozen=True)
+class ClassAverage:
+    average: np.ndarray
+    """Compensated, then normalized over the mask: the channel's next reference."""
+    raw: np.ndarray
+    fweight: np.ndarray
+    fmask: np.ndarray
+    threshold: float
+    members: int
+
+
+@dataclass(frozen=True)
+class ChannelSearch:
+    angles: np.ndarray
+    shifts: np.ndarray
+    correlations: np.ndarray
+
+
+@dataclass(frozen=True)
+class MraIteration:
+    computed: list[int]
+    searches: dict[int, ChannelSearch]
+    assignment: np.ndarray
+    surviving: list[int]
+    averages: dict[int, ClassAverage]
+
+
+def prepare_reference(template, mask, settings: SearchSettings = DEFAULT_SETTINGS) -> np.ndarray:
+    """What the iteration setup makes of a starting reference before the search uses it.
+
+    `dynamo_database_volume_process(template, 'template', ..., {'sym','dim','band',
+    'norm'})`: with C1 and no resizing, the project bandpass that particles also
+    get in database preprocessing, then normalization over the project's `mask`
+    item, the alignment mask thresholded at 0.5. On refine223 this rebuilds
+    `starting_reference_transformed_ref_001_ite_0001.em` from the project's
+    `template_initial_ref_001.em` to 2.4e-8 relative L2, float32 storage;
+    normalizing over the soft mask's nonzero voxels instead leaves 0.33.
+    """
+    t = _cube(template)
+    return normalize_roi(
+        apply_filter(t, bandpass(len(t), settings.high, settings.low)), np.asarray(mask) > 0.5
+    )
+
+
+def fweight_divide(volume, fweight, threshold: float) -> np.ndarray:
+    """`dynamo_fweight_divide`: divide the centred spectrum by the weight where the
+    weight reaches `threshold`, and zero every other component."""
+    spectrum = np.fft.fftshift(np.fft.fftn(np.asarray(volume, dtype=float)))
+    fweight = np.asarray(fweight, dtype=float)
+    keep = np.isfinite(fweight) & (fweight >= threshold)
+    divided = np.zeros_like(spectrum)
+    np.divide(spectrum, fweight, out=divided, where=keep)
+    return np.fft.ifftn(np.fft.ifftshift(divided)).real
+
+
+def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 1) -> ClassAverage:
+    """A class average as the MRA plugin asks `dynamo_average` for it.
+
+    Per particle, the path of the project's own averaging, which the search
+    kernel's `average_particles` reproduces (replay: 8e-5 against Dynamo): the
+    inverse pose, out-of-box voxels zeroed, normalization over the mask's nonzero
+    voxels, zeroed again, and the table wedge rotated with the implicit sphere
+    for the Fourier weight. Unlike that `fsc = true` assembly: one sum over all
+    members in their given order (ascending tags in Dynamo), no odd/even halves;
+    the compensation threshold `fmin / N` of the max-normalized weight, not 0.1;
+    and the compensated average normalized over the mask once more.
+    """
+    nmask = _cube(nmask)
+    rows = list(zip(particles, angles, shifts, tilt_ranges, strict=True))
+    if not rows or np.any(nmask < 0) or not np.any(nmask):
+        raise ValueError("a class needs at least one particle and a nonnegative, nonempty mask")
+    if type(fmin) is not int or fmin < 1:
+        raise ValueError(f"fmin counts particles and must be a positive integer, got {fmin!r}")
+    total = np.zeros(nmask.shape)
+    contributions = np.zeros(nmask.shape)
+    weights = np.zeros(nmask.shape)
+    for particle, angle, shift, tilts in rows:
+        if _cube(particle).shape != nmask.shape:
+            raise ValueError("particle and mask shapes differ")
+        inverse_angles = -_triple(angle)[::-1]
+        aligned, valid = resample(particle, inverse_angles, -_triple(shift))
+        aligned = normalize_roi(aligned, nmask)
+        aligned[~valid] = 0
+        total += aligned
+        contributions += valid
+        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True)
+        weights += rotated_wedge
+    count = len(rows)
+    # explicitBalanceNan: every voxel divided by the particles that really reached it.
+    raw = np.divide(total, contributions, out=np.zeros_like(total), where=contributions > 0)
+    raw = normalize_roi(raw, nmask)
+    fweight = weights / weights.max()
+    threshold = fmin / count if fmin < count else 1 / count
+    average = normalize_roi(fweight_divide(raw, fweight, threshold), nmask)
+    return ClassAverage(
+        average, raw, fweight, (fweight >= threshold).astype(float), threshold, count
+    )
+
+
+def assign(correlations: Mapping[int, np.ndarray]) -> np.ndarray:
+    """Each particle's channel: the highest CC, the lowest channel number on a tie.
+
+    The plugin fills a score row over the channels in order and takes MATLAB's
+    `max`, whose first maximum is the lowest channel; `argmax` over the sorted
+    channels is that.
+    """
+    channels = sorted(correlations)
+    if not channels:
+        raise ValueError("no live channel to assign particles to")
+    scores = np.stack([np.asarray(correlations[k], dtype=float) for k in channels])
+    if not np.isfinite(scores).all():
+        raise ValueError("every live channel needs a finite CC for every particle")
+    return np.asarray(channels)[np.argmax(scores, axis=0)]
+
+
+def mra_iteration(
+    particles: Sequence[np.ndarray],
+    references: Mapping[int, np.ndarray],
+    starts: Mapping[int, tuple[np.ndarray, np.ndarray]],
+    tilt_ranges: Sequence[tuple[float, float]],
+    mask,
+    settings: SearchSettings = DEFAULT_SETTINGS,
+    *,
+    fmin: int = 1,
+    workers: int = 1,
+) -> MraIteration:
+    """One iteration: every live channel searches every particle, then they swap.
+
+    `mask` is the project's soft mask, used as Dynamo uses it: thresholded at
+    0.5 for the search and the reference normalization, its nonzero voxels for
+    the class averages' normalization.
+    """
+    if set(references) != set(starts):
+        raise ValueError("every live channel needs a reference and starting poses")
+    binary = (np.asarray(mask) > 0.5).astype(float)
+    computed = sorted(references)
+    searches = {}
+    for k in computed:
+        prepared = prepare_reference(references[k], mask, settings)
+        angles, shifts = (np.asarray(v, dtype=float) for v in starts[k])
+        results = search_particles(
+            particles,
+            prepared,
+            binary,
+            list(zip(angles, shifts, strict=True)),
+            tilt_ranges,
+            settings,
+            workers=workers,
+        )
+        searches[k] = ChannelSearch(
+            np.array([r[0] for r in results]),
+            np.array([r[1] for r in results]),
+            np.array([r[2] for r in results]),
+        )
+    assignment = assign({k: searches[k].correlations for k in computed})
+    surviving = sorted({int(k) for k in assignment})
+    averages = {}
+    for k in surviving:
+        members = np.flatnonzero(assignment == k)
+        averages[k] = average_class(
+            [particles[i] for i in members],
+            searches[k].angles[members],
+            searches[k].shifts[members],
+            [tilt_ranges[i] for i in members],
+            mask,
+            fmin=fmin,
+        )
+    return MraIteration(computed, searches, assignment, surviving, averages)
+
+
+def run_mra(
+    particles: Sequence[np.ndarray],
+    references: Mapping[int, np.ndarray],
+    angles: np.ndarray,
+    shifts: np.ndarray,
+    tilt_ranges: Sequence[tuple[float, float]],
+    mask,
+    settings: SearchSettings = DEFAULT_SETTINGS,
+    *,
+    iterations: int,
+    fmin: int = 1,
+    workers: int = 1,
+) -> list[MraIteration]:
+    """`iterations` MRA iterations from one starting table shared by every channel.
+
+    Each channel carries its own poses for every particle into the next
+    iteration, members or not, as each channel's refined table becomes its next
+    starting table in Dynamo; its class average becomes its next reference.
+    """
+    if iterations < 1:
+        raise ValueError("at least one iteration")
+    starts = {k: (np.asarray(angles, float), np.asarray(shifts, float)) for k in references}
+    references = dict(references)
+    history = []
+    for _ in range(iterations):
+        step = mra_iteration(
+            particles, references, starts, tilt_ranges, mask, settings, fmin=fmin, workers=workers
+        )
+        history.append(step)
+        references = {k: step.averages[k].average for k in step.surviving}
+        starts = {k: (step.searches[k].angles, step.searches[k].shifts) for k in step.surviving}
+    return history
