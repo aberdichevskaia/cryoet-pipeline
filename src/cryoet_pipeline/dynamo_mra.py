@@ -10,7 +10,7 @@ What one iteration does, read from Dynamo's CPU project path
 
 1. Every live channel's starting reference is prepared as the iteration setup
    prepares it: the project bandpass, then normalization over the alignment mask
-   thresholded at 0.5 (`prepare_reference`).
+   thresholded at 0.5 (the kernel's `prepare_reference`).
 2. Every live channel searches every particle, each channel from its own poses
    of the previous iteration, with the ordinary search (`search_particles`).
 3. Every particle goes to the channel with the highest search CC, the lowest
@@ -73,9 +73,8 @@ from cryoet_pipeline.backends.dynamo_search import (
     SearchSettings,
     _cube,
     _triple,
-    apply_filter,
-    bandpass,
     normalize_roi,
+    prepare_reference,
     resample,
     search_particles,
     wedge,
@@ -107,23 +106,6 @@ class MraIteration:
     assignment: np.ndarray
     surviving: list[int]
     averages: dict[int, ClassAverage]
-
-
-def prepare_reference(template, mask, settings: SearchSettings = DEFAULT_SETTINGS) -> np.ndarray:
-    """What the iteration setup makes of a starting reference before the search uses it.
-
-    `dynamo_database_volume_process(template, 'template', ..., {'sym','dim','band',
-    'norm'})`: with C1 and no resizing, the project bandpass that particles also
-    get in database preprocessing, then normalization over the project's `mask`
-    item, the alignment mask thresholded at 0.5. On refine223 this rebuilds
-    `starting_reference_transformed_ref_001_ite_0001.em` from the project's
-    `template_initial_ref_001.em` to 2.4e-8 relative L2, float32 storage;
-    normalizing over the soft mask's nonzero voxels instead leaves 0.33.
-    """
-    t = _cube(template)
-    return normalize_roi(
-        apply_filter(t, bandpass(len(t), settings.high, settings.low)), np.asarray(mask) > 0.5
-    )
 
 
 def fweight_divide(volume, fweight, threshold: float) -> np.ndarray:

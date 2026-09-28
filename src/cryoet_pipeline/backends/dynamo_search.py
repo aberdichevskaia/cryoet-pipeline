@@ -668,6 +668,27 @@ def dynamo_to_native(angles, shift, box: int) -> tuple[np.ndarray, np.ndarray]:
     return a, np.asarray(shift, dtype=float) - (a - np.eye(3)) @ _dynamo_centre_offset(box)
 
 
+def prepare_reference(template, mask, settings: SearchSettings = DEFAULT_SETTINGS) -> np.ndarray:
+    """What Dynamo's iteration setup makes of a reference before its search uses it.
+
+    `+dpkproject/preprocessReferences.m` runs `dynamo_database_volume_process(
+    template, 'template', ..., {'sym','dim','band','norm'})` on every starting
+    reference, the first and every rebuilt one. With C1 and no resizing that is
+    the project bandpass, the one particles also get in database preprocessing,
+    then normalization over the project's `mask` item, the alignment mask
+    thresholded at 0.5. On refine223 it rebuilds
+    `starting_reference_transformed_ref_001_ite_0001.em` from the project's
+    `template_initial_ref_001.em` to 2.4e-8 relative L2 (float32 storage);
+    normalizing over the soft mask's nonzero voxels instead leaves 0.33. Left
+    out, it moved all 25 of 25 refine223 poses off Dynamo's, by a median of one
+    finest-level step.
+    """
+    t = _cube(template)
+    return normalize_roi(
+        apply_filter(t, bandpass(len(t), settings.high, settings.low)), np.asarray(mask) > 0.5
+    )
+
+
 def search_mask(box: int, diameter_px: float) -> np.ndarray:
     """The binary alignment mask, a sphere about the particle's centre `(N - 1) / 2`.
 
@@ -850,7 +871,11 @@ class DynamoSearchRefinementBackend:
         coverage = None
         iteration_summaries: list[dict[str, float]] = []
         for iteration in range(num_iterations):
-            fixed = reference.detach().cpu().numpy().astype(np.float64)
+            # Prepared as Dynamo prepares every starting reference, the first and
+            # every rebuilt one, before the search sees it.
+            fixed = prepare_reference(
+                reference.detach().cpu().numpy().astype(np.float64), mask, settings
+            )
             before = [matrix.copy() for matrix in matrices], [shift.copy() for shift in shifts]
             results = search_particles(
                 raw,

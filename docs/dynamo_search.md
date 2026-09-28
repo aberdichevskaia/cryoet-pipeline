@@ -29,16 +29,23 @@ can repair a systematic pose error. Template FSC there is reference-biased.
 
 ## What one iteration does
 
-1. Every particle is searched against the current reference, held fixed until
-   all particles are done: a multilevel cone and in-plane grid around its pose,
-   a moving-mask local NCC, and a shift search inside a sphere re-centred on
-   each level's winner.
-2. The reference is rebuilt from the raw particles at the new poses with
+1. The current reference is prepared as Dynamo's iteration setup prepares
+   every starting reference (`+dpkproject/preprocessReferences.m`): the search
+   bandpass, then normalization over the search mask (`prepare_reference`).
+2. Every particle is searched against it, held fixed until all particles are
+   done: a multilevel cone and in-plane grid around its pose, a moving-mask
+   local NCC, and a shift search inside a sphere re-centred on each level's
+   winner.
+3. The reference is rebuilt from the raw particles at the new poses with
    `subtomogram._compensated_reference`: each particle's wedge at its own tilt
    range, frequencies divided by how many particles measured them.
 
 The first reference is that same average of the initial poses, or
-`--initial-reference`. `--num-iterations` defaults to 1, the protocol that was
+`--initial-reference`: a raw map, as Dynamo's `file_template_initial` is, never
+a reference Dynamo has already transformed, which would be prepared twice.
+Without step 1 the search differed from Dynamo's on every one of 25 refine223
+particles (median 1.25 degrees, one finest-level step); the module parity runs
+before 2026-09-28 fed Dynamo's transformed reference and are unaffected. `--num-iterations` defaults to 1, the protocol that was
 validated. K = 1, and not gold-standard: every particle is scored against an
 average that contains it.
 

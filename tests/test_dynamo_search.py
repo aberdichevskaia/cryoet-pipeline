@@ -441,6 +441,41 @@ def test_particles_searched_in_parallel_land_exactly_where_one_process_puts_them
     assert os.environ["OMP_NUM_THREADS"] == "7"  # the workers' setting did not leak
 
 
+def test_the_backend_searches_the_reference_as_dynamo_prepares_it(tmp_path, monkeypatch):
+    """Every iteration's reference, the given one and the rebuilt one, is prepared first."""
+    truth, _ = _true_and_perturbed(4, 0.0)
+    stack = _wedged_particles(tmp_path, truth)
+    reference = tmp_path / "reference.mrc"
+    with mrcfile.new(reference) as handle:
+        handle.set_data(_granular_phantom(24).numpy())
+    seen = []
+    real = core.search_particles
+
+    def spy(particles, fixed, mask, *args, **kwargs):
+        seen.append((fixed.copy(), mask.copy(), kwargs))
+        return real(particles, fixed, mask, *args, **kwargs)
+
+    monkeypatch.setattr(core, "search_particles", spy)
+    _run(tmp_path, stack, num_iterations=2, initial_reference_path=str(reference), workers=1)
+    assert len(seen) == 2
+    settings = core.SearchSettings(
+        cone_aperture=10,
+        cone_sampling=5,
+        inplane_range=10,
+        inplane_sampling=5,
+        refine=1,
+        low=11,
+        shift_limit=1.5,
+    )
+    first, mask, _ = seen[0]
+    expected = core.prepare_reference(
+        _granular_phantom(24).numpy().astype(np.float64), mask, settings
+    )
+    np.testing.assert_allclose(first, expected, atol=1e-10)
+    rebuilt = seen[1][0][mask > 0.5]
+    assert abs(rebuilt.mean()) < 1e-10 and rebuilt.std(ddof=1) == pytest.approx(1)
+
+
 def test_worker_default_is_the_jobs_allocation(monkeypatch):
     monkeypatch.setenv("SLURM_CPUS_PER_TASK", "3")
     assert core.available_cpus() == 3
