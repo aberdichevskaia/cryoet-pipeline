@@ -8,10 +8,11 @@ What Dynamo's project-mode chain does, read from `dynamo_ccmatrix_compute.m`,
 `dynamo_ccmatrix_assemble.m`, `dynamo_PCA_Xmatrix.m`, `dynamo_PCA.m`,
 `dynamo_kmeans.m` and the `dynamo_particle.m` actions they call:
 
-1. Every particle is brought into the reference frame by its table pose. This is
-   the inverse shift-rotate of the averaging. Voxels the rotation leaves
-   undefined become 0, and the project band then filters the particle
-   (`aligned`).
+1. Every particle is brought into the reference frame by its table pose: the
+   inverse shift-rotate of the averaging, but with `dynamo_shift_rot`'s default
+   `rotateIntoMask`, which also leaves undefined every voxel outside the sphere
+   of radius N/2. Undefined voxels become 0, and the project band then filters
+   the particle (`aligned`).
 2. Its Fourier sampling is the table's single-axis wedge, evaluated analytically
    in the particle's rotated frame (`rotated_wedge`).
 3. Every pair is compared on the frequencies both of them sampled: the product
@@ -141,13 +142,17 @@ def rotated_wedge(size, tilt_range, angles) -> np.ndarray:
 def aligned(particle, angles, shift, high, low, *, undefined: str = "zero") -> np.ndarray:
     """`dynamo_particle` with `align`, `nan` and `band`, in that order.
 
-    The inverse pose, as the averaging applies it. Then the voxels it leaves
-    undefined become 0 (`undefined="zero"`, the CC matrix and the Xmatrix) or the
-    particle's minimum (`"min"`, the coefficients). Last comes the band.
+    The inverse pose, as the averaging applies it, except for the masking.
+    `dynamo_particle` aligns by `dynamo_shift_rot` with its default
+    `rotateIntoMask`; the averaging's `sharpShiftRot` turns that off. So besides
+    the eight-corner support, every voxel outside the sphere of radius N/2 is
+    undefined: the kernel's `sphere` rule, as for `dynamo_rot`. The undefined
+    voxels then become 0 (`undefined="zero"`, the CC matrix and the Xmatrix) or
+    the particle's minimum (`"min"`, the coefficients). Last comes the band.
     """
     if undefined not in {"zero", "min"}:
         raise ValueError("undefined voxels become 'zero' or 'min'")
-    volume, valid = resample(particle, -_triple(angles)[::-1], -_triple(shift))
+    volume, valid = resample(particle, -_triple(angles)[::-1], -_triple(shift), sphere=True)
     if not valid.any():
         raise ValueError("the pose leaves no voxel of the particle defined")
     if undefined == "min":
