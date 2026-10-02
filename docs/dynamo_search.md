@@ -153,7 +153,12 @@ averages with the pipeline's reducer instead.
    that case Dynamo returns `pv(1) - 1` unchecked, and in single precision this
    can be complex. Under mode 2 the next level rounds it into the sphere's
    centre and `circshift` aborts the project (CZII MRA, iteration 3, tag 868:
-   coarse z = 6.00 + 0.60i). Mode 1 recentres nothing, so it cannot abort there.
+   coarse z = 6.00 + 0.60i). Mode 1 recentres nothing, so the search cannot
+   abort there. A complex value from the last level still makes the
+   iteration's whole table complex, though. Dynamo's binary table writer then
+   stores the interleaved buffer as if it were real, and the assembly aborts on
+   the scrambled table (CZII MRA arm B under mode 1, iteration 5, tag 696:
+   y = -1 + 2.10i).
    Near the fit's own singularity (a true offset of 0.293 voxel for refine223
    tags 53 and 170), Dynamo's single-precision arithmetic also returns finite
    nonsense that can win the search: integer offsets, and scores that are
