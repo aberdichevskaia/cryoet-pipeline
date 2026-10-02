@@ -3595,6 +3595,139 @@ def compute_fsc_command(
     typer.echo(f"QC status: {report.status.value}")
 
 
+def _parse_map_spec(spec: str) -> tuple[str, Path]:
+    """`LABEL=PATH`, or a bare `PATH` labelled by its stem; `\\n` in a label breaks the line."""
+
+    label, separator, path = spec.partition("=")
+    if not separator:
+        return Path(spec).stem, Path(spec)
+    if not label or not path:
+        raise typer.BadParameter(f"expected LABEL=PATH, got {spec!r}", param_hint="map")
+    return label.replace("\\n", "\n"), Path(path)
+
+
+@app.command("compare-maps")
+def compare_maps_command(
+    map_specs: Annotated[
+        list[str],
+        typer.Option(
+            "--map",
+            help="A map to show, as LABEL=PATH (or just PATH, labelled by its file name). "
+            "Repeat once per column, in display order. '\\n' in a label starts a new line.",
+        ),
+    ],
+    out: Annotated[Path, typer.Option(help="Output image; the format follows the suffix.")],
+    protein_bright: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--protein-bright",
+            help="Label (or path) of a map whose protein is positive — EMDB maps and "
+            "simulated templates usually are. Inverted so protein is dark everywhere. "
+            "Repeatable.",
+        ),
+    ] = None,
+    planes: Annotated[
+        str, typer.Option(help="Comma-separated central planes: any of xy, xz, yz.")
+    ] = "xy,xz",
+    low_pass: Annotated[
+        list[float] | None,
+        typer.Option(
+            "--low-pass",
+            help="Repeat every plane low-passed at this resolution, angstrom. Repeatable.",
+        ),
+    ] = None,
+    sphere_diameter: Annotated[
+        float | None,
+        typer.Option(
+            help="Diameter of the normalisation sphere, angstrom (default: inscribed in the box)."
+        ),
+    ] = None,
+    sigma_min: Annotated[float, typer.Option(help="Black point, in sigma.")] = -3.0,
+    sigma_max: Annotated[float, typer.Option(help="White point, in sigma.")] = 1.5,
+    slab: Annotated[
+        float, typer.Option(help="Slab thickness averaged into each section, voxels.")
+    ] = 1.0,
+    title: Annotated[
+        str | None, typer.Option(help="Figure title (default: describes the display).")
+    ] = None,
+    voxel_size: Annotated[
+        float | None,
+        typer.Option(
+            help="Voxel size, angstrom, for maps whose header has none (Dynamo writes 0). "
+            "Maps that do carry one must agree with it."
+        ),
+    ] = None,
+) -> None:
+    """Show several maps (template, averages, classes) sliced and scaled identically."""
+
+    from cryoet_pipeline.map_comparison import ComparedMap, load_map, render_map_comparison
+
+    parsed = [_parse_map_spec(spec) for spec in map_specs]
+    bright = {name.replace("\\n", "\n") for name in protein_bright or []}
+    known = {label for label, _ in parsed} | {str(path) for _, path in parsed}
+    unknown = bright - known
+    if unknown:
+        raise typer.BadParameter(
+            f"--protein-bright names no --map: {', '.join(sorted(unknown))}",
+            param_hint="protein_bright",
+        )
+
+    loaded = [(label, path, *load_map(path)) for label, path in parsed]
+    headers = [(path, size) for _, path, _, size in loaded if size is not None]
+    if voxel_size is None:
+        if len(headers) < len(loaded):
+            missing = [str(path) for _, path, _, size in loaded if size is None]
+            raise typer.BadParameter(
+                f"no voxel size in the header of {', '.join(missing)}; pass --voxel-size",
+                param_hint="voxel_size",
+            )
+        reference_path, voxel_size = headers[0]
+    else:
+        reference_path = Path("--voxel-size")
+    for path, size in headers:
+        if not math.isclose(size, voxel_size, rel_tol=1e-3):
+            raise typer.BadParameter(
+                f"{path} has voxel size {size:.4f} A but {reference_path} has "
+                f"{voxel_size:.4f} A; resample one of them first",
+                param_hint="map",
+            )
+    target = max(int(volume.shape[0]) for _, _, volume, _ in loaded)
+
+    import torch
+
+    maps = []
+    for label, path, volume, _ in loaded:
+        if int(volume.shape[0]) < target:
+            # Same centring as compute-fsc, including the half-voxel Fourier
+            # shift across odd/even parity, so this figure and an FSC between the
+            # same files compare the same superposition.
+            volume, _, original = _pad_to_common_box(volume, torch.zeros((target,) * 3))
+            typer.echo(f"padded {label!r} from {original} to {tuple(volume.shape)}")
+        maps.append(
+            ComparedMap(
+                label=label,
+                volume=volume,
+                protein_bright=label in bright or str(path) in bright,
+            )
+        )
+
+    try:
+        render_map_comparison(
+            maps,
+            out=out,
+            voxel_size_angstrom=voxel_size,
+            planes=[plane.strip() for plane in planes.split(",") if plane.strip()],
+            low_pass_angstrom=low_pass or [],
+            sphere_diameter_angstrom=sphere_diameter,
+            sigma_range=(sigma_min, sigma_max),
+            slab_voxels=slab,
+            title=title,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"wrote map comparison: {out}")
+
+
 @app.command()
 def run(
     project: Annotated[Path, typer.Option(help="Project directory created by init.")],
