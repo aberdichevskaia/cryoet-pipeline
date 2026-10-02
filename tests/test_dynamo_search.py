@@ -201,11 +201,54 @@ def test_invalid_volumes_are_refused(bad):
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{"shift_limit": 0}, {"refine": 1.5}, {"low": float("nan")}, {"refine_factor": 1}]
+    "kwargs",
+    [
+        {"shift_limit": 0},
+        {"refine": 1.5},
+        {"low": float("nan")},
+        {"refine_factor": 1},
+        {"area_search_modus": 0},
+        {"area_search_modus": 3},
+        {"area_search_modus": 2.0},
+    ],
 )
 def test_unsupported_settings_are_refused(kwargs):
     with pytest.raises(ValueError):
         core.SearchSettings(**kwargs)
+
+
+def test_mode_one_keeps_the_shift_sphere_on_the_box_centre():
+    # A centred particle recorded 10 voxels off. Mode 2 recentres its 3-voxel
+    # sphere on the preceding winner, so two levels move it at most 2 x (3 + 1)
+    # voxels and cannot come within 2 of the centre; mode 1 searches about the
+    # box centre whatever the record says (Dynamo's limm 1).
+    box, angles, tilts = 24, np.array([30.0, 60.0, -45.0]), (-60, 60)
+    phantom = _granular_phantom(box).numpy().astype(float)
+    rotated, _ = core.resample(phantom, angles)
+    wedged = core.apply_filter(rotated, core.wedge(box, tilts))
+    noise = np.random.default_rng(7).normal(scale=0.5 * wedged.std(), size=wedged.shape)
+    found = {
+        modus: core.refine_particle(
+            wedged + noise,
+            phantom,
+            core.search_mask(box, 18.0),
+            angles,
+            [10, 0, 0],
+            tilts,
+            core.SearchSettings(
+                cone_aperture=10,
+                cone_sampling=5,
+                inplane_range=10,
+                inplane_sampling=5,
+                refine=1,
+                low=8,
+                area_search_modus=modus,
+            ),
+        ).shift
+        for modus in (1, 2)
+    }
+    assert np.abs(found[1]).max() < 0.5
+    assert abs(found[2][0]) >= 2
 
 
 # ---------------------------------------------------------------- the backend

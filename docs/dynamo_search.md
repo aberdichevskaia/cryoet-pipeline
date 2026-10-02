@@ -142,14 +142,26 @@ averages with the pipeline's reducer instead.
 5. Candidate order, last-winner ties, matrix-to-Euler pole tolerance, and the
    legacy in-plane seed are retained. That seed can generate large SO(3) jumps;
    compatibility does not endorse the behavior.
-6. Mode 2 centres a search sphere on the rounded preceding winner at each
-   refinement level. Subpixel fitting uses unrestricted neighbours, so the
-   final displacement may exceed 3 voxels.
+6. Mode 2 (`area_search_modus=2`, Dynamo's `limm 2`) centres a search sphere
+   on the rounded preceding winner at each refinement level. A particle whose
+   peak lies outside it therefore follows the sphere outward from level to level
+   and from iteration to iteration. Mode 1 keeps the sphere on the box centre.
+   Subpixel fitting uses unrestricted neighbours in both modes, so the final
+   displacement may exceed the sphere by up to a voxel.
 7. Peak fitting follows `dynamo_peak_subpixel_direction`, not a parabola. A
-   degenerate fit without a finite valid extremum keeps the integer peak rather
-   than propagating NaN/-Inf. Scores in (1,1.05) are clamped to 1 as in Dynamo;
-   larger overshoots remain visible. Ill-conditioned extrema may differ between
-   runtimes. No tolerance is adjusted to conceal mismatches.
+   degenerate fit without a finite valid extremum keeps the integer peak. In
+   that case Dynamo returns `pv(1) - 1` unchecked, and in single precision this
+   can be complex. Under mode 2 the next level rounds it into the sphere's
+   centre and `circshift` aborts the project (CZII MRA, iteration 3, tag 868:
+   coarse z = 6.00 + 0.60i). Mode 1 recentres nothing, so it cannot abort there.
+   Near the fit's own singularity (a true offset of 0.293 voxel for refine223
+   tags 53 and 170), Dynamo's single-precision arithmetic also returns finite
+   nonsense that can win the search: integer offsets, and scores that are
+   simple fractions (0.5, 0.75, 19/24, 1; also CZII MRA tag 868 in iteration 2).
+   The port fits in double and reproduces neither. Scores in (1,1.05) are
+   clamped to 1 as in Dynamo; larger overshoots remain visible. Ill-conditioned
+   extrema may differ between runtimes. No tolerance is adjusted to conceal
+   mismatches.
 8. Averaging divides by actual valid resampling contributions per voxel
    (`explicitBalanceNan=1`). Particles are normalized after alignment using ROI
    sample standard deviation.

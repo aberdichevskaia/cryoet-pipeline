@@ -131,6 +131,8 @@ class SearchSettings:
     high: float = 2.0
     low: float = 16.0
     shift_limit: float = 3.0
+    # Dynamo's limm: 2 centres the shift sphere on the preceding winner, 1 on the box.
+    area_search_modus: int = 2
 
     def __post_init__(self):
         numbers = np.array(list(vars(self).values()), dtype=float)
@@ -138,6 +140,8 @@ class SearchSettings:
             raise ValueError("search settings must be finite")
         if not (0 < self.high < self.low and self.shift_limit > 0):
             raise ValueError("require 0 < high < low and shift_limit > 0")
+        if type(self.area_search_modus) is not int or self.area_search_modus not in (1, 2):
+            raise ValueError("area_search_modus must be 1 (box centre) or 2 (preceding winner)")
         if not (0 <= self.cone_aperture <= 180 and 0 <= self.inplane_range <= 360):
             raise ValueError("invalid angular range")
         if min(self.cone_sampling, self.inplane_sampling) <= 0:
@@ -400,10 +404,12 @@ def _spline_peak(y1, y2, y3):
 
 
 def restricted_peak(cc, shift, radius):
-    """Mode 2: integer sphere around the previous shift, then subpixel peak.
+    """Integer sphere around `shift`, then subpixel peak.
 
+    Mode 2 passes the preceding winner, so the sphere moves again at each
+    refinement level, not only each run; mode 1 passes zero, the box centre.
     As in Dynamo, interpolation uses UNRESTRICTED neighbours and may leave the
-    sphere. The sphere moves again at each refinement level, not only each run.
+    sphere.
     """
     cc = _cube(cc)
     n = cc.shape[0]
@@ -459,7 +465,7 @@ def refine_particle(
     trace = []
     for level in range(settings.refine + 1):
         candidates = angle_list(best_angles, cr, cs, ir, ins)
-        center_shift = best_shift.copy()
+        center_shift = best_shift.copy() if settings.area_search_modus == 2 else np.zeros(3)
         best_score = -np.inf
         for candidate in candidates:
             rotated, support = resample(ref, candidate, mask=mask)
