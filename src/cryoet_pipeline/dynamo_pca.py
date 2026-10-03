@@ -213,11 +213,15 @@ def corner_sphere(size) -> np.ndarray:
     return sphere.astype(np.float32).astype(float)
 
 
-def cc_matrix(volumes: Sequence[np.ndarray], wedges: Sequence[np.ndarray], mask) -> np.ndarray:
+def cc_matrix(
+    volumes: Sequence[np.ndarray], wedges: Sequence[np.ndarray], mask, *, sphere: bool = True
+) -> np.ndarray:
     """Every pair on the frequencies both sampled, Pearson over the mask's nonzero voxels.
 
     The samplings are binarized at 0.5, as `dynamo_binarize` does, and their
-    product is weighted by `corner_sphere`.
+    product is weighted by `corner_sphere`. `sphere=False` leaves it out, which
+    Dynamo never does: a replay uses it to check that its project reaches the
+    sphere.
     """
     if len(volumes) != len(wedges) or len(volumes) < 2:
         raise ValueError("need one wedge per particle and at least two particles")
@@ -225,13 +229,13 @@ def cc_matrix(volumes: Sequence[np.ndarray], wedges: Sequence[np.ndarray], mask)
     if shape[0] % 2:
         raise ValueError("odd box sizes are not ported: Dynamo's sphere and wedge shifts differ")
     support = _support(mask, shape)
-    sphere = _half(corner_sphere(shape[0]))
+    weight = _half(corner_sphere(shape[0])) if sphere else 1.0
     spectra = [_spectrum(v, shape) for v in volumes]
     samplings = [_half(_cube(w) >= 0.5) for w in wedges]
     matrix = np.eye(len(volumes))
     for i in range(len(volumes)):
         for j in range(i + 1, len(volumes)):
-            common = samplings[i] * samplings[j] * sphere
+            common = samplings[i] * samplings[j] * weight
             a = _inverse(spectra[i] * common, shape)[support]
             b = _inverse(spectra[j] * common, shape)[support]
             value = pearson(a, b)

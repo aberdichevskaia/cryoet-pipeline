@@ -124,6 +124,8 @@ def test_the_cc_matrix_ignores_frequencies_beyond_the_corner_sphere():
     ones = [np.ones(base.shape)] * 2
     cc = port.cc_matrix([base, base + 5 * noise], ones, np.ones(base.shape))
     np.testing.assert_allclose(cc[0, 1], 1.0, atol=1e-12)
+    without = port.cc_matrix([base, base + 5 * noise], ones, np.ones(base.shape), sphere=False)
+    assert without[0, 1] < 0.9
 
 
 def test_the_cc_matrix_binarizes_the_samplings_and_the_coefficients_do_not():
