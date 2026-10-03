@@ -103,6 +103,29 @@ def test_cc_matrix_is_symmetric_with_unit_diagonal_and_finds_the_copy():
     assert abs(cc[0, 2]) < 0.3 and abs(cc[1, 2]) < 0.3
 
 
+def test_the_corner_sphere_is_one_inside_radius_n2_minus_1_and_decays_past_it():
+    sphere = port.corner_sphere(BOX)
+    x, y, z = core._xyz(BOX).astype(float)
+    r = np.sqrt(x * x + y * y + z * z)
+    edge = BOX / 2 - 1
+    assert (sphere[r <= edge] == 1).all() and (sphere[r > edge] < 1).all()
+    assert (sphere[r > edge + np.sqrt(-np.log(0.13))] == 0).all()
+    soft = sphere[(sphere > 0) & (sphere < 1)]
+    assert soft.size and soft.min() > 0.13
+    np.testing.assert_array_equal(sphere[1:, 1:, 1:], sphere[:0:-1, :0:-1, :0:-1])
+
+
+def test_the_cc_matrix_ignores_frequencies_beyond_the_corner_sphere():
+    rng = np.random.default_rng(3)
+    base = rng.normal(size=(BOX,) * 3)
+    x, y, z = core._xyz(BOX).astype(float)
+    corners = np.fft.ifftshift(np.sqrt(x * x + y * y + z * z) > BOX / 2 + 0.5)
+    noise = np.fft.ifftn(np.fft.fftn(rng.normal(size=base.shape)) * corners).real
+    ones = [np.ones(base.shape)] * 2
+    cc = port.cc_matrix([base, base + 5 * noise], ones, np.ones(base.shape))
+    np.testing.assert_allclose(cc[0, 1], 1.0, atol=1e-12)
+
+
 def test_the_cc_matrix_binarizes_the_samplings_and_the_coefficients_do_not():
     rng = np.random.default_rng(2)
     v, mask = phantom(), core.search_mask(BOX, 24.0)
@@ -179,9 +202,9 @@ def test_lloyd_reaches_a_fixed_point_and_refills_an_empty_cluster():
         lambda: port.rotated_wedge(BOX, (10, 60), [1, 2, 3]),
         lambda: port.aligned(np.zeros((BOX,) * 3), [0] * 3, [0] * 3, HIGH, LOW, undefined="mean"),
         lambda: port.cc_matrix(
-            [np.random.default_rng(0).normal(size=(BOX,) * 3)] * 2,
-            [np.ones((BOX,) * 3)] * 2,
-            np.ones((BOX,) * 3),
+            [np.random.default_rng(0).normal(size=(BOX - 1,) * 3)] * 2,
+            [np.ones((BOX - 1,) * 3)] * 2,
+            np.ones((BOX - 1,) * 3),
         ),
         lambda: port.pca(
             np.array([[1.0, 0.2], [0.3, 1.0]]), [np.ones((BOX,) * 3)] * 2, np.ones((BOX,) * 3)

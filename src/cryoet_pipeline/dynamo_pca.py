@@ -40,11 +40,11 @@ What Dynamo's project-mode chain does, read from `dynamo_ccmatrix_compute.m`,
 Scope, refused rather than guessed: project mode (the uncentred Xmatrix),
 single-axis wedges (table ftype 1), no resizing, binning or symmetrization, the
 actions `align` and `band` and nothing else, and coefficients with the fmask
-compensation that `dynamo_PCA` uses by default. Dynamo also multiplies the
-common sampling by a sphere of radius N/2 - 1 that a MEX draws
-(`dynamo__sphere_mex`, not read). `cc_matrix` refuses particles with any
-frequency within 3 pixels of that radius, where the sphere is 1 whatever the
-MEX's centre convention, and leaves it out.
+compensation that `dynamo_PCA` uses by default, and even box sizes. Dynamo
+also multiplies the CC matrix's common sampling by a soft sphere of radius
+N/2 - 1 (`corner_sphere`), drawn by `dynamo__sphere_mex`
+(`volume_noncubic::fillSphere`) and shifted by `fftshift` while the samplings
+are shifted by `ifftshift`. The two shifts agree only for even N.
 
 The rotated wedge follows the MEX's C++ source (`dynamo__wedge_mex.cpp`,
 `volume_noncubic::fillWedge`, shipped with the 1.1.591 sources), not Dynamo's
@@ -194,32 +194,44 @@ def _inverse(spectrum, shape) -> np.ndarray:
     return np.fft.irfftn(spectrum, s=shape, axes=(0, 1, 2))
 
 
+def corner_sphere(size) -> np.ndarray:
+    """The CC matrix's sphere, as `dynamo_ccmatrix_compute` draws it, before its shift.
+
+    `dynamo_ellipsoid(N/2 - 1, N, N/2 + 1, 1)` reaches `dynamo__sphere_mex`.
+    Its `fillSphere` takes rn = (i - N/2) / R per axis, R = N/2 - 1, in
+    double: 1 where |rn|^2 <= 1, and outside exp(-((|rn| - 1) R)^2) while that
+    exceeds 0.13, else 0. The volume stores float. For even N the map is
+    centred at N // 2, as the samplings are.
+    """
+    radius = size / 2 - 1
+    i = np.arange(size, dtype=float)
+    rn = ((i - (size / 2 + 1)) + 1) / radius
+    interior = rn[None, None, :] ** 2 + rn[None, :, None] ** 2 + rn[:, None, None] ** 2
+    with np.errstate(invalid="ignore"):
+        decay = np.exp(-(((np.sqrt(interior) - 1) / (1 / radius)) ** 2))
+    sphere = np.where(interior <= 1, 1.0, np.where(decay > 0.13, decay, 0.0))
+    return sphere.astype(np.float32).astype(float)
+
+
 def cc_matrix(volumes: Sequence[np.ndarray], wedges: Sequence[np.ndarray], mask) -> np.ndarray:
     """Every pair on the frequencies both sampled, Pearson over the mask's nonzero voxels.
 
-    The samplings are binarized at 0.5, as `dynamo_binarize` does. A particle
-    with frequencies within 3 pixels of the corner sphere's radius N/2 - 1 is
-    refused, since the sphere is left out (module docstring).
+    The samplings are binarized at 0.5, as `dynamo_binarize` does, and their
+    product is weighted by `corner_sphere`.
     """
     if len(volumes) != len(wedges) or len(volumes) < 2:
         raise ValueError("need one wedge per particle and at least two particles")
     shape = _cube(volumes[0]).shape
+    if shape[0] % 2:
+        raise ValueError("odd box sizes are not ported: Dynamo's sphere and wedge shifts differ")
     support = _support(mask, shape)
-    radius = np.sqrt(np.sum(_xyz(shape[0]).astype(float) ** 2, axis=0))
-    beyond = _half(radius >= shape[0] / 2 - 4)
+    sphere = _half(corner_sphere(shape[0]))
     spectra = [_spectrum(v, shape) for v in volumes]
-    for index, spectrum in enumerate(spectra):
-        size = np.abs(spectrum)
-        if size[beyond].max(initial=0) > 1e-9 * size.max(initial=0):
-            raise ValueError(
-                f"particle {index} has frequencies within 3 pixels of the corner sphere "
-                f"(radius {shape[0] / 2 - 1:g}), which is not ported"
-            )
     samplings = [_half(_cube(w) >= 0.5) for w in wedges]
     matrix = np.eye(len(volumes))
     for i in range(len(volumes)):
         for j in range(i + 1, len(volumes)):
-            common = samplings[i] * samplings[j]
+            common = samplings[i] * samplings[j] * sphere
             a = _inverse(spectra[i] * common, shape)[support]
             b = _inverse(spectra[j] * common, shape)[support]
             value = pearson(a, b)
