@@ -178,9 +178,23 @@ def _support(mask, shape) -> np.ndarray:
     return support
 
 
-def _half(centred: np.ndarray) -> np.ndarray:
-    """A centred Fourier map on `rfftn`'s half grid."""
-    return np.fft.ifftshift(centred)[..., : centred.shape[2] // 2 + 1]
+def _half(centred: np.ndarray, *, negated: bool = False) -> np.ndarray:
+    """A centred Fourier map on `rfftn`'s half grid; `negated` reads it at -k."""
+    m = np.fft.ifftshift(centred)
+    if negated:
+        m = np.roll(m[::-1, ::-1, ::-1], 1, axis=(0, 1, 2))
+    return m[..., : centred.shape[2] // 2 + 1]
+
+
+def _hermitian_half(centred: np.ndarray) -> np.ndarray:
+    """The part of a real Fourier map that `real(ifftn(fftn(x) .* ifftshift(map)))` uses.
+
+    Dynamo filters on the full grid and keeps the real part, which is filtering
+    by (M(k) + M(-k)) / 2. A rotated wedge is not symmetric on the Nyquist
+    planes, where -k folds back onto the plane, so `irfftn` of the map's own
+    half grid would differ there.
+    """
+    return (_half(centred) + _half(centred, negated=True)) / 2
 
 
 def _spectrum(volume, shape) -> np.ndarray:
@@ -219,23 +233,26 @@ def cc_matrix(
     """Every pair on the frequencies both sampled, Pearson over the mask's nonzero voxels.
 
     The samplings are binarized at 0.5, as `dynamo_binarize` does, and their
-    product is weighted by `corner_sphere`. `sphere=False` leaves it out, which
+    product is weighted by `corner_sphere`. Filtering keeps the real part, as
+    Dynamo's `real(ifftn(...))` does (`_hermitian_half`). `sphere=False` leaves it out, which
     Dynamo never does: a replay uses it to check that its project reaches the
     sphere.
     """
     if len(volumes) != len(wedges) or len(volumes) < 2:
         raise ValueError("need one wedge per particle and at least two particles")
     shape = _cube(volumes[0]).shape
-    if shape[0] % 2:
-        raise ValueError("odd box sizes are not ported: Dynamo's sphere and wedge shifts differ")
     support = _support(mask, shape)
     weight = _half(corner_sphere(shape[0])) if sphere else 1.0
     spectra = [_spectrum(v, shape) for v in volumes]
-    samplings = [_half(_cube(w) >= 0.5) for w in wedges]
+    binary = [(_cube(w) >= 0.5).astype(float) for w in wedges]
+    samplings = [(_half(b), _half(b, negated=True)) for b in binary]
     matrix = np.eye(len(volumes))
     for i in range(len(volumes)):
         for j in range(i + 1, len(volumes)):
-            common = samplings[i] * samplings[j] * weight
+            # The Hermitian part of the product, as in `_hermitian_half`; the
+            # sphere is symmetric already.
+            (si, ni), (sj, nj) = samplings[i], samplings[j]
+            common = (si * sj + ni * nj) * (weight / 2)
             a = _inverse(spectra[i] * common, shape)[support]
             b = _inverse(spectra[j] * common, shape)[support]
             value = pearson(a, b)
@@ -281,8 +298,9 @@ def pca(cc: np.ndarray, volumes: Sequence[np.ndarray], mask, neigs: int = NEIGS)
 def coefficients(eigenvolumes, volumes, wedges, mask) -> np.ndarray:
     """`dynamo_pearson3d_fmask` of every particle with every eigenvolume.
 
-    Both are filtered by the particle's sampling map as given, not binarized,
-    then Pearson-correlated over the mask's nonzero voxels: one row per
+    Both are filtered by the particle's sampling map as given, not binarized
+    (its Hermitian part, which is what Dynamo's `real(ifftn(...))` uses), then
+    Pearson-correlated over the mask's nonzero voxels: one row per
     particle, one column per eigenvolume, as eigentable columns 41 on.
     """
     if len(volumes) != len(wedges):
@@ -293,7 +311,7 @@ def coefficients(eigenvolumes, volumes, wedges, mask) -> np.ndarray:
     eigen_spectra = [_spectrum(e, shape) for e in eigenvolumes]
     table = np.empty((len(volumes), len(eigenvolumes)))
     for i, (volume, sampling) in enumerate(zip(volumes, wedges, strict=True)):
-        f = _half(_cube(sampling))
+        f = _hermitian_half(_cube(sampling))
         particle = _inverse(_spectrum(volume, shape) * f, shape)[support]
         for k, spectrum in enumerate(eigen_spectra):
             table[i, k] = pearson(_inverse(spectrum * f, shape)[support], particle)

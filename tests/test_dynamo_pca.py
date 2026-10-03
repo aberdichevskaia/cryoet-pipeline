@@ -143,6 +143,34 @@ def test_the_cc_matrix_binarizes_the_samplings_and_the_coefficients_do_not():
     assert np.abs(blurred - port.coefficients(eigen, volumes, sharp, mask)).max() > 1e-4
 
 
+def test_filtering_matches_the_real_part_of_a_full_grid_filter_for_any_map():
+    # Dynamo filters as real(ifftn(fftn(x) .* ifftshift(map))). A map that is
+    # not symmetric under k -> -k, as rotated wedges are not on the Nyquist
+    # planes, must give the same as that.
+    rng = np.random.default_rng(5)
+    volumes = [rng.normal(size=(BOX,) * 3) for _ in range(3)]
+    maps = [rng.uniform(size=(BOX,) * 3) for _ in range(3)]
+    mask = core.search_mask(BOX, 12.0)
+    support = mask != 0
+
+    def full(volume, sampling):
+        spectrum = np.fft.fftn(volume) * np.fft.ifftshift(sampling)
+        return np.fft.ifftn(spectrum).real[support]
+
+    sphere = port.corner_sphere(BOX)
+    cc = port.cc_matrix(volumes, maps, mask)
+    for i, j in [(0, 1), (0, 2), (1, 2)]:
+        common = (maps[i] >= 0.5) * (maps[j] >= 0.5) * sphere
+        expected = port.pearson(full(volumes[i], common), full(volumes[j], common))
+        np.testing.assert_allclose(cc[i, j], expected, atol=1e-12)
+    eigen = [rng.normal(size=(BOX,) * 3) * mask for _ in range(2)]
+    table = port.coefficients(eigen, volumes, maps, mask)
+    for i, (volume, sampling) in enumerate(zip(volumes, maps, strict=True)):
+        for k, e in enumerate(eigen):
+            expected = port.pearson(full(e, sampling), full(volume, sampling))
+            np.testing.assert_allclose(table[i, k], expected, atol=1e-12)
+
+
 def test_project_mode_eigenvolumes_keep_the_mean_particle():
     """Near-copies make the first eigenvector nearly uniform: V' X is then their average."""
     rng = np.random.default_rng(5)
