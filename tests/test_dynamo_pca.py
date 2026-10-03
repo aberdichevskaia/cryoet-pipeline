@@ -50,6 +50,19 @@ def test_rotated_wedge_is_the_kernel_wedge_unrotated_and_follows_a_grid_rotation
     np.testing.assert_array_equal(turned[inside], expected[inside])
 
 
+def test_rotated_wedge_has_no_slab_and_keeps_only_the_origin_on_an_exact_axis():
+    # tilt 90 maps the tilt axis onto z, where X' == 0 exactly but Z' is a
+    # rounding residue: the MEX drops that line except the origin.
+    w = port.rotated_wedge(BOX, TILTS, [0, 90, 0])
+    c = BOX // 2
+    assert w[c, c, c] == 1
+    assert not w[c + 1 :, c, c].any() and not w[:c, c, c].any()
+    # Off the axis, |Z'| < 0.5 alone samples nothing: k = (-3, 4, -4) under
+    # (30, 60, -45) has X' = -0.107, Z' = -0.299, a ratio far outside the range.
+    w = port.rotated_wedge(48, (-45.04, 44.96), [30, 60, -45])
+    assert w[24 - 4, 24 + 4, 24 - 3] == 0
+
+
 def test_rotated_wedge_is_centrosymmetric_as_the_half_spectra_need():
     w = port.rotated_wedge(BOX, TILTS, [37.0, 71.0, -122.0])
     interior = w[1:, 1:, 1:]

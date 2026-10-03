@@ -46,10 +46,10 @@ common sampling by a sphere of radius N/2 - 1 that a MEX draws
 frequency within 3 pixels of that radius, where the sphere is 1 whatever the
 MEX's centre convention, and leaves it out.
 
-The rotated wedge follows Dynamo's own MATLAB rendering of its MEX
-(`rotated_wedge_single_tilt_local`), with the crop sphere of the unrotated wedge
-the kernel already reproduces. It still has to be checked against the MEX
-itself (`dynamo_wedge_mask`).
+The rotated wedge follows the MEX's C++ source (`dynamo__wedge_mex.cpp`,
+`volume_noncubic::fillWedge`, shipped with the 1.1.591 sources), not Dynamo's
+MATLAB rendering of it, which adds a slab around Z' = 0. Benchmark
+DYNAMO_PCA_REPLAY.md, step 1, compares it with masks the MEX itself wrote.
 
 Numerical adaptation of the Dynamo routines named above. The BSD option of the
 following original joint notice is selected for these adaptations; this does
@@ -101,7 +101,6 @@ from cryoet_pipeline.backends.dynamo_search import (
     bandpass,
     euler_matrix,
     resample,
-    wedge,
 )
 
 NEIGS = 10
@@ -112,30 +111,35 @@ KMEANS_MAX_ITERATIONS = 100
 """MATLAB `kmeans`' default `MaxIter`."""
 
 
-def rotated_wedge(size, tilt_range, angles) -> np.ndarray:
-    """Dynamo's single-axis wedge (ftype 1, crop 1) in a frame rotated by `angles`.
+MEX_PI = 3.1415926535897
+"""The truncated pi `volume_noncubic::fillWedge` converts the tilt range with."""
 
-    It evaluates the wedge test at X' = M[0]·k and Z' = M[2]·k, with
-    M = `euler_matrix(angles)`. A frequency with |X'| < 1e-8 is unsampled; the
-    slab |Z'| <= 0.5 is sampled; outside the crop sphere nothing is. With zero
-    angles it is the kernel's `wedge`, whose rules there differ on the axis.
+
+def rotated_wedge(size, tilt_range, angles) -> np.ndarray:
+    """`dynamo__wedge_mex`'s single-axis wedge (ftype 1, crop 1), rotated by `angles`.
+
+    `volume_noncubic::fillWedge`, in its float32 arithmetic: the angles become
+    float, M = `euler_matrix` is built in double, and X' = M[0]·k and
+    Z' = M[2]·k are rounded to float. A frequency is sampled when
+    tan(min) < Z'/X' < tan(max); on X' == 0 exactly, only when Z' == 0 too.
+    There is no slab around Z' = 0, unlike Dynamo's MATLAB rendering
+    (`rotated_wedge_single_tilt_local`). The crop keeps (k / (N/2 + 0.5))^2 < 1,
+    in float.
     """
-    a = _triple(angles)
-    if not np.any(a):
-        return wedge(size, tilt_range)
     lo, hi = np.asarray(tilt_range, dtype=float)
     if not np.isfinite([lo, hi]).all() or not -90 <= lo < 0 < hi <= 90:
         raise ValueError("require a finite Y tilt range spanning zero within [-90, 90]")
-    m = euler_matrix(a)
+    m = euler_matrix(_triple(angles).astype(np.float32).astype(float))
     x, y, z = _xyz(size).astype(float)
-    big_x = m[0, 0] * x + m[0, 1] * y + m[0, 2] * z
-    big_z = m[2, 0] * x + m[2, 1] * y + m[2, 2] * z
-    on_axis = np.abs(big_x) < 1e-8
-    ratio = np.divide(big_z, big_x, out=np.zeros_like(big_z), where=~on_axis)
-    tlo, thi = np.tan(np.deg2rad([lo, hi]))
-    support = (ratio < thi) & (ratio > tlo) & ~on_axis
-    support |= np.abs(big_z) <= 0.5
-    support &= (x * x + y * y + z * z) < (size / 2 + 0.5) ** 2
+    big_x = (m[0, 0] * x + m[0, 1] * y + m[0, 2] * z).astype(np.float32)
+    big_z = (m[2, 0] * x + m[2, 1] * y + m[2, 2] * z).astype(np.float32)
+    on_axis = big_x == 0
+    ratio = big_z / np.where(on_axis, np.float32(1), big_x)
+    tlo, thi = (np.float32(np.tan(float(np.float32(t)) * MEX_PI / 180.0)) for t in (lo, hi))
+    support = np.where(on_axis, big_z == 0, (ratio < thi) & (ratio > tlo))
+    c = np.float32(size // 2 + 0.5)
+    rx, ry, rz = (u.astype(np.float32) / c for u in (x, y, z))
+    support &= rx * rx + ry * ry + rz * rz < 1
     return support.astype(float)
 
 
