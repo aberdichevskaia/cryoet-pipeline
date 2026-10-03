@@ -88,6 +88,7 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
             "1.000000 2.000000 3.000000 0.500000\n"
             "4.000000 5.000000 6.000000 0.700000\n"
         )
+        (job_json.parent / "TS_TEST_extraction_graph.svg").write_text("<svg/>")
         return subprocess.CompletedProcess(command, 0, stdout="extracted", stderr="")
 
     artifacts = pick_and_register(
@@ -158,6 +159,10 @@ def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
     # dose weighting is indistinguishable from one with it.
     assert picks.parameters["per_tilt_weighting"] is False
     assert picks.parameters["dose_weighted"] is False
+    # The extraction graph is kept without asking, unlike the score volumes.
+    graph = Path(picks.parameters["pytom_extraction_graph_path"])
+    assert graph.read_text() == "<svg/>"
+    assert picks.parameters["pytom_scores_volume_path"] is None
 
 
 def test_pytom_match_pick_requires_cuda_device(tmp_path: Path) -> None:

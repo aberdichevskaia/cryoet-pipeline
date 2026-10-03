@@ -234,6 +234,13 @@ class PytomMatchPickBackend:
             _replace_output(job_json, paths.job_json)
             _replace_output(particles_star, paths.particles_star)
             _replace_output(temporary_report, paths.report)
+            # pytom's plot of the score distribution against the noise fit it
+            # cut at: the only picture of why the cut-off landed where it did.
+            # Kilobytes, so always kept. Optional because pytom only draws it
+            # when its plotting dependencies are installed.
+            graph = sorted(temporary_root.rglob("*_extraction_graph.svg"))
+            if graph:
+                _replace_output(graph[0], paths.extraction_graph)
             if keep_volumes:
                 # The correlation volume is what the half hour of GPU actually
                 # bought; the candidates are one cheap reading of it. Keeping it
@@ -292,6 +299,9 @@ class PytomMatchPickBackend:
                 ),
                 "pytom_whitening_filter_path": (
                     str(paths.whitening_filter) if paths.whitening_filter.is_file() else None
+                ),
+                "pytom_extraction_graph_path": (
+                    str(paths.extraction_graph) if paths.extraction_graph.is_file() else None
                 ),
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
@@ -434,6 +444,7 @@ class _PickingPaths:
         scores_volume: Path,
         angles_volume: Path,
         whitening_filter: Path,
+        extraction_graph: Path,
     ) -> None:
         self.picks_dir = picks_dir
         self.qc_dir = qc_dir
@@ -444,6 +455,7 @@ class _PickingPaths:
         self.scores_volume = scores_volume
         self.angles_volume = angles_volume
         self.whitening_filter = whitening_filter
+        self.extraction_graph = extraction_graph
 
     @property
     def outputs(self) -> tuple[Path, ...]:
@@ -501,6 +513,7 @@ def _picking_paths(
         scores_volume=picks_dir / f"{prefix}_scores.mrc",
         angles_volume=picks_dir / f"{prefix}_angles.mrc",
         whitening_filter=picks_dir / f"{prefix}_whitening_filter.npy",
+        extraction_graph=qc_dir / f"{prefix}_extraction_graph.svg",
         report=qc_dir / f"{prefix}_qc.json",
         log=picks_dir / f"{prefix}.log",
     )
