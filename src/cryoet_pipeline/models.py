@@ -1153,7 +1153,8 @@ class DynamoSearchQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: int = 2
+    """2: Dynamo's averaging replaced this pipeline's reducer; the mask can be a file."""
     backend: str
     tilt_series_ids: list[str]
     particle_stack_ids: list[str]
@@ -1172,13 +1173,26 @@ class DynamoSearchQc(BaseModel):
     search_highpass_px: float = Field(gt=0.0)
     search_lowpass_px: float = Field(gt=0.0)
     shift_limit_px: float = Field(gt=0.0)
-    alignment_mask_diameter_angstrom: float = Field(gt=0.0)
+    shift_search_mode: int = Field(default=2, ge=1, le=2)
+    """Dynamo's limm: 2 re-centres the shift sphere on each level's winner, 1 not."""
+    alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
+    """The search sphere's diameter; None when the mask came from a file."""
+    alignment_mask_path: str | None = None
+    """Dynamo's convention: voxels above 0.5 are searched, nonzero ones normalise."""
+    search_mask_voxels: int = Field(ge=2)
+    normalization_mask_voxels: int = Field(ge=2)
     grid_reach_deg: float = Field(ge=0.0)
     """The widest rotation one iteration's candidate levels can compose to."""
     wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
     wedge_boundary_policy: str
-    wedge_coverage_floor_fraction: float = Field(gt=0.0, le=1.0)
-    wedge_coverage: dict[str, float] | None = None
+    averaging: str = "dynamo project assembly (average_particles)"
+    """Dynamo's `fsc = true` assembly: particles normalised in the mask's support,
+    odd/even raw sums merged, Fourier weight divided where it reaches the threshold."""
+    fourier_weight_threshold: float = Field(gt=0.0, le=1.0)
+    fourier_weight: dict[str, float] | None = None
+    """The last average's merged, max-normalised wedge weight inside the Nyquist
+    sphere: minimum, median, and the fraction of components below the threshold,
+    which the averaging zeroes."""
     initial_reference: str
     gold_standard: bool = False
     """Always false: every particle is searched against an average containing it."""

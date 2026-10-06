@@ -69,9 +69,10 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from pathlib import Path
 
+import mrcfile
 import numpy as np
-import torch
 
 from cryoet_pipeline.backends.protocols import BackendContext, variant_label, variant_suffix
 from cryoet_pipeline.backends.subtomogram import (
@@ -80,8 +81,6 @@ from cryoet_pipeline.backends.subtomogram import (
     _class_average_id,
     _class_average_path,
     _combine_particle_stacks,
-    _compensated_reference,
-    _Compensation,
     _int_parameter,
     _load_reference_mrc,
     _nonnegative_float_parameter,
@@ -112,11 +111,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.particles import write_particle_star
-from cryoet_pipeline.rotations import (
-    matrix_to_relion_euler,
-    relion_euler_to_matrix,
-    resample_volume_zyx,
-)
+from cryoet_pipeline.rotations import matrix_to_relion_euler, relion_euler_to_matrix
 from cryoet_pipeline.wedge import WEDGE_BOUNDARY_POLICY
 
 
@@ -581,11 +576,17 @@ def search_particles(particles, reference, mask, starts, tilt_ranges, settings, 
         return list(pool.map(_search_task, tasks, chunksize=max(1, len(tasks) // (4 * workers))))
 
 
+# The fsc=true merge in Dynamo 1.1.511 hard-codes 0.1, ignoring fmin.
+FOURIER_WEIGHT_THRESHOLD = 0.1
+
+
 def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_ranges, mask):
     """Raw-data average and Fourier compensation; no search/interpolation reuse.
 
     Use the same helper for fixed and refined poses to avoid comparing different
-    averaging estimators. Normalization uses all NONZERO mask voxels (ddof=1).
+    averaging estimators. The `dynamo-search` backend averages every iteration
+    with it (replayed against Dynamo: 8e-5 on refine223, 6.5e-5 on sel45_k1).
+    Normalization uses all NONZERO mask voxels (ddof=1).
     Match the CPU project's fsc=true assembly: normalize odd/even raw averages
     separately, merge them equally, compensate at weight >= 0.1, and do NOT
     re-normalize the final map. These are not independently refined half-maps.
@@ -615,13 +616,84 @@ def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_rang
     raw_halves = np.divide(total, contributions, out=np.zeros_like(total), where=contributions > 0)
     raw = (normalize_roi(raw_halves[0], mask) + normalize_roi(raw_halves[1], mask)) / 2
     weights = (weights[0] / weights[0].max() + weights[1] / weights[1].max()) / 2
-    # The fsc=true merge in Dynamo 1.1.511 hard-codes 0.1, ignoring fmin.
-    good = weights >= 0.1
+    good = weights >= FOURIER_WEIGHT_THRESHOLD
     spectrum = np.fft.fftshift(np.fft.fftn(raw))
     corrected = np.zeros_like(spectrum)
     np.divide(spectrum, weights, out=corrected, where=good)
     average = np.fft.ifftn(np.fft.ifftshift(corrected)).real
     return average, raw, weights
+
+
+@dataclass(frozen=True)
+class ClassAverage:
+    average: np.ndarray
+    """Compensated, then normalized over the mask: the channel's next reference, or
+    the backend's starting one."""
+    raw: np.ndarray
+    fweight: np.ndarray
+    fmask: np.ndarray
+    threshold: float
+    members: int
+
+
+def fweight_divide(volume, fweight, threshold: float) -> np.ndarray:
+    """`dynamo_fweight_divide`: divide the centred spectrum by the weight where the
+    weight reaches `threshold`, and zero every other component."""
+    spectrum = np.fft.fftshift(np.fft.fftn(np.asarray(volume, dtype=float)))
+    fweight = np.asarray(fweight, dtype=float)
+    keep = np.isfinite(fweight) & (fweight >= threshold)
+    divided = np.zeros_like(spectrum)
+    np.divide(spectrum, fweight, out=divided, where=keep)
+    return np.fft.ifftn(np.fft.ifftshift(divided)).real
+
+
+def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 1) -> ClassAverage:
+    """A class average as the MRA plugin asks `dynamo_average` for it.
+
+    Also the console call `dynamo_average(..., 'fcompensate', true, 'fmin', 1,
+    'nmask', mask)` that makes a project's starting template from the initial
+    poses (sel45_avg.em, replayed to 4e-7), and so the `dynamo-search` backend's
+    starting reference when none is given.
+
+    Per particle, the path of the project's own averaging, which the search
+    kernel's `average_particles` reproduces (replay: 8e-5 against Dynamo): the
+    inverse pose, out-of-box voxels zeroed, normalization over the mask's nonzero
+    voxels, zeroed again, and the table wedge rotated with the implicit sphere
+    for the Fourier weight. Unlike that `fsc = true` assembly: one sum over all
+    members in their given order (ascending tags in Dynamo), no odd/even halves;
+    the compensation threshold `fmin / N` of the max-normalized weight, not 0.1;
+    and the compensated average normalized over the mask once more.
+    """
+    nmask = _cube(nmask)
+    rows = list(zip(particles, angles, shifts, tilt_ranges, strict=True))
+    if not rows or np.any(nmask < 0) or not np.any(nmask):
+        raise ValueError("a class needs at least one particle and a nonnegative, nonempty mask")
+    if type(fmin) is not int or fmin < 1:
+        raise ValueError(f"fmin counts particles and must be a positive integer, got {fmin!r}")
+    total = np.zeros(nmask.shape)
+    contributions = np.zeros(nmask.shape)
+    weights = np.zeros(nmask.shape)
+    for particle, angle, shift, tilts in rows:
+        if _cube(particle).shape != nmask.shape:
+            raise ValueError("particle and mask shapes differ")
+        inverse_angles = -_triple(angle)[::-1]
+        aligned, valid = resample(particle, inverse_angles, -_triple(shift))
+        aligned = normalize_roi(aligned, nmask)
+        aligned[~valid] = 0
+        total += aligned
+        contributions += valid
+        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True)
+        weights += rotated_wedge
+    count = len(rows)
+    # explicitBalanceNan: every voxel divided by the particles that really reached it.
+    raw = np.divide(total, contributions, out=np.zeros_like(total), where=contributions > 0)
+    raw = normalize_roi(raw, nmask)
+    fweight = weights / weights.max()
+    threshold = fmin / count if fmin < count else 1 / count
+    average = normalize_roi(fweight_divide(raw, fweight, threshold), nmask)
+    return ClassAverage(
+        average, raw, fweight, (fweight >= threshold).astype(float), threshold, count
+    )
 
 
 def _dynamo_centre_offset(box: int) -> np.ndarray:
@@ -737,17 +809,48 @@ def _rotation_between_deg(first: np.ndarray, second: np.ndarray) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
-def _compensated_average(volumes, matrices, shifts, compensation, geometries, device):
-    """This pipeline's reducer on the raw particles at the given native poses."""
-    aligned = [
-        resample_volume_zyx(volume, matrix, shift, device=device)
-        for volume, matrix, shift in zip(volumes, matrices, shifts, strict=True)
-    ]
-    return _compensated_reference(aligned, matrices, compensation, geometries)
+def _dynamo_poses(matrices, shifts, box: int):
+    poses = [native_to_dynamo(m, s, box) for m, s in zip(matrices, shifts, strict=True)]
+    return [angles for angles, _ in poses], [shift for _, shift in poses]
+
+
+def _project_average(particles, matrices, shifts, tilt_ranges, mask, box: int):
+    """Dynamo's project averaging (`average_particles`) at native poses: map and weights."""
+    angles, dynamo_shifts = _dynamo_poses(matrices, shifts, box)
+    average, _, fweight = average_particles(particles, angles, dynamo_shifts, tilt_ranges, mask)
+    return average, fweight
+
+
+def _fourier_weight_summary(fweight: np.ndarray) -> dict[str, float]:
+    """The merged weight inside the Nyquist sphere; the cube's corners are always empty."""
+    radius = np.sqrt(np.sum(_xyz(len(fweight)).astype(float) ** 2, axis=0))
+    inside = fweight[radius < len(fweight) / 2]
+    return {
+        "minimum": float(inside.min()),
+        "median": float(np.median(inside)),
+        "fraction_below_threshold": float(np.mean(inside < FOURIER_WEIGHT_THRESHOLD)),
+    }
+
+
+def _load_alignment_mask(path: Path, box: int) -> np.ndarray:
+    """A Dynamo alignment mask: its voxels above 0.5 are searched, its nonzero ones
+    normalise each particle before averaging."""
+    with mrcfile.open(path, permissive=True) as handle:
+        mask = np.array(handle.data, dtype=np.float64)
+    if mask.shape != (box, box, box):
+        raise ValueError(f"alignment mask {path} is {mask.shape}, the particles {(box,) * 3}")
+    if not np.isfinite(mask).all() or np.any(mask < 0):
+        raise ValueError(f"alignment mask {path} must be finite and nonnegative")
+    if np.count_nonzero(mask > 0.5) < 2:
+        raise ValueError(f"alignment mask {path} has no voxels above 0.5 to search")
+    return mask
+
+
+INITIAL_REFERENCE_DEFAULT = "dynamo_average of the initial poses (fcompensate, fmin 1)"
 
 
 class DynamoSearchRefinementBackend:
-    """Dynamo's local search, this pipeline's compensated averaging. The default backend."""
+    """Dynamo's local search and Dynamo's project averaging. The default backend."""
 
     name = "dynamo-search"
 
@@ -807,6 +910,9 @@ class DynamoSearchRefinementBackend:
             shift_limit=_positive_float_parameter(
                 context, "shift_range_px", default=DEFAULT_SETTINGS.shift_limit
             ),
+            area_search_modus=_int_parameter(
+                context, "shift_search_mode", default=DEFAULT_SETTINGS.area_search_modus
+            ),
         )
         if _nonnegative_float_parameter(context, "wedge_tilt_axis_deg", default=0.0) != 0.0:
             raise ValueError("dynamo-search models one wedge about y; the tilt axis must be 0")
@@ -824,11 +930,20 @@ class DynamoSearchRefinementBackend:
         particle_diameter = _positive_float_parameter(
             context, "particle_diameter_angstrom", default=box * spacing
         )
-        mask_diameter = (
-            _optional_float_parameter(context, "alignment_mask_diameter_angstrom")
-            or particle_diameter
-        )
-        mask = search_mask(box, mask_diameter / spacing)
+        mask_path = _optional_path_parameter(context, "alignment_mask_path")
+        mask_diameter = _optional_float_parameter(context, "alignment_mask_diameter_angstrom")
+        if mask_path is not None:
+            if mask_diameter is not None:
+                raise ValueError(
+                    "dynamo-search takes the alignment mask as a file or as a diameter, not both"
+                )
+            # One mask, two uses, as in Dynamo: thresholded for the search, its
+            # whole support for normalising the particles before averaging.
+            normalization_mask = _load_alignment_mask(mask_path, box)
+        else:
+            mask_diameter = mask_diameter or particle_diameter
+            normalization_mask = search_mask(box, mask_diameter / spacing)
+        mask = (normalization_mask > 0.5).astype(float)
         geometries = _wedge_geometry_per_particle(
             pairs,
             combined,
@@ -850,7 +965,6 @@ class DynamoSearchRefinementBackend:
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
 
-        compensation = _Compensation(geometries=geometries, box_size=box, device=device)
         records = list(combined.records)
         if [record.index for record in records] != list(range(len(records))):
             raise ValueError("combined particle records are not in stack order")
@@ -860,43 +974,45 @@ class DynamoSearchRefinementBackend:
         ]
         matrices = [relion_euler_to_matrix(r.rot_deg, r.tilt_deg, r.psi_deg) for r in records]
         shifts = [np.array([r.shift_x_px, r.shift_y_px, r.shift_z_px]) for r in records]
-        volumes = combined.volumes
-        raw = [volume.detach().cpu().numpy().astype(np.float64) for volume in volumes]
+        raw = [volume.detach().cpu().numpy().astype(np.float64) for volume in combined.volumes]
+        tilt_ranges = [(g.min_tilt_deg, g.max_tilt_deg) for g in geometries]
         if initial_reference_path is not None:
-            reference = _load_reference_mrc(
-                initial_reference_path, expected_box_size=box, device=device
+            reference = (
+                _load_reference_mrc(initial_reference_path, expected_box_size=box, device=device)
+                .cpu()
+                .numpy()
+                .astype(np.float64)
             )
             initial_reference = str(initial_reference_path)
         else:
-            reference, _ = _compensated_average(
-                volumes, matrices, shifts, compensation, geometries, device
-            )
-            initial_reference = "compensated average of the initial poses"
+            angles, dynamo_shifts = _dynamo_poses(matrices, shifts, box)
+            reference = average_class(
+                raw, angles, dynamo_shifts, tilt_ranges, normalization_mask, fmin=1
+            ).average
+            initial_reference = INITIAL_REFERENCE_DEFAULT
 
         correlations = [math.nan] * len(records)
-        coverage = None
+        fweight = None
         iteration_summaries: list[dict[str, float]] = []
         for iteration in range(num_iterations):
             # Prepared as Dynamo prepares every starting reference, the first and
             # every rebuilt one, before the search sees it.
-            fixed = prepare_reference(
-                reference.detach().cpu().numpy().astype(np.float64), mask, settings
-            )
+            fixed = prepare_reference(reference, mask, settings)
             before = [matrix.copy() for matrix in matrices], [shift.copy() for shift in shifts]
             results = search_particles(
                 raw,
                 fixed,
                 mask,
                 [native_to_dynamo(m, s, box) for m, s in zip(matrices, shifts, strict=True)],
-                [(g.min_tilt_deg, g.max_tilt_deg) for g in geometries],
+                tilt_ranges,
                 settings,
                 workers=workers,
             )
             for index, (angles, shift, correlation) in enumerate(results):
                 matrices[index], shifts[index] = dynamo_to_native(angles, shift, box)
                 correlations[index] = correlation
-            reference, coverage = _compensated_average(
-                volumes, matrices, shifts, compensation, geometries, device
+            reference, fweight = _project_average(
+                raw, matrices, shifts, tilt_ranges, normalization_mask, box
             )
             iteration_summaries.append(
                 {
@@ -938,7 +1054,7 @@ class DynamoSearchRefinementBackend:
         average_path = _class_average_path(paths, 1, num_classes=1)
         _write_average_mrc(
             average_path,
-            reference.detach().cpu().numpy(),
+            reference,
             pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
         )
 
@@ -960,7 +1076,6 @@ class DynamoSearchRefinementBackend:
                 "legacy in-plane seed, kept as Dynamo keeps it"
             )
         status = QcStatus.WARNING if warnings else QcStatus.PASS
-        floor = max(compensation.floor_fraction, 1.0 / len(records))
         report = DynamoSearchQc(
             backend=self.name,
             tilt_series_ids=combined.tilt_series_ids,
@@ -978,20 +1093,16 @@ class DynamoSearchRefinementBackend:
             search_highpass_px=settings.high,
             search_lowpass_px=settings.low,
             shift_limit_px=settings.shift_limit,
+            shift_search_mode=settings.area_search_modus,
             alignment_mask_diameter_angstrom=mask_diameter,
+            alignment_mask_path=None if mask_path is None else str(mask_path),
+            search_mask_voxels=int(np.count_nonzero(mask)),
+            normalization_mask_voxels=int(np.count_nonzero(normalization_mask)),
             grid_reach_deg=reach,
             wedge_tilt_ranges_deg=[list(one) for one in ranges],
             wedge_boundary_policy=WEDGE_BOUNDARY_POLICY,
-            wedge_coverage_floor_fraction=compensation.floor_fraction,
-            wedge_coverage=(
-                None
-                if coverage is None
-                else {
-                    "minimum": float(coverage.min()),
-                    "median": float(coverage.median()),
-                    "fraction_on_the_floor": float((coverage < floor).to(torch.float32).mean()),
-                }
-            ),
+            fourier_weight_threshold=FOURIER_WEIGHT_THRESHOLD,
+            fourier_weight=None if fweight is None else _fourier_weight_summary(fweight),
             initial_reference=initial_reference,
             mean_final_correlation=float(np.mean(correlations)),
             minimum_final_correlation=minimum,
@@ -1033,7 +1144,10 @@ class DynamoSearchRefinementBackend:
                 "search_highpass_px": settings.high,
                 "search_lowpass_px": settings.low,
                 "shift_limit_px": settings.shift_limit,
+                "shift_search_mode": settings.area_search_modus,
                 "alignment_mask_diameter_angstrom": mask_diameter,
+                "alignment_mask_path": None if mask_path is None else str(mask_path),
+                "averaging": "dynamo project assembly (average_particles)",
                 "wedge_boundary_policy": WEDGE_BOUNDARY_POLICY,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),

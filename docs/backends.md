@@ -36,7 +36,7 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `prepare-template` | `pytom` | ✓ | pytom-match-pick | `pytom_create_template.py` + `pytom_create_mask.py`. |
 | `pick-particles` | `pytom-match-pick` | ✓ | pytom-match-pick, **CUDA** | Template matching. No CPU path. |
 | `extract-particles` | `cubic-crop` | ✓ | — | Crops cubic subvolumes at pick locations. |
-| `average-particles` | `dynamo-search` | ✓ | — | Dynamo's local search + compensated averaging, K=1. See [dynamo_search.md](dynamo_search.md). |
+| `average-particles` | `dynamo-search` | ✓ | — | Dynamo's local search + Dynamo's averaging, K=1. See [dynamo_search.md](dynamo_search.md). |
 | | `cone-search` | | — | Cone search + multi-reference classification. |
 | | `fft-refinement` | | — | Simple per-Euler-angle baseline. |
 
@@ -212,7 +212,9 @@ DYNAMO's approach. It does not call DYNAMO or MATLAB.
 `--alignment-mask-diameter-angstrom 300` enables weighted Pearson NCC in
 `cone-search`. The default remains the original unmasked scorer, so historical
 runs and fixed-pose `fft-refinement` controls retain their behavior. In
-`dynamo-search` the same option sets the diameter of the binary search mask.
+`dynamo-search` the same option sets the diameter of the binary search mask,
+which also normalises the particles before averaging; `--alignment-mask` takes a
+mask file instead, searched above 0.5 and normalising on its nonzero voxels.
 Supplying it to `fft-refinement` is rejected rather than silently ignored.
 
 The reference-frame spherical weight is flat to 80% of its radius and has a

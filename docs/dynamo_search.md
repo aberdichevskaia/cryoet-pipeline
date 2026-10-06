@@ -1,10 +1,10 @@
-# `dynamo-search`: Dynamo's local search, this pipeline's averaging
+# `dynamo-search`: Dynamo's local search and averaging
 
 `average-particles --backend dynamo-search` is the default refinement backend.
 It searches each particle with a CPU numerical adaptation of Dynamo 1.1.511's
-local alignment and rebuilds the reference with the pipeline's Fourier-
-compensated reducer, the one `cone-search --fourier-compensation` uses. It does
-not call Dynamo or MATLAB. `cone-search` and `fft-refinement` stay available.
+local alignment and rebuilds the reference as Dynamo's project averages it
+(`average_particles`). It does not call Dynamo or MATLAB. `cone-search` and
+`fft-refinement` stay available.
 
 ## Why it is the default
 
@@ -14,7 +14,6 @@ Measured on 223 CZII ribosomes, identical particles, pytom poses and extraction
 - Dynamo's angle changes were neutral; `cone-search`'s cost about 3 A.
 - Its shift search removed a half voxel every particle had been extracted off
   by, which no internal control had seen (`particles.CROP_POSE_CONVENTION`).
-- With the same poses, this pipeline's averaging beat Dynamo's by about 7 A.
 
 The module itself, not only its kernel, reproduces Dynamo: run through the
 CLI on refine223's stacks, reference and mask, it returned its kernel's poses
@@ -27,6 +26,34 @@ Once that extraction offset is fixed, the search itself adds little on those
 particles (0.3 A); the case for it is that it does not degrade them and that it
 can repair a systematic pose error. Template FSC there is reference-biased.
 
+## Why it averages as Dynamo does
+
+Until 2026-10-06 the backend averaged with this pipeline's compensated reducer,
+because at the same poses its map had a template FSC about 7 A better than
+Dynamo's averaging gave. That FSC was unmasked. Three checks on CZII, each at
+identical poses or from an identical start, took the case apart:
+
+- Accuracy. 227 ground-truth-matched particles at their PyTom poses, FSC with
+  the 390 A mask against EMD-16721, a human 80S from an unrelated sample, not
+  the EMD-3883 the particles were picked with: the two maps agree within 0.02
+  on every shell from 60 to 25 A. Unmasked, this pipeline's map stays ahead,
+  as the old template FSC said; the difference lies outside the particle.
+- Independent halves. 288 particles selected by score, Dynamo's own
+  half-set project against this backend run on each half the same way: the
+  same masked FSC down to 24 A.
+- Artefacts near Nyquist, one each, both traced by swapping one averaging step
+  at a time. The pipeline's reducer correlates the halves outside the mask,
+  because it divides by the particle count instead of each voxel's count of
+  valid contributions. Dynamo's averaging makes masked half-set FSC rise
+  towards Nyquist (0.78 at 20 A on those particles); its interpolated wedge
+  weights carry that.
+
+With no loss in accuracy, averaging as Dynamo does makes the whole backend
+reproduce Dynamo, search and map, each replayed against it: 8e-5 for the
+average on refine223, 6.5e-5 on the score-selected project, 4e-7 for the
+`dynamo_average` start. Dynamo's rise of half-set FSC near Nyquist comes with
+it, so read half-set FSC there with care, and only masked.
+
 ## What one iteration does
 
 1. The current reference is prepared as Dynamo's iteration setup prepares
@@ -36,12 +63,18 @@ can repair a systematic pose error. Template FSC there is reference-biased.
    done: a multilevel cone and in-plane grid around its pose, a moving-mask
    local NCC, and a shift search inside a sphere re-centred on each level's
    winner.
-3. The reference is rebuilt from the raw particles at the new poses with
-   `subtomogram._compensated_reference`: each particle's wedge at its own tilt
-   range, frequencies divided by how many particles measured them.
+3. The reference is rebuilt from the particles at the new poses as Dynamo's
+   project assembles it (`average_particles`, its `fsc = true` path): each
+   particle at its inverse pose, normalised over the alignment mask's nonzero
+   voxels, with every voxel divided by the particles that really reached it;
+   odd and even particles summed apart, each normalised, merged; the merged
+   wedge weight divided where it reaches 0.1 of its maximum and every other
+   component zeroed; the map not normalised again.
 
-The first reference is that same average of the initial poses, or
-`--initial-reference`: a raw map, as Dynamo's `file_template_initial` is, never
+The first reference is `dynamo_average` of the initial poses with `fcompensate`
+and `fmin 1` (`average_class`), the console call that makes a Dynamo project's
+starting template, or `--initial-reference`: a raw map, as Dynamo's
+`file_template_initial` is, never
 a reference Dynamo has already transformed, which would be prepared twice.
 Without step 1 the search differed from Dynamo's on every one of 25 refine223
 particles (median 1.25 degrees, one finest-level step); the module parity runs
@@ -60,16 +93,20 @@ average that contains it.
 | `--inplane-range-deg`, `--inplane-sampling-deg` | 15, 5 | in-plane range and step |
 | `--refine-levels` | 2 | levels after the first; each shrinks by `--refine-factor` (2) |
 | `--search-highpass-px`, `--search-lowpass-px` | 2, 16 | search band in Fourier pixels |
-| `--shift-range-px` | 3 | shift sphere radius, re-centred each level |
-| `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask, a sphere about `(N - 1) / 2` |
+| `--shift-range-px` | 3 | shift sphere radius |
+| `--shift-search-mode` | 2 | Dynamo's `limm`: 2 re-centres the shift sphere on each level's winner, 1 keeps it on the box centre (item 6) |
+| `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask, a sphere about `(N - 1) / 2`; it also normalises the particles |
+| `--alignment-mask` | — | a mask file instead, used as Dynamo uses one: voxels above 0.5 are searched, nonzero voxels normalise the particles |
 | `--workers` | the job's CPUs | processes searching particles in parallel; the poses do not depend on it |
 
 The grid, band and shift defaults are Dynamo's `refine223` project on CZII: a
 48-voxel box at 10.012 A, where 16 Fourier pixels is 30 A. The band is in
 Fourier pixels, so a different box needs its own `--search-lowpass-px`. That
-project's mask was a 390.468 A (39 px) sphere, which
-`--alignment-mask-diameter-angstrom 390.468` reproduces voxel for voxel and the
-particle-diameter default does not. The wedge is always modelled and the
+project's mask was a soft sphere whose part above 0.5 is a 390.468 A (39 px)
+sphere: `--alignment-mask-diameter-angstrom 390.468` reproduces its search mask
+voxel for voxel, the particle-diameter default does not, and only
+`--alignment-mask` with the file itself reproduces its normalisation, which
+reaches out to the soft edge. The wedge is always modelled and the
 average always compensated, so `--missing-wedge` and `--fourier-compensation`
 are refused; `--wedge-min-tilt-deg` and `--wedge-max-tilt-deg` override the
 manifests. The tilt axis must be y.
@@ -94,7 +131,11 @@ alone moved all 25 poses off Dynamo's, by a median of one finest-level step
 
 `qc/<scope>/subtomogram_averaging/*.json` (`DynamoSearchQc`) records the search
 settings, per-iteration mean and minimum CC and pose movement, the whole run's
-`pose_change`, Fourier coverage, the wedge boundary policy, and
+`pose_change`, the alignment mask (file or diameter, and how many voxels it
+searches and normalises), the last average's Fourier weight inside the Nyquist
+sphere (minimum, median, and the fraction below 0.1, which the averaging
+zeroes), the wedge boundary
+policy, and
 `beyond_grid_count`: particles that moved further than the grid can reach
 (`grid_reach_deg`), which is Dynamo's legacy in-plane seed at work. Those moves
 are kept, as Dynamo keeps them, and reported as a warning.
@@ -117,14 +158,12 @@ particle is still searched by the same code on the same float64 inputs, and
 nothing in the search sums across threads, so the poses do not depend on the
 worker count; a test holds the STAR to the same bytes. Workers are spawned, so
 a script that calls the backend directly needs the usual
-`if __name__ == "__main__":` guard; the CLI has one. The averaging runs on
-`--device`.
+`if __name__ == "__main__":` guard; the CLI has one. The averaging is NumPy in
+the main process, 12 ms a particle at box 48.
 
 ## Source behavior retained deliberately
 
-Items 8 and 9 describe the kernel's own `average_particles`, kept so the
-benchmark's replay can still check averaging against Dynamo; the backend
-averages with the pipeline's reducer instead.
+Items 8 and 9 describe `average_particles`, which the backend averages with.
 
 1. The CPU project applies the bandpass twice to a particle: database processing,
    then its wedge/band filter. The rotated template gets that filter once.

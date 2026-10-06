@@ -2993,8 +2993,8 @@ def average_particles(
     backend: Annotated[
         str,
         typer.Option(
-            help="Subtomogram averaging backend: dynamo-search (Dynamo's local search, "
-            "this pipeline's Fourier-compensated averaging; one class), cone-search (cone "
+            help="Subtomogram averaging backend: dynamo-search (Dynamo's local search "
+            "and Dynamo's project averaging; one class), cone-search (cone "
             "orientation search, multi-reference classification) or fft-refinement "
             "(simple baseline)."
         ),
@@ -3078,6 +3078,16 @@ def average_particles(
             "at most half the box. Default: 16 (30 A for a 48-voxel box at 10.012 A).",
         ),
     ] = None,
+    shift_search_mode: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            max=2,
+            help="[dynamo-search] Dynamo's limm (area_search_modus): 2 re-centres the "
+            "shift sphere on each level's winner, 1 keeps it on the box centre. "
+            "Default: 2.",
+        ),
+    ] = None,
     workers: Annotated[
         int | None,
         typer.Option(
@@ -3111,8 +3121,17 @@ def average_particles(
             help="[cone-search] Enable reference-frame weighted NCC inside a soft sphere "
             "of this diameter in A (flat to 80% radius, cosine edge). Default: no mask. "
             "The mask plus shift window must fit inside the box. [dynamo-search] Diameter "
-            "of the binary search mask; default: the particle diameter. Output maps are "
-            "not masked.",
+            "of the binary search mask, which also normalises the particles before "
+            "averaging; default: the particle diameter. Output maps are not masked.",
+        ),
+    ] = None,
+    alignment_mask: Annotated[
+        Path | None,
+        typer.Option(
+            help="[dynamo-search] Alignment mask file (MRC, the particle box), used as "
+            "Dynamo uses one: its voxels above 0.5 are searched, and its nonzero voxels "
+            "normalise each particle before averaging. Instead of "
+            "--alignment-mask-diameter-angstrom.",
         ),
     ] = None,
     alignment_frame: Annotated[
@@ -3298,6 +3317,16 @@ def average_particles(
             "an alignment mask is supported only by cone-search and dynamo-search",
             param_hint="alignment-mask-diameter-angstrom",
         )
+    if alignment_mask is not None and backend != "dynamo-search":
+        raise typer.BadParameter(
+            "an alignment mask file is supported only by dynamo-search",
+            param_hint="alignment-mask",
+        )
+    if alignment_mask is not None and alignment_mask_diameter_angstrom is not None:
+        raise typer.BadParameter(
+            "give the alignment mask as a file or as a diameter, not both",
+            param_hint="alignment-mask",
+        )
     if backend == "dynamo-search" and (missing_wedge or fourier_compensation):
         raise typer.BadParameter(
             "dynamo-search always models the wedge and always averages with Fourier "
@@ -3318,6 +3347,7 @@ def average_particles(
         "refine-levels": refine_levels,
         "search-highpass-px": search_highpass_px,
         "search-lowpass-px": search_lowpass_px,
+        "shift-search-mode": shift_search_mode,
         "workers": workers,
     }
     for hint, value in dynamo_only.items():
@@ -3394,6 +3424,7 @@ def average_particles(
         "refine_levels": refine_levels,
         "search_highpass_px": search_highpass_px,
         "search_lowpass_px": search_lowpass_px,
+        "shift_search_mode": shift_search_mode,
         "workers": workers,
     }.items():
         if value is not None:
@@ -3408,6 +3439,8 @@ def average_particles(
         parameters["target_resolution_angstrom"] = target_resolution_angstrom
     if initial_reference is not None:
         parameters["initial_reference_path"] = initial_reference
+    if alignment_mask is not None:
+        parameters["alignment_mask_path"] = alignment_mask
     context = BackendContext(
         output_dir=out,
         device=resolve_device(device),

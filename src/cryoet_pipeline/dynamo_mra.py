@@ -70,26 +70,24 @@ import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import (
     DEFAULT_SETTINGS,
+    ClassAverage,
     SearchSettings,
-    _cube,
-    _triple,
-    normalize_roi,
+    average_class,
+    fweight_divide,
     prepare_reference,
-    resample,
     search_particles,
-    wedge,
 )
 
-
-@dataclass(frozen=True)
-class ClassAverage:
-    average: np.ndarray
-    """Compensated, then normalized over the mask: the channel's next reference."""
-    raw: np.ndarray
-    fweight: np.ndarray
-    fmask: np.ndarray
-    threshold: float
-    members: int
+__all__ = [
+    "ChannelSearch",
+    "ClassAverage",
+    "MraIteration",
+    "assign",
+    "average_class",
+    "fweight_divide",
+    "mra_iteration",
+    "run_mra",
+]
 
 
 @dataclass(frozen=True)
@@ -106,61 +104,6 @@ class MraIteration:
     assignment: np.ndarray
     surviving: list[int]
     averages: dict[int, ClassAverage]
-
-
-def fweight_divide(volume, fweight, threshold: float) -> np.ndarray:
-    """`dynamo_fweight_divide`: divide the centred spectrum by the weight where the
-    weight reaches `threshold`, and zero every other component."""
-    spectrum = np.fft.fftshift(np.fft.fftn(np.asarray(volume, dtype=float)))
-    fweight = np.asarray(fweight, dtype=float)
-    keep = np.isfinite(fweight) & (fweight >= threshold)
-    divided = np.zeros_like(spectrum)
-    np.divide(spectrum, fweight, out=divided, where=keep)
-    return np.fft.ifftn(np.fft.ifftshift(divided)).real
-
-
-def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 1) -> ClassAverage:
-    """A class average as the MRA plugin asks `dynamo_average` for it.
-
-    Per particle, the path of the project's own averaging, which the search
-    kernel's `average_particles` reproduces (replay: 8e-5 against Dynamo): the
-    inverse pose, out-of-box voxels zeroed, normalization over the mask's nonzero
-    voxels, zeroed again, and the table wedge rotated with the implicit sphere
-    for the Fourier weight. Unlike that `fsc = true` assembly: one sum over all
-    members in their given order (ascending tags in Dynamo), no odd/even halves;
-    the compensation threshold `fmin / N` of the max-normalized weight, not 0.1;
-    and the compensated average normalized over the mask once more.
-    """
-    nmask = _cube(nmask)
-    rows = list(zip(particles, angles, shifts, tilt_ranges, strict=True))
-    if not rows or np.any(nmask < 0) or not np.any(nmask):
-        raise ValueError("a class needs at least one particle and a nonnegative, nonempty mask")
-    if type(fmin) is not int or fmin < 1:
-        raise ValueError(f"fmin counts particles and must be a positive integer, got {fmin!r}")
-    total = np.zeros(nmask.shape)
-    contributions = np.zeros(nmask.shape)
-    weights = np.zeros(nmask.shape)
-    for particle, angle, shift, tilts in rows:
-        if _cube(particle).shape != nmask.shape:
-            raise ValueError("particle and mask shapes differ")
-        inverse_angles = -_triple(angle)[::-1]
-        aligned, valid = resample(particle, inverse_angles, -_triple(shift))
-        aligned = normalize_roi(aligned, nmask)
-        aligned[~valid] = 0
-        total += aligned
-        contributions += valid
-        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True)
-        weights += rotated_wedge
-    count = len(rows)
-    # explicitBalanceNan: every voxel divided by the particles that really reached it.
-    raw = np.divide(total, contributions, out=np.zeros_like(total), where=contributions > 0)
-    raw = normalize_roi(raw, nmask)
-    fweight = weights / weights.max()
-    threshold = fmin / count if fmin < count else 1 / count
-    average = normalize_roi(fweight_divide(raw, fweight, threshold), nmask)
-    return ClassAverage(
-        average, raw, fweight, (fweight >= threshold).astype(float), threshold, count
-    )
 
 
 def assign(correlations: Mapping[int, np.ndarray]) -> np.ndarray:

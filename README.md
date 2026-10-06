@@ -324,8 +324,8 @@ cryoet compute-fsc \
 ```
 
 `average-particles` defaults to the `dynamo-search` backend: Dynamo's local
-search, adapted to NumPy and validated against Dynamo itself, with this
-pipeline's Fourier-compensated averaging, one class, one iteration unless
+search and averaging, adapted to NumPy and validated against Dynamo itself,
+one class, one iteration unless
 `--num-iterations` says otherwise; see [docs/dynamo_search.md](docs/dynamo_search.md).
 `--backend cone-search` searches orientations on a cone and refines several
 references at once when `--num-classes` is above one; see

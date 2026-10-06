@@ -10,6 +10,7 @@ import mrcfile
 import numpy as np
 import pytest
 import torch
+import zarr
 from test_wedge import _granular_phantom, _manifest, _particle_stack
 from typer.testing import CliRunner
 
@@ -21,6 +22,7 @@ from cryoet_pipeline.backends.subtomogram import average_and_register
 from cryoet_pipeline.models import ArtifactKind
 from cryoet_pipeline.particles import read_particle_star
 from cryoet_pipeline.rotations import (
+    center_particle_volume,
     matrix_to_relion_euler,
     perturbation_matrix,
     relion_euler_to_matrix,
@@ -430,11 +432,13 @@ def test_dynamo_search_brings_poses_twenty_degrees_off_back_to_the_truth(tmp_pat
 
 
 def test_dynamo_search_holds_true_poses_to_its_information_limit(tmp_path):
-    """From the true poses, against its own compensated reference, two iterations.
+    """From the true poses, against its own Dynamo average, two iterations.
 
-    Measured on this seed, 12 particles: median 4.9 deg, max 10.8 deg after one
-    iteration, with every found pose scoring at least as high as the true one:
-    the landscape is flat to about the Crowther limit of this box, 5-6 deg.
+    Measured on this seed, 12 particles, with Dynamo's averaging: median 4.9 deg,
+    max 11.0 deg after one iteration, 5.0 and 13.3 deg after two. With the
+    previous reducer one iteration gave 4.9 and 10.8, and every found pose scored
+    at least as high as the true one: the landscape is flat to about the Crowther
+    limit of this box, 5-6 deg.
     """
     truth, _ = _true_and_perturbed(12, 0.0)
     stack = _wedged_particles(tmp_path, truth)
@@ -448,7 +452,7 @@ def test_dynamo_search_holds_true_poses_to_its_information_limit(tmp_path):
     report = json.loads(qc.path.read_text())
     assert report["backend"] == "dynamo-search" and report["iterations_run"] == 2
     assert report["gold_standard"] is False and len(report["iterations"]) == 2
-    assert report["initial_reference"] == "compensated average of the initial poses"
+    assert report["initial_reference"] == core.INITIAL_REFERENCE_DEFAULT
     assert report["grid_reach_deg"] == pytest.approx(
         core.grid_reach_deg(
             core.SearchSettings(
@@ -517,6 +521,145 @@ def test_the_backend_searches_the_reference_as_dynamo_prepares_it(tmp_path, monk
     np.testing.assert_allclose(first, expected, atol=1e-10)
     rebuilt = seen[1][0][mask > 0.5]
     assert abs(rebuilt.mean()) < 1e-10 and rebuilt.std(ddof=1) == pytest.approx(1)
+
+
+def _loaded_particles(stack):
+    """The particles as the backend loads them: centred in float32, then float64."""
+    return [
+        center_particle_volume(torch.as_tensor(v)).numpy().astype(np.float64)
+        for v in zarr.open(stack.path, mode="r")[:]
+    ]
+
+
+def _dynamo_table(records, box):
+    poses = [
+        core.native_to_dynamo(
+            relion_euler_to_matrix(r.rot_deg, r.tilt_deg, r.psi_deg),
+            np.array([r.shift_x_px, r.shift_y_px, r.shift_z_px]),
+            box,
+        )
+        for r in records
+    ]
+    return [angles for angles, _ in poses], [shift for _, shift in poses]
+
+
+def _relative(actual, expected):
+    return np.linalg.norm(actual - expected) / np.linalg.norm(expected)
+
+
+def _spy_searches(monkeypatch):
+    seen = []
+    real = core.search_particles
+
+    def spy(particles, fixed, mask, *args, **kwargs):
+        seen.append((fixed.copy(), mask.copy()))
+        return real(particles, fixed, mask, *args, **kwargs)
+
+    monkeypatch.setattr(core, "search_particles", spy)
+    return seen
+
+
+def test_the_backend_averages_as_dynamos_project_does(tmp_path, monkeypatch):
+    """It starts from `dynamo_average` of the given poses and writes Dynamo's project
+    average at the poses it found, both as replayed against Dynamo."""
+    truth, perturbed = _true_and_perturbed(6, 10.0)
+    stack = _wedged_particles(tmp_path, perturbed, truth=truth)
+    seen = _spy_searches(monkeypatch)
+    average, qc = _run(tmp_path, stack, workers=1)
+    particles = _loaded_particles(stack)
+    mask = core.search_mask(24, 22.0)
+    tilts = [(-60.0, 60.0)] * len(particles)
+    start = read_particle_star(Path(stack.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(start, 24)
+    expected_start = core.average_class(particles, angles, shifts, tilts, mask, fmin=1).average
+    np.testing.assert_allclose(
+        seen[0][0],
+        core.prepare_reference(expected_start, mask, core.SearchSettings(low=11.0)),
+        atol=1e-10,
+    )
+    found = read_particle_star(Path(average.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(found, 24)
+    expected = core.average_particles(particles, angles, shifts, tilts, mask)[0]
+    assert _relative(mrcfile.read(average.path).astype(np.float64), expected) < 1e-5
+    report = json.loads(qc.path.read_text())
+    assert report["schema_version"] == 2
+    assert report["initial_reference"] == core.INITIAL_REFERENCE_DEFAULT
+    assert report["fourier_weight_threshold"] == core.FOURIER_WEIGHT_THRESHOLD
+    assert set(report["fourier_weight"]) == {"minimum", "median", "fraction_below_threshold"}
+    assert report["alignment_mask_diameter_angstrom"] == 220.0
+    assert report["alignment_mask_path"] is None
+    assert report["search_mask_voxels"] == report["normalization_mask_voxels"] == mask.sum()
+    assert report["shift_search_mode"] == 2
+
+
+def test_the_shift_search_mode_reaches_the_search(tmp_path, monkeypatch):
+    """Dynamo's limm 1, the mode the CZII Dynamo projects run in, gets to the kernel."""
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    modes = []
+    real = core.search_particles
+
+    def spy(particles, fixed, mask, starts, tilts, settings, **kwargs):
+        modes.append(settings.area_search_modus)
+        return real(particles, fixed, mask, starts, tilts, settings, **kwargs)
+
+    monkeypatch.setattr(core, "search_particles", spy)
+    _, qc = _run(tmp_path, stack, workers=1, shift_search_mode=1)
+    assert modes == [1]
+    assert json.loads(qc.path.read_text())["shift_search_mode"] == 1
+
+
+def _soft_mask(box=24, inner=6.0, outer=9.0):
+    """One inside `inner`, a cosine to zero at `outer`: above 0.5 inside 7.5."""
+    axis = np.arange(box) - (box - 1) / 2
+    z, y, x = np.meshgrid(axis, axis, axis, indexing="ij")
+    r = np.sqrt(x * x + y * y + z * z)
+    edge = np.clip((r - inner) / (outer - inner), 0.0, 1.0)
+    return np.where(r < outer, 0.5 + 0.5 * np.cos(np.pi * edge), 0.0)
+
+
+def test_a_mask_file_is_searched_above_half_and_normalises_on_its_support(tmp_path, monkeypatch):
+    """One mask, two uses, as in Dynamo: thresholded for the search, whole for averaging."""
+    truth, perturbed = _true_and_perturbed(6, 10.0)
+    stack = _wedged_particles(tmp_path, perturbed, truth=truth)
+    path = tmp_path / "mask.mrc"
+    with mrcfile.new(path) as handle:
+        handle.set_data(_soft_mask().astype(np.float32))
+    soft = mrcfile.read(path).astype(np.float64)
+    seen = _spy_searches(monkeypatch)
+    average, qc = _run(tmp_path, stack, workers=1, alignment_mask_path=str(path))
+    np.testing.assert_array_equal(seen[0][1], (soft > 0.5).astype(float))
+    particles = _loaded_particles(stack)
+    tilts = [(-60.0, 60.0)] * len(particles)
+    found = read_particle_star(Path(average.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(found, 24)
+    written = mrcfile.read(average.path).astype(np.float64)
+    on_support = core.average_particles(particles, angles, shifts, tilts, soft)[0]
+    on_threshold = core.average_particles(particles, angles, shifts, tilts, soft > 0.5)[0]
+    assert _relative(written, on_support) < 1e-5
+    assert _relative(written, on_threshold) > 1e-3  # the support is what normalises
+    report = json.loads(qc.path.read_text())
+    assert report["alignment_mask_path"] == str(path.resolve())
+    assert report["alignment_mask_diameter_angstrom"] is None
+    assert report["search_mask_voxels"] == np.count_nonzero(soft > 0.5)
+    assert report["normalization_mask_voxels"] == np.count_nonzero(soft)
+
+
+@pytest.mark.parametrize(
+    ("mask", "extra", "match"),
+    [
+        (np.ones((20, 20, 20)), {}, "the particles"),
+        (-np.ones((24, 24, 24)), {}, "nonnegative"),
+        (np.full((24, 24, 24), 0.4), {}, "above 0.5"),
+        (np.ones((24, 24, 24)), {"alignment_mask_diameter_angstrom": 200.0}, "not both"),
+    ],
+)
+def test_dynamo_search_refuses_a_mask_it_cannot_use(tmp_path, mask, extra, match):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    path = tmp_path / "mask.mrc"
+    with mrcfile.new(path) as handle:
+        handle.set_data(mask.astype(np.float32))
+    with pytest.raises(ValueError, match=match):
+        _run(tmp_path, stack, alignment_mask_path=str(path), **extra)
 
 
 def test_worker_default_is_the_jobs_allocation(monkeypatch):
@@ -601,6 +744,11 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
     assert captured["parameters"]["cone_range_deg"] == 12.0
     assert captured["parameters"]["refine_levels"] == 1
     assert captured["parameters"]["workers"] == 2
+    assert "alignment_mask_path" not in captured["parameters"]
+    result, captured = _cli(tmp_path / "mask", monkeypatch, "--alignment-mask", "mask.mrc")
+    assert captured["parameters"]["alignment_mask_path"] == Path("mask.mrc"), result.output
+    result, captured = _cli(tmp_path / "limm", monkeypatch, "--shift-search-mode", "1")
+    assert captured["parameters"]["shift_search_mode"] == 1, result.output
 
 
 @pytest.mark.parametrize(
@@ -612,6 +760,10 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
         ("--backend", "fft-refinement", "--search-lowpass-px", "8"),
         ("--backend", "cone-search", "--workers", "2"),
         ("--workers", "0"),
+        ("--backend", "cone-search", "--alignment-mask", "mask.mrc"),
+        ("--backend", "cone-search", "--shift-search-mode", "1"),
+        ("--shift-search-mode", "3"),
+        ("--alignment-mask", "mask.mrc", "--alignment-mask-diameter-angstrom", "300"),
     ],
 )
 def test_cli_refuses_options_the_chosen_backend_would_not_read(tmp_path, monkeypatch, arguments):
