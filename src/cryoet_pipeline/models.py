@@ -1225,6 +1225,10 @@ class FscQc(BaseModel):
     crossing_resolution_angstrom: float | None = None
     resolution_angstrom: list[float]
     correlation: list[float]
+    rise_toward_nyquist: dict[str, float | None] | None = None
+    """Set when agreement comes back after a dip in the outer half beyond chance
+    (`fsc.rise_toward_nyquist`): the dip, the peak, their significance, and where
+    the curve fell through the threshold before the dip."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

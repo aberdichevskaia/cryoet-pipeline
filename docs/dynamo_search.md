@@ -45,14 +45,15 @@ identical poses or from an identical start, took the case apart:
   at a time. The pipeline's reducer correlates the halves outside the mask,
   because it divides by the particle count instead of each voxel's count of
   valid contributions. Dynamo's averaging makes masked half-set FSC rise
-  towards Nyquist (0.78 at 20 A on those particles); its interpolated wedge
-  weights carry that.
+  towards Nyquist (0.27 at 22.9 A back up to 0.69 at 20 A on those particles);
+  its interpolated wedge weights carry that.
 
 With no loss in accuracy, averaging as Dynamo does makes the whole backend
 reproduce Dynamo, search and map, each replayed against it: 8e-5 for the
 average on refine223, 6.5e-5 on the score-selected project, 4e-7 for the
 `dynamo_average` start. Dynamo's rise of half-set FSC near Nyquist comes with
-it, so read half-set FSC there with care, and only masked.
+it, so read half-set FSC there with care, and only masked; `compute-fsc` warns
+when a curve rises like that (`fsc.rise_toward_nyquist`).
 
 ## What one iteration does
 

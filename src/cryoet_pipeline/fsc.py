@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,16 +25,25 @@ def _fourier_shell_correlation(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor
     The CLI imports every module up front, so a package needed by one command
     must not be imported at module scope: otherwise a missing optional
     dependency breaks unrelated commands.
+
+    It gets full transforms. Its `fourier_shell_correlation` sums the `rfftn`
+    half grid without Hermitian weights, so the kx = 0 and kx = N/2 planes,
+    which hold both members of their conjugate pairs, counted twice against
+    every other coefficient. Whatever those planes share then lifts the curve:
+    on CZII half-maps it added up to 0.12 near Nyquist unmasked, and 0.09 on
+    the masked Nyquist shell of Dynamo's halves.
     """
 
     try:
-        from torch_fourier_shell_correlation import fourier_shell_correlation
+        from torch_fourier_shell_correlation import fourier_correlation
     except ImportError as exc:  # pragma: no cover - exercised only without the package
         raise ImportError(
             "compute-fsc needs the torch-fourier-shell-correlation package; "
             'install it with: pip install -e ".[gpu]"'
         ) from exc
-    result: torch.Tensor = fourier_shell_correlation(a, b)
+    result: torch.Tensor = fourier_correlation(
+        torch.fft.fftn(a), torch.fft.fftn(b), tuple(a.shape), rfft=False
+    )
     return result
 
 
@@ -145,6 +154,76 @@ def compute_fsc_curve(
     )
 
 
+# Two independent maps correlate in shell k by about +-sqrt(2 / N_k), N_k being the
+# voxels in the shell (van Heel & Schatz 2005, the basis of their 3-sigma curve).
+# A rise is flagged when it clears 5 such sigma of the dip and the peak together,
+# and 0.1 FSC. Five rather than three because the dip and the peak are picked out
+# of a dozen shells after looking: on CZII at box 48 a shuffled-pose null reached
+# about 4 by chance, while Dynamo's averaging of real half-maps rose by about 16.
+RISE_MIN_SIGMA = 5.0
+RISE_MIN_FSC = 0.1
+
+
+@dataclass(frozen=True)
+class NyquistRise:
+    """Agreement that comes back after a dip in the outer half of the curve."""
+
+    dip_resolution_angstrom: float
+    dip_correlation: float
+    peak_resolution_angstrom: float
+    peak_correlation: float
+    sigma: float
+    """The rise in units of the two shells' noise, sqrt(2 / N_k) each."""
+    crossing_before_dip_angstrom: float | None
+    """Where the curve last fell through the threshold before the dip, if it did:
+    the resolution its final descent would report without the rise."""
+
+
+def _shell_voxel_counts(box_size: int) -> np.ndarray:
+    frequency = np.fft.fftfreq(box_size) * box_size
+    z, y, x = np.meshgrid(frequency, frequency, frequency, indexing="ij")
+    return np.bincount(np.rint(np.sqrt(x * x + y * y + z * z)).astype(int).ravel())
+
+
+def rise_toward_nyquist(curve: FscCurve, box_size: int) -> NyquistRise | None:
+    """The deepest dip in the curve's outer half and the strongest return after it,
+    when that return is beyond chance; otherwise None.
+
+    Real agreement fades toward Nyquist. When it comes back there, the two maps
+    more often share something other than the structure: Dynamo's averaging does
+    this to masked half-maps on CZII (0.27 at 22.9 A back up to 0.69 at 20.0 A),
+    and this pipeline's former compensated reducer did it unmasked. It can also be
+    signal past an uncorrected CTF zero. Either way the final-descent crossing
+    then lands beyond the dip, or nowhere, so the dip is worth reporting.
+    """
+
+    correlation = np.asarray(curve.correlation, dtype=float)
+    count = len(correlation)
+    if count < 4:
+        return None
+    voxels = _shell_voxel_counts(box_size)[1 : count + 1]
+    noise = np.sqrt(2.0 / np.maximum(voxels, 1))
+    start = count // 2 - 1  # the outer half: shells count/2 .. count
+    dip = start + int(np.argmin(correlation[start:-1]))
+    peak = dip + 1 + int(np.argmax(correlation[dip + 1 :]))
+    rise = float(correlation[peak] - correlation[dip])
+    sigma = rise / float(np.hypot(noise[dip], noise[peak]))
+    if rise < RISE_MIN_FSC or sigma < RISE_MIN_SIGMA:
+        return None
+    crossing = None
+    above = np.flatnonzero(correlation[:dip] >= curve.threshold)
+    if above.size and correlation[above[-1] + 1] < curve.threshold:
+        crossing = curve.resolution_angstrom[above[-1] + 1]
+    return NyquistRise(
+        dip_resolution_angstrom=curve.resolution_angstrom[dip],
+        dip_correlation=float(correlation[dip]),
+        peak_resolution_angstrom=curve.resolution_angstrom[peak],
+        peak_correlation=float(correlation[peak]),
+        sigma=sigma,
+        crossing_before_dip_angstrom=crossing,
+    )
+
+
 def build_half_set_average(
     *,
     particle_stack_path: Path,
@@ -234,6 +313,24 @@ def compute_and_write_fsc_report(
             "so read the reported resolution as the final descent and not the "
             "low-frequency part of the curve"
         )
+    rise = rise_toward_nyquist(curve, int(volume_a.shape[0]))
+    if rise is not None:
+        status = QcStatus.WARNING
+        before = (
+            f"; before it the curve fell through {threshold:.3f} at "
+            f"{rise.crossing_before_dip_angstrom:.1f} A"
+            if rise.crossing_before_dip_angstrom is not None
+            else ""
+        )
+        warnings.append(
+            f"the curve rises again toward Nyquist, from {rise.dip_correlation:.2f} at "
+            f"{rise.dip_resolution_angstrom:.1f} A to {rise.peak_correlation:.2f} at "
+            f"{rise.peak_resolution_angstrom:.1f} A ({rise.sigma:.0f} sigma of shell "
+            "noise). Agreement that returns this close to Nyquist is more often shared "
+            "processing than structure (Dynamo's averaging does it to masked half-maps), "
+            "though it can be signal past an uncorrected CTF zero. The final descent "
+            f"then lands beyond the dip{before}"
+        )
 
     report = FscQc(
         mode=mode,
@@ -243,6 +340,7 @@ def compute_and_write_fsc_report(
         crossing_resolution_angstrom=curve.crossing_resolution_angstrom,
         resolution_angstrom=curve.resolution_angstrom,
         correlation=curve.correlation,
+        rise_toward_nyquist=None if rise is None else asdict(rise),
         status=status,
         warnings=warnings,
     )

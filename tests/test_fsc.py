@@ -9,11 +9,15 @@ import torch
 import zarr
 
 from cryoet_pipeline.fsc import (
+    RISE_MIN_SIGMA,
+    _shell_voxel_counts,
     build_half_set_average,
+    compute_and_write_fsc_report,
     compute_fsc_curve,
     load_mask,
     load_mrc_volume,
     plot_fsc_curve,
+    rise_toward_nyquist,
 )
 from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 
@@ -195,6 +199,133 @@ def test_a_curve_that_dips_at_low_frequency_and_recovers_says_so() -> None:
     # And in particular NOT the coarsest shell, which is what the first-dip scan
     # returned for exactly this shape on real data.
     assert result.crossing_resolution_angstrom < result.resolution_angstrom[1]
+
+
+def _two_maps(*, shared_outer: bool, seed: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
+    """Box 32 at 2 A: a strong signal low-passed at shell 5, independent noise
+    everywhere, and, if asked, a component both maps share beyond shell 12 only.
+
+    The filter's edge is soft: the signal still holds 0.72 at shell 6 and is gone
+    at 7, and the shared band reaches 0.59 at shell 13 and 0.8 from 14 on.
+    """
+
+    from cryoet_pipeline.filters import low_pass_filter_volume
+
+    size, apix = 32, 2.0
+    torch.manual_seed(seed)
+    signal = 3.0 * low_pass_filter_volume(
+        torch.randn(size, size, size), cutoff_angstrom=64.0 / 5, pixel_spacing_angstrom=apix
+    )
+    a = signal + torch.randn(size, size, size)
+    b = signal + torch.randn(size, size, size)
+    if shared_outer:
+        full = torch.randn(size, size, size)
+        outer = full - low_pass_filter_volume(
+            full, cutoff_angstrom=64.0 / 12, pixel_spacing_angstrom=apix
+        )
+        a, b = a + 2.0 * outer, b + 2.0 * outer
+    return a, b
+
+
+def test_agreement_that_returns_toward_nyquist_is_flagged_with_the_crossing_it_hides() -> None:
+    a, b = _two_maps(shared_outer=True)
+    curve = compute_fsc_curve(a, b, pixel_spacing_angstrom=2.0, threshold=0.5)
+    # Preconditions: signal to shell 6, nothing in the middle, the shared band after.
+    assert min(curve.correlation[:6]) > 0.5, curve.correlation
+    assert max(curve.correlation[6:11]) < 0.3, curve.correlation
+    assert min(curve.correlation[13:]) > 0.6, curve.correlation
+    rise = rise_toward_nyquist(curve, 32)
+    assert rise is not None
+    assert rise.sigma >= RISE_MIN_SIGMA
+    assert 64.0 / 12 < rise.dip_resolution_angstrom <= 64.0 / 8
+    assert rise.peak_resolution_angstrom <= 64.0 / 12
+    # The final descent reports nothing, the shared band staying above 0.5 to the
+    # end; the crossing before the dip is the signal's own, at shell 7.
+    assert curve.crossing_resolution_angstrom is None
+    assert rise.crossing_before_dip_angstrom == pytest.approx(64.0 / 7)
+
+
+def test_a_curve_that_fades_to_nyquist_is_not_flagged() -> None:
+    a, b = _two_maps(shared_outer=False)
+    curve = compute_fsc_curve(a, b, pixel_spacing_angstrom=2.0, threshold=0.5)
+    assert curve.crossing_resolution_angstrom == pytest.approx(64.0 / 7)
+    assert rise_toward_nyquist(curve, 32) is None
+
+
+def test_independent_noise_does_not_rise_beyond_chance() -> None:
+    """Twenty pairs of independent maps at the CZII box: none flagged."""
+
+    for seed in range(20):
+        generator = torch.Generator().manual_seed(seed)
+        a = torch.randn(48, 48, 48, generator=generator)
+        b = torch.randn(48, 48, 48, generator=generator)
+        curve = compute_fsc_curve(a, b, pixel_spacing_angstrom=10.0, threshold=0.143)
+        assert rise_toward_nyquist(curve, 48) is None, (seed, curve.correlation)
+
+
+def test_shell_noise_counts_the_voxels_of_each_shell() -> None:
+    counts = _shell_voxel_counts(48)
+    assert counts.sum() == 48**3
+    assert counts[12] == pytest.approx(4 * np.pi * 12**2, rel=0.05)
+
+
+def test_the_report_warns_of_a_rise_and_records_it(tmp_path: Path) -> None:
+    a, b = _two_maps(shared_outer=True)
+    out = tmp_path / "fsc.json"
+    report = compute_and_write_fsc_report(
+        a, b, mode="half-set", pixel_spacing_angstrom=2.0, threshold=0.5, out=out
+    )
+    assert report.status.value == "warning"
+    assert any("rises again toward Nyquist" in w for w in report.warnings)
+    assert any("fell through 0.500 at 9.1 A" in w for w in report.warnings)
+    assert report.rise_toward_nyquist is not None
+    assert report.rise_toward_nyquist["crossing_before_dip_angstrom"] == pytest.approx(64.0 / 7)
+    assert '"rise_toward_nyquist"' in out.read_text()
+    a, b = _two_maps(shared_outer=False)
+    quiet = compute_and_write_fsc_report(
+        a, b, mode="half-set", pixel_spacing_angstrom=2.0, threshold=0.5, out=out
+    )
+    assert quiet.rise_toward_nyquist is None
+    assert not any("Nyquist" in w for w in quiet.warnings)
+
+
+def _triangle_shell_fsc(a: np.ndarray, b: np.ndarray, *, half_grid: bool = False) -> np.ndarray:
+    """FSC on the library's triangular shells, summed over the full FFT grid, or over
+    the rfft half grid without Hermitian weights, as the library's rfft path sums it."""
+
+    n = a.shape[0]
+    axis = np.fft.fftfreq(n) * n
+    if half_grid:
+        fa, fb, x_axis = np.fft.rfftn(a), np.fft.rfftn(b), np.fft.rfftfreq(n) * n
+    else:
+        fa, fb, x_axis = np.fft.fftn(a), np.fft.fftn(b), axis
+    kz, ky, kx = np.meshgrid(axis, axis, x_axis, indexing="ij")
+    radius = np.sqrt(kx**2 + ky**2 + kz**2)
+    curve = []
+    for k in range(1, n // 2 + 1):
+        w = np.clip(1.0 - np.abs(radius - k), 0.0, None)
+        cross = (w * fa * np.conj(fb)).sum().real
+        curve.append(cross / np.sqrt((w * np.abs(fa) ** 2).sum() * (w * np.abs(fb) ** 2).sum()))
+    return np.array(curve)
+
+
+def test_the_fsc_counts_every_fourier_coefficient_once() -> None:
+    """Content both maps share only in the kx = 0 plane, where the rfft half grid holds
+    both members of every conjugate pair: summed unweighted there, as the library's
+    rfft path does, it counts twice and lifts the curve. The full grid does not."""
+
+    n = 24
+    generator = np.random.default_rng(4)
+    plane = np.repeat(generator.normal(size=(n, n, 1)), n, axis=2)  # constant along x
+    a = generator.normal(size=(n, n, n)) + 0.6 * plane
+    b = generator.normal(size=(n, n, n)) + 0.6 * plane
+    expected = _triangle_shell_fsc(a, b)
+    # Precondition: the construction separates the two ways of counting.
+    assert np.abs(_triangle_shell_fsc(a, b, half_grid=True) - expected).max() > 0.05
+    curve = compute_fsc_curve(
+        torch.from_numpy(a), torch.from_numpy(b), pixel_spacing_angstrom=2.0, threshold=0.5
+    )
+    np.testing.assert_allclose(curve.correlation, expected, atol=1e-4)
 
 
 def test_compute_fsc_curve_rejects_mismatched_shapes() -> None:

@@ -333,7 +333,9 @@ references at once when `--num-classes` is above one; see
 
 `compute-fsc` also runs in `--mode map-to-model` to compare the average against
 the template. Both modes accept `--mask` so background noise outside the
-particle is not counted. Note that the half-set FSC is still optimistic: both
+particle is not counted. A curve that rises again toward Nyquist after a dip is
+reported as a warning, with where it fell through the threshold before the dip:
+the final descent the resolution is read from then lands beyond it. Note that the half-set FSC is still optimistic: both
 halves are refined against a shared reference, rebuilt from all particles every
 iteration, so it is not yet a true gold-standard estimate — see
 [docs/roadmap.md](docs/roadmap.md). A separate and larger defect has been fixed:
