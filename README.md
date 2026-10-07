@@ -326,7 +326,9 @@ cryoet compute-fsc \
 `average-particles` defaults to the `dynamo-search` backend: Dynamo's local
 search and averaging, adapted to NumPy and validated against Dynamo itself,
 one class, one iteration unless
-`--num-iterations` says otherwise; see [docs/dynamo_search.md](docs/dynamo_search.md).
+`--num-iterations` says otherwise. `--gold-standard` refines the two halves of
+`rlnRandomSubset` independently from a common band-passed start and reports
+their FSC; see [docs/dynamo_search.md](docs/dynamo_search.md).
 `--backend cone-search` searches orientations on a cone and refines several
 references at once when `--num-classes` is above one; see
 [docs/backends.md](docs/backends.md) for it and for the `fft-refinement` baseline.

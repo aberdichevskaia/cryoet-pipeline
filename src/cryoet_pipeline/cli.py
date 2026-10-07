@@ -3078,6 +3078,24 @@ def average_particles(
             "at most half the box. Default: 16 (30 A for a 48-voxel box at 10.012 A).",
         ),
     ] = None,
+    gold_standard: Annotated[
+        bool,
+        typer.Option(
+            "--gold-standard/--no-gold-standard",
+            help="[dynamo-search] Refine the two halves set by rlnRandomSubset independently "
+            "from one start band-passed to --gold-standard-start-lowpass-angstrom, as "
+            "Dynamo's half-set projects do; write both half maps and their FSC to QC. The "
+            "map is every particle at the pose its own half gave it. Default: off.",
+        ),
+    ] = False,
+    gold_standard_start_lowpass_angstrom: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="[dynamo-search, --gold-standard] Low-pass of the halves' common start in "
+            "A, applied as Dynamo's dynamo_bandpass [1 low 2]. Default: 60.",
+        ),
+    ] = None,
     shift_search_mode: Annotated[
         int | None,
         typer.Option(
@@ -3348,8 +3366,19 @@ def average_particles(
         "search-highpass-px": search_highpass_px,
         "search-lowpass-px": search_lowpass_px,
         "shift-search-mode": shift_search_mode,
+        "gold-standard-start-lowpass-angstrom": gold_standard_start_lowpass_angstrom,
         "workers": workers,
     }
+    if gold_standard and backend != "dynamo-search":
+        raise typer.BadParameter(
+            "--gold-standard is read only by dynamo-search; fft-refinement always splits",
+            param_hint="gold-standard",
+        )
+    if gold_standard_start_lowpass_angstrom is not None and not gold_standard:
+        raise typer.BadParameter(
+            "the start low-pass is read only with --gold-standard",
+            param_hint="gold-standard-start-lowpass-angstrom",
+        )
     for hint, value in dynamo_only.items():
         if value is not None and backend != "dynamo-search":
             raise typer.BadParameter(
@@ -3441,6 +3470,10 @@ def average_particles(
         parameters["initial_reference_path"] = initial_reference
     if alignment_mask is not None:
         parameters["alignment_mask_path"] = alignment_mask
+    if gold_standard:
+        parameters["gold_standard"] = True
+    if gold_standard_start_lowpass_angstrom is not None:
+        parameters["gold_standard_start_lowpass_angstrom"] = gold_standard_start_lowpass_angstrom
     context = BackendContext(
         output_dir=out,
         device=resolve_device(device),

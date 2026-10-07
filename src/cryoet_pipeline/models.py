@@ -1153,8 +1153,9 @@ class DynamoSearchQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 2
-    """2: Dynamo's averaging replaced this pipeline's reducer; the mask can be a file."""
+    schema_version: int = 3
+    """2: Dynamo's averaging replaced this pipeline's reducer; the mask can be a file.
+    3: independent halves (`gold_standard`) and their FSC."""
     backend: str
     tilt_series_ids: list[str]
     particle_stack_ids: list[str]
@@ -1195,7 +1196,13 @@ class DynamoSearchQc(BaseModel):
     which the averaging zeroes."""
     initial_reference: str
     gold_standard: bool = False
-    """Always false: every particle is searched against an average containing it."""
+    """True with `--gold-standard`: each half refined alone from a band-passed common
+    start. False: every particle is searched against an average containing it."""
+    gold_standard_start_lowpass_angstrom: float | None = Field(default=None, gt=0.0)
+    half_counts: dict[str, int] | None = None
+    half_map_fsc: dict[str, Any] | None = None
+    """FSC between the half maps, `masked` (the alignment mask) and `unmasked`: the
+    curve, its 0.5 and 0.143 crossings, and any rise toward Nyquist."""
     mean_final_correlation: float | None = None
     minimum_final_correlation: float | None = None
     iterations: list[dict[str, float]] = Field(default_factory=list)

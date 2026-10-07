@@ -73,9 +73,11 @@ from pathlib import Path
 
 import mrcfile
 import numpy as np
+import torch
 
 from cryoet_pipeline.backends.protocols import BackendContext, variant_label, variant_suffix
 from cryoet_pipeline.backends.subtomogram import (
+    _MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION,
     _averaging_paths,
     _bool_parameter,
     _class_average_id,
@@ -97,9 +99,11 @@ from cryoet_pipeline.backends.subtomogram import (
     _write_average_mrc,
     _write_json,
     averaging_scope,
+    half_set_indices,
     pose_change_summary,
     torch_device_for_preference,
 )
+from cryoet_pipeline.fsc import compute_fsc_curve, rise_toward_nyquist
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -847,6 +851,96 @@ def _load_alignment_mask(path: Path, box: int) -> np.ndarray:
 
 
 INITIAL_REFERENCE_DEFAULT = "dynamo_average of the initial poses (fcompensate, fmin 1)"
+GOLD_STANDARD_START_LOWPASS_ANGSTROM = 60.0
+"""The common start of the halves is band-passed as `dynamo_bandpass(v, [1 low 2])`.
+
+60 A is the CZII session's `[1 8 2]` at a 48-voxel box of 10.012 A: below it the
+halves share the start, above it each half builds its own map from its own data.
+"""
+
+
+def _refine(raw, matrices, shifts, tilt_ranges, reference, mask, normalization_mask,
+            settings, *, iterations, workers, box, half=None):
+    """`iterations` rounds of searching every given particle against a fixed reference
+    and rebuilding it from them: Dynamo's project iteration, on whatever subset it gets.
+
+    Returns the new poses, the search CCs, the last reference and its Fourier weight,
+    and one summary per iteration.
+    """
+    matrices = [m.copy() for m in matrices]
+    shifts = [np.asarray(v, dtype=float).copy() for v in shifts]
+    correlations = [math.nan] * len(raw)
+    fweight = None
+    summaries: list[dict[str, float]] = []
+    for iteration in range(iterations):
+        # Prepared as Dynamo prepares every starting reference, the first and
+        # every rebuilt one, before the search sees it.
+        fixed = prepare_reference(reference, mask, settings)
+        before = [m.copy() for m in matrices], [v.copy() for v in shifts]
+        results = search_particles(
+            raw,
+            fixed,
+            mask,
+            [native_to_dynamo(m, v, box) for m, v in zip(matrices, shifts, strict=True)],
+            tilt_ranges,
+            settings,
+            workers=workers,
+        )
+        for index, (angles, shift, correlation) in enumerate(results):
+            matrices[index], shifts[index] = dynamo_to_native(angles, shift, box)
+            correlations[index] = correlation
+        reference, fweight = _project_average(
+            raw, matrices, shifts, tilt_ranges, normalization_mask, box
+        )
+        summary = {
+            "iteration": float(iteration + 1),
+            "mean_correlation": float(np.mean(correlations)),
+            "minimum_correlation": float(np.min(correlations)),
+            "rotation_deg_mean": float(
+                np.mean([
+                    _rotation_between_deg(a, b)
+                    for a, b in zip(before[0], matrices, strict=True)
+                ])
+            ),
+            "shift_px_mean": float(
+                np.mean([np.linalg.norm(a - b) for a, b in zip(before[1], shifts, strict=True)])
+            ),
+        }
+        if half is not None:
+            summary["half"] = float(half)
+        summaries.append(summary)
+    return matrices, shifts, correlations, reference, fweight, summaries
+
+
+def _half_map_fsc(half_maps, mask, spacing: float) -> dict[str, object]:
+    """FSC between the two half maps, with the alignment mask (applied as `compute-fsc
+    --mask` applies one) and without, read at 0.5 and 0.143, with any rise toward
+    Nyquist (`fsc.rise_toward_nyquist`)."""
+    report: dict[str, object] = {}
+    for label, weight in (("masked", mask), ("unmasked", None)):
+        a, b = (h if weight is None else h * weight for h in (half_maps[1], half_maps[2]))
+        a, b = torch.from_numpy(np.ascontiguousarray(a)), torch.from_numpy(np.ascontiguousarray(b))
+        curves = {t: compute_fsc_curve(a, b, pixel_spacing_angstrom=spacing, threshold=t)
+                  for t in (0.5, 0.143)}
+        rises = {t: rise_toward_nyquist(curves[t], len(mask)) for t in curves}
+        rise = rises[0.143]
+        report[label] = {
+            "resolution_angstrom": curves[0.5].resolution_angstrom,
+            "correlation": curves[0.5].correlation,
+            "crossing_0_5_angstrom": curves[0.5].crossing_resolution_angstrom,
+            "crossing_0_143_angstrom": curves[0.143].crossing_resolution_angstrom,
+            "rise_toward_nyquist": None if rise is None else {
+                "dip_resolution_angstrom": rise.dip_resolution_angstrom,
+                "dip_correlation": rise.dip_correlation,
+                "peak_resolution_angstrom": rise.peak_resolution_angstrom,
+                "peak_correlation": rise.peak_correlation,
+                "sigma": rise.sigma,
+                # The final descent lands beyond the dip, or nowhere; these do not.
+                "crossing_before_dip_0_5_angstrom": rises[0.5].crossing_before_dip_angstrom,
+                "crossing_before_dip_0_143_angstrom": rise.crossing_before_dip_angstrom,
+            },
+        }
+    return report
 
 
 class DynamoSearchRefinementBackend:
@@ -917,6 +1011,10 @@ class DynamoSearchRefinementBackend:
         if _nonnegative_float_parameter(context, "wedge_tilt_axis_deg", default=0.0) != 0.0:
             raise ValueError("dynamo-search models one wedge about y; the tilt axis must be 0")
         initial_reference_path = _optional_path_parameter(context, "initial_reference_path")
+        gold_standard = _bool_parameter(context, "gold_standard", default=False)
+        start_lowpass = _optional_float_parameter(context, "gold_standard_start_lowpass_angstrom")
+        if start_lowpass is not None and not gold_standard:
+            raise ValueError("gold_standard_start_lowpass_angstrom is read only with gold_standard")
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
@@ -991,51 +1089,64 @@ class DynamoSearchRefinementBackend:
             ).average
             initial_reference = INITIAL_REFERENCE_DEFAULT
 
-        correlations = [math.nan] * len(records)
-        fweight = None
-        iteration_summaries: list[dict[str, float]] = []
-        for iteration in range(num_iterations):
-            # Prepared as Dynamo prepares every starting reference, the first and
-            # every rebuilt one, before the search sees it.
-            fixed = prepare_reference(reference, mask, settings)
-            before = [matrix.copy() for matrix in matrices], [shift.copy() for shift in shifts]
-            results = search_particles(
-                raw,
-                fixed,
-                mask,
-                [native_to_dynamo(m, s, box) for m, s in zip(matrices, shifts, strict=True)],
-                tilt_ranges,
-                settings,
-                workers=workers,
-            )
-            for index, (angles, shift, correlation) in enumerate(results):
-                matrices[index], shifts[index] = dynamo_to_native(angles, shift, box)
-                correlations[index] = correlation
+        half_maps: dict[int, np.ndarray] = {}
+        half_counts: dict[int, int] = {}
+        if gold_standard:
+            # Dynamo's half-set scheme: one start for both halves, band-passed so they
+            # share nothing beyond it, then each half refined from its own data alone.
+            start_lowpass = start_lowpass or GOLD_STANDARD_START_LOWPASS_ANGSTROM
+            low_px = box * spacing / start_lowpass
+            if not 1.0 < low_px <= box / 2:
+                raise ValueError(
+                    f"a {start_lowpass:g} A start low-pass is {low_px:.2f} Fourier pixels in "
+                    f"this {box}-voxel box; it has to lie between 1 and {box // 2}"
+                )
+            reference = apply_filter(reference, bandpass(box, 1.0, low_px, 2.0))
+            halves = half_set_indices(records)
+            half_counts = {half: len(indices) for half, indices in halves.items()}
+            if min(half_counts.values()) < 2:
+                raise ValueError(
+                    "gold_standard needs at least two particles in each half; "
+                    f"rlnRandomSubset puts {half_counts[1]} and {half_counts[2]}"
+                )
+            correlations = [math.nan] * len(records)
+            iteration_summaries: list[dict[str, float]] = []
+            for half, indices in sorted(halves.items()):
+                found, moved_to, found_cc, half_maps[half], _, summaries = _refine(
+                    [raw[i] for i in indices],
+                    [matrices[i] for i in indices],
+                    [shifts[i] for i in indices],
+                    [tilt_ranges[i] for i in indices],
+                    reference,
+                    mask,
+                    normalization_mask,
+                    settings,
+                    iterations=num_iterations,
+                    workers=workers,
+                    box=box,
+                    half=half,
+                )
+                for position, index in enumerate(indices):
+                    matrices[index], shifts[index] = found[position], moved_to[position]
+                    correlations[index] = found_cc[position]
+                iteration_summaries.extend(summaries)
+            # The map is every particle at the pose its own half gave it.
             reference, fweight = _project_average(
                 raw, matrices, shifts, tilt_ranges, normalization_mask, box
             )
-            iteration_summaries.append(
-                {
-                    "iteration": float(iteration + 1),
-                    "mean_correlation": float(np.mean(correlations)),
-                    "minimum_correlation": float(np.min(correlations)),
-                    "rotation_deg_mean": float(
-                        np.mean(
-                            [
-                                _rotation_between_deg(a, b)
-                                for a, b in zip(before[0], matrices, strict=True)
-                            ]
-                        )
-                    ),
-                    "shift_px_mean": float(
-                        np.mean(
-                            [
-                                np.linalg.norm(a - b)
-                                for a, b in zip(before[1], shifts, strict=True)
-                            ]
-                        )
-                    ),
-                }
+        else:
+            matrices, shifts, correlations, reference, fweight, iteration_summaries = _refine(
+                raw,
+                matrices,
+                shifts,
+                tilt_ranges,
+                reference,
+                mask,
+                normalization_mask,
+                settings,
+                iterations=num_iterations,
+                workers=workers,
+                box=box,
             )
 
         for index, record in enumerate(records):
@@ -1057,6 +1168,15 @@ class DynamoSearchRefinementBackend:
             reference,
             pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
         )
+        half_map_fsc = None
+        for half, half_map in half_maps.items():
+            _write_average_mrc(
+                paths.half_maps[half],
+                half_map,
+                pixel_spacing_angstrom=pairs[0][0].pixel_spacing_angstrom,
+            )
+        if half_maps:
+            half_map_fsc = _half_map_fsc(half_maps, normalization_mask, spacing)
 
         reach = grid_reach_deg(settings)
         starting = [relion_euler_to_matrix(*pose[:3]) for pose in starting_poses]
@@ -1075,6 +1195,31 @@ class DynamoSearchRefinementBackend:
                 f"({reach * num_iterations:.1f} deg), up to {max(beyond):.1f} deg: Dynamo's "
                 "legacy in-plane seed, kept as Dynamo keeps it"
             )
+        if half_counts and min(half_counts.values()) < _MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION:
+            warnings.append(
+                f"a half holds {min(half_counts.values())} particles, fewer than "
+                f"{_MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION}: its FSC is reported but not "
+                "interpretable as a resolution"
+            )
+        for label, curve in (half_map_fsc or {}).items():
+            rise = curve["rise_toward_nyquist"]
+            if rise is not None:
+                before = [
+                    f"{threshold} at {rise[key]:.1f} A"
+                    for threshold, key in (
+                        ("0.5", "crossing_before_dip_0_5_angstrom"),
+                        ("0.143", "crossing_before_dip_0_143_angstrom"),
+                    )
+                    if rise[key] is not None
+                ]
+                warnings.append(
+                    f"the {label} half-map FSC rises again toward Nyquist, from "
+                    f"{rise['dip_correlation']:.2f} at {rise['dip_resolution_angstrom']:.1f} A to "
+                    f"{rise['peak_correlation']:.2f} at {rise['peak_resolution_angstrom']:.1f} A "
+                    f"({rise['sigma']:.0f} sigma of shell noise), so its crossings are read "
+                    "beyond the dip or not at all"
+                    + (f"; before the dip it fell through {', '.join(before)}" if before else "")
+                )
         status = QcStatus.WARNING if warnings else QcStatus.PASS
         report = DynamoSearchQc(
             backend=self.name,
@@ -1104,6 +1249,10 @@ class DynamoSearchRefinementBackend:
             fourier_weight_threshold=FOURIER_WEIGHT_THRESHOLD,
             fourier_weight=None if fweight is None else _fourier_weight_summary(fweight),
             initial_reference=initial_reference,
+            gold_standard=gold_standard,
+            gold_standard_start_lowpass_angstrom=start_lowpass if gold_standard else None,
+            half_counts={str(h): n for h, n in half_counts.items()} or None,
+            half_map_fsc=half_map_fsc,
             mean_final_correlation=float(np.mean(correlations)),
             minimum_final_correlation=minimum,
             iterations=iteration_summaries,
@@ -1151,6 +1300,18 @@ class DynamoSearchRefinementBackend:
                 "wedge_boundary_policy": WEDGE_BOUNDARY_POLICY,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
+                "gold_standard": gold_standard,
+                # As fft-refinement records them: the two maps a resolution is a claim about.
+                **(
+                    {
+                        "half_map_paths": {
+                            str(h): str(paths.half_maps[h]) for h in sorted(half_maps)
+                        },
+                        "resolution_angstrom": half_map_fsc["masked"]["crossing_0_143_angstrom"],
+                    }
+                    if half_map_fsc is not None
+                    else {}
+                ),
             },
             software_versions={
                 "numpy": _package_version("numpy"),
@@ -1159,7 +1320,8 @@ class DynamoSearchRefinementBackend:
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
-            size_bytes=_path_size_bytes(average_path),
+            size_bytes=_path_size_bytes(average_path)
+            + sum(_path_size_bytes(paths.half_maps[h]) for h in half_maps),
         )
         qc = Artifact(
             id=f"{scope}:qc:subtomogram_averaging:{self.name}{variant_suffix(context)}",

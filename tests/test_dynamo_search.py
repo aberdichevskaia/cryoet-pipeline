@@ -582,7 +582,8 @@ def test_the_backend_averages_as_dynamos_project_does(tmp_path, monkeypatch):
     expected = core.average_particles(particles, angles, shifts, tilts, mask)[0]
     assert _relative(mrcfile.read(average.path).astype(np.float64), expected) < 1e-5
     report = json.loads(qc.path.read_text())
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 3
+    assert report["gold_standard"] is False and report["half_map_fsc"] is None
     assert report["initial_reference"] == core.INITIAL_REFERENCE_DEFAULT
     assert report["fourier_weight_threshold"] == core.FOURIER_WEIGHT_THRESHOLD
     assert set(report["fourier_weight"]) == {"minimum", "median", "fraction_below_threshold"}
@@ -660,6 +661,143 @@ def test_dynamo_search_refuses_a_mask_it_cannot_use(tmp_path, mask, extra, match
         handle.set_data(mask.astype(np.float32))
     with pytest.raises(ValueError, match=match):
         _run(tmp_path, stack, alignment_mask_path=str(path), **extra)
+
+
+def test_gold_standard_refines_each_half_alone_from_a_filtered_common_start(tmp_path, monkeypatch):
+    """Both halves start from the same band-passed `dynamo_average`, each is then
+    searched and rebuilt from its own rlnRandomSubset alone, and the map is every
+    particle at the pose its own half gave it."""
+    truth, perturbed = _true_and_perturbed(8, 10.0)
+    stack = _wedged_particles(tmp_path, perturbed, truth=truth)
+    seen = _spy_searches(monkeypatch)
+    sizes = []
+    real = core.search_particles
+
+    def count(particles, *args, **kwargs):
+        sizes.append(len(particles))
+        return real(particles, *args, **kwargs)
+
+    monkeypatch.setattr(core, "search_particles", count)
+    average, qc = _run(
+        tmp_path,
+        stack,
+        workers=1,
+        num_iterations=2,
+        gold_standard=True,
+        gold_standard_start_lowpass_angstrom=40.0,
+    )
+    assert sizes == [4, 4, 4, 4]  # two iterations of half 1, then two of half 2
+    particles = _loaded_particles(stack)
+    mask = core.search_mask(24, 22.0)
+    tilts = [(-60.0, 60.0)] * len(particles)
+    start = read_particle_star(Path(stack.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(start, 24)
+    common = core.average_class(particles, angles, shifts, tilts, mask, fmin=1).average
+    common = core.apply_filter(common, core.bandpass(24, 1.0, 24 * 10.0 / 40.0, 2.0))
+    expected_first = core.prepare_reference(common, mask, core.SearchSettings(low=11.0))
+    np.testing.assert_allclose(seen[0][0], expected_first, atol=1e-10)  # half 1, iteration 1
+    np.testing.assert_allclose(seen[2][0], expected_first, atol=1e-10)  # half 2, iteration 1
+    found = read_particle_star(Path(average.parameters["metadata_path"]))
+    assert [r.random_subset for r in found] == [r.random_subset for r in start]
+    angles, shifts = _dynamo_table(found, 24)
+    combined = core.average_particles(particles, angles, shifts, tilts, mask)[0]
+    assert _relative(mrcfile.read(average.path).astype(np.float64), combined) < 1e-5
+    for half, path in average.parameters["half_map_paths"].items():
+        members = [i for i, r in enumerate(found) if r.random_subset == int(half)]
+        expected = core.average_particles(
+            [particles[i] for i in members],
+            [angles[i] for i in members],
+            [shifts[i] for i in members],
+            [tilts[i] for i in members],
+            mask,
+        )[0]
+        assert _relative(mrcfile.read(path).astype(np.float64), expected) < 1e-5
+    report = json.loads(qc.path.read_text())
+    assert report["gold_standard"] is True and average.parameters["gold_standard"] is True
+    assert report["half_counts"] == {"1": 4, "2": 4}
+    assert report["gold_standard_start_lowpass_angstrom"] == 40.0
+    assert [s["half"] for s in report["iterations"]] == [1.0, 1.0, 2.0, 2.0]
+    for label in ("masked", "unmasked"):
+        assert len(report["half_map_fsc"][label]["correlation"]) == 12
+    assert (
+        average.parameters["resolution_angstrom"]
+        == (report["half_map_fsc"]["masked"]["crossing_0_143_angstrom"])
+    )
+    assert any("fewer than 10" in w for w in report["warnings"])
+
+
+def test_the_half_map_fsc_names_the_crossing_a_rise_toward_nyquist_hides():
+    """Halves that share a band beyond shell 12: the final descent finds no 0.5
+    crossing, and the report gives the one before the dip (shell 7, as test_fsc's
+    construction measures it)."""
+    from test_fsc import _two_maps
+
+    a, b = _two_maps(shared_outer=True)
+    report = core._half_map_fsc({1: a.numpy(), 2: b.numpy()}, np.ones((32, 32, 32)), 2.0)
+    for label in ("masked", "unmasked"):
+        curve = report[label]
+        assert curve["crossing_0_5_angstrom"] is None
+        rise = curve["rise_toward_nyquist"]
+        assert rise["sigma"] >= 5
+        assert rise["crossing_before_dip_0_5_angstrom"] == pytest.approx(64.0 / 7)
+
+
+def test_gold_standard_halves_never_see_each_other(tmp_path):
+    """From a given start, half 2's poses and map do not change by a bit when every
+    particle of half 1 is replaced by noise."""
+    truth, perturbed = _true_and_perturbed(8, 10.0)
+    reference = tmp_path / "start.mrc"
+    with mrcfile.new(reference) as handle:
+        handle.set_data(_granular_phantom(24).numpy())
+    outcomes = []
+    for corrupt in (False, True):
+        folder = tmp_path / f"corrupt-{corrupt}"
+        folder.mkdir()
+        stack = _wedged_particles(folder, perturbed, truth=truth)
+        if corrupt:
+            data = zarr.open(stack.path, mode="r+")
+            noise = np.random.default_rng(9).normal(size=data.shape[1:]).astype(np.float32)
+            for index in range(0, data.shape[0], 2):  # random_subset 1
+                data[index] = noise
+        average, _ = _run(
+            folder,
+            stack,
+            workers=1,
+            gold_standard=True,
+            initial_reference_path=str(reference),
+        )
+        found = read_particle_star(Path(average.parameters["metadata_path"]))
+        outcomes.append(
+            (
+                [r for r in found if r.random_subset == 2],
+                [r for r in found if r.random_subset == 1],
+                mrcfile.read(average.parameters["half_map_paths"]["2"]),
+            )
+        )
+    (half2, half1, map2), (half2_again, half1_again, map2_again) = outcomes
+    assert half2_again == half2
+    np.testing.assert_array_equal(map2_again, map2)
+    assert half1_again != half1  # the corruption did reach half 1
+
+
+@pytest.mark.parametrize(
+    ("parameters", "match"),
+    [
+        ({"gold_standard_start_lowpass_angstrom": 60.0}, "only with gold_standard"),
+        ({"gold_standard": True, "gold_standard_start_lowpass_angstrom": 300.0}, "between 1"),
+        ({"gold_standard": True, "gold_standard_start_lowpass_angstrom": 10.0}, "between 1"),
+    ],
+)
+def test_gold_standard_refuses_what_it_cannot_run(tmp_path, parameters, match):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)] * 2)
+    with pytest.raises(ValueError, match=match):
+        _run(tmp_path, stack, **parameters)
+
+
+def test_gold_standard_needs_two_particles_in_each_half(tmp_path):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0), (5.0, 6.0, 7.0)])
+    with pytest.raises(ValueError, match="at least two particles in each half"):
+        _run(tmp_path, stack, gold_standard=True)
 
 
 def test_worker_default_is_the_jobs_allocation(monkeypatch):
@@ -749,6 +887,16 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
     assert captured["parameters"]["alignment_mask_path"] == Path("mask.mrc"), result.output
     result, captured = _cli(tmp_path / "limm", monkeypatch, "--shift-search-mode", "1")
     assert captured["parameters"]["shift_search_mode"] == 1, result.output
+    assert "gold_standard" not in captured["parameters"]
+    result, captured = _cli(
+        tmp_path / "gold",
+        monkeypatch,
+        "--gold-standard",
+        "--gold-standard-start-lowpass-angstrom",
+        "50",
+    )
+    assert captured["parameters"]["gold_standard"] is True, result.output
+    assert captured["parameters"]["gold_standard_start_lowpass_angstrom"] == 50.0
 
 
 @pytest.mark.parametrize(
@@ -762,6 +910,9 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
         ("--workers", "0"),
         ("--backend", "cone-search", "--alignment-mask", "mask.mrc"),
         ("--backend", "cone-search", "--shift-search-mode", "1"),
+        ("--backend", "cone-search", "--gold-standard"),
+        ("--backend", "fft-refinement", "--gold-standard"),
+        ("--gold-standard-start-lowpass-angstrom", "60"),
         ("--shift-search-mode", "3"),
         ("--alignment-mask", "mask.mrc", "--alignment-mask-diameter-angstrom", "300"),
     ],

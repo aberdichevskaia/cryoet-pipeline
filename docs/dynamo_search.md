@@ -81,9 +81,56 @@ Without step 1 the search differed from Dynamo's on every one of 25 refine223
 particles (median 1.25 degrees, one finest-level step); the module parity runs
 before 2026-09-28 fed Dynamo's transformed reference and are unaffected, and
 parity v3, from Dynamo's raw template with this preparation, wrote the same
-STAR byte for byte. `--num-iterations` defaults to 1, the protocol that was
-validated. K = 1, and not gold-standard: every particle is scored against an
-average that contains it.
+STAR byte for byte. `--num-iterations` defaults to 1. Two iterations reproduce
+Dynamo's on the CZII score-selected set: every pose that differs is either one
+Dynamo's spline defect gave (`Source behavior` item 7) or inherited from Dynamo
+writing its tables at five digits and its maps in float32 between iterations.
+Without `--gold-standard` the step is K = 1 and not gold-standard: every
+particle is scored against an average that contains it.
+
+## Independent halves (`--gold-standard`)
+
+With `--gold-standard` the step follows Dynamo's half-set projects
+(`dynamo_vpr_eo`):
+
+1. One start for both halves: the initial reference, or `dynamo_average` of all
+   particles at their initial poses, band-passed as Dynamo's
+   `dynamo_bandpass(v, [1 low 2])`. `low` comes from
+   `--gold-standard-start-lowpass-angstrom`, 60 A by default, which is the CZII
+   session's `[1 8 2]` at a 48-voxel box of 10.012 A. Below it the halves share
+   the start; above it each builds its own map from its own data.
+2. Each half, the particles of `rlnRandomSubset` 1 and 2, then runs every
+   iteration alone: its own reference, search and rebuild. Nothing of one half
+   reaches the other: a test replaces every particle of one half by noise, and
+   the other half's poses and map do not change by a bit.
+3. The map written as the average is every particle at the pose its own half gave
+   it. The two half maps are written beside it (`half_map_paths`), and QC records
+   their FSC with the alignment mask and without: the curve, its 0.5 and 0.143
+   crossings, and any rise toward Nyquist, which is also a warning.
+   `resolution_angstrom` is the masked 0.143 crossing. Below ten particles in a
+   half the FSC is reported but flagged as uninterpretable.
+
+The halves are `rlnRandomSubset`, assigned once at extraction and never
+recomputed, so a particle stays in its half through every step. The column is
+not random, though. Extraction writes `1 + index % 2` in each tomogram's pick
+order, which is pytom's score order, so the halves alternate by score rank. They
+are better balanced in score than a random split, and every tomogram is split
+evenly. Dynamo's `dynamo_vpr_eo` uses the same parity over the table's rows, but
+recomputes it whenever a project is made. Neither keeps neighbours with
+overlapping boxes in the same half.
+
+Checked against Dynamo's own half-set project on the CZII score-selected set
+(288 particles, three iterations, the halves as Dynamo set them):
+
+- The prepared start of both halves matched Dynamo's to 3e-8.
+- After three iterations 126 and 106 of 144 poses matched. Each of the other 56,
+  searched again from Dynamo's own inputs, was either Dynamo's spline defect
+  (one) or gave Dynamo's pose, so it was inherited from Dynamo's five-digit
+  tables and float32 maps.
+- The QC's half-map FSC agreed with the FSC of Dynamo's own half maps within
+  0.006 masked and 0.010 unmasked, and flagged the same masked rise toward
+  Nyquist, 0.25 at 22.9 A back up to 0.68 at 20.0 A. Before the dip it fell
+  through 0.5 at 25.3 A, which QC reports as `crossing_before_dip_0_5_angstrom`.
 
 ## Parameters
 
@@ -95,6 +142,8 @@ average that contains it.
 | `--refine-levels` | 2 | levels after the first; each shrinks by `--refine-factor` (2) |
 | `--search-highpass-px`, `--search-lowpass-px` | 2, 16 | search band in Fourier pixels |
 | `--shift-range-px` | 3 | shift sphere radius |
+| `--gold-standard` | off | refine the two halves of `rlnRandomSubset` independently; see above |
+| `--gold-standard-start-lowpass-angstrom` | 60 | band-pass of the halves' common start, as `dynamo_bandpass [1 low 2]` |
 | `--shift-search-mode` | 2 | Dynamo's `limm`: 2 re-centres the shift sphere on each level's winner, 1 keeps it on the box centre (item 6) |
 | `--alignment-mask-diameter-angstrom` | particle diameter | binary search mask, a sphere about `(N - 1) / 2`; it also normalises the particles |
 | `--alignment-mask` | — | a mask file instead, used as Dynamo uses one: voxels above 0.5 are searched, nonzero voxels normalise the particles |
@@ -135,8 +184,8 @@ settings, per-iteration mean and minimum CC and pose movement, the whole run's
 `pose_change`, the alignment mask (file or diameter, and how many voxels it
 searches and normalises), the last average's Fourier weight inside the Nyquist
 sphere (minimum, median, and the fraction below 0.1, which the averaging
-zeroes), the wedge boundary
-policy, and
+zeroes), with `--gold-standard` the half counts and the half-map FSC, the wedge
+boundary policy, and
 `beyond_grid_count`: particles that moved further than the grid can reach
 (`grid_reach_deg`), which is Dynamo's legacy in-plane seed at work. Those moves
 are kept, as Dynamo keeps them, and reported as a warning.
