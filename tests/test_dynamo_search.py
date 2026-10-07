@@ -698,12 +698,12 @@ def test_gold_standard_refines_each_half_alone_from_a_filtered_common_start(tmp_
     np.testing.assert_allclose(seen[0][0], expected_first, atol=1e-10)  # half 1, iteration 1
     np.testing.assert_allclose(seen[2][0], expected_first, atol=1e-10)  # half 2, iteration 1
     found = read_particle_star(Path(average.parameters["metadata_path"]))
-    assert [r.random_subset for r in found] == [r.random_subset for r in start]
+    assert [r.half_set for r in found] == [r.half_set for r in start]
     angles, shifts = _dynamo_table(found, 24)
     combined = core.average_particles(particles, angles, shifts, tilts, mask)[0]
     assert _relative(mrcfile.read(average.path).astype(np.float64), combined) < 1e-5
     for half, path in average.parameters["half_map_paths"].items():
-        members = [i for i, r in enumerate(found) if r.random_subset == int(half)]
+        members = [i for i, r in enumerate(found) if r.half_set == int(half)]
         expected = core.average_particles(
             [particles[i] for i in members],
             [angles[i] for i in members],
@@ -757,7 +757,7 @@ def test_gold_standard_halves_never_see_each_other(tmp_path):
         if corrupt:
             data = zarr.open(stack.path, mode="r+")
             noise = np.random.default_rng(9).normal(size=data.shape[1:]).astype(np.float32)
-            for index in range(0, data.shape[0], 2):  # random_subset 1
+            for index in range(0, data.shape[0], 2):  # half_set 1
                 data[index] = noise
         average, _ = _run(
             folder,
@@ -769,8 +769,8 @@ def test_gold_standard_halves_never_see_each_other(tmp_path):
         found = read_particle_star(Path(average.parameters["metadata_path"]))
         outcomes.append(
             (
-                [r for r in found if r.random_subset == 2],
-                [r for r in found if r.random_subset == 1],
+                [r for r in found if r.half_set == 2],
+                [r for r in found if r.half_set == 1],
                 mrcfile.read(average.parameters["half_map_paths"]["2"]),
             )
         )

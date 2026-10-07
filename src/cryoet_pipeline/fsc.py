@@ -228,7 +228,7 @@ def build_half_set_average(
     *,
     particle_stack_path: Path,
     metadata_path: Path,
-    random_subset: int,
+    half_set: int,
     device: torch.device,
 ) -> torch.Tensor:
     """Average one half-set's particles using each particle's already-refined
@@ -254,9 +254,11 @@ def build_half_set_average(
             "be paired with a single stack, so this half-set FSC would silently "
             "average whichever particles those indices happened to land on"
         )
-    records = [record for record in all_records if record.random_subset == random_subset]
+    records = [record for record in all_records if record.half_set == half_set]
     if not records:
-        raise ValueError(f"no particles with random_subset={random_subset} in {metadata_path}")
+        raise ValueError(
+            f"no particles in half {half_set} (rlnRandomSubset) in {metadata_path}"
+        )
     volumes = []
     for record in records:
         raw = center_particle_volume(

@@ -179,7 +179,7 @@ class CubicCropExtractionBackend:
                     shift_z_px=row.z_px - center_offset - z_start - geometric_center,
                     score=row.lccmax,
                     class_number=1,
-                    random_subset=1 + (output_index % 2),
+                    half_set=1 + (output_index % 2),
                 )
             )
         write_particle_star(paths.particle_metadata, records)
@@ -339,12 +339,13 @@ def half_set_indices(records: Sequence[ParticleRecord]) -> dict[int, list[int]]:
 
     grouped: dict[int, list[int]] = {1: [], 2: []}
     for record in records:
-        if record.random_subset not in grouped:
+        if record.half_set not in grouped:
             raise ValueError(
-                f"particle {record.index} has random_subset={record.random_subset}; "
+                f"particle {record.index} has half_set={record.half_set} "
+                "(rlnRandomSubset); "
                 "the half-set assignment must be 1 or 2"
             )
-        grouped[record.random_subset].append(record.index)
+        grouped[record.half_set].append(record.index)
     return grouped
 
 

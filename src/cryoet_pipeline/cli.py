@@ -3571,13 +3571,13 @@ def compute_fsc_command(
         volume_a = build_half_set_average(
             particle_stack_path=particle_stack,
             metadata_path=metadata,
-            random_subset=1,
+            half_set=1,
             device=torch_device,
         )
         volume_b = build_half_set_average(
             particle_stack_path=particle_stack,
             metadata_path=metadata,
-            random_subset=2,
+            half_set=2,
             device=torch_device,
         )
         resolved_pixel_spacing = pixel_spacing_angstrom

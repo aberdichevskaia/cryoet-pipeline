@@ -110,8 +110,10 @@ With `--gold-standard` the step follows Dynamo's half-set projects
    `resolution_angstrom` is the masked 0.143 crossing. Below ten particles in a
    half the FSC is reported but flagged as uninterpretable.
 
-The halves are `rlnRandomSubset`, assigned once at extraction and never
-recomputed, so a particle stays in its half through every step. The column is
+The halves are the STAR column `rlnRandomSubset` (`ParticleRecord.half_set`; the
+column keeps RELION's name so other programs read it), assigned once at
+extraction and never recomputed, so a particle stays in its half through every
+step. The column is
 not random, though. Extraction writes `1 + index % 2` in each tomogram's pick
 order, which is pytom's score order, so the halves alternate by score rank. They
 are better balanced in score than a random split, and every tomogram is split

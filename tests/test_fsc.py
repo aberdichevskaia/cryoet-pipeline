@@ -355,7 +355,7 @@ def test_build_half_set_average_filters_and_averages_by_subset(tmp_path: Path) -
     halves purely by their mean — the one thing `center_particle_volume` removes,
     because a non-zero mean is what stamps a rotation-shaped envelope into every
     average. Zero-mean patterns test the same thing (that filtering by
-    `random_subset` picks up the right particles) without resting on the offset.
+    `half_set` picks up the right particles) without resting on the offset.
     """
 
     box_size = 6
@@ -397,9 +397,9 @@ def test_build_half_set_average_filters_and_averages_by_subset(tmp_path: Path) -
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=1,
-                random_subset=random_subset,
+                half_set=half_set,
             )
-            for index, random_subset in enumerate([1, 1, 2, 2])
+            for index, half_set in enumerate([1, 1, 2, 2])
         ],
     )
 
@@ -407,13 +407,13 @@ def test_build_half_set_average_filters_and_averages_by_subset(tmp_path: Path) -
     average_subset_1 = build_half_set_average(
         particle_stack_path=stack_path,
         metadata_path=metadata_path,
-        random_subset=1,
+        half_set=1,
         device=device,
     )
     average_subset_2 = build_half_set_average(
         particle_stack_path=stack_path,
         metadata_path=metadata_path,
-        random_subset=2,
+        half_set=2,
         device=device,
     )
 
@@ -449,16 +449,16 @@ def test_build_half_set_average_rejects_missing_subset(tmp_path: Path) -> None:
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=1,
-                random_subset=1,
+                half_set=1,
             )
         ],
     )
 
-    with pytest.raises(ValueError, match="no particles with random_subset=2"):
+    with pytest.raises(ValueError, match="no particles in half 2"):
         build_half_set_average(
             particle_stack_path=stack_path,
             metadata_path=metadata_path,
-            random_subset=2,
+            half_set=2,
             device=torch.device("cpu"),
         )
 
@@ -493,7 +493,7 @@ def _stack_and_star(tmp_path: Path, *, stack_count: int, record_count: int) -> t
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=1,
-                random_subset=1 + (index % 2),
+                half_set=1 + (index % 2),
             )
             for index in range(record_count)
         ],
@@ -517,7 +517,7 @@ def test_build_half_set_average_refuses_a_cross_series_star_against_one_stack(
         build_half_set_average(
             particle_stack_path=stack_path,
             metadata_path=metadata_path,
-            random_subset=1,
+            half_set=1,
             device=torch.device("cpu"),
         )
 
@@ -540,7 +540,7 @@ def test_build_half_set_average_refuses_a_stack_larger_than_its_star(
         build_half_set_average(
             particle_stack_path=stack_path,
             metadata_path=metadata_path,
-            random_subset=1,
+            half_set=1,
             device=torch.device("cpu"),
         )
 
@@ -553,7 +553,7 @@ def test_build_half_set_average_accepts_a_matched_stack_and_star(tmp_path: Path)
     average = build_half_set_average(
         particle_stack_path=stack_path,
         metadata_path=metadata_path,
-        random_subset=1,
+        half_set=1,
         device=torch.device("cpu"),
     )
 

@@ -153,7 +153,7 @@ def test_actual_cli_preserves_nonzero_fixed_shifts_and_records_scorer(tmp_path):
         reference, matrix.T, -matrix.T @ np.array([0.5, -0.25, 0.75]), device=DEVICE
     )
     stack = _particle_stack(tmp_path, [raw, raw], [(27, 48, -19)] * 2)
-    rows = [replace(row, index=i, random_subset=i + 1) for i in range(2)]
+    rows = [replace(row, index=i, half_set=i + 1) for i in range(2)]
     write_particle_star(Path(stack.parameters["metadata_path"]), rows)
     registry = ArtifactRegistry.empty()
     registry.add(stack)
@@ -207,7 +207,7 @@ def test_actual_cli_preserves_nonzero_fixed_shifts_and_records_scorer(tmp_path):
     output_rows = read_particle_star(Path(params["metadata_path"]))
     for output, initial in zip(output_rows, rows, strict=True):
         assert (output.shift_x_px, output.shift_y_px, output.shift_z_px) == (0.5, -0.25, 0.75)
-        assert output.random_subset == initial.random_subset
+        assert output.half_set == initial.half_set
     with mrcfile.open(average.path) as mrc:
         np.testing.assert_allclose(
             mrc.data,

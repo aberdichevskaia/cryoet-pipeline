@@ -95,7 +95,16 @@ class ParticleRecord:
     shift_z_px: float
     score: float | None
     class_number: int
-    random_subset: int
+    half_set: int
+    """Which half (1 or 2) the particle belongs to for independent refinement.
+
+    Not random, despite the STAR column it is stored in, `rlnRandomSubset`,
+    whose name is RELION's and is kept so that other programs read it.
+    Extraction writes `1 + index % 2` in each tomogram's pick order, which is
+    pytom's score order, so the halves alternate by score rank and split every
+    tomogram evenly. Nothing recomputes it afterwards: a particle keeps its half
+    through every step that carries the STAR rows.
+    """
 
 
 def read_star_loop(path: Path) -> tuple[list[str], list[list[str]]]:
@@ -162,7 +171,7 @@ def write_particle_star(path: Path, records: list[ParticleRecord]) -> None:
                     f"{record.shift_z_px:.6f}",
                     f"{record.score:.6f}" if record.score is not None else "nan",
                     str(record.class_number),
-                    str(record.random_subset),
+                    str(record.half_set),
                 ]
             )
         )
@@ -193,7 +202,7 @@ def read_particle_star(path: Path) -> list[ParticleRecord]:
                 shift_z_px=float(fields[positions["shiftZPx"]]),
                 score=None if score_text == "nan" else float(score_text),
                 class_number=int(fields[positions["rlnClassNumber"]]),
-                random_subset=int(fields[positions["rlnRandomSubset"]]),
+                half_set=int(fields[positions["rlnRandomSubset"]]),
             )
         )
     records.sort(key=lambda record: record.index)

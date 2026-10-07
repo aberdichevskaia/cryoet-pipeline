@@ -324,7 +324,7 @@ def _particle_stack_artifact(
             shift_z_px=0.0,
             score=0.5,
             class_number=1,
-            random_subset=1 + (index % 2),
+            half_set=1 + (index % 2),
         )
         for index, angles in enumerate(picked_angles)
     ]
@@ -620,7 +620,7 @@ def _write_particle_stack(
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=1,
-                random_subset=1 + (index % 2),
+                half_set=1 + (index % 2),
             )
             for index, angles in enumerate(picked_angles)
         ],
@@ -904,7 +904,7 @@ def test_pose_change_measures_rotations_not_euler_differences() -> None:
             shift_z_px=shift[2],
             score=None,
             class_number=1,
-            random_subset=1,
+            half_set=1,
         )
 
     start = (12.0, 34.0, -56.0, 0.0, 0.0, 0.0)
@@ -1119,7 +1119,7 @@ def test_cone_angular_search_recovers_analytic_ground_truth(perturbed: bool) -> 
         index=0, x_px=0.0, y_px=0.0, z_px=0.0,
         rot_deg=rot, tilt_deg=tilt, psi_deg=psi,
         shift_x_px=0.0, shift_y_px=0.0, shift_z_px=0.0,
-        score=0.5, class_number=1, random_subset=1,
+        score=0.5, class_number=1, half_set=1,
     )
     candidate = _search_multi_reference(
         raw, [reference], record,
@@ -1150,7 +1150,7 @@ def test_cone_search_cannot_take_an_out_of_range_spin_even_if_reference_rewards_
         index=0, x_px=0.0, y_px=0.0, z_px=0.0,
         rot_deg=31.0, tilt_deg=64.0, psi_deg=-12.0,
         shift_x_px=0.0, shift_y_px=0.0, shift_z_px=0.0,
-        score=0.5, class_number=1, random_subset=1,
+        score=0.5, class_number=1, half_set=1,
     )
     candidate = _search_multi_reference(
         raw, [misleading_reference], record,
@@ -1299,7 +1299,7 @@ def test_one_half_set_cannot_influence_the_other_half_maps(tmp_path: Path) -> No
                     shift_z_px=0.0,
                     score=0.5,
                     class_number=1,
-                    random_subset=1 + (index % 2),
+                    half_set=1 + (index % 2),
                 )
             )
         aligned = torch.stack(
@@ -1393,7 +1393,7 @@ def test_the_only_channel_between_the_halves_is_shut_when_the_fsc_says_nothing(
                     shift_z_px=0.0,
                     score=0.5,
                     class_number=1,
-                    random_subset=1 + (index % 2),
+                    half_set=1 + (index % 2),
                 )
             )
         aligned = torch.stack(
@@ -1756,7 +1756,7 @@ def test_averaging_can_be_restricted_to_one_class(tmp_path: Path) -> None:
             shift_z_px=0.0,
             score=0.5,
             class_number=class_number,
-            random_subset=1 + (index % 2),
+            half_set=1 + (index % 2),
         )
 
     # Two series of three particles. Classes alternate so both series contribute.
@@ -1783,7 +1783,7 @@ def test_averaging_can_be_restricted_to_one_class(tmp_path: Path) -> None:
     assert only_one.tilt_series_ids == ["TS_A", "TS_B"]
 
     # The half-set assignment travels with each particle, unchanged.
-    assert [one.random_subset for one in only_one.records] == [1, 1, 1]
+    assert [one.half_set for one in only_one.records] == [1, 1, 1]
 
 
 def test_asking_for_a_class_nobody_is_in_says_which_classes_exist(tmp_path: Path) -> None:
@@ -1811,7 +1811,7 @@ def test_asking_for_a_class_nobody_is_in_says_which_classes_exist(tmp_path: Path
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=2,
-                random_subset=1,
+                half_set=1,
             )
         ],
         box_size=8,

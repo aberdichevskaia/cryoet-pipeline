@@ -150,7 +150,7 @@ def _particle_stack(
                 shift_z_px=0.0,
                 score=0.5,
                 class_number=1,
-                random_subset=1 + (index % 2),
+                half_set=1 + (index % 2),
             )
             for index, pose in enumerate(angles)
         ],
