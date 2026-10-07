@@ -124,7 +124,21 @@ def record_timing(
 
 
 def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[str, Command]]:
-    """The canned lane-B chain. Order is fixed here, not in the config."""
+    """The lane's canned chain. The config names which one; the order of each is
+    fixed here, not in the config."""
+
+    chain = cfg["lane"].get("chain", "stack")
+    if chain == "stack":
+        return build_stack_steps(cfg, project, series)
+    if chain == "frames":
+        return build_frames_steps(cfg, project, series)
+    raise SystemExit(f"unknown chain {chain!r} in [lane]; known: stack, frames")
+
+
+def build_stack_steps(
+    cfg: dict[str, Any], project: Path, series: str
+) -> list[tuple[str, Command]]:
+    """The canned lane-B chain: one assembled stack per series, patch tracking."""
 
     manifest = project / "manifests" / f"{series}.json"
     registry = project / "artifacts.json"
@@ -285,6 +299,168 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     return steps
 
 
+def build_frames_steps(
+    cfg: dict[str, Any], project: Path, series: str
+) -> list[tuple[str, Command]]:
+    """The canned lane-C chain: frames, gold beads, membrane segmentation.
+
+    `init` is not here: it is project-level, takes every series at once, and
+    writes an empty registry, so it runs once before this chain (see
+    configs/lanes/gag-bin8.toml).
+    """
+
+    manifest = project / "manifests" / f"{series}.json"
+    registry = project / "artifacts.json"
+    common = ["--manifest", str(manifest), "--registry", str(registry), "--out", str(project)]
+
+    lane = cfg["lane"]["variant"]
+    motion, binning = cfg["motion"], cfg["binning"]
+    align, qc = cfg["align"], cfg["qc_coarse"]
+    fid, fine = cfg["fiducials"], cfg["fine_align"]
+    ctf, seg, tmpl, pick = cfg["ctf"], cfg["segment"], cfg["template"], cfg["pick"]
+    extract, exe = cfg["extract"], cfg["executables"]
+    recon = cfg.get("reconstruct", {})
+    tta = seg.get("test_time_augmentation")
+
+    return [
+        # Motion correction, then the stack from the corrected sums.
+        (
+            "prepare-tilt-series",
+            ["prepare-tilt-series", *common,
+             *flag("motion-backend", motion["backend"]),
+             *flag("storage-policy", motion.get("storage_policy")),
+             *flag("motioncor3-executable", exe.get("motioncor3")),
+             *flag("motioncor3-gpu", motion.get("gpu")),
+             *flag("motioncor3-patch-x", motion.get("patch_x")),
+             *flag("motioncor3-patch-y", motion.get("patch_y")),
+             *flag("motioncor3-pixel-size", motion.get("pixel_size_angstrom"))],
+        ),
+        (
+            "align-tilt-series",
+            ["align-tilt-series", *common,
+             *flag("binning", align["binning"]),
+             *flag("min-std-ratio", align["min_std_ratio"]),
+             *flag("tilt-axis-angle", align.get("tilt_axis_angle"))],
+        ),
+        (
+            "qc-coarse-alignment",
+            ["qc-coarse-alignment", *common,
+             *flag("preview-binning", qc["preview_binning"]),
+             *flag("residual-warning-px", qc["residual_warning_px"])],
+        ),
+        (
+            "generate-fiducial-seed",
+            ["generate-fiducial-seed", *common,
+             *flag("backend", fid["seed_backend"]),
+             *flag("tracking-binning", fid.get("tracking_binning")),
+             *flag("fiducial-diameter-nm", fid.get("fiducial_diameter_nm")),
+             *flag("raw-pixel-spacing", fid.get("raw_pixel_spacing_angstrom")),
+             *flag("target-beads", fid.get("target_beads"))],
+        ),
+        (
+            "track-fiducials",
+            ["track-fiducials", *common,
+             *flag("backend", fid["track_backend"]),
+             *flag("rounds", fid.get("rounds"))],
+        ),
+        (
+            "fine-align-tilt-series",
+            ["fine-align-tilt-series", *common,
+             *flag("robust-fitting", fine.get("robust_fitting")),
+             *flag("auto-prune-outliers", fine.get("auto_prune_outliers")),
+             *flag("max-pruned-fraction", fine.get("max_pruned_fraction")),
+             *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze"))],
+        ),
+        # Unlabelled, so correct-ctf in the lane falls back to the model fitted on it.
+        (
+            "build-ctf-stack",
+            ["build-final-aligned-stack", *common,
+             *flag("output-binning", binning["ctf_fit"])],
+        ),
+        (
+            "estimate-ctf",
+            ["estimate-ctf", *common,
+             *flag("ctf-voltage-kv", ctf["voltage_kv"]),
+             *flag("ctf-spherical-aberration-mm", ctf["spherical_aberration_mm"]),
+             *flag("ctf-amplitude-contrast", ctf.get("amplitude_contrast")),
+             *flag("ctffind-min-defocus-angstrom", ctf.get("min_defocus_angstrom")),
+             *flag("ctffind-max-defocus-angstrom", ctf.get("max_defocus_angstrom"))],
+        ),
+        (
+            "build-final-aligned-stack",
+            ["build-final-aligned-stack", *common,
+             *flag("output-binning", binning["tomogram"]),
+             *flag("variant", lane)],
+        ),
+        (
+            "correct-ctf",
+            ["correct-ctf", *common, *flag("variant", lane)],
+        ),
+        (
+            "reconstruct-tomogram",
+            ["reconstruct-tomogram", *common,
+             *flag("thickness", recon.get("thickness")),
+             *flag("variant", lane)],
+        ),
+        (
+            "segment-tomogram",
+            ["segment-tomogram", *common,
+             *flag("membrain-executable", seg.get("executable")),
+             *flag("membrain-model", seg["model"]),
+             *flag("membrain-sliding-window-size", seg.get("sliding_window_size")),
+             *([] if tta is None else [
+                 "--membrain-test-time-augmentation" if tta
+                 else "--no-membrain-test-time-augmentation"
+             ]),
+             *flag("variant", lane)],
+        ),
+        (
+            "prepare-template",
+            ["prepare-template", *common,
+             *flag("emdb-id", tmpl["emdb_id"]),
+             *flag("template-particle-diameter-angstrom", tmpl.get("particle_diameter_angstrom")),
+             *flag("template-low-pass-angstrom", tmpl.get("low_pass_angstrom")),
+             *flag("template-mask-radius-px", tmpl.get("mask_radius_px")),
+             *flag("pytom-create-template-executable", exe["pytom_create_template"]),
+             *flag("pytom-create-mask-executable", exe["pytom_create_mask"]),
+             *flag("variant", lane)],
+        ),
+        (
+            "pick-particles",
+            ["pick-particles", *common,
+             *flag("pytom-particle-diameter", pick["particle_diameter_angstrom"]),
+             *flag("pytom-extract-particle-diameter",
+                   pick.get("extract_particle_diameter_angstrom")),
+             *flag("pytom-number-of-particles", pick["number_of_particles"]),
+             *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
+             *flag("pytom-tophat-filter", pick.get("tophat_filter")),
+             *flag("pytom-low-pass", pick.get("low_pass_angstrom")),
+             *flag("pytom-random-phase-correction", pick.get("random_phase_correction")),
+             *flag("pytom-per-tilt-weighting", pick.get("per_tilt_weighting")),
+             *flag("pytom-spectral-whitening", pick.get("spectral_whitening")),
+             *flag("pytom-gpu-ids", pick["gpu_ids"]),
+             *([] if pick.get("use_segmentation_mask") is None else [
+                 "--use-segmentation-mask" if pick["use_segmentation_mask"]
+                 else "--no-use-segmentation-mask"
+             ]),
+             *flag("segmentation-mask-dilation-px", pick.get("segmentation_mask_dilation_px")),
+             *flag("pytom-match-template-executable", exe["pytom_match_template"]),
+             *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
+             *flag("variant", lane)],
+        ),
+        (
+            "visualize-picks",
+            ["visualize-picks", *common, *flag("variant", lane)],
+        ),
+        (
+            "extract-particles",
+            ["extract-particles", *common,
+             *flag("box-size-px", extract["box_size_px"]),
+             *flag("variant", lane)],
+        ),
+    ]
+
+
 def slice_steps(
     steps: list[tuple[str, Command]], start: str | None, end: str | None
 ) -> list[tuple[str, Command]]:
@@ -319,12 +495,22 @@ def main() -> int:
     )
     parser.add_argument("--execute", action="store_true", help="run instead of printing")
     parser.add_argument("--list-steps", action="store_true")
+    parser.add_argument(
+        "--list-steps-range",
+        action="store_true",
+        help="print the step names --from..--until would run, one per line",
+    )
     args = parser.parse_args()
 
     cfg = tomllib.loads(args.config.read_text())
 
     if args.list_steps:
         for name, _ in build_steps(cfg, args.project, args.series[0]):
+            print(name)
+        return 0
+    if args.list_steps_range:
+        steps = build_steps(cfg, args.project, args.series[0])
+        for name, _ in slice_steps(steps, args.start, args.end):
             print(name)
         return 0
 
