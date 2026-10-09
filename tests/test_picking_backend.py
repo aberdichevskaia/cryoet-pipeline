@@ -18,8 +18,10 @@ from cryoet_pipeline.backends.picking import (
     _included_z_values,
     _match_template_command,
     _PicksStatistics,
+    _read_star_statistics,
     _write_dose_accumulation,
     _z_spread_verdict,
+    parse_volume_split,
     pick_and_register,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -1129,3 +1131,180 @@ def test_a_negative_cut_off_is_still_refused() -> None:
             job_json_path=Path("/x/j.json"),
             tomogram_mask_path=None,
         )
+
+
+def test_a_pick_table_with_no_rows_is_zero_picks_not_its_header(tmp_path: Path) -> None:
+    # What pytom_extract_candidates writes when nothing clears its cut-off:
+    # starfile's comment line, the block and the columns, and no data. Reading
+    # the comment as a row once failed the step on "package" after a full match.
+    star = tmp_path / "TS_X_particles.star"
+    star.write_text(
+        "# Created by the starfile Python package (version 0.5.13) at 23:10:02\n"
+        "\n"
+        "data_particles\n"
+        "\n"
+        "loop_\n"
+        "_rlnCoordinateX #1\n"
+        "_rlnCoordinateY #2\n"
+        "_rlnCoordinateZ #3\n"
+        "_rlnAngleRot #4\n"
+        "_rlnAngleTilt #5\n"
+        "_rlnAnglePsi #6\n"
+        "_rlnLCCmax #7\n"
+    )
+
+    statistics = _read_star_statistics(star)
+
+    assert statistics.particle_count == 0
+    assert statistics.maximum_score is None
+
+
+def test_a_volume_split_reaches_pytom_only_when_asked_and_in_x_y_z_order(
+    tmp_path: Path,
+) -> None:
+    """pytom reads --volume-split as three piece counts, x then y then z.
+
+    1,1,1 is pytom's own default, and asking for it gives the command an unsplit
+    run always got, so a lane can write the setting down without changing what
+    runs.
+    """
+
+    unsplit = _match_command(tmp_path)
+    assert "--volume-split" not in unsplit
+    assert _match_command(tmp_path, pytom_volume_split="1,1,1") == unsplit
+
+    # Three different counts, so a swapped pair of axes cannot pass.
+    split = _match_command(tmp_path, pytom_volume_split="3,2,1")
+    assert split.count("--volume-split") == 1
+    at = split.index("--volume-split")
+    assert split[at + 1 : at + 4] == ["3", "2", "1"]
+    # The flag is all that changed.
+    assert split[:at] + split[at + 4 :] == unsplit
+
+
+def test_a_malformed_volume_split_is_refused_before_the_gpu_run(tmp_path: Path) -> None:
+    for malformed in ("2,2", "2,2,1,1", "2,0,1", "2,-1,1", "2.5,2,1", "x,y,z", ""):
+        with pytest.raises(ValueError, match="volume split"):
+            parse_volume_split(malformed)
+    assert parse_volume_split(" 2, 2 ,1") == (2, 2, 1)
+
+    tomogram = _tomogram_artifact(tmp_path)
+    template = tmp_path / "template.mrc"
+    template.touch()
+    template_mask = tmp_path / "template_mask.mrc"
+    template_mask.touch()
+    executable = tmp_path / "pytom_match_template.py"
+    executable.touch()
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("the match must not run on a malformed split")
+
+    def pick(split: object) -> None:
+        PytomMatchPickBackend(fake_runner).pick(
+            tomogram,
+            _manifest(),
+            BackendContext(
+                output_dir=tmp_path / "outputs",
+                device=DevicePreference.CUDA,
+                parameters={
+                    "pytom_match_template_executable": executable,
+                    "pytom_extract_candidates_executable": executable,
+                    "pytom_template": template,
+                    "pytom_template_mask": template_mask,
+                    "pytom_gpu_ids": "0",
+                    "pytom_particle_diameter": 100.0,
+                    "pytom_number_of_particles": 100,
+                    "pytom_volume_split": split,
+                },
+            ),
+        )
+
+    with pytest.raises(ValueError, match="pytom_volume_split"):
+        pick("2,2")
+    with pytest.raises(TypeError, match="pytom_volume_split"):
+        pick((2, 2, 1))
+
+
+def test_the_picks_record_the_split_their_search_ran_with(tmp_path: Path) -> None:
+    """pytom's job JSON does not say whether the search was split.
+
+    The noise statistics it records do depend on it, and the false-positive
+    cut-off is computed from them, so the picks carry the split. An unsplit
+    search records pytom's default rather than nothing, so the two read alike.
+    """
+
+    unsplit, unsplit_match, _ = _pick_with(tmp_path / "unsplit")
+    split, split_match, registry = _pick_with(tmp_path / "split", pytom_volume_split="3,2,1")
+
+    assert "--volume-split" not in unsplit_match
+    assert unsplit.parameters["pytom_volume_split"] == [1, 1, 1]
+    assert "--volume-split" in split_match
+    assert split.parameters["pytom_volume_split"] == [3, 2, 1]
+    # And it survives the registry file the CLI writes.
+    written = tmp_path / "artifacts.json"
+    registry.write(written)
+    reloaded = ArtifactRegistry.load(written).get(split.id)
+    assert reloaded.parameters["pytom_volume_split"] == [3, 2, 1]
+
+
+def _pick_with(
+    root: Path, **parameters: object
+) -> tuple[Artifact, list[str], ArtifactRegistry]:
+    """One run through the backend on fakes: the picks, the match command, the registry."""
+
+    root.mkdir()
+    tomogram = _tomogram_artifact(root)
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    executable = root / "pytom.py"
+    executable.touch()
+    template = root / "template.mrc"
+    template.touch()
+    template_mask = root / "template_mask.mrc"
+    template_mask.touch()
+    commands: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        if "-j" in command:
+            # Extraction: one pick, beside the job it read.
+            job_json = Path(command[command.index("-j") + 1])
+            (job_json.parent / "TS_TEST_particles.star").write_text(
+                "data_\n\nloop_\n_rlnCoordinateZ #1\n_rlnLCCmax #2\n1.000000 0.500000\n"
+            )
+        else:
+            destination = Path(command[command.index("-d") + 1])
+            (destination / "TS_TEST_job.json").write_text("{}")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    _, picks, _ = pick_and_register(
+        PytomMatchPickBackend(fake_runner),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=root / "outputs",
+            device=DevicePreference.CUDA,
+            parameters={
+                "pytom_match_template_executable": executable,
+                "pytom_extract_candidates_executable": executable,
+                "pytom_template": template,
+                "pytom_template_mask": template_mask,
+                "pytom_gpu_ids": "0",
+                "pytom_particle_diameter": 100.0,
+                "pytom_number_of_particles": 100,
+                **parameters,
+            },
+        ),
+        registry,
+    )
+    return picks, commands[0], registry

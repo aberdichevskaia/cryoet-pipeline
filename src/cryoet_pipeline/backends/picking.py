@@ -62,6 +62,7 @@ class PytomMatchPickBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         segmentation = _optional_segmentation_artifact(supporting_artifacts)
         gpu_ids = _gpu_ids_parameter(context)
+        volume_split = _volume_split(context)
         paths = _picking_paths(
             context.output_dir,
             manifest,
@@ -289,6 +290,13 @@ class PytomMatchPickBackend:
                     context, "pytom_per_tilt_weighting", default=False
                 ),
                 "dose_weighted": dose_path is not None,
+                # Nothing else records it: pytom hands the split to its job
+                # runner, not to the job, so the job JSON is silent. And a split
+                # is not neutral. pytom averages the pieces' noise variances
+                # instead of pooling them and skips a piece the tomogram mask
+                # covers nowhere, and the false-positive cut-off and the
+                # significance in the QC report are computed from those numbers.
+                "pytom_volume_split": list(volume_split),
                 "pytom_template_mask_path": str(template_mask),
                 "pytom_job_json_path": str(paths.job_json),
                 "pytom_scores_volume_path": (
@@ -713,6 +721,11 @@ def _match_template_command(
     search_z = _optional_search_range(context, "pytom_search_z")
     if search_z is not None:
         command.extend(["--search-z", str(search_z[0]), str(search_z[1])])
+    volume_split = _volume_split(context)
+    if volume_split != _UNSPLIT:
+        # Left out at 1 1 1, pytom's own default, so an unsplit search is the
+        # same command it always was.
+        command.extend(["--volume-split", *(str(pieces) for pieces in volume_split)])
     if tomogram_mask_path is not None:
         command.extend(["--tomogram-mask", str(tomogram_mask_path)])
     low_pass = _optional_positive_float_parameter(context, "pytom_low_pass")
@@ -779,7 +792,10 @@ def _read_star_statistics(star_path: Path) -> _PicksStatistics:
     lines = star_path.read_text().splitlines()
     columns: list[str] = []
     in_loop = False
-    data_start = 0
+    # No data line after the columns means pytom found nothing above its cut-off,
+    # a result rather than an error. Starting from 0 instead read the whole file,
+    # starfile's "# Created by ... package" comment included, as particle rows.
+    data_start = len(lines)
     for index, raw_line in enumerate(lines):
         line = raw_line.strip()
         if line == "loop_":
@@ -1363,6 +1379,38 @@ def _optional_search_range(context: BackendContext, key: str) -> tuple[int, int]
     if low < 0 or high <= low:
         raise ValueError(f"context parameter {key!r} must satisfy 0 <= min < max")
     return low, high
+
+
+_UNSPLIT = (1, 1, 1)
+
+
+def parse_volume_split(value: str) -> tuple[int, int, int]:
+    """Read 'x,y,z', how many pieces pytom cuts the search into along each axis."""
+
+    parts = value.split(",")
+    if len(parts) != 3:
+        raise ValueError(f"volume split must be 'x,y,z', got {value!r}")
+    try:
+        x, y, z = (int(part.strip()) for part in parts)
+    except ValueError as error:
+        raise ValueError(f"volume split must be three integers, got {value!r}") from error
+    if min(x, y, z) < 1:
+        raise ValueError(f"volume split must be positive integers, got {value!r}")
+    return x, y, z
+
+
+def _volume_split(context: BackendContext) -> tuple[int, int, int]:
+    """The split pytom searches with: its default, unsplit, unless one was asked for."""
+
+    value = context.parameters.get("pytom_volume_split")
+    if value is None:
+        return _UNSPLIT
+    if not isinstance(value, str):
+        raise TypeError("context parameter 'pytom_volume_split' must be an 'x,y,z' string")
+    try:
+        return parse_volume_split(value)
+    except ValueError as error:
+        raise ValueError(f"context parameter 'pytom_volume_split': {error}") from error
 
 
 def _required_positive_int_parameter(context: BackendContext, key: str) -> int:
