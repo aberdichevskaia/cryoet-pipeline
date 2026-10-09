@@ -129,6 +129,13 @@ from cryoet_pipeline.models import (
     ProjectConfig,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.pick_geometry import (
+    AXIS_DIRECTIONS,
+    TEMPLATE_AXES,
+    MembraneRule,
+    filter_picks_by_membrane,
+    summary_lines,
+)
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
@@ -2742,6 +2749,151 @@ def pick_particles(
     typer.echo(f"wrote picking QC: {qc_report.path}")
     typer.echo(f"QC status: {qc_report.parameters['status']}")
     _echo_qc_warnings(report)
+    typer.echo(f"updated {registry}")
+
+
+@app.command("filter-picks")
+def filter_picks(
+    manifest: Annotated[
+        Path,
+        typer.Option(help="Tilt-series manifest JSON written by init."),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Project output directory.")],
+    output_variant: Annotated[
+        str,
+        typer.Option(
+            help="Label for the kept picks. Extraction, the Dynamo export and averaging "
+            "select them by it, as `--variant <label>`."
+        ),
+    ],
+    variant: Annotated[
+        str | None,
+        typer.Option(help="Label of the picks to filter, e.g. the lane's own."),
+    ] = None,
+    max_membrane_distance_angstrom: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="Drop picks further than this from the nearest voxel of the membrane "
+            "segmentation the search was masked with.",
+        ),
+    ] = None,
+    min_membrane_distance_angstrom: Annotated[
+        float,
+        typer.Option(min=0.0, help="Drop picks closer than this to the nearest membrane voxel."),
+    ] = 0.0,
+    normal_angle_deg: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            max=90.0,
+            help="Expected angle between the template axis and the membrane normal: 0 for "
+            "a target whose axis runs along the normal, as the Gag lattice's does. Leave "
+            "it out for a target with no fixed orientation to the membrane.",
+        ),
+    ] = None,
+    angle_tolerance_deg: Annotated[
+        float | None,
+        typer.Option(min=0.0, max=90.0, help="How far from the expected angle a pick may be."),
+    ] = None,
+    axis_direction: Annotated[
+        str,
+        typer.Option(
+            help="toward, away or either: whether the template axis must point toward the "
+            "nearest membrane voxel. Once real picks show which way it points, this tells "
+            "the two sides of a membrane apart. Read a dry run's counts first.",
+        ),
+    ] = "either",
+    template_axis: Annotated[
+        str,
+        typer.Option(help="Template axis compared with the membrane normal: x, y or z."),
+    ] = "z",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Measure and report only: the per-pick table and the histograms, with "
+            "nothing registered. The rule is chosen from these.",
+        ),
+    ] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite the filter's outputs and registry entries."),
+    ] = False,
+) -> None:
+    """Keep the picks that sit where the target can: at its distance from the membrane,
+    oriented to it as the target is."""
+
+    if axis_direction not in AXIS_DIRECTIONS:
+        raise typer.BadParameter(
+            f"expected one of {', '.join(AXIS_DIRECTIONS)}, got {axis_direction!r}",
+            param_hint="axis-direction",
+        )
+    if template_axis not in TEMPLATE_AXES:
+        raise typer.BadParameter(
+            f"expected one of {', '.join(TEMPLATE_AXES)}, got {template_axis!r}",
+            param_hint="template-axis",
+        )
+    try:
+        rule = MembraneRule(
+            min_distance_angstrom=min_membrane_distance_angstrom,
+            max_distance_angstrom=max_membrane_distance_angstrom,
+            normal_angle_deg=normal_angle_deg,
+            angle_tolerance_deg=angle_tolerance_deg,
+            axis_direction=axis_direction,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    artifact_registry = ArtifactRegistry.load(registry)
+    picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+    # The membrane the search itself was masked with, so the filter and the
+    # search agree on where the membranes are.
+    segmentation_id = picks.parameters.get("segmentation_id")
+    if not isinstance(segmentation_id, str):
+        raise typer.BadParameter(
+            f"{picks.id} was not searched with a segmentation, so there is no membrane "
+            "to measure it against",
+            param_hint="variant",
+        )
+    try:
+        segmentation = artifact_registry.get(segmentation_id)
+    except (KeyError, ValueError) as exc:
+        raise typer.BadParameter(
+            f"{picks.id} names segmentation {segmentation_id!r}, which is not in the registry",
+            param_hint="registry",
+        ) from exc
+
+    result = filter_picks_by_membrane(
+        picks,
+        segmentation,
+        tilt_series_manifest,
+        output_root=out,
+        label=output_variant,
+        rule=rule,
+        template_axis=template_axis,
+        overwrite=overwrite,
+        dry_run=dry_run,
+    )
+    typer.echo(f"measured {picks.id} against {segmentation.id}")
+    for line in summary_lines(result.summary):
+        typer.echo(line)
+    typer.echo(f"wrote per-pick table: {result.table_path}")
+    typer.echo(f"wrote filter QC: {result.report_path}")
+    for warning in cast(list[str], result.summary["warnings"]):
+        typer.echo(f"warning: {warning}")
+    if dry_run:
+        typer.echo("dry run: nothing registered")
+        return
+    artifact_registry.extend(result.artifacts, replace=overwrite)
+    artifact_registry.commit(registry)
+    typer.echo(f"wrote picks: {result.star_path}")
+    typer.echo(f"registered {result.artifacts[0].id}")
     typer.echo(f"updated {registry}")
 
 

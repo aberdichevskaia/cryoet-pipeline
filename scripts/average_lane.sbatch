@@ -14,7 +14,9 @@
 # MASK is the alignment mask: a diameter in A, or an MRC file in the particle
 # box, which is used as Dynamo uses one, so a mask made for the Dynamo project
 # can serve both. Optional: ITERATIONS (default 3), START_LOWPASS_ANGSTROM
-# (the halves' common start; default 60), OVERWRITE=1.
+# (the halves' common start; default 60), OVERWRITE=1, and VARIANT to average
+# picks under another label than the lane's, such as the ones `cryoet
+# filter-picks --output-variant` registers.
 #
 # The thresholds keep LCCmax >= the minimum, the rule the Dynamo selection
 # uses, so the two branches start from the same particles. Box and variant come
@@ -54,7 +56,7 @@ EOF
 }
 
 box=$(lane extract box_size_px)
-variant=$(lane lane variant)
+variant=${VARIANT:-$(lane lane variant)}
 if [[ -f "$MASK" ]]; then
     mask=(--alignment-mask "$MASK")
 else
