@@ -80,6 +80,9 @@ runs_on() {  # runs_on CAP BINARY
 
 if needs prepare-tilt-series; then
     [[ -x "${MOTIONCOR3:-}" ]] || fail "MOTIONCOR3 is not an executable: '${MOTIONCOR3:-}'"
+    # The loader names only the first library it misses; ldd names them all.
+    missing=$(ldd "$MOTIONCOR3" 2>/dev/null | awk '/not found/ {print $1}' | tr '\n' ' ')
+    [[ -z "$missing" ]] || fail "MotionCor3 cannot load: ${missing}- put their directory on LD_LIBRARY_PATH before submitting"
     cap=$(gpu_cap)
     if [[ -z "$cap" || ! -x "$cuobjdump" ]]; then
         echo "preflight: no compute capability or cuobjdump here; MotionCor3's GPU code unchecked"

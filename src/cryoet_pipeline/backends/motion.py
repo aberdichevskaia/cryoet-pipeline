@@ -455,12 +455,15 @@ def _motioncor3_command(
     log_dir: Path,
     alignment_dir: Path,
 ) -> list[str]:
+    # MotionCor3 runs in its work directory, not ours, so a relative path here
+    # (a manifest written by `init --frames data/...`, a relative --out) would
+    # be looked up from the wrong place: "cannot open stack file".
     command = [
         str(settings.executable),
         "-InMrc",
-        str(input_path),
+        str(input_path.resolve()),
         "-OutMrc",
-        str(output_path),
+        str(output_path.resolve()),
         "-Patch",
         str(settings.patch_x),
         str(settings.patch_y),
@@ -480,9 +483,9 @@ def _motioncor3_command(
         "-Gpu",
         *(str(gpu_id) for gpu_id in settings.gpu_ids),
         "-LogDir",
-        str(log_dir),
+        str(log_dir.resolve()),
         "-OutAln",
-        str(alignment_dir),
+        str(alignment_dir.resolve()),
     ]
     if settings.gain_reference is not None:
         command.extend(["-Gain", str(settings.gain_reference)])

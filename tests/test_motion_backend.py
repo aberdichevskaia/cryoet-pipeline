@@ -706,6 +706,57 @@ def test_phase_correlation_backend_requires_overwrite_flag(tmp_path: Path) -> No
         backend.correct(manifest, context)
 
 
+def test_motioncor3_is_given_absolute_paths_when_the_project_is_relative(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cluster layout: `init --frames data/...` and `--out outputs/hiv`, both
+    # relative to the repository, while MotionCor3 runs in its own work directory.
+    monkeypatch.chdir(tmp_path)
+    movie_path = Path("data/frames/TS_TEST_000_0.0.mrc")
+    _write_mrc(movie_path, np.ones((3, 4, 6), dtype=np.float32))
+    executable = tmp_path / "bin" / "MotionCor3"
+    executable.parent.mkdir()
+    executable.touch()
+    captured: dict[str, list[str]] = {}
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        captured["command"] = list(command)
+        paths = {flag: Path(command[command.index(flag) + 1]) for flag in
+                 ("-InMrc", "-OutMrc", "-LogDir", "-OutAln")}
+        # Looked up the way MotionCor3 looks them up: from its working directory.
+        assert (cwd / paths["-InMrc"]).is_file()
+        _write_mrc(cwd / paths["-OutMrc"], np.zeros((4, 6), dtype=np.float32))
+        (cwd / paths["-LogDir"]).mkdir(parents=True, exist_ok=True)
+        (cwd / paths["-LogDir"] / f"{paths['-OutMrc'].stem}.log").write_text("log\n")
+        (cwd / paths["-OutAln"]).mkdir(parents=True, exist_ok=True)
+        return subprocess.CompletedProcess(command, 0, stdout="completed", stderr="")
+
+    context = BackendContext(
+        output_dir=Path("outputs/hiv"),
+        device=DevicePreference.CUDA,
+        parameters={
+            "motioncor3_executable": executable,
+            "motioncor3_pixel_size_angstrom": 0.675,
+        },
+    )
+
+    MotionCor3MotionCorrectionBackend(fake_runner).correct(
+        _manifest(movie_path, num_subframes=3),
+        context,
+    )
+
+    command = captured["command"]
+    for flag in ("-InMrc", "-OutMrc", "-LogDir", "-OutAln"):
+        assert Path(command[command.index(flag) + 1]).is_absolute(), flag
+    assert Path(command[command.index("-InMrc") + 1]) == (tmp_path / movie_path).resolve()
+
+
 def _manifest(
     movie_path: Path | None,
     *,
