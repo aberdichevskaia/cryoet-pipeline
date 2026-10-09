@@ -56,6 +56,9 @@ echo "cryoet      $(command -v cryoet)"
 echo "imod        $(command -v tiltxcorr || echo 'not on PATH')"
 echo "ctffind     $(command -v ctffind5 || command -v ctffind || echo 'not on PATH')"
 nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader 2>/dev/null || true
+# Inside a MIG slice the line above reports the whole card: job 41075712 had a
+# 3g.20gb slice and printed 40960 MiB. -L lists the slice itself.
+nvidia-smi -L 2>/dev/null || true
 echo
 
 # Preflight: each of these fails deep inside a tool otherwise, after the
