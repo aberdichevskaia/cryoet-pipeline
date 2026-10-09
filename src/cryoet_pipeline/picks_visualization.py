@@ -222,9 +222,13 @@ def write_picks_visualization(
     _write_tomogram_mrc(tomogram.path, tomogram_path, voxel_size_angstrom=voxel_size)
     shutil.copyfile(picks.path, picks_path)
     template_statistics: _VolumeStatistics | None = None
+    template_negated = template is not None and template.parameters.get("inverted") is True
     if template is not None and template_path is not None:
         template_statistics = _write_tomogram_mrc(
-            template.path, template_path, voxel_size_angstrom=voxel_size
+            template.path,
+            template_path,
+            voxel_size_angstrom=voxel_size,
+            negate=template_negated,
         )
     if segmentation is not None and segmentation_path is not None:
         _write_tomogram_mrc(
@@ -237,6 +241,7 @@ def write_picks_visualization(
             voxel_size_angstrom=voxel_size,
             template_name=template_path.name if template_path else None,
             template_statistics=template_statistics,
+            template_negated=template_negated,
             segmentation_name=segmentation_path.name if segmentation_path else None,
         )
     )
@@ -404,6 +409,7 @@ def _chimerax_script(
     voxel_size_angstrom: float,
     template_name: str | None = None,
     template_statistics: _VolumeStatistics | None = None,
+    template_negated: bool = False,
     segmentation_name: str | None = None,
 ) -> str:
     """Open everything at one scale, with each pick shown as the template.
@@ -414,11 +420,13 @@ def _chimerax_script(
     in Angstrom. ArtiaX places a particle at `coordinate * originScaleFactor`
     with the factor defaulting to one, while the coordinates are in tomogram
     voxels, so without it every pick lands at a fraction of its true position.
-    `artiax attach` re-opens the file beneath the particle list rather than
-    linking the model that was passed to it, so afterwards the template answers
-    to a new number and the one it was opened under no longer exists. And the
-    template is inverted to match dark particles, so ChimeraX's positive default
-    level wraps the background instead of the density.
+    `artiax attach` moves the map's data into a new model beneath the particle
+    list and deletes the one it was given, keeping none of its display settings:
+    the template answers to a new number afterwards, and a level set on it
+    before the attach is lost — the copies open at ChimeraX's default level. So
+    the level goes on the list, after the attach, with `artiax particles ...
+    surfaceLevel`. Measured in ChimeraX 1.12 with ArtiaX: a level of -0.0009 set
+    on `#1` before the attach left the copies at the default 0.000195.
 
     The volumes are opened before ArtiaX starts, because they are the ones the
     later commands have to name and only a plain `open` into an empty session
@@ -456,65 +464,47 @@ def _chimerax_script(
             f"volume #{numbers[segmentation_name]} level 0.5 style surface transparency 0.5",
         ]
     if template_name is not None:
-        # A template with no statistics cannot have its level derived, so the
-        # script says so rather than printing a number nothing stands behind.
-        if template_statistics is None:
-            lines += [
-                "",
-                "# The template's statistics were not available when this was written,",
-                "# so the level below is a placeholder. Set it from the map's own",
-                "# histogram: an inverted template's density is its LOW tail, so pick",
-                "# a level below the mean, and re-run the attach afterwards.",
-                f"volume #{numbers[template_name]} level -1.0 style surface",
-                f"artiax attach #{numbers[template_name]} toParticleList {particle_list}",
-                f"artiax show {particle_list} surfaces",
-                f"artiax hide {particle_list} markers",
-                f"artiax hide {particle_list} axes",
-            ]
-            lines.append("")
-            return "\n".join(lines)
-
-        level = template_statistics.level
-        template_minimum = template_statistics.minimum
-        template_maximum = template_statistics.maximum
-        template_mean = template_statistics.mean
-        template_sd = template_statistics.sd
         lines += [
             "",
             "# Each pick drawn as the template at the orientation found for it,",
             "# which is what makes a wrong orientation visible.",
-            "# Contour first: attaching copies the surface as it stands, so a level",
-            "# set afterwards changes the original and not the copies drawn at each",
-            "# particle.",
-            "#",
-            "# The level is NEGATIVE because the template is inverted to match dark",
-            "# particles, so its density is the low tail rather than the high one.",
-            "# Stated as numbers rather than asserted, because the claim is easy to",
-            "# doubt and impossible to check from the script otherwise:",
-            f"#   template values run {template_minimum:.5f} to {template_maximum:.5f}",
-            f"#   mean {template_mean:.5f}, sd {template_sd:.5f}",
-            f"#   level = mean - 2 sd = {level:.5f}",
-            "#",
-            "# Do NOT flip the map with `volume scale ... factor -1` instead. That",
-            "# creates a NEW model rather than changing this one, so the numbering",
-            "# every line below depends on shifts, and the attach still copies the",
-            "# unflipped surface. The negative level is the inversion.",
-            "#",
-            "# If the copies drawn on the particles look empty or crumbly, the level",
-            "# below did not take effect before the attach: ChimeraX opens a map at",
-            "# its own default level, which for an inverted template sits in the",
-            "# positive tail where there is almost nothing. Re-run this file in a",
-            "# fresh session.",
-            f"volume #{numbers[template_name]} level {level:.4f} style surface",
+        ]
+        if template_negated:
+            lines += [
+                "# This copy of the template has its sign flipped. The pipeline's",
+                "# template is inverted to match the tomogram's dark particles; flipped",
+                "# back, its density is the high tail, like any other map's.",
+            ]
+        lines += [
             f"artiax attach #{numbers[template_name]} toParticleList {particle_list}",
+            "# The level goes on the list, after the attach: attaching replaces the",
+            "# model above with a new one and keeps none of its display settings,",
+            "# so a level set on it beforehand never reaches the copies.",
+        ]
+        # A template with no statistics cannot have its level derived, so the
+        # script says so rather than printing a number nothing stands behind.
+        if template_statistics is None:
+            lines += [
+                "# The template's statistics were not available when this was written,",
+                "# so the copies keep ChimeraX's default level. Set one with",
+                f"#   artiax particles {particle_list} surfaceLevel <value>",
+            ]
+        else:
+            lines += [
+                f"#   template values run {template_statistics.minimum:.5g} "
+                f"to {template_statistics.maximum:.5g}",
+                f"#   mean {template_statistics.mean:.5g}, sd {template_statistics.sd:.5g}",
+                f"#   level = mean + 2 sd = {template_statistics.level:.5g}",
+                f"artiax particles {particle_list} surfaceLevel {template_statistics.level:.5g}",
+            ]
+        lines += [
             "# Attaching does not display: the list keeps drawing its own markers",
             "# and the attached surface stays hidden.",
             f"artiax show {particle_list} surfaces",
             f"artiax hide {particle_list} markers",
             f"artiax hide {particle_list} axes",
-            "# To try another level, set it on the model above and attach again —",
-            f"# somewhere between {template_minimum:.5f} and {template_mean:.5f}, since",
-            "# further below the mean shows less and above it shows background.",
+            "# To try another level, run the surfaceLevel line again with a new",
+            "# value; higher shows less of the particle, lower shows background.",
         ]
     lines.append("")
     return "\n".join(lines)
@@ -531,15 +521,15 @@ class _VolumeStatistics:
 
     @property
     def level(self) -> float:
-        """Two standard deviations below the mean.
+        """Two standard deviations above the mean.
 
-        Below rather than above because an inverted template's density is its
-        low tail. Two rather than some other number because it is the
-        conventional starting contour and this is a viewing aid, not a
-        measurement — the script says how to change it.
+        Above because the template is written with its density positive — an
+        inverted one has its sign flipped on the way out. Two rather than some
+        other number because it is the conventional starting contour and this
+        is a viewing aid, not a measurement — the script says how to change it.
         """
 
-        return self.mean - 2.0 * self.sd
+        return self.mean + 2.0 * self.sd
 
 
 def _write_tomogram_mrc(
@@ -547,17 +537,19 @@ def _write_tomogram_mrc(
     destination: Path,
     *,
     voxel_size_angstrom: float,
+    negate: bool = False,
 ) -> _VolumeStatistics:
     """Convert to MRC and return the statistics a contour level comes from.
 
-    ChimeraX picks a positive default from the histogram, which is the wrong
-    side for a template inverted to match a tomogram's dark particles: the
-    surface then wraps the background instead of the particle.
+    `negate` flips the sign, for a template inverted to match a tomogram's dark
+    particles. ChimeraX contours the high tail, and so does every level set on
+    an ArtiaX particle list; left inverted, the template's density is the low
+    tail and a surface drawn there wraps the background instead of the
+    particle. Whether to flip comes from the `inverted` the template step
+    recorded, not from the data's histogram.
 
     The four numbers rather than the level alone, so the written script can show
-    its working. A reader who doubts that the template is inverted — a
-    reasonable doubt, since nothing in a `.cxc` says so — can otherwise only
-    take the level's sign on trust.
+    its working. They describe the array as written, after any flip.
 
     The array is written in the canonical ZYX order it is stored in, which is
     also what makes the picks land: they are indices into this array, and the
@@ -571,6 +563,8 @@ def _write_tomogram_mrc(
             data = np.array(mrc.data, dtype=np.float32)
     if data.ndim != 3:
         raise ValueError(f"expected a 3D tomogram, got shape {data.shape}: {source}")
+    if negate:
+        data = -data
     with mrcfile.new(destination, overwrite=True) as mrc:
         mrc.set_data(data)
         mrc.voxel_size = voxel_size_angstrom

@@ -367,7 +367,7 @@ def test_export_carries_the_template_and_segmentation(tmp_path: Path) -> None:
         id="TS_TEST:template:pytom",
         kind=ArtifactKind.TEMPLATE,
         path=template_path,
-        parameters={"tilt_series_id": "TS_TEST"},
+        parameters={"tilt_series_id": "TS_TEST", "inverted": True},
     )
     segmentation_path = tmp_path / "segmentation.zarr"
     zarr.save(segmentation_path, np.zeros((2, 3, 4), dtype=np.float32))
@@ -390,33 +390,52 @@ def test_export_carries_the_template_and_segmentation(tmp_path: Path) -> None:
     assert export.segmentation_path is not None and export.segmentation_path.is_file()
     with mrcfile.open(export.template_path, permissive=True) as mrc:
         assert float(mrc.voxel_size.x) == pytest.approx(_VOXEL_SIZE, abs=1e-3)
+        written = np.array(mrc.data)
+    # The template step recorded it as inverted, so the copy written for viewing
+    # is flipped back: ChimeraX and ArtiaX contour the high tail.
+    np.testing.assert_array_equal(written, -template_values)
 
     script = export.chimerax_script_path.read_text()
-    assert "artiax attach #1 toParticleList #3.2.1" in script
-    # attach re-opens the file beneath the particle list, so naming the model it
-    # was opened under afterwards fails with "No volumes specified" and aborts
-    # the rest of the script.
-    # The level is set on the model that is about to be attached, because
-    # attaching copies the surface as it stands.
-    contour_line = next(
-        line for line in script.splitlines() if line.startswith("volume #1 level")
-    )
-    attach_line = next(line for line in script.splitlines() if line.startswith("artiax attach"))
-    assert script.index(contour_line) < script.index(attach_line)
+    lines = script.splitlines()
+    assert "artiax attach #1 toParticleList #3.2.1" in lines
+    # attach moves the data into a new model and deletes #1 with its display
+    # settings, so a level set on #1 never reaches the copies; it has to go on
+    # the list, after the attach.
+    assert not any(line.startswith("volume #1") for line in lines)
+    level_line = next(line for line in lines if "surfaceLevel" in line and not line.startswith("#"))
+    assert level_line.startswith("artiax particles #3.2.1 surfaceLevel ")
+    assert lines.index(level_line) > lines.index("artiax attach #1 toParticleList #3.2.1")
+    level = float(level_line.split("surfaceLevel ")[1])
+    assert level == pytest.approx(float(written.mean() + 2.0 * written.std()), rel=1e-4)
     # Attaching alone leaves the surface hidden while the list keeps drawing its
     # own markers, so a level change appears to do nothing.
     assert "artiax show #3.2.1 surfaces" in script
     assert "artiax hide #3.2.1 markers" in script
-    # The template is inverted to match dark particles, so the level has to sit
-    # below its mean; ChimeraX's own default is above it, on the wrong side.
-    contour = contour_line
-    level = float(contour.split("level ")[1].split()[0])
-    assert level < float(template_values.mean())
-    assert level == pytest.approx(
-        float(template_values.mean() - 2.0 * template_values.std()), abs=1e-3
-    )
     assert f"open {export.segmentation_path.name}" in script
     assert "volume #2 level 0.5" in script
+
+
+def test_a_template_not_recorded_as_inverted_is_written_as_it_is(tmp_path: Path) -> None:
+    """Only the template step knows whether it inverted; the histogram is not asked."""
+
+    tomogram = _tomogram(tmp_path)
+    picks = _picks(tmp_path, tomogram)
+    template_path = tmp_path / "template.zarr"
+    template_values = np.arange(2 * 3 * 4, dtype=np.float32).reshape(2, 3, 4)
+    zarr.save(template_path, template_values)
+    template = Artifact(
+        id="TS_TEST:template:pytom",
+        kind=ArtifactKind.TEMPLATE,
+        path=template_path,
+        parameters={"tilt_series_id": "TS_TEST", "inverted": False},
+    )
+
+    export = _visualize(tmp_path, tomogram=tomogram, picks=picks, template=template)
+
+    assert export.template_path is not None
+    with mrcfile.open(export.template_path, permissive=True) as mrc:
+        np.testing.assert_array_equal(np.array(mrc.data), template_values)
+    assert "sign flipped" not in export.chimerax_script_path.read_text()
 
 
 def test_export_without_a_template_or_segmentation_says_nothing_about_them(
