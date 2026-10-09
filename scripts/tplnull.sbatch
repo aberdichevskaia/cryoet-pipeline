@@ -3,14 +3,12 @@
 #SBATCH --output=slurm-ribo-tplnull-%a-%j.log
 #SBATCH --partition=gpu_p
 #SBATCH --qos=gpu_normal
-#SBATCH --gres=gpu:1
-# NEEDS A FULL CARD, NOT A MIG SLICE. Measured on the running job with
-# nvidia-smi --query-gpu=memory.used: 27983 MiB. The 20 GB slice this script
-# first asked for (a100_3g.20gb:1, copied from ribo_pick.sbatch) would not have
-# fitted, and the run only survived because the scheduler handed out a full
-# A100-PCIE-40GB. See the memory note below for where the 28 GB goes.
-# Replace `gpu:1` with whatever this cluster calls a whole A100 if `gpu:1` can
-# hand back a slice.
+#SBATCH --gres=gpu:a100_3g.20gb:1
+# A 20 GB slice is enough: sacct shows both runs that finished (40090844_1,
+# 40094531_0, 2026-09-04) on a100_3g.20gb. This once asked for a whole card on a
+# misreading. Inside a MIG slice nvidia-smi --query-gpu describes the parent card,
+# so the log's "A100-PCIE-40GB" was not a whole card, and 27983 MiB of memory.used
+# cannot have been this job's own: it is more than the slice holds.
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=16:00:00
@@ -58,16 +56,13 @@
 # together, but the ring count stays put while each ring's circumference is
 # sampled more finely, so narrowing the search does not make it cheaper here.
 #
-# MEMORY, measured at 27983 MiB rather than derived. The particle stack is the
-# small part: 4000 x 48^3 x 4 B is 1.77 GB, and the loop holds raw_volumes,
-# aligned and new_aligned at once for 5.3 GB. What an estimate from the inputs
-# misses is the SEARCH — 2650 orientations scored per particle in the first
-# iteration against 24 in a classification iteration, so the batch of rotated
-# volumes and its FFT workspace dwarf the stack, and torch's caching allocator
-# keeps the reservation at its high-water mark for the rest of the run.
-#
-# The transferable part: a GPU memory figure derived from the inputs is a lower
-# bound, and the width of the orientation search is what sets the peak.
+# MEMORY is not measured. The particle stack is 4000 x 48^3 x 4 B = 1.77 GB, and
+# the loop holds raw_volumes, aligned and new_aligned at once for 5.3 GB. The
+# search adds the batch of rotated volumes and its FFT workspace (2650
+# orientations per particle in the first iteration against 24 in a
+# classification iteration), so 5.3 GB is a lower bound. The peak is below the
+# slice's 20 GB, since both runs finished there; the 27983 MiB once recorded here
+# was the whole card (see the --gres note above).
 #
 # The classification runs cost 296 per particle by the same arithmetic (8 cone
 # directions x 3 in-plane x 4 classes for three iterations, then 1 x 1 once the

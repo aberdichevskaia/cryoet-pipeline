@@ -1523,14 +1523,12 @@ Record the measured throughput in QC: units, elapsed, and the rate. Then "how
 long will this take" is answerable BEFORE starting, from what a comparable run
 actually did rather than from arithmetic about the inputs.
 
-That is worth stating because the alternative was tried twice in one day and
-failed twice. The same template-null run was estimated at three hours and then
-at 7.2 hours, and the GPU memory at 5.3 GB against a measured 27983 MiB. Both
-first figures were derived from the input sizes; both were wrong by between two
-and five times, because **the width of the orientation search sets the cost, not
-the size of the data**. The correction was only possible because one comparable
-run had been timed — a classification of the same 4000 particles at 296
-orientations each, which took 14 minutes on an A100 and gave the 31x ratio.
+That is worth stating because the alternative was tried and failed. The same
+template-null run was estimated at three hours from the input sizes and then at
+7.2 hours, because **the width of the orientation search sets the cost, not the
+size of the data**. The correction was only possible because one comparable run
+had been timed — a classification of the same 4000 particles at 296 orientations
+each, which took 14 minutes on an A100 and gave the 31x ratio.
 
 `step_timings.jsonl` already records per-step wall time and disk delta, so half
 of this exists. What it cannot do is give a rate, because it records neither the
