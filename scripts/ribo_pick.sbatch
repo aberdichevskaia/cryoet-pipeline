@@ -40,6 +40,8 @@ set -u
 echo "host        $(hostname)"
 echo "started     $(date -Is)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+# Inside a MIG slice the line above reports the whole card; -L lists the slice.
+nvidia-smi -L || true
 echo
 
 # Preflight, because every one of these fails deep inside a tool after the GPU

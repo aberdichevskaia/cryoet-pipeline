@@ -71,6 +71,8 @@ echo "started     $(date -Is)"
 echo "seed        $SEED"
 echo "label       $LABEL"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+# Inside a MIG slice the line above reports the whole card; -L lists the slice.
+nvidia-smi -L || true
 echo
 
 # A registry copy per task, because both array tasks would otherwise write the

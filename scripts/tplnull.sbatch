@@ -105,6 +105,8 @@ echo "host        $(hostname)"
 echo "started     $(date -Is)"
 echo "lane        $VARIANT -> $LABEL"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
+# Inside a MIG slice the line above reports the whole card; -L lists the slice.
+nvidia-smi -L || true
 echo
 
 # Both tasks must start from the SAME reference, or the two sides of the
