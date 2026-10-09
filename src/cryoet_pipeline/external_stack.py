@@ -130,7 +130,7 @@ def import_external_tilt_stack(
         ArtifactRegistry.load(registry_path) if registry_path.exists() else ArtifactRegistry.empty()
     )
     registry.extend([tilt_angles_artifact, tilt_stack_artifact], replace=overwrite)
-    registry.write(registry_path)
+    registry.commit(registry_path)
 
     return ExternalStackImportResult(
         manifest=manifest,

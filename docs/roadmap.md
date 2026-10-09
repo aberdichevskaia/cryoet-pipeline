@@ -26,6 +26,17 @@ at the same time lose one another's entries. This bites at five series, not at
 five hundred. Observed since, and worse than this paragraph says: parallel
 picking does not quietly lose entries, it brings the runs down — section 20.
 
+*Changed 2026-10-09.* The loss happened for real on 2026-10-07: a cancelled
+duplicate job's fine-align wrote back a copy loaded 1.5 minutes earlier and
+erased TS_0487's bin2 final aligned stack and TS_0572's import. Since then a
+command records what it adds, replaces and removes, and `ArtifactRegistry.commit`
+replays that onto the document as it is at the end, under `flock` on
+`artifacts.json.lock`, written to a temporary file and renamed over the
+registry. A concurrent change to an entry the command replaces, or to a parent
+of one it registers, is refused rather than overwritten. Jobs no longer erase
+one another's entries, given a flock that reaches across nodes; without one, a
+commit refuses to run. Section 20's crash is a separate question.
+
 The database is not first because its design needs the scale-up as input. Several
 of the open questions in [database_design.md](database_design.md) — the
 `content_params`/`execution_params` split per step, run granularity, whether
@@ -1644,6 +1655,12 @@ process. So there are at least three routes from concurrent writers to an
 exception rather than to silent loss, which is why the order of work above
 understates this. Whether any of them is what actually fired here is unknown
 until there is a traceback.
+
+*Changed 2026-10-09:* the write is now atomic and locked, and each command
+merges its own changes into the registry as it then is, so the partial-document
+and lost-write routes above are closed. Two commands changing the same entry
+still raise, now as `RegistryConflictError`, by design. None of this says what
+crashed here; the traceback is still the first work item.
 
 **Why this is not cosmetic.** The workaround is the serial shell loop, and at the
 measured 29 minutes of A100 per series a fifty-series run is about 24 hours

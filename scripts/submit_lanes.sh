@@ -6,9 +6,10 @@
 #   scripts/submit_lanes.sh ribo hiv    # both; the two projects run side by side
 #
 # Each lane is a chain of stages joined by afterok, so a stage starts only when the
-# previous one finished without a failed series, and the stages of one project never
-# overlap (they share one registry). Before submitting: data downloaded, `init` run
-# for hiv, EMDB maps cached — see the runbook.
+# previous one finished without a failed series: it needs that stage's outputs. The
+# registry no longer forbids jobs of one project overlapping (each command merges its
+# entries under a lock), but two jobs on the same series still must not. Before
+# submitting: data downloaded, `init` run for hiv, EMDB maps cached — see the runbook.
 #
 # Set these before running (or export them in your shell):
 #   MOTIONCOR3     MotionCor3 binary                      (hiv)

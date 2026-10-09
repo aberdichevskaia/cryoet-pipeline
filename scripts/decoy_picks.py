@@ -542,7 +542,7 @@ def main() -> int:
         can_recompute=True,
     )
     registry.add(artifact, replace=True)
-    registry.write(args.registry)
+    registry.commit(args.registry)
 
     print(f"\nwrote {star}")
     print(f"registered {artifact.id}\n")

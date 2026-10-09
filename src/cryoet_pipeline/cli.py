@@ -376,7 +376,7 @@ def correct_motion(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     typer.echo(f"wrote {len(artifacts)} corrected projections")
     typer.echo(f"updated {registry}")
@@ -491,7 +491,7 @@ def prepare_tilt_series(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     typer.echo(f"wrote {len(corrected_artifacts)} corrected projections")
     typer.echo(f"wrote {len(stack_artifacts)} tilt-series preparation artifacts")
@@ -573,7 +573,7 @@ def align_tilt_series(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     typer.echo(f"wrote coarse alignment: {alignment.path}")
     typer.echo(f"wrote IMOD transforms: {alignment.parameters['imod_xf_path']}")
@@ -650,7 +650,7 @@ def qc_coarse_alignment(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     preview, report = artifacts
     typer.echo(f"wrote coarse-alignment preview: {preview.path}")
@@ -805,7 +805,7 @@ def generate_fiducial_seed(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     tracking_stack, seed_model, report = artifacts
     typer.echo(f"wrote fiducial tracking stack: {tracking_stack.path}")
@@ -952,7 +952,7 @@ def track_fiducials(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     fiducial_model, report = artifacts
     typer.echo(f"wrote tracked fiducial model: {fiducial_model.path}")
@@ -1104,7 +1104,7 @@ def fine_align_tilt_series(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     alignment, report = artifacts
     typer.echo(f"wrote fine alignment: {alignment.path}")
@@ -1186,7 +1186,7 @@ def build_final_aligned_stack(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     typer.echo(f"wrote final aligned stack: {artifact.path}")
     typer.echo(f"wrote solved tilt angles: {artifact.parameters['tilt_file_path']}")
@@ -1293,7 +1293,7 @@ def estimate_defocus_hint(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     defocus_hint, qc_report = artifacts
     typer.echo(f"wrote defocus hint: {defocus_hint.path}")
@@ -1526,7 +1526,7 @@ def estimate_ctf(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     ctf_model, qc_report = artifacts
     typer.echo(f"wrote CTF model: {ctf_model.path}")
@@ -1629,7 +1629,7 @@ def correct_ctf(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     corrected_stack, qc_report = artifacts
     typer.echo(f"used CTF model: {ctf_model.path}")
@@ -1771,7 +1771,7 @@ def reconstruct_tomogram(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     tomogram, qc_report = artifacts
     typer.echo(f"wrote canonical tomogram: {tomogram.path}")
@@ -1883,7 +1883,7 @@ def restore_tomogram(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     restored, qc_report = artifacts
     typer.echo(f"wrote restored tomogram: {restored.path}")
@@ -2016,7 +2016,7 @@ def segment_tomogram(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     segmentation, qc_report = artifacts
     typer.echo(f"wrote segmentation: {segmentation.path}")
@@ -2359,7 +2359,7 @@ def prepare_template(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     template, mask, qc_report = artifacts
     report = _read_qc_report(qc_report)
@@ -2726,7 +2726,7 @@ def pick_particles(
         supporting_artifacts=supporting_artifacts,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     *match, picks, qc_report = artifacts
     report = _read_qc_report(qc_report)
@@ -2979,7 +2979,7 @@ def extract_particles(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     particle_stack, qc_report = artifacts
     report = _read_qc_report(qc_report)
@@ -3503,7 +3503,7 @@ def average_particles(
         artifact_registry,
         replace_existing=overwrite,
     )
-    artifact_registry.write(registry)
+    artifact_registry.commit(registry)
 
     *average_maps, qc_report = artifacts
     report = _read_qc_report(qc_report)

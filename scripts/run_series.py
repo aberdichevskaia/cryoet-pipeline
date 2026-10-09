@@ -44,6 +44,12 @@ The `--project` layout it assumes is the one every command already uses:
 
     <project>/artifacts.json          the registry
     <project>/manifests/<series>.json the manifest
+
+Several invocations may share a project, one per series — the parallelism is the
+scheduler's, not this script's: each command merges what it registered into the
+registry under a lock when it finishes, instead of writing back the copy it
+loaded. Two invocations on the same series must not overlap, because they write
+the same files.
 """
 
 from __future__ import annotations
@@ -77,6 +83,8 @@ def project_size_bytes(project: Path) -> int:
     Walked rather than asked of the filesystem because the interesting number is
     what this project holds, not what the volume has free — and on a shared
     quota the latter moves for reasons that have nothing to do with this run.
+    Other jobs writing into the same project still land in it, so a step's
+    delta is its own only while it runs alone.
     """
 
     total = 0

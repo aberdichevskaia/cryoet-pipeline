@@ -117,6 +117,56 @@ def test_correct_motion_command_writes_outputs_and_updates_registry(
         np.testing.assert_allclose(corrected.data, movie_data.mean(axis=0))
 
 
+def test_correct_motion_keeps_entries_another_job_registered_while_it_ran(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A command commits its own entries instead of writing back what it loaded.
+
+    The other job's commit lands between this command's load, at its start, and
+    its commit at the end: where a slow step spends its hours.
+    """
+
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, np.ones((2, 2, 2), dtype=np.float32))
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(movie_path).model_dump_json())
+    registry_path = tmp_path / "artifacts.json"
+    ArtifactRegistry.empty().write(registry_path)
+    other_entry = Artifact(
+        id="TS_OTHER:tilt_stack", kind=ArtifactKind.TILT_STACK, path=tmp_path / "TS_OTHER.mrc"
+    )
+    real_correct_and_register = cli.correct_and_register
+
+    def correct_while_another_job_commits(*args, **kwargs):
+        other_job = ArtifactRegistry.load(registry_path)
+        other_job.add(other_entry)
+        other_job.commit(registry_path)
+        return real_correct_and_register(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "correct_and_register", correct_while_another_job_commits)
+
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "correct-motion",
+            "--manifest",
+            str(manifest_path),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    registry = ArtifactRegistry.load(registry_path)
+    assert registry.get("TS_OTHER:tilt_stack") == other_entry
+    assert len(registry.by_kind(ArtifactKind.CORRECTED_PROJECTION)) == 1
+
+
 def test_correct_motion_command_requires_overwrite_for_rerun(tmp_path: Path) -> None:
     movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
     _write_mrc(movie_path, np.ones((2, 2, 2), dtype=np.float32))

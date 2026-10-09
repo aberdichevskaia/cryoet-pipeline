@@ -12,9 +12,11 @@
 # PYTOMO_MP_DIR. OVERWRITE=1 adds --overwrite to every step, for re-running a
 # step that already wrote part of its output.
 #
-# Series run SEQUENTIALLY inside a project: the registry is one JSON document
-# rewritten without locking, so two jobs of the same project would lose each
-# other's entries. Different projects may run at the same time.
+# Jobs of one project may run at the same time, one per series: each command
+# merges its own entries into the registry under a lock when it finishes
+# (ArtifactRegistry.commit), so jobs no longer erase each other's. Two jobs on
+# the SAME series must still not overlap: they write the same output files, and
+# the later registry commit is refused. Inside one job, series run in turn.
 #
 # Disposable, like scripts/run_series.py.
 
@@ -116,6 +118,18 @@ fi
 if needs estimate-ctf; then
     command -v ctffind >/dev/null || command -v ctffind5 >/dev/null || fail "no ctffind on PATH"
 fi
+# Every step commits to the registry under a lock and refuses to without one that
+# holds across nodes (no flock on this mount, or localflock); find that out here,
+# not after the first step has run.
+python3 - "$PROJECT/artifacts.json" <<'EOF' || fail "cannot lock the registry from this node (above)"
+import sys
+from pathlib import Path
+
+from cryoet_pipeline.artifacts import registry_lock
+
+with registry_lock(Path(sys.argv[1]), timeout=60):
+    pass
+EOF
 echo "preflight   ok"
 echo
 
