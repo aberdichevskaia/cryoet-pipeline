@@ -219,6 +219,27 @@ class ArtifactRegistry(BaseModel):
                 pending.append(parent_id)
         return False
 
+    def ancestors_of_kind(self, artifact_id: str, kind: ArtifactKind) -> list[Artifact]:
+        """Every registered ancestor of one kind, each once, nearest generation first."""
+
+        found: list[Artifact] = []
+        seen = {artifact_id}
+        index = self._find_index(artifact_id)
+        pending = list(self.artifacts[index].parent_ids) if index is not None else []
+        while pending:
+            current = pending.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            index = self._find_index(current)
+            if index is None:
+                continue
+            parent = self.artifacts[index]
+            if parent.kind == kind:
+                found.append(parent)
+            pending.extend(parent.parent_ids)
+        return found
+
     @property
     def total_size_bytes(self) -> int:
         return sum(artifact.size_bytes or 0 for artifact in self.artifacts)

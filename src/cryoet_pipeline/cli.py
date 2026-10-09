@@ -2952,8 +2952,22 @@ def visualize_picks(
         artifact_registry, picks, tilt_series_manifest, variant=variant
     )
 
-    registered_template = _template_artifacts(
-        artifact_registry, tilt_series_manifest, variant=variant
+    # The template and the segmentation come from the picks' lineage too, for
+    # the same reason: picks narrowed by filter-picks carry a label of their
+    # own and share both with the list they came from, so a lookup by their
+    # label finds neither. The label stays the fallback for picks whose lineage
+    # does not record them, such as a match against a template file passed on
+    # the command line.
+    registered_template = _template_from_picks(
+        artifact_registry, picks
+    ) or _template_artifacts(artifact_registry, tilt_series_manifest, variant=variant)
+    segmentations = artifact_registry.ancestors_of_kind(picks.id, ArtifactKind.SEGMENTATION)
+    segmentation = (
+        segmentations[0]
+        if len(segmentations) == 1
+        else _optional_segmentation_artifact(
+            artifact_registry, tilt_series_manifest, variant=variant
+        )
     )
     parameters: dict[str, Any] = {}
     if imod_dir is not None:
@@ -2974,9 +2988,7 @@ def visualize_picks(
     )
     export = write_picks_visualization(
         template=registered_template[0] if registered_template else None,
-        segmentation=_optional_segmentation_artifact(
-            artifact_registry, tilt_series_manifest, variant=variant
-        ),
+        segmentation=segmentation,
         tomogram=tomogram,
         picks=picks,
         out=out,
@@ -4403,6 +4415,28 @@ def _template_artifacts(
             param_hint="registry",
         )
     return template, masks[0]
+
+
+def _template_from_picks(
+    registry: ArtifactRegistry, picks: Artifact
+) -> tuple[Artifact, Artifact] | None:
+    """The template and mask these picks were matched with, from their lineage.
+
+    None when the lineage does not name exactly one template with exactly one
+    mask, so the caller falls back to looking them up by label.
+    """
+
+    templates = registry.ancestors_of_kind(picks.id, ArtifactKind.TEMPLATE)
+    if len(templates) != 1:
+        return None
+    masks = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.TEMPLATE_MASK)
+        if artifact.parameters.get("template_id") == templates[0].id
+    ]
+    if len(masks) != 1:
+        return None
+    return templates[0], masks[0]
 
 
 def _particle_extraction_backend(name: str) -> ParticleExtractionBackend:

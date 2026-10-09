@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import typer
 import zarr
 from typer.testing import CliRunner
 
@@ -330,6 +331,68 @@ def test_a_dry_run_reports_and_registers_nothing(tmp_path: Path) -> None:
     tables = list((tmp_path / "outputs").rglob("*_membrane_filter.tsv"))
     assert len(tables) == 1
     assert not list((tmp_path / "outputs").rglob("*bin8-membrane_particles.star"))
+
+
+def test_a_filtered_list_finds_its_template_and_membrane_through_its_lineage(
+    tmp_path: Path,
+) -> None:
+    """visualize-picks once looked these up by label and refused a filtered list.
+
+    The filtered picks carry a label of their own, while the template, its mask
+    and the segmentation keep the lane's, so the label finds none of them.
+    """
+
+    def artifact(
+        id_: str,
+        kind: ArtifactKind,
+        parents: list[str],
+        *,
+        variant: str = "bin8",
+        template_id: str | None = None,
+    ) -> Artifact:
+        parameters: dict[str, object] = {"tilt_series_id": "TS_TEST"}
+        if template_id is not None:
+            parameters["template_id"] = template_id
+        return Artifact(
+            id=id_,
+            kind=kind,
+            path=tmp_path / id_.replace(":", "_"),
+            parent_ids=parents,
+            variant=variant,
+            parameters=parameters,
+        )
+
+    tomogram = artifact("TS_TEST:tomogram", ArtifactKind.TOMOGRAM, [])
+    template = artifact("TS_TEST:template", ArtifactKind.TEMPLATE, [])
+    mask = artifact(
+        "TS_TEST:template_mask", ArtifactKind.TEMPLATE_MASK, [template.id], template_id=template.id
+    )
+    segmentation = artifact("TS_TEST:segmentation", ArtifactKind.SEGMENTATION, [tomogram.id])
+    match = artifact(
+        "TS_TEST:template_match",
+        ArtifactKind.TEMPLATE_MATCH,
+        [tomogram.id, segmentation.id, template.id, mask.id],
+    )
+    picks = artifact("TS_TEST:picks:bin8", ArtifactKind.PICKS, [match.id])
+    filtered = artifact(
+        "TS_TEST:picks:bin8-membrane",
+        ArtifactKind.PICKS,
+        [picks.id, segmentation.id],
+        variant="bin8-membrane",
+    )
+    registry = ArtifactRegistry.empty()
+    for one in (tomogram, template, mask, segmentation, match, picks, filtered):
+        registry.add(one)
+    manifest = TiltSeriesManifest.model_validate_json(
+        _series_registry(tmp_path / "manifest_only")[1].read_text()
+    )
+
+    with pytest.raises(typer.BadParameter, match="no template"):
+        cli._template_artifacts(registry, manifest, variant="bin8-membrane")
+    assert cli._template_from_picks(registry, filtered) == (template, mask)
+    assert registry.ancestors_of_kind(filtered.id, ArtifactKind.SEGMENTATION) == [segmentation]
+    # And the lane's own picks still find the same ones.
+    assert cli._template_from_picks(registry, picks) == (template, mask)
 
 
 def test_picks_searched_without_a_membrane_are_refused(tmp_path: Path) -> None:
