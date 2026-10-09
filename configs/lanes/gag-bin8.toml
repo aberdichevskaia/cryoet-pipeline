@@ -117,6 +117,22 @@ random_phase_correction = true
 per_tilt_weighting = true
 spectral_whitening = true
 gpu_ids = "0"
+# The search cut into 2 x 2 x 1 pieces that pytom matches one after another.
+# Unsplit, a bin8 search here did not fit the 20 GB A100 slice this lane runs on
+# (2026-10-07): a 1.18 GB volume-sized buffer failed with 20.1 GB, seventeen such
+# buffers' worth, already in use. That puts the peak above 21 GB without saying by
+# how much, so the split leaves room rather than just halving: each piece is about
+# a quarter of the volume plus half a template box (~14 px) of overlap per cut,
+# a few per cent more voxels in all. z, the thin axis, is left whole, since the
+# overlap costs most there.
+#
+# Not neutral for the cut-off: number_of_false_positives is converted to a score
+# through pytom's noise statistics, which a split averages over the pieces (and a
+# piece the mask covers nowhere is skipped). The picks record the split.
+#
+# Needs pytom-match-pick 0.12.0 or later; before it each piece was filtered on
+# its own. "1,1,1", or no line, is the unsplit search, the same command as before.
+volume_split = "2,2,1"
 # Picks are restricted to the membrane segmentation, dilated. Starting value:
 # the CA layer lies ~15-20 nm inside the membrane, so 40 px (21.6 nm) reaches it.
 use_segmentation_mask = true

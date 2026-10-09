@@ -1235,6 +1235,102 @@ def test_track_fiducials_accepts_the_patch_filter_options(tmp_path: Path) -> Non
     assert "is read by" not in accepted.output
 
 
+def test_pick_particles_refuses_a_volume_split_before_reading_anything(
+    tmp_path: Path,
+) -> None:
+    # Neither file exists, so reaching them would fail differently (exit 1).
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "pick-particles",
+            "--manifest",
+            str(tmp_path / "manifest.json"),
+            "--registry",
+            str(tmp_path / "artifacts.json"),
+            "--out",
+            str(tmp_path / "outputs"),
+            "--pytom-volume-split",
+            "2,2",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "volume split must be 'x,y,z'" in result.output
+
+
+def test_pick_particles_hands_the_volume_split_to_the_backend(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tomogram_path = tmp_path / "tomogram.zarr"
+    zarr.save(tomogram_path, np.ones((2, 3, 4), dtype=np.float32))
+    registry_path = tmp_path / "artifacts.json"
+    registry = ArtifactRegistry.empty()
+    registry.add(
+        Artifact(
+            id="TS_TEST:tomogram:fine",
+            kind=ArtifactKind.TOMOGRAM,
+            path=tomogram_path,
+            shape=(2, 3, 4),
+            dtype="float32",
+            axis_order=AxisOrder.ZYX,
+            pixel_spacing_angstrom=13.5,
+            parameters={"tilt_series_id": "TS_TEST", "tomogram_branch": "full"},
+        )
+    )
+    registry.write(registry_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
+    template = tmp_path / "template.mrc"
+    template.touch()
+    template_mask = tmp_path / "template_mask.mrc"
+    template_mask.touch()
+    handed: list[dict[str, object]] = []
+
+    class StopAtTheBackend:
+        name = "pytom-match-pick"
+
+        def pick(
+            self,
+            tomogram: Artifact,
+            manifest: TiltSeriesManifest,
+            context,
+            supporting_artifacts: Sequence[Artifact] = (),
+        ) -> Artifact:
+            handed.append(dict(context.parameters))
+            raise RuntimeError("stop once the backend has its parameters")
+
+    monkeypatch.setattr(cli, "_picking_backend", lambda name: StopAtTheBackend())
+    base = [
+        "pick-particles",
+        "--manifest",
+        str(manifest_path),
+        "--registry",
+        str(registry_path),
+        "--out",
+        str(tmp_path / "outputs"),
+        "--pytom-template",
+        str(template),
+        "--pytom-template-mask",
+        str(template_mask),
+        "--pytom-particle-diameter",
+        "130",
+        "--pytom-low-pass",
+        "20",
+        "--no-pytom-ctf-weighting",
+        "--device",
+        "cuda",
+    ]
+
+    for extra in (["--pytom-volume-split", "2,2,1"], []):
+        result = CliRunner().invoke(cli.app, [*base, *extra])
+        assert isinstance(result.exception, RuntimeError), result.output
+
+    split, unsplit = handed
+    assert split["pytom_volume_split"] == "2,2,1"
+    assert "pytom_volume_split" not in unsplit
+
+
 def _manifest(movie_path: Path) -> TiltSeriesManifest:
     return _manifest_from_movies([(movie_path, 0, 0.0)])
 

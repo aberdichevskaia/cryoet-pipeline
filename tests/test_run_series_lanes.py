@@ -8,6 +8,7 @@ import pytest
 import typer
 
 from cryoet_pipeline import cli
+from cryoet_pipeline.backends.picking import parse_volume_split
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -41,6 +42,29 @@ def test_every_step_of_the_lane_is_a_valid_command(lane):
         flags = {part for part in command[1:] if part.startswith("--")}
         assert flags <= known, f"{lane.stem}/{name}: unknown {sorted(flags - known)}"
         assert required <= flags, f"{lane.stem}/{name}: missing {sorted(required - flags)}"
+
+
+@pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
+def test_a_volume_split_renders_as_a_valid_option_in_either_chain(lane):
+    # A lane that sets no split never renders the flag, so the test above cannot
+    # see a misspelt one in that lane's chain. Set it in every lane here.
+    group = typer.main.get_command(cli.app)
+    known, _ = _options(group.commands["pick-particles"])
+    config = tomllib.loads(lane.read_text())
+    if "volume_split" in config["pick"]:
+        # The CLI refuses a malformed value only once the GPU job is running.
+        parse_volume_split(config["pick"]["volume_split"])
+
+    config["pick"]["volume_split"] = "3,2,1"
+    split = dict(run_series.build_steps(config, Path("outputs/project"), "TS_X"))
+    command = split["pick-particles"]
+    assert "--pytom-volume-split" in known
+    assert command[command.index("--pytom-volume-split") + 1] == "3,2,1"
+
+    # Without the line, the command a lane rendered before the option existed.
+    del config["pick"]["volume_split"]
+    unsplit = dict(run_series.build_steps(config, Path("outputs/project"), "TS_X"))
+    assert "--pytom-volume-split" not in unsplit["pick-particles"]
 
 
 def test_an_unknown_chain_is_refused():

@@ -277,6 +277,7 @@ def build_stack_steps(
              *flag("pytom-per-tilt-weighting", pick.get("per_tilt_weighting")),
              *flag("pytom-spectral-whitening", pick.get("spectral_whitening")),
              *flag("pytom-gpu-ids", pick["gpu_ids"]),
+             *flag("pytom-volume-split", pick.get("volume_split")),
              *flag("pytom-match-template-executable", exe["pytom_match_template"]),
              *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
              *flag("variant", lane)],
@@ -439,6 +440,7 @@ def build_frames_steps(
              *flag("pytom-per-tilt-weighting", pick.get("per_tilt_weighting")),
              *flag("pytom-spectral-whitening", pick.get("spectral_whitening")),
              *flag("pytom-gpu-ids", pick["gpu_ids"]),
+             *flag("pytom-volume-split", pick.get("volume_split")),
              *([] if pick.get("use_segmentation_mask") is None else [
                  "--use-segmentation-mask" if pick["use_segmentation_mask"]
                  else "--no-use-segmentation-mask"

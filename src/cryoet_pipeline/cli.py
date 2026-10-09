@@ -53,6 +53,7 @@ from cryoet_pipeline.backends.motion import (
 )
 from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
+    parse_volume_split,
     pick_and_register,
 )
 from cryoet_pipeline.backends.protocols import (
@@ -2522,6 +2523,14 @@ def pick_particles(
             "reconstruction's own top and bottom edges out of the correlation.",
         ),
     ] = None,
+    pytom_volume_split: Annotated[
+        str | None,
+        typer.Option(
+            help="Match the search in 'x,y,z' pieces (pytom's --volume-split), for a "
+            "tomogram whose search does not fit in GPU memory. 1,1,1 is the unsplit "
+            "search.",
+        ),
+    ] = None,
     pytom_z_axis_symmetry: Annotated[
         int | None,
         typer.Option(
@@ -2594,6 +2603,11 @@ def pick_particles(
 ) -> None:
     """Pick particles from a reconstructed tomogram and register a canonical STAR result."""
 
+    if pytom_volume_split is not None:
+        try:
+            parse_volume_split(pytom_volume_split)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="pytom-volume-split") from exc
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
     tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
@@ -2676,6 +2690,8 @@ def pick_particles(
         parameters["pytom_rng_seed"] = pytom_rng_seed
     if pytom_search_z is not None:
         parameters["pytom_search_z"] = pytom_search_z
+    if pytom_volume_split is not None:
+        parameters["pytom_volume_split"] = pytom_volume_split
     if pytom_z_axis_symmetry is not None:
         parameters["pytom_z_axis_symmetry"] = pytom_z_axis_symmetry
     if pytom_low_pass is not None:
