@@ -2,6 +2,10 @@
 """Several FSC reports side by side, with a statistic that is not quantised.
 
     python3 scripts/fsc_table.py outputs/ribo/fsc/real-cls0*-vs-template.json
+    python3 scripts/fsc_table.py --shells "masked=fsc_a.json" "unmasked=fsc_b.json"
+
+A report can be given as LABEL=PATH, and the label then names it in every
+table; a bare path is named by its file name.
 
 The threshold crossing is a poor way to compare curves that are close together,
 and it misled here. It can only land on a shell: for a 48 box at 9.784 A the
@@ -10,7 +14,12 @@ nothing in between. Four class averages came back at 47.0, 52.2, 52.2 and 52.2 A
 and were read as "all four agree", which the statistic cannot support — it has
 one-shell resolution and cannot see a difference of a few percent.
 
-So the crossing is printed alongside two continuous numbers:
+So the crossings are read off the curve itself, at every level in `--levels`
+(0.5 and 0.143 by default): the first shell to fall below the level, placed
+between it and the shell before by linear interpolation in spatial frequency.
+That also makes them independent of the threshold a report was written with,
+which differs between half-set and map-to-model reports. They are printed
+alongside two continuous numbers:
 
   band mean   the mean correlation across a stated band, by default from 200 A
               to 35 A. The lower limit is the resolution the tilt-series
@@ -41,9 +50,48 @@ import json
 from pathlib import Path
 
 
+def labelled(argument: str) -> tuple[str, Path]:
+    """LABEL=PATH, or a bare PATH named by its file name."""
+
+    label, separator, path = argument.partition("=")
+    if not separator:
+        return Path(argument).name, Path(argument)
+    if not label or not path:
+        raise argparse.ArgumentTypeError(f"expected LABEL=PATH, got {argument!r}")
+    return label, Path(path)
+
+
+def crossing(resolutions: list[float], values: list[float], level: float) -> float | None:
+    """Where the curve first falls below `level`, interpolated in spatial frequency.
+
+    The first fall only: a curve that dips through the level and rises again is
+    read at the dip, as the half-map QC reads its crossings before a dip. None
+    when it never falls below.
+    """
+
+    for index in range(1, len(values)):
+        if values[index] < level <= values[index - 1]:
+            coarse, fine = 1.0 / resolutions[index - 1], 1.0 / resolutions[index]
+            fraction = (values[index - 1] - level) / (values[index - 1] - values[index])
+            return 1.0 / (coarse + fraction * (fine - coarse))
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("reports", nargs="+", type=Path, help="FSC report JSONs.")
+    parser.add_argument(
+        "reports",
+        nargs="+",
+        type=labelled,
+        help="FSC report JSONs, each as PATH or LABEL=PATH.",
+    )
+    parser.add_argument(
+        "--levels",
+        nargs="+",
+        type=float,
+        default=[0.5, 0.143],
+        help="Correlation levels to read crossings at, interpolated between shells.",
+    )
     parser.add_argument(
         "--band-coarse-angstrom",
         type=float,
@@ -81,24 +129,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    crossing_header = "".join(f" {f'{level:g} at':>10}" for level in args.levels)
     print(
-        f"{'report':<34} {'crossing':>10} {'band mean':>10} {'peak':>7} "
+        f"{'report':<34}{crossing_header} {'band mean':>10} {'peak':>7} "
         f"{'peak at':>9} {'shells':>7} {'blind mean':>10}"
     )
-    print("-" * 96)
+    print("-" * (86 + 11 * len(args.levels)))
 
     rows: list[tuple[float, str]] = []
     curves: list[tuple[str, list[float], list[float]]] = []
-    for path in args.reports:
+    for label, path in args.reports:
         try:
             payload = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"{path.name:<34} could not be read: {exc}")
+            print(f"{label:<34} could not be read: {exc}")
             continue
         correlation = payload.get("correlation") or []
         resolutions = payload.get("resolution_angstrom") or []
         if len(correlation) != len(resolutions) or not correlation:
-            print(f"{path.name:<34} report holds no usable curve")
+            print(f"{label:<34} report holds no usable curve")
             continue
 
         in_band = [
@@ -108,18 +157,20 @@ def main() -> int:
         ]
         if not in_band:
             print(
-                f"{path.name:<34} no shells between "
+                f"{label:<34} no shells between "
                 f"{args.band_coarse_angstrom:.0f} and {args.band_fine_angstrom:.0f} A"
             )
             continue
         band_mean = sum(value for value, _ in in_band) / len(in_band)
         peak = max(correlation)
         peak_at = resolutions[correlation.index(peak)]
-        crossing = payload.get("crossing_resolution_angstrom")
-        crossing_text = f"{crossing:.1f} A" if crossing is not None else "none"
+        crossings = ""
+        for level in args.levels:
+            found = crossing(resolutions, correlation, level)
+            crossings += f" {'none' if found is None else f'{found:.1f} A':>10}"
 
-        rows.append((band_mean, path.name))
-        curves.append((path.name, correlation, resolutions))
+        rows.append((band_mean, label))
+        curves.append((label, correlation, resolutions))
         blind = [
             value
             for value, resolution in zip(correlation, resolutions, strict=True)
@@ -127,7 +178,7 @@ def main() -> int:
         ]
         blind_mean = sum(blind) / len(blind) if blind else float("nan")
         print(
-            f"{path.name[-33:]:<34} {crossing_text:>10} {band_mean:>10.3f} "
+            f"{label[-33:]:<34}{crossings} {band_mean:>10.3f} "
             f"{peak:>7.3f} {peak_at:>7.1f} A {len(in_band):>7} {blind_mean:>10.4f}"
         )
 
@@ -145,7 +196,7 @@ def main() -> int:
         )
         header = f"  {'shell':>5} {'A':>8}"
         for name, _, _ in curves:
-            header += f" {name[:14]:>15}"
+            header += f" {name[:20]:>21}"
         if len(curves) == 2:
             header += f" {'difference':>12}"
         print(header)
@@ -168,9 +219,9 @@ def main() -> int:
             for _, correlation, _ in curves:
                 if index < len(correlation):
                     values.append(correlation[index])
-                    line += f" {correlation[index]:>15.4f}"
+                    line += f" {correlation[index]:>21.4f}"
                 else:
-                    line += f" {'':>15}"
+                    line += f" {'':>21}"
             if len(curves) == 2 and len(values) == 2:
                 line += f" {values[0] - values[1]:>+12.4f}"
             print(line)
