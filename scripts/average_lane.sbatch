@@ -5,11 +5,14 @@
 # series at its threshold from scripts/qc_dynamo_picks.py, then refine them all
 # together with independent halves. Submit from the repo root, e.g.
 #
-#   PROJECT=outputs/ribo2 CONFIG=configs/lanes/ribo-bin8.toml \
-#   SERIES="TS_0201 TS_0388 TS_0487 TS_0572 TS_0636" \
+#   CONFIG=configs/lanes/ribo-bin8.toml \
 #   THRESHOLDS=outputs/ribo2/dynamo/pick-qc/thresholds.json MASK=381.6 \
 #       sbatch --partition=cpu_p --qos=cpu_normal --cpus-per-task=32 --mem=64G \
 #           --time=24:00:00 --job-name=ribo2-avg scripts/average_lane.sbatch
+#
+# PROJECT and SERIES (space-separated) default to the config's [run] section,
+# the one scripts/submit_lanes.py submitted the lane from; set them to average
+# another project or a subset of the series.
 #
 # MASK is the alignment mask: a diameter in A, or an MRC file in the particle
 # box, which is used as Dynamo uses one, so a mask made for the Dynamo project
@@ -27,7 +30,7 @@ set -euo pipefail
 REPO=/lustre/groups/shared/users/peng_marr/a.berdichevskaia/cryoet-pipeline
 cd "$REPO"
 
-for name in PROJECT CONFIG SERIES THRESHOLDS MASK; do
+for name in CONFIG THRESHOLDS MASK; do
     if [[ -z "${!name:-}" ]]; then
         echo "$name is not set; see the header of this script" >&2
         exit 1
@@ -39,10 +42,14 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate cryoet-pipeline
 set -u
 
-lane() {  # lane SECTION KEY: one value of the lane config
-    python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))[sys.argv[2]][sys.argv[3]])' \
-        "$CONFIG" "$1" "$2"
+lane() {  # lane SECTION KEY: one value of the lane config; a list prints space-separated
+    python3 -c '
+import sys, tomllib
+value = tomllib.load(open(sys.argv[1], "rb"))[sys.argv[2]][sys.argv[3]]
+print(" ".join(value) if isinstance(value, list) else value)' "$CONFIG" "$1" "$2"
 }
+PROJECT=${PROJECT:-$(lane run project)}
+SERIES=${SERIES:-$(lane run series)}
 threshold() {  # threshold SERIES: its minimum score, refusing the null placeholder
     python3 - "$THRESHOLDS" "$1" <<'EOF'
 import json

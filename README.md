@@ -40,6 +40,187 @@ command. Every stage writes a machine-readable QC report with a `pass`,
 Planned work, and the design decisions already settled for it, are in
 [docs/roadmap.md](docs/roadmap.md).
 
+## Processing your own data on the cluster
+
+This section is for running a dataset end to end, from tilt-series to a
+subtomogram average, without writing code. You write one config file and run
+two submissions. In between, you look at the picks and choose score thresholds.
+
+```text
+download data ─▶ lane config ─▶ submission 1 (Slurm) ─▶ review picks, set thresholds ─▶ submission 2 (Slurm)
+                                 tilt-series → particles                                  average + resolution
+```
+
+### Will it work for my data?
+
+Not for every dataset yet. There are two ready-made recipes ("chains"), and your
+data has to fit one of them:
+
+| Your data | Chain | Start from |
+|---|---|---|
+| One assembled MRC tilt stack per tilt-series, **no gold beads** (e.g. FIB lamellae) | `stack`: patch tracking | [`configs/lanes/ribo-bin8.toml`](configs/lanes/ribo-bin8.toml) |
+| Raw MRC movies per tilt, **gold beads**, membranes to segment | `frames`: motion correction, bead tracking, MemBrain-seg | [`configs/lanes/gag-bin8.toml`](configs/lanes/gag-bin8.toml) |
+
+What is not supported yet:
+
+- **Movies as TIFF or EER, or movies that need a separate gain reference.**
+  Motion correction reads MRC movies only, and the chain passes no gain file.
+- **Other combinations**, for example movies without gold, a stack with gold, or
+  movies without membrane segmentation. These need a new chain in
+  [`scripts/run_series.py`](scripts/run_series.py). Ask the maintainers instead of
+  editing the config to get around it.
+- **A reference map that is not in EMDB.** The chain fetches the template by EMDB
+  accession. `cryoet prepare-template --source-map` takes a local file, but only
+  when you run the command by hand.
+- **Metadata without a SerialEM `.mdoc`.** Tilt angles, dose and frame names all
+  come from the mdoc.
+- **Clusters other than ours.** The Slurm scripts are written for the
+  Helmholtz Munich cluster: its partitions, the shared IMOD install, and the
+  `cryoet-pipeline` conda environment.
+
+### 0. One-time setup
+
+1. Clone the repository on the cluster and install it into the `cryoet-pipeline`
+   conda environment (`python -m pip install -e ".[io]"`). IMOD, CTFFIND,
+   pytom-match-pick and, for the `frames` chain, MotionCor3 and MemBrain-seg must
+   also be installed; ask the maintainers where the shared copies are.
+2. Open [`scripts/lane.sbatch`](scripts/lane.sbatch) and
+   [`scripts/average_lane.sbatch`](scripts/average_lane.sbatch). Set `REPO=` to
+   **your** clone. It still points at the maintainer's clone, and the jobs `cd`
+   there, so your outputs would end up in their folder.
+3. Run everything below from the root of your clone, on the login node, with the
+   environment active:
+
+   ```bash
+   conda activate cryoet-pipeline
+   ```
+
+### 1. Get the data
+
+**From EMPIAR.** Every deposition arranges its folders differently, so first
+describe the layout in a short YAML file. Browse
+`https://ftp.ebi.ac.uk/empiar/world_availability/<id>/data/`, copy
+[`configs/empiar-layouts/example.yaml`](configs/empiar-layouts/example.yaml) and
+set the folders and file name patterns (details in
+[Downloading a different EMPIAR deposition](#downloading-a-different-empiar-deposition)).
+Then download with `--dry-run` first, to see which files it would fetch:
+
+```bash
+cryoet download-empiar --out data/empiar-11538 --empiar-id 11538 --tilt-series TS_0201 --tilt-series TS_0388 --layout configs/empiar-layouts/11538-untreated.yaml --dry-run
+```
+
+**Your own data.** Copy it under `data/<name>/`: the `.mdoc` files plus either
+the tilt stacks or the movies. For movies, the file names must match the
+`SubFramePath` entries in the mdocs. The folder they came from does not matter,
+only the file name.
+
+**`frames` chain only:** create the project once, for all tilt-series together.
+`init` writes a new, empty project, so running it again later erases what is
+already there.
+
+```bash
+cryoet init --frames data/<name>/frames --mdocs data/<name>/mdocs --out outputs/<project> --tilt-series TS_01 --tilt-series TS_43
+```
+
+### 2. Write the lane config
+
+Copy the config for your chain to a new file, e.g.
+`configs/lanes/<name>-bin8.toml`. Every value in it has a comment that says where
+it came from and what to look at when you change it. Read those comments: the
+values in the examples were measured on *their* datasets and will be wrong for
+yours. The values you always have to set:
+
+| Section | What to set |
+|---|---|
+| `[lane]` | `name`, and `variant`, the label every output gets (e.g. `bin8`) |
+| `[run]` | `project` (output folder), `series` (tilt-series ids), and the Slurm stages: partition, GPU, memory and time per job |
+| `[data]` | where the stacks/movies and mdocs are; `{series}` is replaced by each id |
+| `[binning]` | the binning for the CTF fit and for the tomogram. Choose by pixel size in Å, as the comment explains |
+| `[ctf]` | voltage, Cs, amplitude contrast, and a defocus search range that brackets the nominal defocus |
+| `[motion]` (`frames`) | pixel size of the movies, which can differ from the MRC header for super-resolution data |
+| `[fiducials]` | patch grid (`stack`) or bead diameter (`frames`) |
+| `[reconstruct]` | `thickness` in binned pixels. Make it generous, so the tomogram also contains vacuum above and below the sample |
+| `[template]` | `emdb_id` of your particle, the low-pass, the mask radius |
+| `[pick]` | particle diameter in Å, how many candidates to keep per tomogram, GPU options |
+| `[extract]` | box size in pixels, about 1.5× the particle |
+
+The `[run]` stages split the fixed chain of steps into Slurm jobs. A job runs
+every tilt-series of the project in turn, and the next job starts only when the
+previous one finished without errors. Stages have to follow one another without
+skipping or repeating a step; the submitter checks this. To list the step names:
+
+```bash
+python3 scripts/run_series.py --project outputs/<project> --config configs/lanes/<name>-bin8.toml --series X --list-steps
+```
+
+### 3. Submission 1: tilt-series to extracted particles
+
+First see what would be submitted and whether anything is missing:
+
+```bash
+python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --dry-run
+```
+
+It lists every `$VARIABLE` the config uses that is not set in your shell
+(`PYTOMO_MP_DIR`, `MOTIONCOR3`, `MEMBRAIN_EXE`, `MEMBRAIN_CKPT`), and, for the
+`frames` chain, any tilt-series that has no project yet. Set those
+variables, then submit for real:
+
+```bash
+python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml
+```
+
+The script only queues the jobs and exits. Follow them with `squeue -u $USER`;
+each job writes `slurm-<job name>-<id>.log` in the repository root. If a job
+fails, the log ends with the failed step and the tilt-series. Fix the cause, then
+resubmit from that stage. Steps that already finished in that stage run
+again, which is why `OVERWRITE=1` is needed:
+
+```bash
+OVERWRITE=1 python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --from-stage gpu
+```
+
+Each step writes a QC report (`pass`, `warning` or `fail`) under
+`outputs/<project>/qc/`. A `warning` does not stop the chain, so read the reports
+anyway, especially for alignment and CTF. `visualize-picks` writes each tomogram
+with its picks overlaid, for ChimeraX (`.cxc`) and 3dmod (`.mrc` + `.mod`). Open
+one or two before you go on.
+
+### 4. Review the picks and set thresholds
+
+Template matching keeps every candidate it was asked for, including the false
+ones. Choosing the score cut-off is your decision, made by looking at the
+particles:
+
+```bash
+python3 scripts/export_dynamo.py --project outputs/<project> --variant bin8 --series TS_01 --series TS_43 --out outputs/<project>/dynamo/export
+```
+
+```bash
+python3 scripts/qc_dynamo_picks.py --export outputs/<project>/dynamo/export --out outputs/<project>/dynamo/pick-qc --gallery
+```
+
+This writes score distributions and galleries of particles sampled across the
+score range, per tomogram, plus `pick-qc/thresholds.json` with one empty
+(`null`) entry per tilt-series. Fill in a minimum score for each tilt-series.
+The plots suggest where to look, not where to cut.
+
+### 5. Submission 2: average and resolution
+
+```bash
+CONFIG=configs/lanes/<name>-bin8.toml THRESHOLDS=outputs/<project>/dynamo/pick-qc/thresholds.json MASK=380 sbatch --partition=cpu_p --qos=cpu_normal --cpus-per-task=32 --mem=64G --time=24:00:00 --job-name=<project>-avg scripts/average_lane.sbatch
+```
+
+This re-extracts each tilt-series with its threshold, then refines all of them
+together as two independent half-sets. `MASK` is the alignment mask: either a
+diameter in Å (a bit larger than the particle) or an MRC mask in the particle
+box. Project and series come from the config's `[run]` section. Optional
+settings, such as the number of iterations, are listed at the top of the script.
+
+The average, the two half-maps and the particle STAR file are written to
+`outputs/<project>/averages/`. The FSC and the resolution estimate are in the QC
+report under `outputs/<project>/qc/`.
+
 ## Development
 
 ```bash

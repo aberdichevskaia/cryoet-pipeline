@@ -3,8 +3,8 @@
 #
 # One stage of one lane: scripts/run_series.py over SERIES, steps FROM..UNTIL.
 # Partition, GPU, time and job name come from the sbatch command line, so the
-# same file serves the CPU and the GPU stages; scripts/submit_lanes.sh submits
-# them chained with afterok.
+# same file serves the CPU and the GPU stages; scripts/submit_lanes.py submits
+# them chained with afterok, from the [run] section of the lane config.
 #
 # Required in the environment (sbatch --export):
 #   PROJECT  CONFIG  SERIES (space-separated)  FROM  UNTIL
@@ -27,7 +27,7 @@ cd "$REPO"
 
 for name in PROJECT CONFIG SERIES FROM UNTIL; do
     if [[ -z "${!name:-}" ]]; then
-        echo "$name is not set; submit through scripts/submit_lanes.sh" >&2
+        echo "$name is not set; submit through scripts/submit_lanes.py" >&2
         exit 1
     fi
 done
@@ -94,7 +94,7 @@ if needs prepare-tilt-series; then
     elif ! runs_on "$cap" "$MOTIONCOR3"; then
         fail "MotionCor3 has nothing this GPU (compute $cap) can run." \
             "cubins: $(archs -lelf "$MOTIONCOR3")ptx: $(archs -lptx "$MOTIONCOR3")" \
-            "Rebuild it, or give the motion stage another GPU with MOTION_GRES."
+            "Rebuild it, or give the motion stage another GPU in the config's [[run.stage]]."
     fi
 fi
 if needs segment-tomogram; then

@@ -12,6 +12,30 @@
 name = "ribo-bin8"
 variant = "bin8"          # label applied from the stack rebuild onward
 
+[run]
+# What scripts/submit_lanes.py submits: the project, its series, and how the
+# chain in scripts/run_series.py is cut into Slurm jobs. A stage is a slice of
+# that chain, not a reordering of it: stages must follow one another without a
+# gap or an overlap, and the submitter refuses otherwise. The project path is
+# relative to the repo root, where scripts/lane.sbatch runs.
+project = "outputs/ribo2"
+series = ["TS_0201", "TS_0388", "TS_0487", "TS_0572", "TS_0636"]
+
+[[run.stage]]
+name = "cpu"
+from = "import-tilt-stack"
+until = "reconstruct-tomogram"
+time = "10:00:00"
+sbatch = ["--partition=cpu_p", "--qos=cpu_normal", "--cpus-per-task=8", "--mem=32G"]
+
+[[run.stage]]
+name = "gpu"
+from = "prepare-template"
+until = "extract-particles"
+time = "16:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+
 [data]
 # {series} is substituted per series.
 mdoc = "data/empiar-11538/data/mdoc_files/{series}.mrc.mdoc"

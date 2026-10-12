@@ -13,6 +13,7 @@ from cryoet_pipeline.backends.picking import parse_volume_split
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import run_series  # noqa: E402
+import submit_lanes  # noqa: E402
 
 LANES = sorted((ROOT / "configs" / "lanes").glob("*.toml"))
 
@@ -70,3 +71,60 @@ def test_a_volume_split_renders_as_a_valid_option_in_either_chain(lane):
 def test_an_unknown_chain_is_refused():
     with pytest.raises(SystemExit, match="unknown chain"):
         run_series.build_steps({"lane": {"chain": "beads"}}, Path("p"), "TS_X")
+
+
+@pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
+def test_the_run_stages_cover_the_chain_in_order(lane):
+    # Stages are slices of the fixed chain. Covering it whole is not required by
+    # the submitter, but a lane config that skips a step would be a mistake.
+    config = tomllib.loads(lane.read_text())
+    plan = submit_lanes.plan(config, lane)
+    chain = [name for name, _ in run_series.build_steps(config, Path(plan.project), "TS_X")]
+    covered = [
+        name
+        for stage in plan.stages
+        for name, _ in run_series.slice_steps(
+            run_series.build_steps(config, Path(plan.project), "TS_X"), stage.start, stage.end
+        )
+    ]
+    assert covered == chain
+
+
+def _two_stage_lane() -> dict:
+    config = tomllib.loads((ROOT / "configs" / "lanes" / "ribo-bin8.toml").read_text())
+    assert [stage["name"] for stage in config["run"]["stage"]] == ["cpu", "gpu"]
+    return config
+
+
+def test_a_gap_between_stages_is_refused():
+    config = _two_stage_lane()
+    config["run"]["stage"][1]["from"] = "pick-particles"
+    with pytest.raises(SystemExit, match="skips prepare-template"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_an_overlap_between_stages_is_refused():
+    config = _two_stage_lane()
+    config["run"]["stage"][1]["from"] = "reconstruct-tomogram"
+    with pytest.raises(SystemExit, match="repeats reconstruct-tomogram"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_a_stage_that_runs_backwards_or_names_no_step_is_refused():
+    config = _two_stage_lane()
+    config["run"]["stage"][0]["until"] = "import-tilt-stack"
+    config["run"]["stage"][0]["from"] = "reconstruct-tomogram"
+    with pytest.raises(SystemExit, match="comes after"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+    config = _two_stage_lane()
+    config["run"]["stage"][0]["until"] = "reconstruct"
+    with pytest.raises(SystemExit, match="unknown step 'reconstruct'"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_the_environment_a_stage_needs_comes_from_its_commands():
+    config = _two_stage_lane()
+    plan = submit_lanes.plan(config, Path("lane.toml"))
+    env = {stage.name: stage.env for stage in plan.stages}
+    assert env == {"cpu": frozenset(), "gpu": frozenset({"PYTOMO_MP_DIR"})}
