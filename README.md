@@ -53,43 +53,45 @@ download data ─▶ lane config ─▶ submission 1 (Slurm) ─▶ review picks
 
 ### Will it work for my data?
 
-Not for every dataset yet. There are two ready-made recipes ("chains"), and your
-data has to fit one of them:
+The order of the steps is fixed. The config chooses three things:
 
-| Your data | Chain | Start from |
+| Choice | Options | In the config |
 |---|---|---|
-| One assembled MRC tilt stack per tilt-series, **no gold beads** (e.g. FIB lamellae) | `stack`: patch tracking | [`configs/lanes/ribo-bin8.toml`](configs/lanes/ribo-bin8.toml) |
-| Raw MRC movies per tilt, **gold beads**, membranes to segment | `frames`: motion correction, bead tracking, MemBrain-seg | [`configs/lanes/gag-bin8.toml`](configs/lanes/gag-bin8.toml) |
+| How the data comes in | MRC **movies** per tilt + mdocs, motion-corrected here; or one assembled MRC **stack** per tilt-series + its mdoc | `[lane] input = "frames"` or `"stack"` |
+| Alignment | **gold beads**, or **patch tracking** when there is no gold (e.g. FIB lamellae) | the `[fiducials]` backends |
+| Membranes | segmented with MemBrain-seg, optionally used to restrict picking; or skipped | `[segment]` present or deleted |
+
+Two combinations have been run on real data: stacks + patches
+([`ribo-bin8.toml`](configs/lanes/ribo-bin8.toml), EMPIAR-11538) and movies +
+beads + membranes ([`gag-bin8.toml`](configs/lanes/gag-bin8.toml), EMPIAR-10164).
+The others produce valid commands but have not been run yet. If yours is one of
+them, expect to be the first, and tell the maintainers what happened.
+
+The template for picking comes from EMDB (`emdb_id`) or from a local map
+(`source_map`). Movies that are not gain-corrected take a gain reference in
+`[motion]`.
 
 What is not supported yet:
 
-- **Movies as TIFF or EER, or movies that need a separate gain reference.**
-  Motion correction reads MRC movies only, and the chain passes no gain file.
-- **Other combinations**, for example movies without gold, a stack with gold, or
-  movies without membrane segmentation. These need a new chain in
-  [`scripts/run_series.py`](scripts/run_series.py). Ask the maintainers instead of
-  editing the config to get around it.
-- **A reference map that is not in EMDB.** The chain fetches the template by EMDB
-  accession. `cryoet prepare-template --source-map` takes a local file, but only
-  when you run the command by hand.
+- **Movies as TIFF or EER.** Motion correction reads MRC movies only.
 - **Metadata without a SerialEM `.mdoc`.** Tilt angles, dose and frame names all
   come from the mdoc.
-- **Clusters other than ours.** The Slurm scripts are written for the
+- **Clusters other than ours.** The Slurm settings in the configs are for the
   Helmholtz Munich cluster: its partitions, the shared IMOD install, and the
   `cryoet-pipeline` conda environment.
 
 ### 0. One-time setup
 
 1. Clone the repository on the cluster and install it into the `cryoet-pipeline`
-   conda environment (`python -m pip install -e ".[io]"`). IMOD, CTFFIND,
-   pytom-match-pick and, for the `frames` chain, MotionCor3 and MemBrain-seg must
-   also be installed; ask the maintainers where the shared copies are.
-2. Open [`scripts/lane.sbatch`](scripts/lane.sbatch) and
-   [`scripts/average_lane.sbatch`](scripts/average_lane.sbatch). Set `REPO=` to
-   **your** clone. It still points at the maintainer's clone, and the jobs `cd`
-   there, so your outputs would end up in their folder.
+   conda environment (`python -m pip install -e ".[io]"`). IMOD, CTFFIND and
+   pytom-match-pick must also be installed, plus MotionCor3 for movies and
+   MemBrain-seg for membranes; ask the maintainers where the shared copies are.
+2. Set the environment variables the configs refer to, e.g. in your
+   `~/.bashrc`: `PYTOMO_MP_DIR` (the folder with the `pytom_*.py` scripts; note
+   the O), `MOTIONCOR3`, `MEMBRAIN_EXE`, `MEMBRAIN_CKPT`. To use another IMOD
+   than the shared one, set `IMOD_DIR`.
 3. Run everything below from the root of your clone, on the login node, with the
-   environment active:
+   environment active. The jobs run in the clone they were submitted from.
 
    ```bash
    conda activate cryoet-pipeline
@@ -114,40 +116,36 @@ the tilt stacks or the movies. For movies, the file names must match the
 `SubFramePath` entries in the mdocs. The folder they came from does not matter,
 only the file name.
 
-**`frames` chain only:** create the project once, for all tilt-series together.
-`init` writes a new, empty project, so running it again later erases what is
-already there.
-
-```bash
-cryoet init --frames data/<name>/frames --mdocs data/<name>/mdocs --out outputs/<project> --tilt-series TS_01 --tilt-series TS_43
-```
-
 ### 2. Write the lane config
 
-Copy the config for your chain to a new file, e.g.
-`configs/lanes/<name>-bin8.toml`. Every value in it has a comment that says where
-it came from and what to look at when you change it. Read those comments: the
-values in the examples were measured on *their* datasets and will be wrong for
-yours. The values you always have to set:
+Copy [`configs/lanes/example.toml`](configs/lanes/example.toml) to a new file,
+e.g. `configs/lanes/<name>-bin8.toml`, and work through it top to bottom. Every
+line marked `EDIT` depends on your data:
 
 | Section | What to set |
 |---|---|
-| `[lane]` | `name`, and `variant`, the label every output gets (e.g. `bin8`) |
-| `[run]` | `project` (output folder), `series` (tilt-series ids), and the Slurm stages: partition, GPU, memory and time per job |
-| `[data]` | where the stacks/movies and mdocs are; `{series}` is replaced by each id |
+| `[lane]` | `name`; `input` (movies or stacks); `variant`, the label every output gets (e.g. `bin8`) |
+| `[run]` | `project` (a new output folder), `series` (tilt-series ids), and the Slurm stages: partition, GPU, memory and time per job |
+| `[data]` | where the movies and mdocs, or the stacks and mdocs, are; `{series}` is replaced by each id |
+| `[motion]` (movies) | pixel size of the movies, which can differ from the MRC header for super-resolution data; gain reference if needed |
 | `[binning]` | the binning for the CTF fit and for the tomogram. Choose by pixel size in Å, as the comment explains |
+| `[fiducials]` | the bead block or the patch block |
 | `[ctf]` | voltage, Cs, amplitude contrast, and a defocus search range that brackets the nominal defocus |
-| `[motion]` (`frames`) | pixel size of the movies, which can differ from the MRC header for super-resolution data |
-| `[fiducials]` | patch grid (`stack`) or bead diameter (`frames`) |
-| `[reconstruct]` | `thickness` in binned pixels. Make it generous, so the tomogram also contains vacuum above and below the sample |
-| `[template]` | `emdb_id` of your particle, the low-pass, the mask radius |
+| `[reconstruct]` | `thickness` in binned pixels; required with patch tracking. Make it generous, so the tomogram also contains vacuum above and below the sample |
+| `[segment]` | keep it for membranes, or delete it |
+| `[template]` | `emdb_id` or `source_map`, the low-pass, the mask radius |
 | `[pick]` | particle diameter in Å, how many candidates to keep per tomogram, GPU options |
 | `[extract]` | box size in pixels, about 1.5× the particle |
+
+For how the values in a real config were chosen, read the comments in
+`ribo-bin8.toml` and `gag-bin8.toml`. Their values were measured on *their*
+datasets and will be wrong for yours.
 
 The `[run]` stages split the fixed chain of steps into Slurm jobs. A job runs
 every tilt-series of the project in turn, and the next job starts only when the
 previous one finished without errors. Stages have to follow one another without
-skipping or repeating a step; the submitter checks this. To list the step names:
+skipping or repeating a step; the submitter checks this. To list the steps your
+config gives:
 
 ```bash
 python3 scripts/run_series.py --project outputs/<project> --config configs/lanes/<name>-bin8.toml --series X --list-steps
@@ -161,16 +159,19 @@ First see what would be submitted and whether anything is missing:
 python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --dry-run
 ```
 
-It lists every `$VARIABLE` the config uses that is not set in your shell
-(`PYTOMO_MP_DIR`, `MOTIONCOR3`, `MEMBRAIN_EXE`, `MEMBRAIN_CKPT`), and, for the
-`frames` chain, any tilt-series that has no project yet. Set those
-variables, then submit for real:
+Everything in the config is checked before anything is submitted: unknown
+steps, gaps between stages, mismatched bead/patch settings, missing sections,
+input files or folders that are not there, and environment variables the
+config uses but your shell does not set. Fix what it lists, then submit for real:
 
 ```bash
 python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml
 ```
 
-The script only queues the jobs and exits. Follow them with `squeue -u $USER`;
+For movies, a project that does not exist yet is created first (`cryoet
+init`, on the login node). An existing project is never
+re-created, because that would erase it; to add tilt-series later, use a new
+project. The script then only queues the jobs and exits. Follow them with `squeue -u $USER`;
 each job writes `slurm-<job name>-<id>.log` in the repository root. If a job
 fails, the log ends with the failed step and the tilt-series. Fix the cause, then
 resubmit from that stage. Steps that already finished in that stage run

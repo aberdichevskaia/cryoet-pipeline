@@ -1,0 +1,188 @@
+# Starting point for a new dataset. Copy it to configs/lanes/<name>.toml and
+# work through it top to bottom; every line marked EDIT depends on your data.
+# The values here are placeholders or generic starting values, not measurements.
+#
+# The order of the steps is fixed in scripts/run_series.py. This file chooses:
+#   [lane] input   - movies ("frames") or one assembled stack per tilt-series
+#   [fiducials]    - gold beads or patch tracking (no gold)
+#   [segment]      - present: membranes are segmented; delete it to skip
+#
+# List the steps your choices give:
+#   python3 scripts/run_series.py --project x --config <this file> --series X --list-steps
+# Check the whole config without submitting anything:
+#   python3 scripts/submit_lanes.py <this file> --dry-run
+#
+# configs/lanes/gag-bin8.toml (movies, beads, membranes) and ribo-bin8.toml
+# (stacks, patches) are worked examples: their comments explain how each of
+# their values was chosen.
+
+[lane]
+name = "my-lane-bin8"     # EDIT: any name, for you
+input = "frames"          # EDIT: "frames" (movies + mdocs) or "stack" (one MRC stack per tilt-series)
+variant = "bin8"          # label on every output from the tomogram on; keep it short
+
+[run]
+# EDIT: where the outputs go (a new folder per project), and the tilt-series
+# ids. An id is the mdoc name without ".mrc.mdoc" / ".mdoc".
+project = "outputs/my-project"
+series = ["TS_01", "TS_02"]
+
+# Each stage is one Slurm job that runs the steps from..until for every series in
+# turn; the next starts only when the previous one succeeded. Stages must follow
+# one another without skipping a step. With input = "stack", replace the
+# "motion" stage by a CPU stage starting at "import-tilt-stack". With [segment]
+# deleted, the "gpu" stage starts at "prepare-template".
+[[run.stage]]
+name = "motion"
+from = "prepare-tilt-series"
+until = "prepare-tilt-series"
+time = "3:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+
+[[run.stage]]
+name = "cpu"
+from = "align-tilt-series"
+until = "reconstruct-tomogram"
+time = "8:00:00"
+sbatch = ["--partition=cpu_p", "--qos=cpu_normal", "--cpus-per-task=8", "--mem=32G"]
+
+[[run.stage]]
+name = "gpu"
+from = "segment-tomogram"
+until = "extract-particles"
+time = "16:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+
+[data]
+# EDIT. Paths are relative to the repository root.
+# input = "frames": two folders. The movie file names must match the
+# SubFramePath lines in the mdocs (only the file name counts, not the folder).
+frames = "data/my-dataset/frames"
+mdocs = "data/my-dataset/mdocs"
+# input = "stack": one file each per tilt-series; {series} is replaced by the id.
+# mdoc = "data/my-dataset/mdocs/{series}.mrc.mdoc"
+# stack = "data/my-dataset/stacks/{series}.mrc"
+
+[motion]
+# input = "frames" only. MRC movies only: TIFF and EER are not supported yet.
+backend = "motioncor3"
+# EDIT: the movie pixel size in A. For super-resolution movies this is half the
+# physical pixel, and the MRC header may say otherwise; give it explicitly.
+pixel_size_angstrom = 1.35
+patch_x = 5
+patch_y = 5
+gpu = 0
+storage_policy = "working"
+# EDIT if your movies are not gain-corrected: the gain reference (MRC), and its
+# rotation (0-3) and flip (0-2) relative to the movies, as MotionCor3 defines them.
+# gain_reference = "data/my-dataset/gain.mrc"
+# gain_rotation = 0
+# gain_flip = 0
+
+[binning]
+# EDIT. Binning factors relative to the raw pixel. Choose by the pixel size they
+# give, not by the number:
+#   tomogram: your particle should still be a few tens of pixels across. The
+#             worked examples have a ribosome at 30 px (9.8 A/px) and Gag at
+#             46 px (5.4 A/px).
+#   ctf_fit:  the CTF is fitted on a finer stack. Its Nyquist (2 x pixel size)
+#             should be finer than ~6 A, or the stack limits the fit.
+ctf_fit = 2
+tomogram = 8
+
+[align]
+binning = 8               # coarse alignment; the same as [binning] tomogram is fine
+min_std_ratio = 0.2
+# tilt_axis_angle = 85.0  # only if the mdoc's RotationAngle is wrong
+
+[qc_coarse]
+preview_binning = 16
+residual_warning_px = 2.0
+
+[fiducials]
+# EDIT: one of the two blocks.
+#
+# Gold beads:
+seed_backend = "imod-autofidseed"
+track_backend = "imod-beadtrack"
+tracking_binning = 4
+fiducial_diameter_nm = 10.0           # EDIT: your gold size
+raw_pixel_spacing_angstrom = 1.35     # EDIT: the same as [motion] pixel_size_angstrom
+#
+# No gold (e.g. FIB lamellae), patch tracking. Delete the bead lines above.
+# patch_margin_px is in binned pixels; see ribo-bin8.toml for how to size the grid.
+# seed_backend = "imod-patch-seed"
+# track_backend = "imod-patch-track"
+# pre_binning = 8
+# num_patches_x = 5
+# num_patches_y = 5
+# patch_overlap = 0.33
+# patch_margin_px = 100
+
+[fine_align]
+robust_fitting = true
+auto_prune_outliers = true
+# 2 for gold beads (they sit on both surfaces), 1 for patch tracking.
+surfaces_to_analyze = 2
+
+[ctf]
+# EDIT: microscope and defocus. Make the defocus range bracket the nominal
+# defocus with ~0.5-1 um to spare on each side.
+voltage_kv = 300.0
+spherical_aberration_mm = 2.7
+amplitude_contrast = 0.07
+min_defocus_angstrom = 10000
+max_defocus_angstrom = 50000
+
+[reconstruct]
+# Tomogram thickness in binned pixels. With gold beads it can be left out and is
+# derived from them. With patch tracking it MUST be set: patches cannot measure
+# the sample depth. Be generous; the tomogram should contain vacuum above and below.
+# thickness = 320
+
+[segment]
+# Membrane segmentation with MemBrain-seg. Delete this whole section to skip it
+# (then also delete use_segmentation_mask in [pick]). Needs a GPU of compute
+# capability 7.5 or newer.
+executable = "$MEMBRAIN_EXE"
+model = "$MEMBRAIN_CKPT"
+sliding_window_size = 160
+test_time_augmentation = true
+
+[template]
+# EDIT: the reference for template matching. Exactly one of:
+emdb_id = "EMD-XXXXX"                 # fetched from EMDB
+# source_map = "data/my-dataset/reference.mrc"   # or a local map
+low_pass_angstrom = 20.0              # EDIT: about 2 x the tomogram pixel size
+# The mask radius in tomogram pixels: about 10-20% larger than the particle
+# radius. Without it, the radius is derived from the map, which tends to be generous.
+# mask_radius_px = 17
+
+[pick]
+particle_diameter_angstrom = 250.0    # EDIT: your particle; sets the angular sampling
+number_of_particles = 2000            # candidates kept per tomogram, before your review
+number_of_false_positives = 100.0
+low_pass_angstrom = 30.0              # EDIT: keeps the particle's shape, drops noisy detail
+random_phase_correction = true
+per_tilt_weighting = true
+spectral_whitening = true
+tophat_filter = false
+gpu_ids = "0"
+# If picking runs out of GPU memory, split the tomogram: "x,y,z" pieces.
+# volume_split = "2,2,1"
+# Restrict picks to near membranes (needs [segment]):
+use_segmentation_mask = true
+segmentation_mask_dilation_px = 40
+
+[extract]
+box_size_px = 48          # EDIT: about 1.5 x the particle diameter in tomogram pixels; even
+
+[executables]
+# Leave as is; set these environment variables before submitting.
+motioncor3 = "$MOTIONCOR3"
+pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
+pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
+pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"
+pytom_extract_candidates = "$PYTOMO_MP_DIR/pytom_extract_candidates.py"

@@ -22,7 +22,11 @@
 
 set -euo pipefail
 
-REPO=/lustre/groups/shared/users/peng_marr/a.berdichevskaia/cryoet-pipeline
+# The clone the job was submitted from: scripts/submit_lanes.py submits from the
+# repo root, and so does the README. Every relative path below is from there.
+REPO=${SLURM_SUBMIT_DIR:?not running under Slurm}
+[[ -f "$REPO/scripts/run_series.py" ]] \
+    || { echo "submit from the root of a cryoet-pipeline clone, not $REPO" >&2; exit 1; }
 cd "$REPO"
 
 for name in PROJECT CONFIG SERIES FROM UNTIL; do
@@ -32,7 +36,8 @@ for name in PROJECT CONFIG SERIES FROM UNTIL; do
     fi
 done
 
-export IMOD_DIR=/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12
+# The shared IMOD install unless the environment names another.
+export IMOD_DIR=${IMOD_DIR:-/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12}
 
 # `set -u` is for our code, not for environment scripts that were not written
 # for it (IMOD-linux.sh appends to an unset MANPATH; conda's hook likewise).

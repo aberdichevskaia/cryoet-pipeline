@@ -10,6 +10,7 @@
 
 [lane]
 name = "ribo-bin8"
+input = "stack"           # one assembled stack per series, no movies
 variant = "bin8"          # label applied from the stack rebuild onward
 
 [run]

@@ -1,16 +1,18 @@
 # Lane C — HIV-1 Gag on EMPIAR-10164, from frames, with membrane segmentation, bin8.
 #
-# PARAMETER VALUES only, as in ribo-bin8.toml; the step order is the `frames`
-# chain in scripts/run_series.py. `init` is project-level and runs once, before
-# the chain, for every series of the project together: it writes a fresh, EMPTY
-# registry, so running it again for a second series would wipe the first.
+# PARAMETER VALUES only, as in ribo-bin8.toml; the step order is in
+# scripts/run_series.py, and this lane takes movies, gold beads and membrane
+# segmentation from it. `init` is project-level and runs once, before the chain,
+# for every series of the project together: it writes a fresh, EMPTY registry,
+# so running it again for a second series would wipe the first.
+# scripts/submit_lanes.py runs it for a project that does not exist yet.
 #
 # Values marked "starting value" are judgement calls for this first run, not
 # measurements. Read them against visualize-picks and the score plots.
 
 [lane]
 name = "gag-bin8"
-chain = "frames"          # frames -> motion correction -> beads; not import-tilt-stack
+input = "frames"          # movies -> motion correction; not import-tilt-stack
 variant = "bin8"          # label applied from the tomogram stack onward
 
 [run]

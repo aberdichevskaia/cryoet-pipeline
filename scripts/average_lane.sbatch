@@ -27,7 +27,11 @@
 
 set -euo pipefail
 
-REPO=/lustre/groups/shared/users/peng_marr/a.berdichevskaia/cryoet-pipeline
+# The clone the job was submitted from: scripts/submit_lanes.py submits from the
+# repo root, and so does the README. Every relative path below is from there.
+REPO=${SLURM_SUBMIT_DIR:?not running under Slurm}
+[[ -f "$REPO/scripts/run_series.py" ]] \
+    || { echo "submit from the root of a cryoet-pipeline clone, not $REPO" >&2; exit 1; }
 cd "$REPO"
 
 for name in CONFIG THRESHOLDS MASK; do

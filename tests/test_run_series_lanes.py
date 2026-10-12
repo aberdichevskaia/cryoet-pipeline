@@ -1,5 +1,6 @@
 """Every lane config renders commands the CLI accepts: known flags, required ones present."""
 
+import copy
 import sys
 import tomllib
 from pathlib import Path
@@ -30,19 +31,24 @@ def _options(command) -> tuple[set[str], set[str]]:
     return known, required
 
 
-@pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
-def test_every_step_of_the_lane_is_a_valid_command(lane):
+def _assert_valid_commands(config: dict, label: str) -> list[str]:
+    """Every rendered step is a CLI command with known flags and its required ones."""
     group = typer.main.get_command(cli.app)
-    config = tomllib.loads(lane.read_text())
     steps = run_series.build_steps(config, Path("outputs/project"), "TS_X")
-    assert steps, lane
+    assert steps, label
     for name, command in steps:
         sub = group.commands.get(command[0])
-        assert sub is not None, f"{lane.stem}/{name}: no command {command[0]!r}"
+        assert sub is not None, f"{label}/{name}: no command {command[0]!r}"
         known, required = _options(sub)
         flags = {part for part in command[1:] if part.startswith("--")}
-        assert flags <= known, f"{lane.stem}/{name}: unknown {sorted(flags - known)}"
-        assert required <= flags, f"{lane.stem}/{name}: missing {sorted(required - flags)}"
+        assert flags <= known, f"{label}/{name}: unknown {sorted(flags - known)}"
+        assert required <= flags, f"{label}/{name}: missing {sorted(required - flags)}"
+    return [name for name, _ in steps]
+
+
+@pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
+def test_every_step_of_the_lane_is_a_valid_command(lane):
+    _assert_valid_commands(tomllib.loads(lane.read_text()), lane.stem)
 
 
 @pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
@@ -68,9 +74,113 @@ def test_a_volume_split_renders_as_a_valid_option_in_either_chain(lane):
     assert "--pytom-volume-split" not in unsplit["pick-particles"]
 
 
-def test_an_unknown_chain_is_refused():
-    with pytest.raises(SystemExit, match="unknown chain"):
-        run_series.build_steps({"lane": {"chain": "beads"}}, Path("p"), "TS_X")
+def test_an_unknown_input_and_the_old_chain_key_are_refused():
+    with pytest.raises(SystemExit, match="input must be one of"):
+        run_series.build_steps({"lane": {"input": "beads"}}, Path("p"), "TS_X")
+    with pytest.raises(SystemExit, match="chain is now"):
+        run_series.build_steps({"lane": {"chain": "frames"}}, Path("p"), "TS_X")
+
+
+def _lane(stem: str) -> dict:
+    return tomllib.loads((ROOT / "configs" / "lanes" / f"{stem}.toml").read_text())
+
+
+def _combination(source: str, alignment: str, segment: bool) -> dict:
+    """The Gag lane with its input, fiducials and segmentation swapped for the
+    ribosome lane's where the combination asks for them."""
+    gag, ribo = _lane("gag-bin8"), _lane("ribo-bin8")
+    config = copy.deepcopy(gag)
+    if source == "stack":
+        config["lane"]["input"] = "stack"
+        config["data"] = ribo["data"]
+    if alignment == "patches":
+        config["fiducials"] = ribo["fiducials"]
+        config["reconstruct"] = ribo["reconstruct"]
+    if not segment:
+        del config["segment"]
+        for key in ("use_segmentation_mask", "segmentation_mask_dilation_px"):
+            config["pick"].pop(key, None)
+    return config
+
+
+@pytest.mark.parametrize("segment", [True, False], ids=["segment", "no-segment"])
+@pytest.mark.parametrize("alignment", ["beads", "patches"])
+@pytest.mark.parametrize("source", ["frames", "stack"])
+def test_every_combination_renders_valid_commands(source, alignment, segment):
+    config = _combination(source, alignment, segment)
+    names = _assert_valid_commands(config, f"{source}/{alignment}/{segment}")
+    entry = "prepare-tilt-series" if source == "frames" else "import-tilt-stack"
+    assert names[0] == entry
+    assert ("segment-tomogram" in names) is segment
+    steps = dict(run_series.build_steps(config, Path("outputs/project"), "TS_X"))
+    seed = steps["generate-fiducial-seed"]
+    expected = "imod-autofidseed" if alignment == "beads" else "imod-patch-seed"
+    assert seed[seed.index("--backend") + 1] == expected
+
+
+def test_a_mixed_fiducial_pair_is_refused():
+    config = _lane("gag-bin8")
+    config["fiducials"]["track_backend"] = "imod-patch-track"
+    with pytest.raises(SystemExit, match="do not belong together"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def test_patch_tracking_without_a_thickness_is_refused():
+    config = _lane("ribo-bin8")
+    del config["reconstruct"]["thickness"]
+    with pytest.raises(SystemExit, match="thickness must be set"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def test_a_segmentation_mask_without_segmentation_is_refused():
+    config = _lane("gag-bin8")
+    del config["segment"]
+    with pytest.raises(SystemExit, match="no \\[segment\\] section"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def test_the_template_comes_from_exactly_one_of_emdb_and_a_local_map():
+    config = _lane("ribo-bin8")
+    del config["template"]["emdb_id"]
+    config["template"]["source_map"] = "maps/my_reference.mrc"
+    command = dict(run_series.build_steps(config, Path("p"), "TS_X"))["prepare-template"]
+    assert command[command.index("--source-map") + 1] == "maps/my_reference.mrc"
+    assert "--emdb-id" not in command
+    _assert_valid_commands(config, "source-map")
+
+    config["template"]["emdb_id"] = "EMD-16721"
+    with pytest.raises(SystemExit, match="exactly one of"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+    del config["template"]["emdb_id"], config["template"]["source_map"]
+    with pytest.raises(SystemExit, match="exactly one of"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def test_a_gain_reference_reaches_motion_correction():
+    config = _lane("gag-bin8")
+    config["motion"].update(gain_reference="data/gain.mrc", gain_rotation=1, gain_flip=2)
+    command = dict(run_series.build_steps(config, Path("p"), "TS_X"))["prepare-tilt-series"]
+    for flag, value in (("--motioncor3-gain", "data/gain.mrc"),
+                        ("--motioncor3-gain-rotation", "1"),
+                        ("--motioncor3-gain-flip", "2")):
+        assert command[command.index(flag) + 1] == value
+    _assert_valid_commands(config, "gain")
+
+
+def test_a_missing_section_is_named():
+    config = _lane("ribo-bin8")
+    del config["ctf"]
+    with pytest.raises(SystemExit, match="no \\[ctf\\] section"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def test_init_runs_only_for_a_new_frames_project():
+    gag = _lane("gag-bin8")
+    new = submit_lanes.Plan(Path("lane.toml"), "outputs/__no_such_project__", ("TS_01",), ())
+    command = submit_lanes.init_command(gag, new)
+    assert command[:2] == ["cryoet", "init"]
+    assert command[command.index("--tilt-series") + 1] == "TS_01"
+    assert submit_lanes.init_command(_lane("ribo-bin8"), new) is None
 
 
 @pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])

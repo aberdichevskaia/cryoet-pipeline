@@ -22,8 +22,10 @@ what the config's `$VAR` values name (PYTOMO_MP_DIR, MOTIONCOR3, MEMBRAIN_EXE,
 ...) before running; a missing one is refused here rather than in the job.
 OVERWRITE=1 in the environment reaches lane.sbatch the same way.
 
-Not done here: downloading data, caching EMDB maps, and `init` for a frames
-lane, which is project-level and writes an empty registry — see the runbook.
+For a frames lane whose project does not exist yet, `cryoet init` runs here
+first, from [data] frames and mdocs. It is never run on an existing project:
+it starts the registry empty. Not done here: downloading data and caching EMDB
+maps — see the README.
 
 Disposable, like scripts/run_series.py.
 """
@@ -150,17 +152,58 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
         for name in sorted(stage.env)
         if not os.environ.get(name)
     ]
-    # A frames lane starts from manifests that `init` wrote; a stack lane writes
-    # its own in import-tilt-stack.
-    if cfg["lane"].get("chain", "stack") == "frames":
-        manifests = ROOT / lane.project / "manifests"
-        absent = [s for s in lane.series if not (manifests / f"{s}.json").is_file()]
-        if absent:
-            found.append(
-                f"no manifest in {manifests} for {', '.join(absent)}: run `init` for the "
-                "project first (once, for every series together)"
-            )
+    if run_series.lane_input(cfg) != "frames":
+        # A stack lane writes its own manifests in import-tilt-stack; only its
+        # inputs can be checked here, which saves a queue wait on a typo.
+        data = cfg.get("data", {})
+        for series in lane.series:
+            for key in ("mdoc", "stack"):
+                if isinstance(data.get(key), str):
+                    path = ROOT / data[key].format(series=series)
+                    if not path.is_file():
+                        found.append(f"[data] {key}: no file {path}")
+        return found
+    data = cfg.get("data", {})
+    if init_command(cfg, lane) is not None:
+        for key in ("frames", "mdocs"):
+            if not isinstance(data.get(key), str):
+                found.append(f"[data] {key} is not set; init needs it for a new project")
+            elif not (ROOT / data[key]).is_dir():
+                found.append(f"[data] {key}: no directory {ROOT / data[key]}")
+        return found
+    manifests = ROOT / lane.project / "manifests"
+    absent = [s for s in lane.series if not (manifests / f"{s}.json").is_file()]
+    if absent:
+        # init writes a new, empty registry, so it is never run on a project that
+        # already has one: that would throw away every series processed so far.
+        found.append(
+            f"{lane.project} already exists but has no manifest for {', '.join(absent)}, "
+            "and init would erase the project to add them; use a new project for them"
+        )
     return found
+
+
+def init_command(cfg: dict[str, Any], lane: Plan) -> list[str] | None:
+    """`cryoet init` for a frames lane whose project does not exist yet, else None.
+
+    init is project-level and quick (it reads the mdocs and checks the movies are
+    there), so it runs here on the submit node rather than in a job. It is never
+    run on an existing project, because it starts the registry empty.
+    """
+    if run_series.lane_input(cfg) != "frames":
+        return None
+    if (ROOT / lane.project / "artifacts.json").exists():
+        return None
+    data = cfg.get("data", {})
+    command = [
+        "cryoet", "init",
+        "--frames", str(data.get("frames")),
+        "--mdocs", str(data.get("mdocs")),
+        "--out", lane.project,
+    ]
+    for series in lane.series:
+        command += ["--tilt-series", series]
+    return command
 
 
 def _repo_relative(path: Path) -> str:
@@ -251,8 +294,13 @@ def main() -> int:
     if found and not args.dry_run:
         return 1
 
-    for _, lane, stages, _ in lanes:
+    for cfg, lane, stages, _ in lanes:
         print(f"# {lane.config}: {lane.project}, {len(lane.series)} series")
+        init = init_command(cfg, lane)
+        if init is not None:
+            print(("would run: " if args.dry_run else "") + " ".join(init))
+            if not args.dry_run:
+                subprocess.run(init, cwd=ROOT, check=True)
         ids = submit(lane, stages, args.dry_run)
         chained = zip(stages, ids, strict=True)
         print("  " + " -> ".join(f"{stage.name} {job}" for stage, job in chained))

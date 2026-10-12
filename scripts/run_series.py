@@ -131,52 +131,148 @@ def record_timing(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+INPUTS = ("frames", "stack")
+# The seed and the tracking backend come in pairs: beads are seeded and tracked
+# as beads, patches as patches. A mixed pair has no defined meaning.
+FIDUCIAL_PAIRS = {
+    "imod-autofidseed": "imod-beadtrack",
+    "imod-patch-seed": "imod-patch-track",
+}
+
+
+def _require(cfg: dict[str, Any], section: str, keys: tuple[str, ...], why: str) -> dict[str, Any]:
+    """One config section with the keys the chain reads from it, or a refusal naming them."""
+    values = cfg.get(section)
+    if not isinstance(values, dict):
+        raise SystemExit(f"the config has no [{section}] section, which {why} needs")
+    missing = [key for key in keys if key not in values]
+    if missing:
+        raise SystemExit(f"[{section}] is missing {', '.join(missing)}, which {why} needs")
+    return values
+
+
+def lane_input(cfg: dict[str, Any]) -> str:
+    """How the series enter the project: `frames` (movies, through init) or `stack`."""
+    lane = cfg.get("lane", {})
+    if "chain" in lane:
+        raise SystemExit(
+            "[lane] chain is now [lane] input: 'frames' or 'stack'. Alignment and "
+            "segmentation are chosen by [fiducials] and [segment], not by the chain"
+        )
+    value = lane.get("input")
+    if value not in INPUTS:
+        raise SystemExit(f"[lane] input must be one of {', '.join(INPUTS)}, not {value!r}")
+    return value
+
+
 def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[str, Command]]:
-    """The lane's canned chain. The config names which one; the order of each is
-    fixed here, not in the config."""
+    """The lane's chain, in the one order this file fixes.
 
-    chain = cfg["lane"].get("chain", "stack")
-    if chain == "stack":
-        return build_stack_steps(cfg, project, series)
-    if chain == "frames":
-        return build_frames_steps(cfg, project, series)
-    raise SystemExit(f"unknown chain {chain!r} in [lane]; known: stack, frames")
+    The config chooses three things and nothing about the order:
 
+    * `[lane] input` — `frames`: movies, motion-corrected here, after `init`
+      wrote the manifests (project-level, so not a step); `stack`: one assembled
+      stack per series, imported here;
+    * `[fiducials]` backends — gold beads or patch tracking;
+    * `[segment]` — present: membranes are segmented after reconstruction, and
+      picking may use them as a mask; absent: the step is left out.
 
-def build_stack_steps(
-    cfg: dict[str, Any], project: Path, series: str
-) -> list[tuple[str, Command]]:
-    """The canned lane-B chain: one assembled stack per series, patch tracking."""
+    A flag is rendered only when its value is in the config, so one builder
+    serves every combination: bead-only options never reach a patch lane.
+    """
 
+    source = lane_input(cfg)
     manifest = project / "manifests" / f"{series}.json"
     registry = project / "artifacts.json"
     common = ["--manifest", str(manifest), "--registry", str(registry), "--out", str(project)]
 
-    lane = cfg["lane"]["variant"]
-    data, binning = cfg["data"], cfg["binning"]
-    align, qc = cfg["align"], cfg["qc_coarse"]
-    fid, fine = cfg["fiducials"], cfg["fine_align"]
-    ctf, tmpl, pick = cfg["ctf"], cfg["template"], cfg["pick"]
-    extract, exe = cfg["extract"], cfg["executables"]
+    lane = _require(cfg, "lane", ("variant",), "every lane")["variant"]
+    binning = _require(cfg, "binning", ("ctf_fit", "tomogram"), "every lane")
+    align = _require(cfg, "align", ("binning", "min_std_ratio"), "every lane")
+    qc = _require(cfg, "qc_coarse", ("preview_binning", "residual_warning_px"), "every lane")
+    fid = _require(cfg, "fiducials", ("seed_backend", "track_backend"), "every lane")
+    fine = cfg.get("fine_align", {})
+    ctf = _require(cfg, "ctf", ("voltage_kv", "spherical_aberration_mm"), "every lane")
+    tmpl = _require(cfg, "template", ("low_pass_angstrom",), "every lane")
+    pick = _require(
+        cfg, "pick", ("particle_diameter_angstrom", "number_of_particles", "gpu_ids"),
+        "every lane",
+    )
+    extract = _require(cfg, "extract", ("box_size_px",), "every lane")
+    exe = _require(
+        cfg, "executables",
+        ("pytom_create_template", "pytom_create_mask",
+         "pytom_match_template", "pytom_extract_candidates"),
+        "every lane",
+    )
     recon = cfg.get("reconstruct", {})
+    seg = cfg.get("segment")
+
+    if FIDUCIAL_PAIRS.get(fid["seed_backend"]) != fid["track_backend"]:
+        pairs = "; ".join(f"{seed} with {track}" for seed, track in FIDUCIAL_PAIRS.items())
+        raise SystemExit(
+            f"[fiducials] seed_backend {fid['seed_backend']!r} and track_backend "
+            f"{fid['track_backend']!r} do not belong together; use {pairs}"
+        )
+    if fid["seed_backend"] == "imod-patch-seed" and "thickness" not in recon:
+        # The derived thickness measures specimen depth only when the fiducials
+        # sample it. Coplanar patches do not: on EMPIAR-11538 TS_0002 it gave a
+        # 24 nm box for a lamella, and reconstruction still reported `pass`.
+        raise SystemExit(
+            "[reconstruct] thickness must be set with patch tracking: patches cannot "
+            "measure the sample depth (see configs/lanes/ribo-bin8.toml)"
+        )
+    if ("emdb_id" in tmpl) == ("source_map" in tmpl):
+        raise SystemExit(
+            "[template] needs exactly one of emdb_id (fetched from EMDB) and "
+            "source_map (a local MRC map)"
+        )
+    if pick.get("use_segmentation_mask") and seg is None:
+        raise SystemExit(
+            "[pick] use_segmentation_mask needs membranes, but there is no [segment] section"
+        )
 
     def sub(template: str) -> str:
         return template.format(series=series)
 
-    steps: list[tuple[str, Command]] = [
-        # No frames in this deposition: one assembled stack per series, so init
-        # and prepare-tilt-series do not apply. import-tilt-stack takes no
-        # --registry; it writes the manifest and registry under --out itself.
-        (
-            "import-tilt-stack",
-            [
+    if source == "frames":
+        motion = _require(cfg, "motion", ("backend",), "input = 'frames'")
+        entry: list[tuple[str, Command]] = [
+            # Motion correction, then the stack from the corrected sums.
+            (
+                "prepare-tilt-series",
+                ["prepare-tilt-series", *common,
+                 *flag("motion-backend", motion["backend"]),
+                 *flag("storage-policy", motion.get("storage_policy")),
+                 *flag("motioncor3-executable", exe.get("motioncor3")),
+                 *flag("motioncor3-gpu", motion.get("gpu")),
+                 *flag("motioncor3-patch-x", motion.get("patch_x")),
+                 *flag("motioncor3-patch-y", motion.get("patch_y")),
+                 *flag("motioncor3-pixel-size", motion.get("pixel_size_angstrom")),
+                 *flag("motioncor3-gain", motion.get("gain_reference")),
+                 *flag("motioncor3-gain-rotation", motion.get("gain_rotation")),
+                 *flag("motioncor3-gain-flip", motion.get("gain_flip"))],
+            ),
+        ]
+    else:
+        data = _require(cfg, "data", ("mdoc", "stack"), "input = 'stack'")
+        entry = [
+            # One assembled stack per series, so init and prepare-tilt-series do
+            # not apply. import-tilt-stack takes no --registry; it writes the
+            # manifest and registry under --out itself.
+            (
                 "import-tilt-stack",
-                "--mdoc", sub(data["mdoc"]),
-                "--stack", sub(data["stack"]),
-                "--tilt-series-id", series,
-                "--out", str(project),
-            ],
-        ),
+                [
+                    "import-tilt-stack",
+                    "--mdoc", sub(data["mdoc"]),
+                    "--stack", sub(data["stack"]),
+                    "--tilt-series-id", series,
+                    "--out", str(project),
+                ],
+            ),
+        ]
+
+    alignment: list[tuple[str, Command]] = [
         # Everything up to fine alignment is shared and unlabelled.
         (
             "align-tilt-series",
@@ -195,9 +291,12 @@ def build_stack_steps(
             "generate-fiducial-seed",
             ["generate-fiducial-seed", *common,
              *flag("backend", fid["seed_backend"]),
-             # Bead path only; ignored by imod-patch-seed.
+             # Bead path.
+             *flag("tracking-binning", fid.get("tracking_binning")),
              *flag("fiducial-diameter-nm", fid.get("fiducial_diameter_nm")),
-             # Patch path only; ignored by imod-autofidseed.
+             *flag("raw-pixel-spacing", fid.get("raw_pixel_spacing_angstrom")),
+             *flag("target-beads", fid.get("target_beads")),
+             # Patch path.
              *flag("pre-binning", fid.get("pre_binning")),
              *flag("num-patches-x", fid.get("num_patches_x")),
              *flag("num-patches-y", fid.get("num_patches_y")),
@@ -212,7 +311,7 @@ def build_stack_steps(
              *flag("coverage-warning", fid.get("coverage_warning")),
              *flag("coverage-failure", fid.get("coverage_failure")),
              # Bead path only. Patch tracking is a single correlation pass, and
-             # track-fiducials now refuses this flag for it rather than ignoring it.
+             # track-fiducials refuses this flag for it rather than ignoring it.
              *flag("rounds", fid.get("rounds")),
              # Patch path only, and likewise refused for the bead backend.
              *flag("patch-filter-sigma1", fid.get("patch_filter_sigma1")),
@@ -263,172 +362,36 @@ def build_stack_steps(
              *flag("thickness", recon.get("thickness")),
              *flag("variant", lane)],
         ),
-        (
-            "prepare-template",
-            ["prepare-template", *common,
-             *flag("emdb-id", tmpl["emdb_id"]),
-             *flag("template-low-pass-angstrom", tmpl["low_pass_angstrom"]),
-             *flag("template-mask-radius-px", tmpl.get("mask_radius_px")),
-             *flag("pytom-create-template-executable", exe["pytom_create_template"]),
-             *flag("pytom-create-mask-executable", exe["pytom_create_mask"]),
-             *flag("variant", lane)],
-        ),
-        (
-            "pick-particles",
-            ["pick-particles", *common,
-             *flag("pytom-particle-diameter", pick["particle_diameter_angstrom"]),
-             *flag("pytom-number-of-particles", pick["number_of_particles"]),
-             *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
-             *flag("pytom-tophat-filter", pick.get("tophat_filter")),
-             *flag("pytom-low-pass", pick.get("low_pass_angstrom")),
-             *flag("pytom-random-phase-correction", pick.get("random_phase_correction")),
-             *flag("pytom-per-tilt-weighting", pick.get("per_tilt_weighting")),
-             *flag("pytom-spectral-whitening", pick.get("spectral_whitening")),
-             *flag("pytom-gpu-ids", pick["gpu_ids"]),
-             *flag("pytom-volume-split", pick.get("volume_split")),
-             *flag("pytom-match-template-executable", exe["pytom_match_template"]),
-             *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
-             *flag("variant", lane)],
-        ),
-        # Look at the picks before spending the extraction on them: this writes
-        # the tomogram with its picks for both ChimeraX and 3dmod. It registers
-        # nothing, so it is the one step here that can be skipped or re-run at
-        # any time without changing what the rest of the chain sees.
-        (
-            "visualize-picks",
-            ["visualize-picks", *common, *flag("variant", lane)],
-        ),
-        (
-            "extract-particles",
-            ["extract-particles", *common,
-             *flag("box-size-px", extract["box_size_px"]),
-             *flag("variant", lane)],
-        ),
     ]
-    return steps
 
+    segmentation: list[tuple[str, Command]] = []
+    if seg is not None:
+        if "model" not in seg:
+            raise SystemExit("[segment] is missing model, the MemBrain-seg checkpoint")
+        tta = seg.get("test_time_augmentation")
+        segmentation = [
+            (
+                "segment-tomogram",
+                ["segment-tomogram", *common,
+                 *flag("membrain-executable", seg.get("executable")),
+                 *flag("membrain-model", seg["model"]),
+                 *flag("membrain-sliding-window-size", seg.get("sliding_window_size")),
+                 *([] if tta is None else [
+                     "--membrain-test-time-augmentation" if tta
+                     else "--no-membrain-test-time-augmentation"
+                 ]),
+                 *flag("variant", lane)],
+            ),
+        ]
 
-def build_frames_steps(
-    cfg: dict[str, Any], project: Path, series: str
-) -> list[tuple[str, Command]]:
-    """The canned lane-C chain: frames, gold beads, membrane segmentation.
-
-    `init` is not here: it is project-level, takes every series at once, and
-    writes an empty registry, so it runs once before this chain (see
-    configs/lanes/gag-bin8.toml).
-    """
-
-    manifest = project / "manifests" / f"{series}.json"
-    registry = project / "artifacts.json"
-    common = ["--manifest", str(manifest), "--registry", str(registry), "--out", str(project)]
-
-    lane = cfg["lane"]["variant"]
-    motion, binning = cfg["motion"], cfg["binning"]
-    align, qc = cfg["align"], cfg["qc_coarse"]
-    fid, fine = cfg["fiducials"], cfg["fine_align"]
-    ctf, seg, tmpl, pick = cfg["ctf"], cfg["segment"], cfg["template"], cfg["pick"]
-    extract, exe = cfg["extract"], cfg["executables"]
-    recon = cfg.get("reconstruct", {})
-    tta = seg.get("test_time_augmentation")
-
-    return [
-        # Motion correction, then the stack from the corrected sums.
-        (
-            "prepare-tilt-series",
-            ["prepare-tilt-series", *common,
-             *flag("motion-backend", motion["backend"]),
-             *flag("storage-policy", motion.get("storage_policy")),
-             *flag("motioncor3-executable", exe.get("motioncor3")),
-             *flag("motioncor3-gpu", motion.get("gpu")),
-             *flag("motioncor3-patch-x", motion.get("patch_x")),
-             *flag("motioncor3-patch-y", motion.get("patch_y")),
-             *flag("motioncor3-pixel-size", motion.get("pixel_size_angstrom"))],
-        ),
-        (
-            "align-tilt-series",
-            ["align-tilt-series", *common,
-             *flag("binning", align["binning"]),
-             *flag("min-std-ratio", align["min_std_ratio"]),
-             *flag("tilt-axis-angle", align.get("tilt_axis_angle"))],
-        ),
-        (
-            "qc-coarse-alignment",
-            ["qc-coarse-alignment", *common,
-             *flag("preview-binning", qc["preview_binning"]),
-             *flag("residual-warning-px", qc["residual_warning_px"])],
-        ),
-        (
-            "generate-fiducial-seed",
-            ["generate-fiducial-seed", *common,
-             *flag("backend", fid["seed_backend"]),
-             *flag("tracking-binning", fid.get("tracking_binning")),
-             *flag("fiducial-diameter-nm", fid.get("fiducial_diameter_nm")),
-             *flag("raw-pixel-spacing", fid.get("raw_pixel_spacing_angstrom")),
-             *flag("target-beads", fid.get("target_beads"))],
-        ),
-        (
-            "track-fiducials",
-            ["track-fiducials", *common,
-             *flag("backend", fid["track_backend"]),
-             *flag("rounds", fid.get("rounds"))],
-        ),
-        (
-            "fine-align-tilt-series",
-            ["fine-align-tilt-series", *common,
-             *flag("robust-fitting", fine.get("robust_fitting")),
-             *flag("auto-prune-outliers", fine.get("auto_prune_outliers")),
-             *flag("max-pruned-fraction", fine.get("max_pruned_fraction")),
-             *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze"))],
-        ),
-        # Unlabelled, so correct-ctf in the lane falls back to the model fitted on it.
-        (
-            "build-ctf-stack",
-            ["build-final-aligned-stack", *common,
-             *flag("output-binning", binning["ctf_fit"])],
-        ),
-        (
-            "estimate-ctf",
-            ["estimate-ctf", *common,
-             *flag("ctf-voltage-kv", ctf["voltage_kv"]),
-             *flag("ctf-spherical-aberration-mm", ctf["spherical_aberration_mm"]),
-             *flag("ctf-amplitude-contrast", ctf.get("amplitude_contrast")),
-             *flag("ctffind-min-defocus-angstrom", ctf.get("min_defocus_angstrom")),
-             *flag("ctffind-max-defocus-angstrom", ctf.get("max_defocus_angstrom"))],
-        ),
-        (
-            "build-final-aligned-stack",
-            ["build-final-aligned-stack", *common,
-             *flag("output-binning", binning["tomogram"]),
-             *flag("variant", lane)],
-        ),
-        (
-            "correct-ctf",
-            ["correct-ctf", *common, *flag("variant", lane)],
-        ),
-        (
-            "reconstruct-tomogram",
-            ["reconstruct-tomogram", *common,
-             *flag("thickness", recon.get("thickness")),
-             *flag("variant", lane)],
-        ),
-        (
-            "segment-tomogram",
-            ["segment-tomogram", *common,
-             *flag("membrain-executable", seg.get("executable")),
-             *flag("membrain-model", seg["model"]),
-             *flag("membrain-sliding-window-size", seg.get("sliding_window_size")),
-             *([] if tta is None else [
-                 "--membrain-test-time-augmentation" if tta
-                 else "--no-membrain-test-time-augmentation"
-             ]),
-             *flag("variant", lane)],
-        ),
+    picking: list[tuple[str, Command]] = [
         (
             "prepare-template",
             ["prepare-template", *common,
-             *flag("emdb-id", tmpl["emdb_id"]),
+             *flag("emdb-id", tmpl.get("emdb_id")),
+             *flag("source-map", tmpl.get("source_map")),
              *flag("template-particle-diameter-angstrom", tmpl.get("particle_diameter_angstrom")),
-             *flag("template-low-pass-angstrom", tmpl.get("low_pass_angstrom")),
+             *flag("template-low-pass-angstrom", tmpl["low_pass_angstrom"]),
              *flag("template-mask-radius-px", tmpl.get("mask_radius_px")),
              *flag("pytom-create-template-executable", exe["pytom_create_template"]),
              *flag("pytom-create-mask-executable", exe["pytom_create_mask"]),
@@ -458,6 +421,10 @@ def build_frames_steps(
              *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
              *flag("variant", lane)],
         ),
+        # Look at the picks before spending the extraction on them: this writes
+        # the tomogram with its picks for both ChimeraX and 3dmod. It registers
+        # nothing, so it is the one step here that can be skipped or re-run at
+        # any time without changing what the rest of the chain sees.
         (
             "visualize-picks",
             ["visualize-picks", *common, *flag("variant", lane)],
@@ -469,6 +436,7 @@ def build_frames_steps(
              *flag("variant", lane)],
         ),
     ]
+    return [*entry, *alignment, *segmentation, *picking]
 
 
 def slice_steps(
