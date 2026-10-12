@@ -118,6 +118,49 @@ def test_every_combination_renders_valid_commands(source, alignment, segment):
     assert seed[seed.index("--backend") + 1] == expected
 
 
+EXAMPLE = ROOT / "configs" / "lanes" / "example.toml"
+
+
+def _example_with_block_b() -> dict:
+    """The starter config as the instructions in it say to switch to patches:
+    block A deleted, one leading "# " removed from every line of block B."""
+    text = EXAMPLE.read_text()
+    head, rest = text.split("# --- Block A", 1)
+    _, rest = rest.split("# --- Block B", 1)
+    block_b, tail = rest.split("# --- end of block B", 1)
+    lines = block_b.splitlines()[1:]  # the rest of the marker line
+    uncommented = [line[2:] if line.startswith("# ") else line.lstrip("#") for line in lines]
+    return tomllib.loads(head + "\n".join(uncommented) + "\n" + tail.split("\n", 1)[1])
+
+
+def test_the_starter_config_leaves_the_unchecked_choices_off():
+    # Each of these is used as given, with no check against the data, and is
+    # right only for some datasets: a pixel size that bypasses the check against
+    # the stack, and a membrane mask that is wrong for a cytosolic particle.
+    config = tomllib.loads(EXAMPLE.read_text())
+    assert "pixel_size_angstrom" not in config["motion"]
+    assert "raw_pixel_spacing_angstrom" not in config["fiducials"]
+    assert "use_segmentation_mask" not in config["pick"]
+    assert "segmentation_mask_dilation_px" not in config["pick"]
+    # Block A is beads, with the fine alignment that goes with beads.
+    assert config["fiducials"]["seed_backend"] == "imod-autofidseed"
+    assert config["fine_align"]["surfaces_to_analyze"] == 2
+
+
+def test_block_b_of_the_starter_config_switches_alignment_as_a_whole():
+    config = _example_with_block_b()
+    names = _assert_valid_commands(config, "example/block-b")
+    assert "generate-fiducial-seed" in names
+    fid, fine = config["fiducials"], config["fine_align"]
+    assert (fid["seed_backend"], fid["track_backend"]) == ("imod-patch-seed", "imod-patch-track")
+    assert fine["surfaces_to_analyze"] == 1
+    # Two whole patches, as the comment derives it.
+    assert fine["max_pruned_fraction"] == 2 / (fid["num_patches_x"] * fid["num_patches_y"])
+    assert "thickness" in config["reconstruct"]
+    # Nothing of block A's bead settings survives the switch.
+    assert not {"tracking_binning", "fiducial_diameter_nm"} & set(fid)
+
+
 def test_a_mixed_fiducial_pair_is_refused():
     config = _lane("gag-bin8")
     config["fiducials"]["track_backend"] = "imod-patch-track"

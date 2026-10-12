@@ -58,7 +58,7 @@ The order of the steps is fixed. The config chooses three things:
 | Choice | Options | In the config |
 |---|---|---|
 | How the data comes in | MRC **movies** per tilt + mdocs, motion-corrected here; or one assembled MRC **stack** per tilt-series + its mdoc | `[lane] input = "frames"` or `"stack"` |
-| Alignment | **gold beads**, or **patch tracking** when there is no gold (e.g. FIB lamellae) | the `[fiducials]` backends |
+| Alignment | **gold beads**, or **patch tracking** when there is no gold (e.g. FIB lamellae) | block A or block B of the config |
 | Membranes | segmented with MemBrain-seg, optionally used to restrict picking; or skipped | `[segment]` present or deleted |
 
 Two combinations have been run on real data: stacks + patches
@@ -127,14 +127,13 @@ line marked `EDIT` depends on your data:
 | `[lane]` | `name`; `input` (movies or stacks); `variant`, the label every output gets (e.g. `bin8`) |
 | `[run]` | `project` (a new output folder), `series` (tilt-series ids), and the Slurm stages: partition, GPU, memory and time per job |
 | `[data]` | where the movies and mdocs, or the stacks and mdocs, are; `{series}` is replaced by each id |
-| `[motion]` (movies) | pixel size of the movies, which can differ from the MRC header for super-resolution data; gain reference if needed |
+| `[motion]` (movies) | the gain reference, if the movies are not gain-corrected |
 | `[binning]` | the binning for the CTF fit and for the tomogram. Choose by pixel size in Å, as the comment explains |
-| `[fiducials]` | the bead block or the patch block |
+| alignment | keep block A (gold beads) or block B (patch tracking) and delete the other. Each block sets `[fiducials]`, `[fine_align]` and `[reconstruct]` together; switching only `[fiducials]` leaves the other two wrong for the method |
 | `[ctf]` | voltage, Cs, amplitude contrast, and a defocus search range that brackets the nominal defocus |
-| `[reconstruct]` | `thickness` in binned pixels; required with patch tracking. Make it generous, so the tomogram also contains vacuum above and below the sample |
 | `[segment]` | keep it for membranes, or delete it |
 | `[template]` | `emdb_id` or `source_map`, the low-pass, the mask radius |
-| `[pick]` | particle diameter in Å, how many candidates to keep per tomogram, GPU options |
+| `[pick]` | particle diameter in Å, how many candidates to keep per tomogram, GPU options. The membrane mask is off: turn it on only for particles on or next to membranes |
 | `[extract]` | box size in pixels, about 1.5× the particle |
 
 For how the values in a real config were chosen, read the comments in

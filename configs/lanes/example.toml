@@ -4,7 +4,7 @@
 #
 # The order of the steps is fixed in scripts/run_series.py. This file chooses:
 #   [lane] input   - movies ("frames") or one assembled stack per tilt-series
-#   [fiducials]    - gold beads or patch tracking (no gold)
+#   alignment      - gold beads or patch tracking (no gold): one of two blocks below
 #   [segment]      - present: membranes are segmented; delete it to skip
 #
 # List the steps your choices give:
@@ -68,13 +68,15 @@ mdocs = "data/my-dataset/mdocs"
 [motion]
 # input = "frames" only. MRC movies only: TIFF and EER are not supported yet.
 backend = "motioncor3"
-# EDIT: the movie pixel size in A. For super-resolution movies this is half the
-# physical pixel, and the MRC header may say otherwise; give it explicitly.
-pixel_size_angstrom = 1.35
 patch_x = 5
 patch_y = 5
 gpu = 0
 storage_policy = "working"
+# The pixel size in A given to MotionCor3. Left unset, it is the movies' MRC
+# header value. It does not change the tilt stack's pixel size, which comes from
+# the movie headers either way. Dose weighting is off in this backend, so
+# MotionCor3 uses it for little else; there is normally no reason to set it.
+# pixel_size_angstrom = 1.35
 # EDIT if your movies are not gain-corrected: the gain reference (MRC), and its
 # rotation (0-3) and flip (0-2) relative to the movies, as MotionCor3 defines them.
 # gain_reference = "data/my-dataset/gain.mrc"
@@ -101,31 +103,64 @@ min_std_ratio = 0.2
 preview_binning = 16
 residual_warning_px = 2.0
 
-[fiducials]
-# EDIT: one of the two blocks.
+# =============================================================================
+# Alignment. EDIT: keep ONE of the two blocks below and delete the other.
 #
-# Gold beads:
+# Each block sets [fiducials], [fine_align] and [reconstruct] together, because
+# the right fine alignment and tomogram thickness follow from how the series is
+# tracked. Switching only [fiducials] leaves the other two tuned for the wrong
+# method: some of that fails, and some of it runs to the end and positions the
+# tomogram wrongly.
+#
+# To use block B: delete block A, then remove "# " from the start of every line
+# of block B. Lines that then still start with "#" are comments, as intended.
+# =============================================================================
+
+# --- Block A: gold beads -----------------------------------------------------
+[fiducials]
 seed_backend = "imod-autofidseed"
 track_backend = "imod-beadtrack"
 tracking_binning = 4
 fiducial_diameter_nm = 10.0           # EDIT: your gold size
-raw_pixel_spacing_angstrom = 1.35     # EDIT: the same as [motion] pixel_size_angstrom
-#
-# No gold (e.g. FIB lamellae), patch tracking. Delete the bead lines above.
-# patch_margin_px is in binned pixels; see ribo-bin8.toml for how to size the grid.
+# The pixel size the bead diameter is converted with. Left unset, it is read
+# from the data and checked against the stack; set, it is used WITHOUT that
+# check. gag-bin8.toml sets it for its super-resolution movies.
+# raw_pixel_spacing_angstrom = 1.35
+
+[fine_align]
+robust_fitting = true
+auto_prune_outliers = true
+surfaces_to_analyze = 2               # beads sit on both faces of the sample
+
+[reconstruct]
+# Thickness in binned pixels. Left unset, it is derived from the beads, which
+# measure the sample depth because they sit on both faces. Set it to override.
+# thickness = 300
+
+# --- Block B: patch tracking, no gold (e.g. FIB lamellae) --------------------
+# [fiducials]
 # seed_backend = "imod-patch-seed"
 # track_backend = "imod-patch-track"
 # pre_binning = 8
 # num_patches_x = 5
 # num_patches_y = 5
 # patch_overlap = 0.33
-# patch_margin_px = 100
-
-[fine_align]
-robust_fitting = true
-auto_prune_outliers = true
-# 2 for gold beads (they sit on both surfaces), 1 for patch tracking.
-surfaces_to_analyze = 2
+# patch_margin_px = 100               # binned pixels; see ribo-bin8.toml for sizing the grid
+#
+# [fine_align]
+# robust_fitting = true
+# auto_prune_outliers = true
+# surfaces_to_analyze = 1             # patch points are coplanar: one plane, not two
+# # Up to two whole patches may be dropped as outliers: 2 / (num_patches_x x
+# # num_patches_y) = 2 / 25. The default, 0.02, is sized for beads, and a single
+# # bad patch (1 / 25 = 4%) already exceeds it.
+# max_pruned_fraction = 0.08
+#
+# [reconstruct]
+# # Required with patches, which cannot measure the sample depth. In binned
+# # pixels; be generous, so the tomogram contains vacuum above and below.
+# thickness = 320
+# --- end of block B ----------------------------------------------------------
 
 [ctf]
 # EDIT: microscope and defocus. Make the defocus range bracket the nominal
@@ -136,16 +171,10 @@ amplitude_contrast = 0.07
 min_defocus_angstrom = 10000
 max_defocus_angstrom = 50000
 
-[reconstruct]
-# Tomogram thickness in binned pixels. With gold beads it can be left out and is
-# derived from them. With patch tracking it MUST be set: patches cannot measure
-# the sample depth. Be generous; the tomogram should contain vacuum above and below.
-# thickness = 320
-
 [segment]
-# Membrane segmentation with MemBrain-seg. Delete this whole section to skip it
-# (then also delete use_segmentation_mask in [pick]). Needs a GPU of compute
-# capability 7.5 or newer.
+# Membrane segmentation with MemBrain-seg. Delete this whole section to skip it.
+# Needs a GPU of compute capability 7.5 or newer. Keeping it lets picking be
+# restricted to membranes; see [pick].
 executable = "$MEMBRAIN_EXE"
 model = "$MEMBRAIN_CKPT"
 sliding_window_size = 160
@@ -172,9 +201,13 @@ tophat_filter = false
 gpu_ids = "0"
 # If picking runs out of GPU memory, split the tomogram: "x,y,z" pieces.
 # volume_split = "2,2,1"
-# Restrict picks to near membranes (needs [segment]):
-use_segmentation_mask = true
-segmentation_mask_dilation_px = 40
+# Only for particles that sit on or next to membranes (needs [segment]): search
+# only inside the membrane segmentation, grown by the dilation, in tomogram
+# pixels. Off for anything else: with it on, a cytosolic particle is searched
+# for only next to membranes. gag-bin8.toml uses 40 px at 5.4 A/px (21.6 nm), to
+# reach the Gag layer under the membrane; the same 40 px is wider at a coarser pixel.
+# use_segmentation_mask = true
+# segmentation_mask_dilation_px = 40
 
 [extract]
 box_size_px = 48          # EDIT: about 1.5 x the particle diameter in tomogram pixels; even
