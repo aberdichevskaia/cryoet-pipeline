@@ -124,7 +124,8 @@ tracking_binning = 4
 fiducial_diameter_nm = 10.0           # EDIT: your gold size
 # The pixel size the bead diameter is converted with. Left unset, it is read
 # from the data and checked against the stack; set, it is used WITHOUT that
-# check. gag-bin8.toml sets it for its super-resolution movies.
+# check. Neither worked example needs it: gag-bin8.toml's value equals the
+# pixel size in its movie headers.
 # raw_pixel_spacing_angstrom = 1.35
 
 [fine_align]

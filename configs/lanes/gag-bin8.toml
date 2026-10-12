@@ -55,11 +55,16 @@ mdocs = "data/empiar-10164/data/mdoc-files"
 
 [motion]
 backend = "motioncor3"
-# The deposited frames are K2 super-resolution, 7676 x 7420, while their MRC
-# header says 1.35 A, the physical pixel. The TS_01 run that worked was built at
-# 0.675 A (bin8 = 5.4 A/px), so the super-resolution size is given explicitly
-# here and again to the bead seed below. Dose weighting is disabled in the
-# backend (-FmDose 0), so MotionCor3 uses the pixel size for little else.
+# The deposited frames are K2 super-resolution, 7676 x 7420. Their MRC headers
+# give the super-resolution pixel, 0.675 A, and that is what the pipeline uses
+# (bin8 = 5.4 A/px): outputs/hiv/manifests/TS_01.json, which init fills from the
+# headers, records 0.675000011920929, float32 as a header stores it (checked
+# 2026-10-12). An earlier note here said the headers give 1.35 A; init did not
+# read that. So this line equals the header value and changes nothing; it stays
+# so the command matches the runs already made. It reaches MotionCor3 alone
+# (-PixSize): the stack's pixel size comes from the headers either way. Dose
+# weighting is disabled in the backend (-FmDose 0), so MotionCor3 uses the
+# pixel size for little else.
 pixel_size_angstrom = 0.675
 patch_x = 5
 patch_y = 5
@@ -86,7 +91,9 @@ residual_warning_px = 2.0
 [fiducials]
 # 10 nm gold, tracked as beads. TS_01's run: imod-autofidseed then
 # imod-beadtrack, tracking binning 4, 150 target beads, and the raw pixel given
-# as 0.675 A, which makes the bead 148 unbinned px.
+# as 0.675 A, which makes the bead 148 unbinned px. The headers give the same
+# 0.675 A (see [motion]), so raw_pixel_spacing_angstrom does not change the bead
+# size. Given, it does skip the check against the stack that an unset value gets.
 seed_backend = "imod-autofidseed"
 track_backend = "imod-beadtrack"
 tracking_binning = 4
