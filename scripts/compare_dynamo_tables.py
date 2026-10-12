@@ -54,6 +54,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--first", type=Path, required=True, help="reference project, e.g. the CPU one")
     parser.add_argument("--second", type=Path, required=True, help="project compared against it")
+    parser.add_argument("--outlier-deg", type=float, default=10.0, help="rotation counted as an outlier")
+    parser.add_argument("--worst", type=int, default=5, help="particles listed, largest rotation first")
     args = parser.parse_args()
 
     first, second = tables(args.first), tables(args.second)
@@ -77,6 +79,11 @@ def main() -> None:
         for name, table in ((args.first.name, a), (args.second.name, b)):
             largest = np.max(np.abs(np.array([table[t][3:6] for t in tags])), axis=0)
             print(f"  max |shift| x,y,z in {name}: {largest[0]:.3f} {largest[1]:.3f} {largest[2]:.3f}")
+        print(f"  rotation > {args.outlier_deg:g} deg: {int(np.sum(rotation > args.outlier_deg))} particles")
+        for i in np.argsort(rotation)[::-1][:args.worst]:
+            t = tags[i]
+            print(f"    tag {t:5d}  rotation {rotation[i]:6.2f}  shift {shift[i]:5.2f}  "
+                  f"CC {a[t][9]:.3f} / {b[t][9]:.3f}")
 
 
 if __name__ == "__main__":
