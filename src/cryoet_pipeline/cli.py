@@ -154,13 +154,33 @@ DEFAULT_DOWNLOAD_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 def init(
     frames: Annotated[
         Path,
-        typer.Option(help="Directory containing multiframe MRC files."),
-    ],
-    mdocs: Annotated[
-        Path,
-        typer.Option(help="Directory containing SerialEM .mdoc files."),
+        typer.Option(help="Directory containing the multiframe movies (MRC or TIFF)."),
     ],
     out: Annotated[Path, typer.Option(help="Project output directory.")],
+    mdocs: Annotated[
+        Path | None,
+        typer.Option(help="Directory containing SerialEM .mdoc files."),
+    ] = None,
+    frames_pattern: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Instead of --mdocs: a regular expression matched against each whole "
+                "movie file name, with the named groups series, tilt and angle, e.g. "
+                r"'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'."
+            ),
+        ),
+    ] = None,
+    pixel_size: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help=(
+                "Raw movie pixel size in angstrom. Read from the MRC headers when "
+                "omitted; required for TIFF movies, which carry none."
+            ),
+        ),
+    ] = None,
     tilt_series: Annotated[
         list[str],
         typer.Option("--tilt-series", help="Tilt-series ids to include in the project."),
@@ -172,9 +192,15 @@ def init(
 ) -> None:
     """Validate local inputs and write project manifests."""
 
+    if (mdocs is None) == (frames_pattern is None):
+        raise typer.BadParameter(
+            "give exactly one of --mdocs and --frames-pattern", param_hint="mdocs"
+        )
     config = ProjectConfig(
         frames_dir=frames,
         mdocs_dir=mdocs,
+        frames_pattern=frames_pattern,
+        raw_pixel_spacing_angstrom=pixel_size,
         output_dir=out,
         tilt_series=tilt_series,
         device=normalize_device(device),
@@ -182,7 +208,16 @@ def init(
     result = initialize_project(config)
     typer.echo(f"wrote {result.project_path}")
     for path in result.manifest_paths:
-        typer.echo(f"wrote {path}")
+        manifest = TiltSeriesManifest.model_validate_json(path.read_text())
+        angles = manifest.tilt_angles_deg
+        frames_per_tilt = ", ".join(str(n) for n in sorted(manifest.num_subframes_set))
+        # Printed so that a pattern which matched the wrong part of the names
+        # shows up here, as a strange angle range or tilt count, before any job.
+        typer.echo(
+            f"wrote {path}: {manifest.num_tilts} tilts, {min(angles):g} to "
+            f"{max(angles):g} deg, {frames_per_tilt} frames per tilt, "
+            f"{manifest.raw_pixel_spacing_angstrom:g} A/px"
+        )
 
 
 @app.command("import-tilt-stack")

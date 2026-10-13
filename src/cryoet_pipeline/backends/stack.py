@@ -122,7 +122,10 @@ def write_tilt_angles(manifest: TiltSeriesManifest, context: BackendContext) -> 
             "format": "imod_tlt",
             "tilt_series_id": manifest.tilt_series_id,
             "num_tilts": manifest.num_tilts,
-            "source_mdoc": str(manifest.source_mdoc),
+            "source_mdoc": (
+                str(manifest.source_mdoc) if manifest.source_mdoc is not None else None
+            ),
+            "source_frames_pattern": manifest.source_frames_pattern,
         },
         storage_role=StorageRole.EXPORT,
         retention_policy=RetentionPolicy.KEEP,

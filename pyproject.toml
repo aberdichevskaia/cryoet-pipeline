@@ -22,6 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 io = [
   "mrcfile>=1.5",
+  "tifffile>=2023.1",
   "zarr>=2.18",
 ]
 gpu = [

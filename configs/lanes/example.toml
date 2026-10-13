@@ -3,7 +3,7 @@
 # The values here are placeholders or generic starting values, not measurements.
 #
 # The order of the steps is fixed in scripts/run_series.py. This file chooses:
-#   [lane] input   - movies ("frames") or one assembled stack per tilt-series
+#   [lane] input   - movies ("frames", MRC or TIFF) or one assembled stack per tilt-series
 #   alignment      - gold beads or patch tracking (no gold): one of two blocks below
 #   [segment]      - present: membranes are segmented; delete it to skip
 #
@@ -18,12 +18,13 @@
 
 [lane]
 name = "my-lane-bin8"     # EDIT: any name, for you
-input = "frames"          # EDIT: "frames" (movies + mdocs) or "stack" (one MRC stack per tilt-series)
+input = "frames"          # EDIT: "frames" (movies + mdocs or file names) or "stack" (one MRC stack per tilt-series)
 variant = "bin8"          # label on every output from the tomogram on; keep it short
 
 [run]
 # EDIT: where the outputs go (a new folder per project), and the tilt-series
-# ids. An id is the mdoc name without ".mrc.mdoc" / ".mdoc".
+# ids. An id is the mdoc name without ".mrc.mdoc" / ".mdoc", or, with
+# [data] frames_pattern, the text its `series` group matches.
 project = "outputs/my-project"
 series = ["TS_01", "TS_02"]
 
@@ -57,24 +58,38 @@ sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
 
 [data]
 # EDIT. Paths are relative to the repository root.
-# input = "frames": two folders. The movie file names must match the
-# SubFramePath lines in the mdocs (only the file name counts, not the folder).
+# input = "frames": the movie folder, MRC (.mrc) or TIFF (.tif/.tiff), and
+# where the tilt angles come from - exactly one of:
+#   mdocs:          SerialEM mdocs. The movie file names must match their
+#                   SubFramePath lines (only the file name counts, not the folder).
+#   frames_pattern: no mdocs; the angles are read from the movie file names with
+#                   a regular expression matched against the whole name. Its named
+#                   groups say where the series id, the tilt number and the angle
+#                   are. Write it in single quotes, so TOML leaves the backslashes
+#                   alone. Without mdocs, also set pixel_size_angstrom (for TIFF
+#                   movies) and [align] tilt_axis_angle.
+#                   `cryoet init` prints the tilts and angle range it found per
+#                   series: check them before the jobs run.
 frames = "data/my-dataset/frames"
 mdocs = "data/my-dataset/mdocs"
+# frames_pattern = 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
+# The raw movie pixel size in A. Read from the MRC movie headers when unset;
+# TIFF movies have none, so for them it is required.
+# pixel_size_angstrom = 1.35
 # input = "stack": one file each per tilt-series; {series} is replaced by the id.
 # mdoc = "data/my-dataset/mdocs/{series}.mrc.mdoc"
 # stack = "data/my-dataset/stacks/{series}.mrc"
 
 [motion]
-# input = "frames" only. MRC movies only: TIFF and EER are not supported yet.
+# input = "frames" only. MRC and TIFF movies; EER is not supported yet.
 backend = "motioncor3"
 patch_x = 5
 patch_y = 5
 gpu = 0
 storage_policy = "working"
-# The pixel size in A given to MotionCor3. Left unset, it is the movies' MRC
-# header value. It does not change the tilt stack's pixel size, which comes from
-# the movie headers either way. Dose weighting is off in this backend, so
+# The pixel size in A given to MotionCor3. Left unset, it is the raw pixel size
+# from [data]: the movies' MRC header value, or pixel_size_angstrom. It does not
+# change the tilt stack's pixel size, which comes from there either way. Dose weighting is off in this backend, so
 # MotionCor3 uses it for little else; there is normally no reason to set it.
 # pixel_size_angstrom = 1.35
 # EDIT if your movies are not gain-corrected: the gain reference (MRC), and its
@@ -97,7 +112,7 @@ tomogram = 8
 [align]
 binning = 8               # coarse alignment; the same as [binning] tomogram is fine
 min_std_ratio = 0.2
-# tilt_axis_angle = 85.0  # only if the mdoc's RotationAngle is wrong
+# tilt_axis_angle = 85.0  # if the mdoc's RotationAngle is wrong; required without mdocs
 
 [qc_coarse]
 preview_binning = 16

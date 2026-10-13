@@ -784,3 +784,64 @@ def _write_mrc(path: Path, data: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with mrcfile.new(path, overwrite=True) as mrc:
         mrc.set_data(data)
+
+
+def test_motioncor3_is_given_a_tiff_movie_as_tiff(tmp_path: Path) -> None:
+    import tifffile
+
+    movie_path = tmp_path / "frames" / "tomogram_1_0_0.0.tif"
+    movie_path.parent.mkdir()
+    tifffile.imwrite(movie_path, np.ones((3, 4, 6), dtype=np.uint16), photometric="minisblack")
+    executable = tmp_path / "MotionCor3"
+    executable.touch()
+    captured: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        captured.append(list(command))
+        _write_mrc(Path(command[command.index("-OutMrc") + 1]), np.ones((4, 6), np.float32))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CUDA,
+        parameters={"motioncor3_executable": executable},
+    )
+    artifact = MotionCor3MotionCorrectionBackend(fake_runner).correct(
+        _manifest(movie_path, num_subframes=3), context
+    )[0]
+
+    (command,) = captured
+    assert "-InMrc" not in command
+    assert command[command.index("-InTiff") + 1] == str(movie_path.resolve())
+    # A TIFF has no header pixel size: MotionCor3 gets the manifest's.
+    assert command[command.index("-PixSize") + 1] == "1.35"
+    assert artifact.shape == (4, 6)
+
+
+def test_average_backend_reads_a_tiff_movie(tmp_path: Path) -> None:
+    import tifffile
+
+    movie_path = tmp_path / "movie.tif"
+    frames = np.stack([np.full((4, 6), value, dtype=np.uint16) for value in (1, 2, 6)])
+    tifffile.imwrite(movie_path, frames, photometric="minisblack")
+    context = BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU)
+
+    artifact = AverageMotionCorrectionBackend().correct(
+        _manifest(movie_path, num_subframes=3), context
+    )[0]
+
+    with mrcfile.open(artifact.path, permissive=True) as corrected:
+        np.testing.assert_allclose(corrected.data, np.full((4, 6), 3.0))
+
+
+def test_a_tiff_movie_with_another_frame_count_is_refused(tmp_path: Path) -> None:
+    import tifffile
+
+    movie_path = tmp_path / "movie.tif"
+    tifffile.imwrite(movie_path, np.ones((3, 4, 6), dtype=np.uint16), photometric="minisblack")
+    context = BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU)
+
+    with pytest.raises(ValueError, match="declares 5 frames, the movie has 3"):
+        AverageMotionCorrectionBackend().correct(_manifest(movie_path, num_subframes=5), context)

@@ -28,6 +28,7 @@ from cryoet_pipeline.models import (
     TiltImage,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.movies import MovieFormat, inspect_movie, movie_format, read_movie
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
 from cryoet_pipeline.runtime import DevicePreference
 from cryoet_pipeline.storage import ArtifactFormat
@@ -458,9 +459,10 @@ def _motioncor3_command(
     # MotionCor3 runs in its work directory, not ours, so a relative path here
     # (a manifest written by `init --frames data/...`, a relative --out) would
     # be looked up from the wrong place: "cannot open stack file".
+    input_flag = "-InTiff" if movie_format(input_path) is MovieFormat.TIFF else "-InMrc"
     command = [
         str(settings.executable),
-        "-InMrc",
+        input_flag,
         str(input_path.resolve()),
         "-OutMrc",
         str(output_path.resolve()),
@@ -506,8 +508,7 @@ def _read_motioncor3_projection(
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"MotionCor3 did not produce a valid MRC output: {exc}") from exc
 
-    input_info = validate_complete_mrc(input_path)
-    expected_shape = tuple(input_info.shape[-2:])
+    expected_shape = inspect_movie(input_path).shape[1:]
     with mrcfile.open(output_path, permissive=True) as mrc:
         data = np.asarray(mrc.data)
         if data.ndim == 3 and data.shape[0] == 1:
@@ -636,13 +637,7 @@ def _require_available_paths(paths: Sequence[Path], *, overwrite: bool) -> None:
 
 
 def _read_movie_frames(path: Path) -> NDArray[np.float32]:
-    with mrcfile.open(path, permissive=True) as mrc:
-        data = np.asarray(mrc.data, dtype=np.float32)
-    if data.ndim != 3:
-        raise ValueError(
-            f"expected multiframe MRC with shape (frames, y, x), got {data.shape}"
-        )
-    return data
+    return np.asarray(read_movie(path), dtype=np.float32)
 
 
 def _estimate_frame_shifts(frames: NDArray[np.float32]) -> NDArray[np.float64]:
@@ -689,17 +684,11 @@ def _apply_shifts_and_average(
 
 
 def _average_movie_frames(path: Path) -> NDArray[np.float32]:
-    with mrcfile.open(path, permissive=True) as mrc:
-        data = np.asarray(mrc.data)
-        if data.ndim != 3:
-            raise ValueError(
-                f"expected multiframe MRC with shape (frames, y, x), got {data.shape}"
-            )
-
-        projection = np.zeros(data.shape[1:], dtype=np.float32)
-        for frame in data:
-            np.add(projection, frame, out=projection, casting="unsafe")
-        projection /= data.shape[0]
+    data = read_movie(path)
+    projection = np.zeros(data.shape[1:], dtype=np.float32)
+    for frame in data:
+        np.add(projection, frame, out=projection, casting="unsafe")
+    projection /= data.shape[0]
     return cast(NDArray[np.float32], projection)
 
 
@@ -717,20 +706,15 @@ def _validate_manifest_movies(manifest: TiltSeriesManifest) -> None:
             continue
 
         try:
-            info = validate_complete_mrc(path)
+            info = inspect_movie(path)
         except (OSError, ValueError) as exc:
             issues.append(str(exc))
             continue
 
-        if len(info.shape) != 3:
-            issues.append(
-                f"{path}: expected multiframe MRC with shape (frames, y, x), "
-                f"got {info.shape}"
-            )
-        elif image.num_subframes is not None and info.shape[0] != image.num_subframes:
+        if image.num_subframes is not None and info.shape[0] != image.num_subframes:
             issues.append(
                 f"{path}: manifest declares {image.num_subframes} frames, "
-                f"MRC header declares {info.shape[0]}"
+                f"the movie has {info.shape[0]}"
             )
 
     if issues:

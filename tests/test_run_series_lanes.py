@@ -281,3 +281,45 @@ def test_the_environment_a_stage_needs_comes_from_its_commands():
     plan = submit_lanes.plan(config, Path("lane.toml"))
     env = {stage.name: stage.env for stage in plan.stages}
     assert env == {"cpu": frozenset(), "gpu": frozenset({"PYTOMO_MP_DIR"})}
+
+
+def _named_frames_lane() -> dict:
+    """The Gag lane with its mdocs swapped for tilt metadata from the file names."""
+    config = copy.deepcopy(_lane("gag-bin8"))
+    del config["data"]["mdocs"]
+    config["data"]["frames_pattern"] = (
+        r"tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif"
+    )
+    config["data"]["pixel_size_angstrom"] = 1.35
+    return config
+
+
+def test_without_mdocs_the_tilt_axis_must_be_given():
+    config = _named_frames_lane()
+    config["align"].pop("tilt_axis_angle", None)
+    with pytest.raises(SystemExit, match="tilt_axis_angle must be set"):
+        run_series.build_steps(config, Path("p"), "1")
+    config["align"]["tilt_axis_angle"] = 85.0
+    _assert_valid_commands(config, "named-frames")
+
+
+def test_init_reads_the_names_when_there_are_no_mdocs():
+    config = _named_frames_lane()
+    new = submit_lanes.Plan(Path("lane.toml"), "outputs/__no_such_project__", ("1",), ())
+    command = submit_lanes.init_command(config, new)
+    assert "--mdocs" not in command
+    assert command[command.index("--frames-pattern") + 1] == config["data"]["frames_pattern"]
+    assert command[command.index("--pixel-size") + 1] == "1.35"
+    # Every flag it renders is one init accepts.
+    known, required = _options(typer.main.get_command(cli.app).commands["init"])
+    flags = {part for part in command if part.startswith("--")}
+    assert flags <= known and required <= flags
+
+
+def test_mdocs_and_a_frames_pattern_together_are_refused():
+    config = _named_frames_lane()
+    config["data"]["mdocs"] = "data/x/mdocs"
+    config["align"]["tilt_axis_angle"] = 85.0
+    lane = submit_lanes.Plan(Path("lane.toml"), "outputs/__no_such_project__", ("1",), ())
+    found = submit_lanes.problems(config, lane, ())
+    assert any("exactly one of mdocs and frames_pattern" in problem for problem in found)

@@ -23,7 +23,8 @@ what the config's `$VAR` values name (PYTOMO_MP_DIR, MOTIONCOR3, MEMBRAIN_EXE,
 OVERWRITE=1 in the environment reaches lane.sbatch the same way.
 
 For a frames lane whose project does not exist yet, `cryoet init` runs here
-first, from [data] frames and mdocs. It is never run on an existing project:
+first, from [data] frames and either mdocs or frames_pattern (tilt metadata
+read from the movie file names). It is never run on an existing project:
 it starts the registry empty. Not done here: downloading data and caching EMDB
 maps — see the README.
 
@@ -35,6 +36,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -165,7 +167,14 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
         return found
     data = cfg.get("data", {})
     if init_command(cfg, lane) is not None:
+        if ("mdocs" in data) == ("frames_pattern" in data):
+            found.append(
+                "[data] needs exactly one of mdocs and frames_pattern; init reads "
+                "the tilt metadata from one of them"
+            )
         for key in ("frames", "mdocs"):
+            if key == "mdocs" and "mdocs" not in data:
+                continue
             if not isinstance(data.get(key), str):
                 found.append(f"[data] {key} is not set; init needs it for a new project")
             elif not (ROOT / data[key]).is_dir():
@@ -195,12 +204,14 @@ def init_command(cfg: dict[str, Any], lane: Plan) -> list[str] | None:
     if (ROOT / lane.project / "artifacts.json").exists():
         return None
     data = cfg.get("data", {})
-    command = [
-        "cryoet", "init",
-        "--frames", str(data.get("frames")),
-        "--mdocs", str(data.get("mdocs")),
-        "--out", lane.project,
-    ]
+    command = ["cryoet", "init", "--frames", str(data.get("frames"))]
+    if "frames_pattern" in data:
+        command += ["--frames-pattern", str(data["frames_pattern"])]
+    else:
+        command += ["--mdocs", str(data.get("mdocs"))]
+    if "pixel_size_angstrom" in data:
+        command += ["--pixel-size", str(data["pixel_size_angstrom"])]
+    command += ["--out", lane.project]
     for series in lane.series:
         command += ["--tilt-series", series]
     return command
@@ -298,7 +309,7 @@ def main() -> int:
         print(f"# {lane.config}: {lane.project}, {len(lane.series)} series")
         init = init_command(cfg, lane)
         if init is not None:
-            print(("would run: " if args.dry_run else "") + " ".join(init))
+            print(("would run: " if args.dry_run else "") + shlex.join(init))
             if not args.dry_run:
                 subprocess.run(init, cwd=ROOT, check=True)
         ids = submit(lane, stages, args.dry_run)

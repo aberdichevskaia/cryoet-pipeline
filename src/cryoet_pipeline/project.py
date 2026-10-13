@@ -2,20 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from math import isclose
 from pathlib import Path
 from typing import Any
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.ingest import parse_mdoc_text, with_raw_pixel_spacing
+from cryoet_pipeline.ingest.frame_names import compile_frame_pattern, manifest_from_frame_names
 from cryoet_pipeline.models import ProjectConfig, TiltSeriesManifest
-from cryoet_pipeline.mrc_validation import validate_complete_mrc
-
-EXPECTED_TILTS_PER_SERIES = 41
-EXPECTED_SUBFRAMES_BY_SERIES = {
-    "TS_01": 8,
-    "TS_43": 10,
-}
+from cryoet_pipeline.movies import common_pixel_spacing, inspect_movie
 
 
 @dataclass(frozen=True)
@@ -28,6 +22,9 @@ class InitResult:
 def initialize_project(config: ProjectConfig) -> InitResult:
     """Validate local input data and write project manifests."""
 
+    if config.frames_pattern is not None:
+        # A malformed pattern is refused before any folder is listed.
+        compile_frame_pattern(config.frames_pattern)
     manifests = [
         load_tilt_series_manifest(config, tilt_series_id)
         for tilt_series_id in config.tilt_series
@@ -67,6 +64,15 @@ def initialize_project(config: ProjectConfig) -> InitResult:
 
 
 def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> TiltSeriesManifest:
+    if config.frames_pattern is not None:
+        return manifest_from_frame_names(
+            frames_dir=config.frames_dir,
+            pattern=config.frames_pattern,
+            tilt_series_id=tilt_series_id,
+            raw_pixel_spacing_angstrom=config.raw_pixel_spacing_angstrom,
+        )
+
+    assert config.mdocs_dir is not None
     mdoc_path = config.mdocs_dir / f"{tilt_series_id}.mrc.mdoc"
     if not mdoc_path.exists():
         raise FileNotFoundError(f"missing mdoc file for {tilt_series_id}: {mdoc_path}")
@@ -77,26 +83,42 @@ def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> Til
         tilt_series_id=tilt_series_id,
         frames_dir=config.frames_dir,
     )
-    return with_raw_pixel_spacing(
-        manifest,
-        _raw_frame_pixel_spacing_angstrom(manifest),
-    )
+    _require_local_frame_files(manifest)
+    pixel_spacing = config.raw_pixel_spacing_angstrom
+    if pixel_spacing is None:
+        pixel_spacing = common_pixel_spacing(
+            tilt_series_id,
+            [image.local_frame_file for image in manifest.images
+             if image.local_frame_file is not None],
+        )
+    return with_raw_pixel_spacing(manifest, pixel_spacing)
 
 
 def validate_tilt_series_manifest(manifest: TiltSeriesManifest) -> None:
-    if manifest.num_tilts != EXPECTED_TILTS_PER_SERIES:
+    """Every movie is there and has the frame count the metadata declares.
+
+    Nothing about the dataset is expected beyond that: the number of tilts and
+    of frames per tilt are the data's own.
+    """
+
+    _require_local_frame_files(manifest)
+    mismatched = []
+    for image in manifest.images:
+        assert image.local_frame_file is not None
+        frames = inspect_movie(image.local_frame_file).shape[0]
+        if frames != image.num_subframes:
+            mismatched.append(
+                f"{image.local_frame_file.name}: {frames} frames, "
+                f"metadata declares {image.num_subframes}"
+            )
+    if mismatched:
         raise ValueError(
-            f"{manifest.tilt_series_id}: expected {EXPECTED_TILTS_PER_SERIES} tilts, "
-            f"found {manifest.num_tilts}"
+            f"{manifest.tilt_series_id}: {len(mismatched)} movies have another frame "
+            f"count than declared; first: {mismatched[0]}"
         )
 
-    expected_subframes = EXPECTED_SUBFRAMES_BY_SERIES.get(manifest.tilt_series_id)
-    if expected_subframes is not None and manifest.num_subframes_set != {expected_subframes}:
-        raise ValueError(
-            f"{manifest.tilt_series_id}: expected {expected_subframes} frames per tilt, "
-            f"found {sorted(manifest.num_subframes_set)}"
-        )
 
+def _require_local_frame_files(manifest: TiltSeriesManifest) -> None:
     local_frame_files: list[Path] = []
     for image in manifest.images:
         if image.local_frame_file is None:
@@ -112,41 +134,6 @@ def validate_tilt_series_manifest(manifest: TiltSeriesManifest) -> None:
             f"{manifest.tilt_series_id}: {len(missing_files)} frame files are missing; "
             f"first: {preview}"
         )
-
-
-def _raw_frame_pixel_spacing_angstrom(manifest: TiltSeriesManifest) -> float:
-    spacings: list[tuple[Path, float]] = []
-    for image in manifest.images:
-        path = image.local_frame_file
-        if path is None:
-            raise ValueError(
-                f"{manifest.tilt_series_id} z={image.z_value}: "
-                "missing local frame file"
-            )
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"{manifest.tilt_series_id} z={image.z_value}: "
-                f"frame file not found: {path}"
-            )
-        info = validate_complete_mrc(path)
-        if info.pixel_spacing_angstrom is None:
-            raise ValueError(f"raw MRC header has no pixel spacing: {path}")
-        spacings.append((path, info.pixel_spacing_angstrom))
-
-    reference_path, reference_spacing = spacings[0]
-    inconsistent = [
-        (path, spacing)
-        for path, spacing in spacings[1:]
-        if not isclose(spacing, reference_spacing, rel_tol=1e-5, abs_tol=1e-6)
-    ]
-    if inconsistent:
-        path, spacing = inconsistent[0]
-        raise ValueError(
-            f"{manifest.tilt_series_id}: inconsistent raw MRC pixel spacing; "
-            f"{reference_path} has {reference_spacing} angstrom, "
-            f"{path} has {spacing} angstrom"
-        )
-    return reference_spacing
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

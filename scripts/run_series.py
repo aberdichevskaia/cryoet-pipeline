@@ -237,6 +237,13 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
 
     if source == "frames":
         motion = _require(cfg, "motion", ("backend",), "input = 'frames'")
+        if "frames_pattern" in cfg.get("data", {}) and align.get("tilt_axis_angle") is None:
+            # Without mdocs nothing records the tilt-axis rotation, and
+            # align-tilt-series would refuse only after motion correction ran.
+            raise SystemExit(
+                "[align] tilt_axis_angle must be set with [data] frames_pattern: "
+                "without mdocs nothing else gives the tilt axis"
+            )
         entry: list[tuple[str, Command]] = [
             # Motion correction, then the stack from the corrected sums.
             (

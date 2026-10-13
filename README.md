@@ -296,6 +296,26 @@ cryoet init \
   --device auto
 ```
 
+Movies may be MRC or TIFF (`tifffile` must be installed for TIFF). A local
+dataset without mdocs is read from its file names instead: `--frames-pattern`
+is a regular expression matched against each whole file name, whose named
+groups `series`, `tilt` and `angle` give the series id, the tilt number (the
+images are ordered by it) and the tilt angle. TIFF headers carry no pixel size,
+so give it with `--pixel-size`; without mdocs, `align-tilt-series` also needs the tilt
+axis (`--tilt-axis-angle`, `[align] tilt_axis_angle` in a lane config).
+
+```bash
+cryoet init \
+  --frames data/my-dataset/frames \
+  --frames-pattern 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif' \
+  --pixel-size 1.35 \
+  --tilt-series 1 --tilt-series 2 \
+  --out outputs/my-dataset
+```
+
+`init` prints the tilt count, angle range and frames per tilt it found for each
+series; check them against what was collected before running anything.
+
 ### Depositions without raw frames
 
 Some depositions ship one already-assembled stack per tilt-series rather than

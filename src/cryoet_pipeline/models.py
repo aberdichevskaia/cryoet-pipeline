@@ -103,10 +103,27 @@ class ProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     frames_dir: Path
-    mdocs_dir: Path
+    # Where the per-tilt metadata comes from: SerialEM mdocs, or, without them,
+    # the movie file names, read with a regular expression whose named groups
+    # `series`, `tilt` and `angle` are the series id, the tilt number and the
+    # tilt angle. Exactly one of the two.
+    mdocs_dir: Path | None = None
+    frames_pattern: str | None = None
+    # The raw movie pixel size. Left unset, it is read from the MRC movie
+    # headers; TIFF movies have none, so for them it is required.
+    raw_pixel_spacing_angstrom: float | None = Field(default=None, gt=0)
     output_dir: Path
     tilt_series: list[str] = Field(default_factory=lambda: ["TS_01", "TS_43"])
     device: DevicePreference = DevicePreference.AUTO
+
+    @model_validator(mode="after")
+    def require_one_metadata_source(self) -> ProjectConfig:
+        if (self.mdocs_dir is None) == (self.frames_pattern is None):
+            raise ValueError(
+                "give exactly one of mdocs_dir (SerialEM mdocs) and frames_pattern "
+                "(tilt metadata from the movie file names)"
+            )
+        return self
 
     @field_validator("tilt_series")
     @classmethod
@@ -122,7 +139,7 @@ class ProjectConfig(BaseModel):
 
 
 class TiltImage(BaseModel):
-    """One tilt image entry from a SerialEM `.mdoc` file."""
+    """One tilt image: an entry of a SerialEM `.mdoc` file, or one movie file name."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -146,7 +163,10 @@ class TiltSeriesManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tilt_series_id: str
-    source_mdoc: Path
+    # What the per-tilt metadata was read from: the mdoc, or the regular
+    # expression the movie file names were matched with.
+    source_mdoc: Path | None = None
+    source_frames_pattern: str | None = None
     images: list[TiltImage]
     mdoc_pixel_spacing_angstrom: float | None = None
     raw_pixel_spacing_angstrom: float | None = None

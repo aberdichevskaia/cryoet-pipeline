@@ -1725,3 +1725,55 @@ side of the FSC has never shown it.
 benchmarking repository. None of these three is the main cause there; they were
 turned up while looking for it, and the search is what makes them measured
 rather than suspected.
+
+## 22. An agent that reads a data folder and says how to start on it
+
+*Opened 2026-10-13, as an agent task by decision.* Local datasets arrive as a
+folder of files whose names follow a convention of their own and whose format
+is not stated anywhere. Given such a folder, the agent works out three things
+and proposes them for the user to confirm:
+
+1. **The naming convention**: which part of a name is the series id, which the
+   tilt number, which the angle, and which is noise to ignore (a date, a
+   `_fractions` suffix). The output is a `frames_pattern` with the named groups
+   `series`, `tilt` and `angle`, what `cryoet init --frames-pattern` takes today,
+   or the matching of names to mdocs when there are mdocs.
+2. **The format**: MRC, TIFF or EER, and what one file holds. It can be the
+   frames of one tilt (several pages or sections), one already-summed image of
+   one tilt, or a whole assembled tilt series. Suffixes, the TIFF page counts
+   and the MRC section counts tell these apart. `movies.py` reads the first two
+   of those already.
+3. **The step to start from**, which follows from the format. Frames start at
+   motion correction (`[lane] input = "frames"`, first stage from
+   `prepare-tilt-series`). An assembled stack starts at `import-tilt-stack`
+   (`input = "stack"`). One summed image per tilt has no entry yet: it would
+   need a stack assembled without motion correction. EER is not read yet. Where
+   there is no entry, the agent says so instead of bending the data into one.
+
+The proposal is a config fragment (`[lane] input`, `[data]`, `[run] series`,
+the first stage) plus what it implies: series found, tilts per series, angle
+range and step, frames per tilt. The user confirms it before anything runs,
+exactly like the planned agent-authored EMPIAR layouts. A wrong reading
+mislabels tilts without any error: alignment and reconstruction run on any
+angle list. When two readings fit the names, the agent lists both and does not
+pick one. It checks against the data where it can: frame counts per file and,
+when present, acquisition timestamps (TIFF tags; file mtimes only if the files
+were not copied) order the tilts independently of the names. A proposed
+tilt-number field can then be tested rather than restated.
+
+**The first dataset, and what it already shows.** `frames.renamed.top1to5/`:
+`tomogram_039_001_-42.0.tif` to `tomogram_039_029_+42.0.tif`, then series
+`096` (the two seen so far): TIFF frames, no mdocs. Four traps in one folder:
+
+- the angle is signed, `+03.0`. The first pattern written for it by hand had
+  no `+`, matched only the 15 tilts from `-42.0` to `-00.0`, and would have
+  reconstructed from half of every series. `init` now refuses a folder in which
+  files with the frames' own suffix do not match the pattern
+  (`ingest/frame_names.py`), but a pattern can still be wrong in ways that match
+  every file;
+- zero is written `-00.0`;
+- the series ids carry leading zeros (`039`); they are kept verbatim;
+- the tilt number follows the angle (`001` is −42°), whereas in EMPIAR-10164's
+  identically shaped names (`TS_01_002_-3.0.mrc`) it is the acquisition order.
+  Here the dose order is not in the names at all. Nothing downstream needs it
+  today, since dose weighting is off, but an agent must not assume either meaning.
