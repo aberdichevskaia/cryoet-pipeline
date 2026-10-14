@@ -250,6 +250,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
                 "prepare-tilt-series",
                 ["prepare-tilt-series", *common,
                  *flag("motion-backend", motion["backend"]),
+                 # MotionCor3 finds the GPU itself; the flag only tells the
+                 # backend there is one. Left to auto, the device is looked up
+                 # through torch, which refused a run on an MDC node whose GPU
+                 # nvidia-smi saw but torch did not (job 3609935, 2026-10-14).
+                 *(flag("device", "cuda") if motion["backend"] == "motioncor3" else []),
                  *flag("storage-policy", motion.get("storage_policy")),
                  *flag("motioncor3-executable", exe.get("motioncor3")),
                  *flag("motioncor3-gpu", motion.get("gpu")),
