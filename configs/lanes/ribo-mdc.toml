@@ -14,24 +14,27 @@ variant = "bin8"          # label applied from the stack rebuild onward
 project = "outputs/ribo-mdc"
 series = ["TS_0306", "TS_0463", "TS_0493", "TS_0564", "TS_0623"]
 
-# The partition and QoS names are NOT known yet: `sinfo -s` on max lists them.
-# SET_ME is left in on purpose, so that sbatch refuses the job at submission
-# rather than sending it to a default partition that may have no GPU.
-# The GPU stage needs no MIG slice here: max has whole A40s (46 GB), and the
-# bin8 ribosome pick already fitted in 20 GB in Munich.
+# Partitions from `sinfo -s` on max (2026-10-14): `normal` is the default, `gpu`
+# the GPU nodes, both with a 7-day limit; no QoS is asked for.
+#
+# The GPU type is pinned to the A40 (45 GB, compute 8.6), the most common card
+# there (`sinfo -p gpu -o "%N %G"`). An unpinned request could land on a T4
+# (15 GB) or a 16 GB V100, while the bin8 ribosome pick has only been run in a
+# 20 GB MIG slice in Munich. CUDA 13, which the env's torch is built for, also
+# dropped Volta (compute 7.0); not tried on these nodes.
 [[run.stage]]
 name = "cpu"
 from = "import-tilt-stack"
 until = "reconstruct-tomogram"
 time = "10:00:00"
-sbatch = ["--partition=SET_ME", "--cpus-per-task=8", "--mem=32G"]
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
 
 [[run.stage]]
 name = "gpu"
 from = "prepare-template"
 until = "extract-particles"
 time = "16:00:00"
-sbatch = ["--partition=SET_ME", "--gres=gpu:1", "--cpus-per-task=8", "--mem=64G"]
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 [data]
 # Absolute: the data sit beside the clone, not inside it. {series} is per series.
