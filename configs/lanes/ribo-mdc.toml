@@ -66,7 +66,21 @@ tomogram = 8              # 9.78 A/px, Nyquist 19.6 A, 512^2, ribosome ~31 px
 
 [align]
 binning = 8               # coarse alignment works on a reduced stack
-min_std_ratio = 0.2
+# Raised from ribo-bin8's 0.2, which excluded nothing on TS_0306. There the
+# per-view std over the median falls smoothly from 1.13 near +9 deg (the
+# lamella's pretilt, judging by where the curve peaks and by the -52..+68 range
+# being centred there) to ~0.7 at both ends; thicker ice gives less contrast.
+# Patch tracking failed at the ends: fine alignment found 5.7-11.8 nm residuals
+# on -52..-42 and +62..+68 against ~2 nm in the middle, the views look black in
+# 3dmod, and 227/1525 points over 5 px exceeded max_pruned_fraction.
+#
+# 0.84 drops -52..-42 (0.69-0.84) and +60..+68 (0.70-0.82), 11 of 61 views, all
+# about 50 deg or more from the lamella normal; -40 (0.864, 3.2 nm) and +58
+# (0.842) stay. It was FITTED to TS_0306's residuals, on a curve with no gap in
+# it, so it is not yet a rule: check per series that the cut falls where the
+# fine-alignment residuals rise, since a thicker or thinner lamella puts the
+# same ratio at another angle.
+min_std_ratio = 0.84
 # Deliberately not set, but NOT because coarse alignment searches for it — it does
 # not. With no override, _tilt_axis_angle takes rotation_angle_deg from the manifest
 # and returns angle - 90, and that value goes to `tiltxcorr -rotation` as an input.
