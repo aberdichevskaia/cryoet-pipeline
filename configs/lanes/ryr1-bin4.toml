@@ -2,10 +2,6 @@
 # TIFF frames without mdocs, with gold beads and membrane segmentation; tomograms
 # at 6.72 A/px. Aimed at a ~20 A average of 5 tomograms, not at high resolution.
 #
-# DRAFT. It cannot run until every line marked OPEN is filled in, which is why it
-# sits in configs/lanes/drafts/, outside the lane tests: run_series refuses a lane
-# without mdocs that has no tilt axis. Move it to configs/lanes/ once complete.
-#
 # What is known about the data, and from where (2026-10-14):
 #   frames  5 series (039 096 097 125 161) x 29 tilts, -42..+42 deg in 3-degree
 #           steps. The tilt number in the names follows the angle, not the
@@ -114,14 +110,17 @@ tomogram = 4
 [align]
 binning = 4
 min_std_ratio = 0.2
-# OPEN: the tilt-axis rotation, in degrees, as IMOD counts it (an mdoc header's
-# "Tilt axis angle", RotationAngle - 90). Without mdocs it comes from nowhere
-# else: SerialEM keeps it in the mdoc, not in the frames. An estimate by eye from
-# the motion-corrected series is enough to start from: fine alignment runs
-# tiltalign with RotOption 1, which solves the rotation from the beads. The sign
-# (or 180 degrees) is not visible that way and sets the hand of the tomogram:
-# check it on the first one.
-# tilt_axis_angle = OPEN
+# The tilt-axis rotation, in degrees, as IMOD counts it from the Y axis (an mdoc
+# header's "Tilt axis angle", RotationAngle - 90). There are no mdocs: read by eye
+# on the motion-corrected stack of 039 on 2026-10-14, the beads move vertically,
+# so the axis is horizontal, +-90. Close is enough, as fine alignment runs
+# tiltalign with RotOption 1, which solves the rotation from the beads.
+# The sign is NOT known: +90 and -90 are the same line in opposite directions,
+# and they give mirror-image tomograms. +90 is a choice, not a measurement; check
+# the hand on the first tomogram (RyR1 is chiral: its template should match
+# better than its mirror image), and if it is wrong, set -90 and rerun from
+# the cpu stage.
+tilt_axis_angle = 90.0
 
 [qc_coarse]
 preview_binning = 8

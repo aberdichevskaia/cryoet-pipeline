@@ -1792,7 +1792,7 @@ returns a table of `emdb_id`, `title`, `resolution`,
 `https://www.ebi.ac.uk/emdb/api/entry/EMD-<id>` returns the whole entry: map box
 and pixel, recommended contour, symmetry, authors and citation, sample and
 organism, microscope, detector and defocus range. The template for the RyR1
-lane (configs/lanes/drafts/ryr1-bin4.toml) was found this way by hand in a few
+lane (configs/lanes/ryr1-bin4.toml) was found this way by hand in a few
 minutes: "ryanodine AND receptor" matched more than the 400 entries read, most of
 them single-particle maps and local refinements. The subtomogram averages among
 them were one in situ series of 17 maps (apo and primed states, consensus, class
