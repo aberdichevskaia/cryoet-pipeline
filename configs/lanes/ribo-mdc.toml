@@ -189,7 +189,16 @@ surfaces_to_analyze = 1
 # limit is sized for. It was not free to leave at 0.02: the run's largest
 # residual was 20.95 px, above the 20 px failure threshold, so without pruning
 # fine alignment ends in `fail` rather than merely refusing to prune.
-max_pruned_fraction = 0.08
+#
+# Here three patches, not two: 3 / 25 = 0.12. TS_0493 (MDC run, 2026-10-14)
+# pruned 123/1350 = 9.1%, all of it in patches 4, 9 and 14 (mean residuals 9.0,
+# 8.0 and 4.6 nm against 0.5-2.4 nm for the other 22), with no view-dependent
+# failure left after min_std_ratio. The three sit in one column of the grid,
+# image X ~313 binned px, and their residuals are almost all along Y. Patches 4
+# and 14 are also among the three worst in TS_0463, a different lamella, which
+# would happen by chance about 3% of the time: possibly something fixed on the
+# camera at ~2504 unbinned px. Not checked; averaging a raw stack would show it.
+max_pruned_fraction = 0.12
 
 [ctf]
 voltage_kv = 300.0
