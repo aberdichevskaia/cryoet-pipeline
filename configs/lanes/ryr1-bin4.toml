@@ -111,16 +111,16 @@ tomogram = 4
 binning = 4
 min_std_ratio = 0.2
 # The tilt-axis rotation, in degrees, as IMOD counts it from the Y axis (an mdoc
-# header's "Tilt axis angle", RotationAngle - 90). There are no mdocs: read by eye
-# on the motion-corrected stack of 039 on 2026-10-14, the beads move vertically,
-# so the axis is horizontal, +-90. Close is enough, as fine alignment runs
-# tiltalign with RotOption 1, which solves the rotation from the beads.
-# The sign is NOT known: +90 and -90 are the same line in opposite directions,
-# and they give mirror-image tomograms. +90 is a choice, not a measurement; check
-# the hand on the first tomogram (RyR1 is chiral: its template should match
-# better than its mirror image), and if it is wrong, set -90 and rerun from
-# the cpu stage.
-tilt_axis_angle = 90.0
+# header's "Tilt axis angle", RotationAngle - 90). There are no mdocs. Read by eye
+# on the motion-corrected stack of 039, the beads move vertically, so the axis is
+# horizontal; 039, 096, 097 and 125 were aligned from 90, and tiltalign (RotOption
+# 1) solved 84.0-84.1 on every one of them (2026-10-14). This is that solution,
+# the better start for 161 and any rerun.
+# The sign is NOT known: 84 and -96 are the same line in opposite directions,
+# and they give mirror-image tomograms. Check the hand on the first tomograms
+# (RyR1 is chiral: its template should match better than its mirror image), and
+# if it is wrong, set -96 and rerun from the cpu stage.
+tilt_axis_angle = 84.0
 
 [qc_coarse]
 preview_binning = 8
@@ -132,6 +132,11 @@ residual_warning_px = 2.0
 # ~30 px, close to the 37 px gag-bin8 tracks.
 seed_backend = "imod-autofidseed"
 track_backend = "imod-beadtrack"
+# 161 is the exception: at tracking binning 2 IMOD 5.1.12's beadtrack, run by
+# autofidseed, segfaults on it (status 139, on two nodes, 2026-10-14), while the
+# other four series track. At binning 3 (5.04 A/px, a ~20 px bead) 161 seeds,
+# tracks and aligns with every QC passing. A lane cannot set a value per series,
+# so 161's cpu stage ran from a copy of this file differing only in that line.
 tracking_binning = 2
 fiducial_diameter_nm = 10.0
 
