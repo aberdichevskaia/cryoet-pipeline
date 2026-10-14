@@ -718,3 +718,22 @@ def _context(
         device=DevicePreference.CPU,
         parameters={**parameters, "imod_dir": imod_dir},
     )
+
+
+def test_the_raw_pixel_is_the_stacks_when_motion_correction_binned_it(
+    tmp_path: Path,
+) -> None:
+    from cryoet_pipeline.backends.fiducials import _raw_pixel_spacing
+
+    context = BackendContext(output_dir=tmp_path, device=DevicePreference.CPU)
+    stack = _stack_artifact(tmp_path, np.zeros((4, 8, 8), dtype=np.float32))
+    # The manifest's movies are at 0.675 A; MotionCor3 -FtBin 2 sums are at 1.35.
+    binned = stack.model_copy(
+        update={"pixel_spacing_angstrom": 1.35,
+                "parameters": {**stack.parameters, "frame_binning": 2}}
+    )
+    assert _raw_pixel_spacing(_manifest(), binned, context) == 1.35
+    # The same 1.35 A without the recorded binning is a stale stack, as before.
+    stale = stack.model_copy(update={"pixel_spacing_angstrom": 1.35})
+    with pytest.raises(ValueError, match="binned 1x; rerun tilt-series preparation"):
+        _raw_pixel_spacing(_manifest(), stale, context)

@@ -22,6 +22,11 @@ what the config's `$VAR` values name (PYTOMO_MP_DIR, MOTIONCOR3, MEMBRAIN_EXE,
 ...) before running; a missing one is refused here rather than in the job.
 OVERWRITE=1 in the environment reaches lane.sbatch the same way.
 
+[run] series may be left out, to take every series: a frames lane then gets the
+ones `init` finds, or, for a project that exists, the ones it has manifests for;
+a stack lane gets every series its [data] stack path matches, with {series} as
+the wildcard.
+
 For a frames lane whose project does not exist yet, `cryoet init` runs here
 first, from [data] frames and either mdocs or frames_pattern (tilt metadata
 read from the movie file names). It is never run on an existing project:
@@ -34,13 +39,14 @@ Disposable, like scripts/run_series.py.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import shlex
 import subprocess
 import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -85,16 +91,24 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
     project = run.get("project")
     if not isinstance(project, str) or not project:
         raise SystemExit(f"{config}: [run] project must be a path")
-    series = _string_list(run.get("series"), f"{config}: [run] series")
-    if not series:
-        raise SystemExit(f"{config}: [run] series is empty")
+    if run.get("series") is None:
+        # Every series. A stack lane finds them now, in its stack paths; a frames
+        # lane only once init has run (see project_series).
+        series = stack_series(cfg, config) if run_series.lane_input(cfg) == "stack" else ()
+    else:
+        series = _string_list(run.get("series"), f"{config}: [run] series")
+        if not series:
+            raise SystemExit(f"{config}: [run] series is empty; leave it out for every series")
     if len(set(series)) != len(series):
         raise SystemExit(f"{config}: [run] series lists a series twice")
     raw_stages = run.get("stage")
     if not isinstance(raw_stages, list) or not raw_stages:
         raise SystemExit(f"{config}: [run] has no [[run.stage]]")
 
-    chain = [name for name, _ in run_series.build_steps(cfg, Path(project), series[0])]
+    # The chain is the same for every series, and a frames lane may not know its
+    # series yet: any id renders it.
+    example = series[0] if series else "TS_X"
+    chain = [name for name, _ in run_series.build_steps(cfg, Path(project), example)]
     stages: list[Stage] = []
     for raw in raw_stages:
         where = f"{config}: [[run.stage]] {raw.get('name', '?')!r}"
@@ -124,7 +138,7 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
 
         # Every series renders the same $VARs; the paths differ, the variables do not.
         sliced = run_series.slice_steps(
-            run_series.build_steps(cfg, Path(project), series[0]), raw["from"], raw["until"]
+            run_series.build_steps(cfg, Path(project), example), raw["from"], raw["until"]
         )
         env = frozenset(
             match
@@ -143,6 +157,31 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
             )
         )
     return Plan(config=config, project=project, series=series, stages=tuple(stages))
+
+
+def stack_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
+    """Every series a stack lane's [data] stack path matches, {series} its wildcard."""
+
+    template = cfg.get("data", {}).get("stack")
+    if not isinstance(template, str) or template.count("{series}") != 1:
+        raise SystemExit(
+            f"{config}: without [run] series, [data] stack must contain {{series}} once, "
+            "so that the series can be found"
+        )
+    prefix, suffix = os.path.join(ROOT, template).split("{series}")
+    found = sorted(
+        path[len(prefix) : len(path) - len(suffix)]
+        for path in glob.glob(glob.escape(prefix) + "*" + glob.escape(suffix))
+    )
+    if not found:
+        raise SystemExit(f"{config}: no file matches [data] stack {template!r}")
+    return tuple(found)
+
+
+def project_series(project: str) -> tuple[str, ...]:
+    """The series a project has manifests for: what init wrote, or import-tilt-stack."""
+
+    return tuple(sorted(path.stem for path in (ROOT / project / "manifests").glob("*.json")))
 
 
 def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list[str]:
@@ -180,6 +219,8 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
             elif not (ROOT / data[key]).is_dir():
                 found.append(f"[data] {key}: no directory {ROOT / data[key]}")
         return found
+    if not lane.series and not project_series(lane.project):
+        found.append(f"{lane.project} exists but has no manifests to take every series from")
     manifests = ROOT / lane.project / "manifests"
     absent = [s for s in lane.series if not (manifests / f"{s}.json").is_file()]
     if absent:
@@ -243,10 +284,14 @@ def submit(lane: Plan, stages: tuple[Stage, ...], dry_run: bool) -> list[str]:
         ]
         # Through the environment rather than --export=VAR=value, whose list is
         # comma-separated: SERIES holds spaces, and nothing has to survive a parser.
+        if not lane.series and not dry_run:
+            raise SystemExit(f"{lane.config}: no series to submit")
         env = {
             "PROJECT": lane.project,
             "CONFIG": _repo_relative(lane.config),
-            "SERIES": " ".join(lane.series),
+            # Unknown in a dry run of a new project without [run] series: init,
+            # which finds them, has not run.
+            "SERIES": " ".join(lane.series) or "<every series init finds>",
             "FROM": stage.start,
             "UNTIL": stage.end,
         }
@@ -306,12 +351,18 @@ def main() -> int:
         return 1
 
     for cfg, lane, stages, _ in lanes:
-        print(f"# {lane.config}: {lane.project}, {len(lane.series)} series")
+        print(f"# {lane.config}: {lane.project}, "
+              + (f"{len(lane.series)} series" if lane.series else "every series"))
         init = init_command(cfg, lane)
         if init is not None:
             print(("would run: " if args.dry_run else "") + shlex.join(init))
             if not args.dry_run:
                 subprocess.run(init, cwd=ROOT, check=True)
+        if not lane.series and (init is None or not args.dry_run):
+            # Every series: the ones init just wrote manifests for, or the ones
+            # the project already has.
+            lane = replace(lane, series=project_series(lane.project))
+            print(f"  series: {' '.join(lane.series)}")
         ids = submit(lane, stages, args.dry_run)
         chained = zip(stages, ids, strict=True)
         print("  " + " -> ".join(f"{stage.name} {job}" for stage, job in chained))

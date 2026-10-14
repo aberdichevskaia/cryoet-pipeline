@@ -94,10 +94,59 @@ def test_tilt_numbers_are_ordered_as_numbers_not_text(tmp_path):
     assert manifest.tilt_angles_deg == [6.0, 27.0, 30.0]
 
 
-def test_a_tiff_series_needs_its_pixel_size(tmp_path):
+def test_a_tiff_without_resolution_tags_needs_its_pixel_size(tmp_path):
     _write_series(tmp_path, "1")
-    with pytest.raises(ValueError, match="TIFF movies\\s+never do"):
+    with pytest.raises(ValueError, match="no pixel size in its header"):
         manifest_from_frame_names(frames_dir=tmp_path, pattern=PATTERN, tilt_series_id="1")
+
+
+@pytest.mark.parametrize(
+    ("resolution", "unit", "expected"),
+    [
+        # Pixels per centimetre or per inch, as SerialEM writes them: IMOD 5.1.12's
+        # `header` reads both as 0.84 A, as it does the first local dataset.
+        (1e8 / 0.84, "CENTIMETER", 0.84),
+        (2.54e8 / 0.84, "INCH", 0.84),
+        # A print density, and a resolution without a unit: IMOD shows 1.0, its
+        # "unknown", for both.
+        (72.0, "INCH", None),
+        (1e8 / 0.84, "NONE", None),
+    ],
+)
+def test_the_tiff_pixel_size_is_read_from_its_resolution_tags(
+    tmp_path, resolution, unit, expected
+):
+    path = tmp_path / "movie.tif"
+    tifffile.imwrite(
+        path, np.zeros((3, 4, 5), np.uint8), photometric="minisblack",
+        resolution=(resolution, resolution), resolutionunit=unit,
+    )
+    spacing = inspect_movie(path).pixel_spacing_angstrom
+    if expected is None:
+        assert spacing is None
+    else:
+        assert spacing == pytest.approx(expected, rel=1e-6)
+
+
+def test_a_given_pixel_size_overrides_the_headers_and_is_noted(tmp_path):
+    for tilt, angle in DOSE_SYMMETRIC:
+        tifffile.imwrite(
+            tmp_path / f"tomogram_1_{tilt}_{angle}.tif", np.zeros((2, 4, 5), np.uint8),
+            photometric="minisblack", resolution=(1e8 / 0.84, 1e8 / 0.84),
+            resolutionunit="CENTIMETER",
+        )
+    from_headers = manifest_from_frame_names(
+        frames_dir=tmp_path, pattern=PATTERN, tilt_series_id="1"
+    )
+    assert from_headers.raw_pixel_spacing_angstrom == pytest.approx(0.84)
+    assert from_headers.notes == []
+
+    overridden = manifest_from_frame_names(
+        frames_dir=tmp_path, pattern=PATTERN, tilt_series_id="1",
+        raw_pixel_spacing_angstrom=1.68,
+    )
+    assert overridden.raw_pixel_spacing_angstrom == 1.68
+    assert "overriding the 0.84 angstrom in the movie headers" in overridden.notes[0]
 
 
 def test_mrc_movies_named_by_pattern_take_the_pixel_size_from_their_headers(tmp_path):
@@ -228,3 +277,20 @@ def test_a_pattern_that_misses_some_frames_is_refused(tmp_path):
     without_plus = r"tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>-?\d+(?:\.\d+)?)\.tif"
     with pytest.raises(ValueError, match=r"14 \.tif files .* tomogram_039_016_\+03\.0\.tif"):
         match_frames(tmp_path, without_plus)
+
+
+def test_init_without_series_takes_every_series_the_pattern_finds(tmp_path):
+    frames = tmp_path / "frames"
+    _write_series(frames, "1")
+    _write_series(frames, "2")
+    result = CliRunner().invoke(
+        app,
+        ["init", "--frames", str(frames), "--frames-pattern", PATTERN,
+         "--pixel-size", "1.35", "--out", str(tmp_path / "out")],
+    )
+    assert result.exit_code == 0, result.output
+    assert "found 2 series: 1 2" in result.output
+    project = json.loads((tmp_path / "out" / "project.json").read_text())
+    assert project["tilt_series"] == ["1", "2"]
+    # What was asked for stays recorded apart from what was found.
+    assert project["config"]["tilt_series"] == []

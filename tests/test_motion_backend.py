@@ -845,3 +845,44 @@ def test_a_tiff_movie_with_another_frame_count_is_refused(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="declares 5 frames, the movie has 3"):
         AverageMotionCorrectionBackend().correct(_manifest(movie_path, num_subframes=5), context)
+
+
+@pytest.mark.parametrize(("written_shape", "accepted"), [((2, 3), True), ((4, 6), False)])
+def test_motioncor3_fourier_binning_halves_the_sum_and_doubles_its_pixel(
+    tmp_path: Path, written_shape: tuple[int, int], accepted: bool
+) -> None:
+    movie_path = tmp_path / "frames" / "movie.mrc"
+    _write_mrc(movie_path, np.ones((3, 4, 6), dtype=np.float32))
+    executable = tmp_path / "MotionCor3"
+    executable.touch()
+    captured: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str], *, cwd: Path, env: Mapping[str, str]
+    ) -> subprocess.CompletedProcess[str]:
+        captured.append(list(command))
+        _write_mrc(Path(command[command.index("-OutMrc") + 1]), np.ones(written_shape, np.float32))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CUDA,
+        parameters={"motioncor3_executable": executable, "motioncor3_ftbin": 2},
+    )
+    backend = MotionCor3MotionCorrectionBackend(fake_runner)
+    manifest = _manifest(movie_path, num_subframes=3)
+    if not accepted:
+        # An unbinned sum where a binned one was asked for is refused, not stacked.
+        with pytest.raises(ValueError, match=r"\(4, 6\) does not match .* \(2, 3\)"):
+            backend.correct(manifest, context)
+        return
+
+    artifact = backend.correct(manifest, context)[0]
+    (command,) = captured
+    assert command[command.index("-FtBin") + 1] == "2"
+    # MotionCor3 is given the movies' pixel; the sum is at twice it.
+    assert command[command.index("-PixSize") + 1] == "1.35"
+    assert artifact.shape == (2, 3)
+    assert artifact.pixel_spacing_angstrom == pytest.approx(2.7)
+    assert artifact.parameters["ftbin"] == 2
+    assert artifact.parameters["input_pixel_spacing_angstrom"] == pytest.approx(1.35)

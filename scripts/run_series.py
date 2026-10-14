@@ -258,7 +258,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
                  *flag("motioncor3-pixel-size", motion.get("pixel_size_angstrom")),
                  *flag("motioncor3-gain", motion.get("gain_reference")),
                  *flag("motioncor3-gain-rotation", motion.get("gain_rotation")),
-                 *flag("motioncor3-gain-flip", motion.get("gain_flip"))],
+                 *flag("motioncor3-gain-flip", motion.get("gain_flip")),
+                 *flag("motioncor3-ftbin", motion.get("ftbin"))],
             ),
         ]
     else:

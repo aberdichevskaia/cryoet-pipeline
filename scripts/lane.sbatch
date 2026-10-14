@@ -37,7 +37,12 @@ for name in PROJECT CONFIG SERIES FROM UNTIL; do
     fi
 done
 
-# The shared IMOD install unless the environment names another.
+# The IMOD the environment names; else the one on PATH (a module, or a profile
+# that put IMOD on PATH without exporting IMOD_DIR), whose bin/ sits in the
+# install; else the shared Munich install.
+if [[ -z "${IMOD_DIR:-}" ]] && command -v imod >/dev/null; then
+    IMOD_DIR=$(dirname "$(dirname "$(command -v imod)")")
+fi
 export IMOD_DIR=${IMOD_DIR:-/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12}
 
 source scripts/activate_env.sh

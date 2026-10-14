@@ -7,7 +7,11 @@ from typing import Any
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.ingest import parse_mdoc_text, with_raw_pixel_spacing
-from cryoet_pipeline.ingest.frame_names import compile_frame_pattern, manifest_from_frame_names
+from cryoet_pipeline.ingest.frame_names import (
+    compile_frame_pattern,
+    manifest_from_frame_names,
+    match_frames,
+)
 from cryoet_pipeline.models import ProjectConfig, TiltSeriesManifest
 from cryoet_pipeline.movies import common_pixel_spacing, inspect_movie
 
@@ -17,6 +21,8 @@ class InitResult:
     project_path: Path
     manifest_paths: list[Path]
     artifact_registry_path: Path
+    # The series included: the ones asked for, or every one found.
+    tilt_series: tuple[str, ...] = ()
 
 
 def initialize_project(config: ProjectConfig) -> InitResult:
@@ -25,9 +31,10 @@ def initialize_project(config: ProjectConfig) -> InitResult:
     if config.frames_pattern is not None:
         # A malformed pattern is refused before any folder is listed.
         compile_frame_pattern(config.frames_pattern)
+    tilt_series = config.tilt_series or find_tilt_series(config)
     manifests = [
         load_tilt_series_manifest(config, tilt_series_id)
-        for tilt_series_id in config.tilt_series
+        for tilt_series_id in tilt_series
     ]
     for manifest in manifests:
         validate_tilt_series_manifest(manifest)
@@ -60,7 +67,28 @@ def initialize_project(config: ProjectConfig) -> InitResult:
         project_path=project_path,
         manifest_paths=manifest_paths,
         artifact_registry_path=artifact_registry_path,
+        tilt_series=tuple(tilt_series),
     )
+
+
+def find_tilt_series(config: ProjectConfig) -> list[str]:
+    """Every series the inputs hold: by the frames pattern, or one per mdoc."""
+
+    if config.frames_pattern is not None:
+        return sorted(match_frames(config.frames_dir, config.frames_pattern))
+    assert config.mdocs_dir is not None
+    if not config.mdocs_dir.is_dir():
+        raise FileNotFoundError(f"mdocs directory not found: {config.mdocs_dir}")
+    # The same name load_tilt_series_manifest looks for.
+    suffix = ".mrc.mdoc"
+    found = sorted(
+        path.name[: -len(suffix)]
+        for path in config.mdocs_dir.iterdir()
+        if path.is_file() and path.name.endswith(suffix) and not path.name.startswith(".")
+    )
+    if not found:
+        raise ValueError(f"no *{suffix} files in {config.mdocs_dir}")
+    return found
 
 
 def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> TiltSeriesManifest:

@@ -1608,19 +1608,22 @@ def _raw_pixel_spacing(
     spacing = manifest.raw_pixel_spacing_angstrom
     if spacing is None or not np.isfinite(spacing) or spacing <= 0.0:
         raise ValueError("manifest must record positive raw pixel spacing")
-    if tilt_stack.pixel_spacing_angstrom is None:
+    stack_spacing = tilt_stack.pixel_spacing_angstrom
+    if stack_spacing is None:
         raise ValueError("tilt stack artifact must record pixel spacing")
-    if not isclose(
-        tilt_stack.pixel_spacing_angstrom,
-        spacing,
-        rel_tol=1e-5,
-        abs_tol=1e-6,
-    ):
+    # The stack is at the movies' pixel times the binning motion correction
+    # recorded on it (MotionCor3 -FtBin; 1 for stacks that predate it or were
+    # imported). The binning is read from the stack, not inferred from the ratio,
+    # so a stale stack at twice the pixel is still caught. What the steps from
+    # here on call the raw pixel is the stack's: bead sizes and tiltalign's
+    # pixel are in its pixels.
+    frame_binning = tilt_stack.parameters.get("frame_binning", 1)
+    if not isclose(stack_spacing, spacing * frame_binning, rel_tol=1e-5, abs_tol=1e-6):
         raise ValueError(
-            f"tilt stack pixel spacing {tilt_stack.pixel_spacing_angstrom} "
-            f"does not match raw MRC spacing {spacing}; rerun tilt-series preparation"
+            f"tilt stack pixel spacing {stack_spacing} does not match the raw movie "
+            f"spacing {spacing} binned {frame_binning}x; rerun tilt-series preparation"
         )
-    return spacing
+    return stack_spacing
 
 
 def _included_indices(

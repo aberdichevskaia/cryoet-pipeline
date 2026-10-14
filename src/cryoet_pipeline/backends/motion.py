@@ -41,11 +41,18 @@ class _MotionCor3Settings:
     gpu_ids: tuple[int, ...]
     patch_x: int
     patch_y: int
+    # The movies' pixel, which MotionCor3 takes as -PixSize; the sums it writes
+    # are binned by ftbin, so their pixel is this times ftbin.
     pixel_spacing_angstrom: float
+    ftbin: int
     gain_reference: Path | None
     gain_rotation: int
     gain_flip: int
     software_version: str
+
+    @property
+    def output_pixel_spacing_angstrom(self) -> float:
+        return self.pixel_spacing_angstrom * self.ftbin
 
 
 class MotionCor3MotionCorrectionBackend:
@@ -157,12 +164,13 @@ class MotionCor3MotionCorrectionBackend:
             projection = _read_motioncor3_projection(
                 temporary_output,
                 input_path=image.local_frame_file,
+                ftbin=settings.ftbin,
             )
             _write_projection(
                 output_path,
                 projection,
                 artifact_format=artifact_format,
-                pixel_spacing_angstrom=settings.pixel_spacing_angstrom,
+                pixel_spacing_angstrom=settings.output_pixel_spacing_angstrom,
                 overwrite=overwrite,
             )
 
@@ -179,7 +187,7 @@ class MotionCor3MotionCorrectionBackend:
             shape=tuple(int(axis_size) for axis_size in projection.shape),
             dtype=str(projection.dtype),
             axis_order=AxisOrder.YX,
-            pixel_spacing_angstrom=settings.pixel_spacing_angstrom,
+            pixel_spacing_angstrom=settings.output_pixel_spacing_angstrom,
             binning=image.binning,
             parameters={
                 "backend": self.name,
@@ -191,7 +199,9 @@ class MotionCor3MotionCorrectionBackend:
                 "num_subframes": image.num_subframes,
                 "patch_grid_xy": [settings.patch_x, settings.patch_y],
                 "gpu_ids": list(settings.gpu_ids),
-                "pixel_spacing_angstrom": settings.pixel_spacing_angstrom,
+                "pixel_spacing_angstrom": settings.output_pixel_spacing_angstrom,
+                "input_pixel_spacing_angstrom": settings.pixel_spacing_angstrom,
+                "ftbin": settings.ftbin,
                 "gain_reference": (
                     str(settings.gain_reference)
                     if settings.gain_reference is not None
@@ -426,6 +436,10 @@ def _motioncor3_settings(
             minimum=1,
         ),
         pixel_spacing_angstrom=pixel_spacing,
+        # Fourier binning of the sums: 2 brings super-resolution frames to the
+        # physical pixel. Whole numbers only, so that the stack's pixel stays a
+        # whole multiple of the movies' and the fiducial step can check it.
+        ftbin=_bounded_int_parameter(context, "motioncor3_ftbin", default=1, minimum=1),
         gain_reference=_optional_existing_file_parameter(
             context,
             "motioncor3_gain_reference",
@@ -470,7 +484,7 @@ def _motioncor3_command(
         str(settings.patch_x),
         str(settings.patch_y),
         "-FtBin",
-        "1.0",
+        str(settings.ftbin),
         "-Align",
         "1",
         "-OutStack",
@@ -502,13 +516,14 @@ def _read_motioncor3_projection(
     output_path: Path,
     *,
     input_path: Path,
+    ftbin: int = 1,
 ) -> NDArray[np.float32]:
     try:
         output_info = validate_complete_mrc(output_path)
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"MotionCor3 did not produce a valid MRC output: {exc}") from exc
 
-    expected_shape = inspect_movie(input_path).shape[1:]
+    expected_shape = tuple(size // ftbin for size in inspect_movie(input_path).shape[1:])
     with mrcfile.open(output_path, permissive=True) as mrc:
         data = np.asarray(mrc.data)
         if data.ndim == 3 and data.shape[0] == 1:

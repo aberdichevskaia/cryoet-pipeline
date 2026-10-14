@@ -48,12 +48,14 @@ class SimpleTiltStackBackend:
             artifact_format=artifact_format,
         )
         overwrite = _bool_parameter(context, "overwrite", default=False)
+        pixel_spacing = _projection_pixel_spacing(ordered_artifacts, manifest)
+        frame_binning = _projection_frame_binning(ordered_artifacts, manifest)
         _write_stack(
             output_path,
             ordered_artifacts,
             stack_shape=stack_shape,
             artifact_format=artifact_format,
-            pixel_spacing_angstrom=manifest.raw_pixel_spacing_angstrom,
+            pixel_spacing_angstrom=pixel_spacing,
             overwrite=overwrite,
         )
 
@@ -65,12 +67,15 @@ class SimpleTiltStackBackend:
             shape=stack_shape,
             dtype="float32",
             axis_order=AxisOrder.TYX,
-            pixel_spacing_angstrom=manifest.raw_pixel_spacing_angstrom,
+            pixel_spacing_angstrom=pixel_spacing,
             parameters={
                 "backend": self.name,
                 "artifact_format": artifact_format.value,
                 "tilt_series_id": manifest.tilt_series_id,
                 "num_tilts": manifest.num_tilts,
+                # How far motion correction binned the movies, so that later
+                # steps can check the stack's pixel against the manifest's.
+                "frame_binning": frame_binning,
             },
             software_versions=_software_versions(),
             storage_role=_storage_role_parameter(context),
@@ -153,6 +158,45 @@ def _ordered_projection_artifacts(
         ordered.append(artifact)
 
     return ordered
+
+
+def _projection_pixel_spacing(
+    projections: Sequence[Artifact],
+    manifest: TiltSeriesManifest,
+) -> float | None:
+    """The sums' own pixel, which motion correction may have binned (-FtBin).
+
+    Falls back to the movies' pixel only for sums that do not record one.
+    """
+
+    recorded = {artifact.pixel_spacing_angstrom for artifact in projections}
+    if recorded == {None}:
+        return manifest.raw_pixel_spacing_angstrom
+    if None in recorded or len(recorded) != 1:
+        raise ValueError(
+            f"{manifest.tilt_series_id}: corrected projections disagree on pixel "
+            f"spacing: {sorted(str(value) for value in recorded)}"
+        )
+    (spacing,) = recorded
+    return spacing
+
+
+def _projection_frame_binning(
+    projections: Sequence[Artifact],
+    manifest: TiltSeriesManifest,
+) -> int:
+    """The binning motion correction applied (MotionCor3 -FtBin); 1 when none."""
+
+    binnings = {artifact.parameters.get("ftbin", 1) for artifact in projections}
+    if len(binnings) != 1:
+        raise ValueError(
+            f"{manifest.tilt_series_id}: corrected projections were binned differently: "
+            f"{sorted(binnings)}"
+        )
+    (binning,) = binnings
+    if isinstance(binning, bool) or not isinstance(binning, int) or binning < 1:
+        raise ValueError(f"{manifest.tilt_series_id}: invalid frame binning {binning!r}")
+    return binning
 
 
 def _projection_z_value(artifact: Artifact) -> int:

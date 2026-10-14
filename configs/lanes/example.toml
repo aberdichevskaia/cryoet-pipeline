@@ -24,7 +24,9 @@ variant = "bin8"          # label on every output from the tomogram on; keep it 
 [run]
 # EDIT: where the outputs go (a new folder per project), and the tilt-series
 # ids. An id is the mdoc name without ".mrc.mdoc" / ".mdoc", or, with
-# [data] frames_pattern, the text its `series` group matches.
+# [data] frames_pattern, the text its `series` group matches. Leave `series`
+# out to take every series: init finds them for movies, and a stack lane looks
+# for them with {series} in [data] stack as the wildcard.
 project = "outputs/my-project"
 series = ["TS_01", "TS_02"]
 
@@ -66,15 +68,15 @@ sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
 #                   a regular expression matched against the whole name. Its named
 #                   groups say where the series id, the tilt number and the angle
 #                   are. Write it in single quotes, so TOML leaves the backslashes
-#                   alone. Without mdocs, also set pixel_size_angstrom (for TIFF
-#                   movies) and [align] tilt_axis_angle.
+#                   alone. Without mdocs, also set [align] tilt_axis_angle.
 #                   `cryoet init` prints the tilts and angle range it found per
 #                   series: check them before the jobs run.
 frames = "data/my-dataset/frames"
 mdocs = "data/my-dataset/mdocs"
 # frames_pattern = 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
-# The raw movie pixel size in A. Read from the MRC movie headers when unset;
-# TIFF movies have none, so for them it is required.
+# The raw movie pixel size in A. Read from the movie headers when unset: the MRC
+# header, or the resolution tags SerialEM writes into a TIFF (`header` from IMOD
+# shows it). Set it only to override a header known to be wrong.
 # pixel_size_angstrom = 1.35
 # input = "stack": one file each per tilt-series; {series} is replaced by the id.
 # mdoc = "data/my-dataset/mdocs/{series}.mrc.mdoc"
@@ -88,19 +90,26 @@ patch_y = 5
 gpu = 0
 storage_policy = "working"
 # The pixel size in A given to MotionCor3. Left unset, it is the raw pixel size
-# from [data]: the movies' MRC header value, or pixel_size_angstrom. It does not
-# change the tilt stack's pixel size, which comes from there either way. Dose weighting is off in this backend, so
-# MotionCor3 uses it for little else; there is normally no reason to set it.
+# from [data]: the movie headers, or pixel_size_angstrom. It does not change the
+# tilt stack's pixel size, which comes from there either way. Dose weighting is
+# off in this backend, so MotionCor3 uses it for little else; there is normally
+# no reason to set it.
 # pixel_size_angstrom = 1.35
 # EDIT if your movies are not gain-corrected: the gain reference (MRC), and its
 # rotation (0-3) and flip (0-2) relative to the movies, as MotionCor3 defines them.
 # gain_reference = "data/my-dataset/gain.mrc"
 # gain_rotation = 0
 # gain_flip = 0
+# Fourier binning of the sums (MotionCor3 -FtBin). 2 brings super-resolution
+# frames to the physical pixel, which is all most tomography needs and a quarter
+# of the disk; the tilt stack, and every binning below, is then at the movie
+# pixel times this. Left unset, the sums keep the movie pixel.
+# ftbin = 2
 
 [binning]
-# EDIT. Binning factors relative to the raw pixel. Choose by the pixel size they
-# give, not by the number:
+# EDIT. Binning factors relative to the tilt stack's pixel: the movie pixel,
+# times [motion] ftbin if set. Choose by the pixel size they give, not by the
+# number:
 #   tomogram: your particle should still be a few tens of pixels across. The
 #             worked examples have a ribosome at 30 px (9.8 A/px) and Gag at
 #             46 px (5.4 A/px).

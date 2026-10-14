@@ -15,14 +15,15 @@ from cryoet_pipeline.models import (
 )
 
 
-def test_project_config_defaults_to_mvp_tilt_series() -> None:
+def test_project_config_takes_every_series_found_by_default() -> None:
     config = ProjectConfig(
         frames_dir=Path("frames"),
         mdocs_dir=Path("mdocs"),
         output_dir=Path("out"),
     )
 
-    assert config.tilt_series == ["TS_01", "TS_43"]
+    # Empty means every series init finds, not the EMPIAR-10164 pair it once was.
+    assert config.tilt_series == []
     assert config.device == "auto"
 
 

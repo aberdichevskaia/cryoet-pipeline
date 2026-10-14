@@ -146,7 +146,6 @@ from cryoet_pipeline.storage import resolve_storage_policy
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
-DEFAULT_INIT_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 DEFAULT_DOWNLOAD_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 
 
@@ -176,15 +175,22 @@ def init(
         typer.Option(
             min=0.0,
             help=(
-                "Raw movie pixel size in angstrom. Read from the MRC headers when "
-                "omitted; required for TIFF movies, which carry none."
+                "Raw movie pixel size in angstrom, overriding the movie headers. "
+                "Omitted, it is read from them: the MRC header, or the resolution "
+                "tags SerialEM writes into a TIFF."
             ),
         ),
     ] = None,
     tilt_series: Annotated[
-        list[str],
-        typer.Option("--tilt-series", help="Tilt-series ids to include in the project."),
-    ] = DEFAULT_INIT_TILT_SERIES,
+        list[str] | None,
+        typer.Option(
+            "--tilt-series",
+            help=(
+                "Tilt-series id to include; repeat for several. Omitted: every series "
+                "found, by --frames-pattern or one per <id>.mrc.mdoc."
+            ),
+        ),
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -202,10 +208,12 @@ def init(
         frames_pattern=frames_pattern,
         raw_pixel_spacing_angstrom=pixel_size,
         output_dir=out,
-        tilt_series=tilt_series,
+        tilt_series=tilt_series or [],
         device=normalize_device(device),
     )
     result = initialize_project(config)
+    if not tilt_series:
+        typer.echo(f"found {len(result.tilt_series)} series: {' '.join(result.tilt_series)}")
     typer.echo(f"wrote {result.project_path}")
     for path in result.manifest_paths:
         manifest = TiltSeriesManifest.model_validate_json(path.read_text())
@@ -379,6 +387,17 @@ def correct_motion(
         int,
         typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
     ] = 0,
+    motioncor3_ftbin: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help=(
+                "MotionCor3 Fourier binning of the sums (-FtBin); 2 brings "
+                "super-resolution frames to the physical pixel. The tilt stack and "
+                "every step after it work at the movie pixel times this."
+            ),
+        ),
+    ] = 1,
 ) -> None:
     """Correct multiframe tilt movies and register corrected projections."""
 
@@ -407,6 +426,7 @@ def correct_motion(
                 gain=motioncor3_gain,
                 gain_rotation=motioncor3_gain_rotation,
                 gain_flip=motioncor3_gain_flip,
+                ftbin=motioncor3_ftbin,
             ),
         },
     )
@@ -485,6 +505,17 @@ def prepare_tilt_series(
         int,
         typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
     ] = 0,
+    motioncor3_ftbin: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help=(
+                "MotionCor3 Fourier binning of the sums (-FtBin); 2 brings "
+                "super-resolution frames to the physical pixel. The tilt stack and "
+                "every step after it work at the movie pixel times this."
+            ),
+        ),
+    ] = 1,
 ) -> None:
     """Correct movies and prepare an alignment-ready tilt-series stack."""
 
@@ -514,6 +545,7 @@ def prepare_tilt_series(
                 gain=motioncor3_gain,
                 gain_rotation=motioncor3_gain_rotation,
                 gain_flip=motioncor3_gain_flip,
+                ftbin=motioncor3_ftbin,
             ),
         },
     )
@@ -4054,11 +4086,13 @@ def _motioncor3_cli_parameters(
     gain: Path | None,
     gain_rotation: int,
     gain_flip: int,
+    ftbin: int = 1,
 ) -> dict[str, object]:
     parameters: dict[str, object] = {
         "motioncor3_gpu_ids": [gpu],
         "motioncor3_patch_x": patch_x,
         "motioncor3_patch_y": patch_y,
+        "motioncor3_ftbin": ftbin,
         "motioncor3_gain_rotation": gain_rotation,
         "motioncor3_gain_flip": gain_flip,
     }

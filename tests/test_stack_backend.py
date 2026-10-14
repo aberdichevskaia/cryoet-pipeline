@@ -177,3 +177,43 @@ def _write_mrc(path: Path, data: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with mrcfile.new(path, overwrite=True) as mrc:
         mrc.set_data(data)
+
+
+def test_a_stack_of_binned_sums_takes_their_pixel_and_records_the_binning(
+    tmp_path: Path,
+) -> None:
+    # Super-resolution movies at 1.35 A, summed by MotionCor3 with -FtBin 2.
+    projections = [
+        _projection_artifact(tmp_path, z_value=z_value, value=1).model_copy(
+            update={
+                "pixel_spacing_angstrom": 2.7,
+                "parameters": {"z_value": z_value, "ftbin": 2},
+            }
+        )
+        for z_value in (0, 1)
+    ]
+    context = BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU)
+
+    stack = SimpleTiltStackBackend().build_stack(
+        projections, _manifest(z_values=[0, 1], tilt_angles=[0.0, 3.0]), context
+    )
+
+    assert stack.pixel_spacing_angstrom == 2.7
+    assert stack.parameters["frame_binning"] == 2
+    with mrcfile.open(stack.path, permissive=True) as written:
+        assert written.voxel_size.x == pytest.approx(2.7)
+
+
+def test_sums_binned_differently_cannot_share_a_stack(tmp_path: Path) -> None:
+    projections = [
+        _projection_artifact(tmp_path, z_value=z_value, value=1).model_copy(
+            update={"pixel_spacing_angstrom": 1.35 * ftbin,
+                    "parameters": {"z_value": z_value, "ftbin": ftbin}}
+        )
+        for z_value, ftbin in ((0, 1), (1, 2))
+    ]
+    context = BackendContext(output_dir=tmp_path / "outputs", device=DevicePreference.CPU)
+    with pytest.raises(ValueError, match="disagree on pixel spacing"):
+        SimpleTiltStackBackend().build_stack(
+            projections, _manifest(z_values=[0, 1], tilt_angles=[0.0, 3.0]), context
+        )

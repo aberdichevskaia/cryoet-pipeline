@@ -323,3 +323,44 @@ def test_mdocs_and_a_frames_pattern_together_are_refused():
     lane = submit_lanes.Plan(Path("lane.toml"), "outputs/__no_such_project__", ("1",), ())
     found = submit_lanes.problems(config, lane, ())
     assert any("exactly one of mdocs and frames_pattern" in problem for problem in found)
+
+
+def test_without_series_a_frames_lane_leaves_them_to_init():
+    config = copy.deepcopy(_lane("gag-bin8"))
+    del config["run"]["series"]
+    lane = submit_lanes.plan(config, Path("lane.toml"))
+    assert lane.series == ()
+    new = submit_lanes.Plan(Path("lane.toml"), "outputs/__no_such_project__", (), lane.stages)
+    assert "--tilt-series" not in submit_lanes.init_command(config, new)
+    # A dry run of a new project cannot know them yet, and says so.
+    assert submit_lanes.submit(new, lane.stages, dry_run=True)
+
+
+def test_without_series_a_stack_lane_finds_its_stacks(tmp_path):
+    for series in ("TS_A", "TS_B"):
+        (tmp_path / f"{series}.mrc").write_bytes(b"")
+    (tmp_path / "TS_A.mrc.mdoc").write_text("")
+    config = copy.deepcopy(_lane("ribo-bin8"))
+    del config["run"]["series"]
+    config["data"]["stack"] = str(tmp_path / "{series}.mrc")
+    assert submit_lanes.plan(config, Path("lane.toml")).series == ("TS_A", "TS_B")
+
+    config["data"]["stack"] = str(tmp_path / "{series}.st")
+    with pytest.raises(SystemExit, match="no file matches"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_an_existing_project_gives_every_series_it_has_manifests_for(tmp_path):
+    (tmp_path / "manifests").mkdir()
+    for series in ("039", "096"):
+        (tmp_path / "manifests" / f"{series}.json").write_text("{}")
+    assert submit_lanes.project_series(str(tmp_path)) == ("039", "096")
+
+
+def test_motion_binning_reaches_motioncor3():
+    config = copy.deepcopy(_lane("gag-bin8"))
+    config["motion"]["ftbin"] = 2
+    _assert_valid_commands(config, "ftbin")
+    steps = dict(run_series.build_steps(config, Path("p"), "TS_01"))
+    command = steps["prepare-tilt-series"]
+    assert command[command.index("--motioncor3-ftbin") + 1] == "2"

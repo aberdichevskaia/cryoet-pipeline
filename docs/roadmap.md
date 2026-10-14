@@ -1777,3 +1777,45 @@ tilt-number field can then be tested rather than restated.
   identically shaped names (`TS_01_002_-3.0.mrc`) it is the acquisition order.
   Here the dose order is not in the names at all. Nothing downstream needs it
   today, since dose weighting is off, but an agent must not assume either meaning.
+
+## 23. An agent that proposes a template from EMDB
+
+*Opened 2026-10-14, as an agent task by decision.* Given what is to be picked
+(a molecule, a species, a state, the sample), the agent proposes one to three
+EMDB entries to try as `[template] emdb_id`, with its reasons, and the user
+chooses.
+
+It needs no general web search: EMDB has a public REST API. A search is
+`https://www.ebi.ac.uk/emdb/api/search/<query>` (Solr syntax; `wt=csv` with `fl=`
+returns a table of `emdb_id`, `title`, `resolution`,
+`structure_determination_method`, `release_date`), and
+`https://www.ebi.ac.uk/emdb/api/entry/EMD-<id>` returns the whole entry: map box
+and pixel, recommended contour, symmetry, authors and citation, sample and
+organism, microscope, detector and defocus range. The template for the RyR1
+lane (configs/lanes/drafts/ryr1-bin4.toml) was found this way by hand in a few
+minutes: "ryanodine AND receptor" matched more than the 400 entries read, most of
+them single-particle maps and local refinements. The subtomogram averages among
+them were one in situ series of 17 maps (apo and primed states, consensus, class
+and focused maps), whose primed state matched the dataset's name; its entry gave
+the pixel, box, symmetry and acquisition parameters.
+
+What the agent weighs, roughly in this order:
+
+- **the same molecule and species**, then the same state (ligands, conformation)
+  when the sample has one;
+- **whole maps over parts**: titles saying "local", "focused", "mask" or
+  "consensus of a domain" are refinements of a region, not a template;
+- **in situ subtomogram averages over isolated single-particle maps** for
+  tomograms, as the context (membrane, neighbours) is the one being searched;
+  but a map that carries a membrane slab matches every membrane unless the mask
+  excludes it, which the agent flags for a look in ChimeraX;
+- **box and pixel against the tomogram's**: the box must hold the particle at
+  the tomogram pixel; resolution matters little, since the template is
+  low-passed to the tomogram's Nyquist or coarser;
+- **independence**: an entry made from the same data being processed (the same
+  lab, sample and acquisition) is a fine template but no independent check of
+  the result, and the agent says so.
+
+Titles are free text, so the agent reads entries, not titles. When no map
+fits, it says so, and a map simulated from a PDB model is the fallback; that
+is a separate step this pipeline does not have yet.

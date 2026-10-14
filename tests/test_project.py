@@ -107,7 +107,7 @@ def test_initialize_project_rejects_inconsistent_raw_pixel_spacing(
             pixel_spacing_angstrom=1.35 if index == 40 else 0.675,
         )
 
-    with pytest.raises(ValueError, match="inconsistent raw MRC pixel spacing"):
+    with pytest.raises(ValueError, match="inconsistent raw pixel spacing"):
         initialize_project(
             ProjectConfig(
                 frames_dir=frames,
@@ -116,3 +116,29 @@ def test_initialize_project_rejects_inconsistent_raw_pixel_spacing(
                 tilt_series=["TS_01"],
             )
         )
+
+
+def test_initialize_project_takes_every_mdoc_unless_told_which(tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    mdocs = tmp_path / "mdocs"
+    frames.mkdir()
+    mdocs.mkdir()
+    for series in ["TS_01", "TS_43"]:
+        (mdocs / f"{series}.mrc.mdoc").write_text(_mdoc_text(series, 8, count=3))
+        for index in range(3):
+            _write_movie(frames / f"{series}_{index:03d}_{float(index)}.mrc", num_subframes=8)
+    (mdocs / "notes.txt").write_text("not an mdoc")
+
+    every = initialize_project(
+        ProjectConfig(frames_dir=frames, mdocs_dir=mdocs, output_dir=tmp_path / "every")
+    )
+    assert every.tilt_series == ("TS_01", "TS_43")
+
+    named = initialize_project(
+        ProjectConfig(
+            frames_dir=frames, mdocs_dir=mdocs, output_dir=tmp_path / "named",
+            tilt_series=["TS_43"],
+        )
+    )
+    assert named.tilt_series == ("TS_43",)
+    assert [path.name for path in named.manifest_paths] == ["TS_43.json"]

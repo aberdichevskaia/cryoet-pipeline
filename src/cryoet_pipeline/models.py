@@ -109,11 +109,13 @@ class ProjectConfig(BaseModel):
     # tilt angle. Exactly one of the two.
     mdocs_dir: Path | None = None
     frames_pattern: str | None = None
-    # The raw movie pixel size. Left unset, it is read from the MRC movie
-    # headers; TIFF movies have none, so for them it is required.
+    # The raw movie pixel size, overriding the movie headers. Left unset, it is
+    # read from them: the MRC header, or the resolution tags SerialEM writes
+    # into a TIFF.
     raw_pixel_spacing_angstrom: float | None = Field(default=None, gt=0)
     output_dir: Path
-    tilt_series: list[str] = Field(default_factory=lambda: ["TS_01", "TS_43"])
+    # Empty: every series found, by the frames pattern or among the mdocs.
+    tilt_series: list[str] = Field(default_factory=list)
     device: DevicePreference = DevicePreference.AUTO
 
     @model_validator(mode="after")
@@ -127,9 +129,9 @@ class ProjectConfig(BaseModel):
 
     @field_validator("tilt_series")
     @classmethod
-    def require_tilt_series(cls, value: list[str]) -> list[str]:
-        if not value:
-            raise ValueError("at least one tilt-series id is required")
+    def refuse_repeated_tilt_series(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("a tilt-series id is listed twice")
         return value
 
     @field_validator("device", mode="before")

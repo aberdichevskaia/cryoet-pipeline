@@ -18,8 +18,9 @@ For that dataset:
 `tomogram_(?P<series>\\d+)_(?P<tilt>\\d+)_(?P<angle>[-+]?\\d+(?:\\.\\d+)?)\\.tif`.
 
 The names carry nothing else, so what an mdoc would add is absent here: dose,
-nominal defocus and the tilt-axis rotation. The pixel size comes from the MRC
-headers or is given; the tilt axis has to be given to alignment.
+nominal defocus and the tilt-axis rotation. The pixel size comes from the movie
+headers (MRC, or the resolution tags SerialEM writes into a TIFF) unless it is
+given; the tilt axis has to be given to alignment.
 
 Telling the series and tilts apart from an arbitrary naming convention, without
 being handed the expression, is not done here; see docs/roadmap.md.
@@ -30,10 +31,11 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from math import isclose
 from pathlib import Path
 
 from cryoet_pipeline.models import TiltImage, TiltSeriesManifest
-from cryoet_pipeline.movies import common_pixel_spacing, inspect_movie
+from cryoet_pipeline.movies import agreed_pixel_spacing, inspect_movie
 
 FRAME_PATTERN_GROUPS = ("series", "tilt", "angle")
 
@@ -133,8 +135,9 @@ def manifest_from_frame_names(
 ) -> TiltSeriesManifest:
     """The manifest of one series, with its frame counts read from the movies.
 
-    A given pixel size is used as is. Otherwise it is read from the movie
-    headers, which must all carry the same one; TIFF headers carry none.
+    The pixel size is read from the movie headers, which must all carry the
+    same one. A given pixel size overrides them, for headers known to be wrong,
+    and the manifest notes it when they say otherwise.
     """
 
     by_series = match_frames(frames_dir, pattern)
@@ -147,9 +150,21 @@ def manifest_from_frame_names(
     _refuse_duplicates(tilt_series_id, frames)
 
     infos = [inspect_movie(frame.path) for frame in frames]
+    header_spacings = [
+        (frame.path, info.pixel_spacing_angstrom) for frame, info in zip(frames, infos, strict=True)
+    ]
+    notes: list[str] = []
     pixel_spacing = raw_pixel_spacing_angstrom
     if pixel_spacing is None:
-        pixel_spacing = common_pixel_spacing(tilt_series_id, [frame.path for frame in frames])
+        pixel_spacing = agreed_pixel_spacing(tilt_series_id, header_spacings)
+    else:
+        in_headers = {spacing for _, spacing in header_spacings}
+        (header,) = in_headers if len(in_headers) == 1 else (None,)
+        if header is not None and not isclose(header, pixel_spacing, rel_tol=1e-5):
+            notes.append(
+                f"raw pixel spacing given as {pixel_spacing:g} angstrom, overriding "
+                f"the {header:g} angstrom in the movie headers"
+            )
 
     images = [
         TiltImage(
@@ -169,6 +184,7 @@ def manifest_from_frame_names(
         source_frames_pattern=pattern,
         images=images,
         raw_pixel_spacing_angstrom=pixel_spacing,
+        notes=notes,
     )
 
 

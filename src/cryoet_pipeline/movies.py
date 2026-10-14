@@ -40,12 +40,21 @@ _SUFFIXES = {
 }
 
 
+# Angstroms per unit of the TIFF ResolutionUnit tag: 2 is the inch, the TIFF
+# default, and 3 the centimetre. 1, no unit, says nothing about size.
+_ANGSTROM_PER_RESOLUTION_UNIT = {2: 2.54e8, 3: 1e8}
+# A detector pixel is a fraction of an angstrom to tens of angstroms. Anything
+# coarser is a print density, such as the 72 dpi many writers put in (3.5e6 A),
+# and says nothing about the detector.
+_MAX_TIFF_PIXEL_ANGSTROM = 100.0
+
+
 @dataclass(frozen=True)
 class MovieInfo:
     format: MovieFormat
     shape: tuple[int, int, int]  # (frames, y, x)
-    # From the MRC header. A TIFF has none: its resolution tags are a print
-    # density, not a detector pixel, so the pixel size has to be given.
+    # From the MRC header, or from the resolution tags SerialEM writes into a
+    # TIFF; None when the file does not say.
     pixel_spacing_angstrom: float | None
 
 
@@ -79,6 +88,7 @@ def inspect_movie(path: Path) -> MovieInfo:
     with _tifffile().TiffFile(path) as tiff:
         shapes = {tuple(int(n) for n in page.shape) for page in tiff.pages}
         frames = len(tiff.pages)
+        pixel_spacing = _tiff_pixel_spacing_angstrom(path, tiff.pages[0])
     if len(shapes) != 1:
         raise ValueError(f"{path}: TIFF pages differ in shape: {sorted(shapes)}")
     (frame_shape,) = shapes
@@ -91,8 +101,44 @@ def inspect_movie(path: Path) -> MovieInfo:
     return MovieInfo(
         format=fmt,
         shape=(frames, frame_shape[0], frame_shape[1]),
-        pixel_spacing_angstrom=None,
+        pixel_spacing_angstrom=pixel_spacing,
     )
+
+
+def _tiff_pixel_spacing_angstrom(path: Path, page: Any) -> float | None:
+    """The pixel size in the TIFF resolution tags, read as IMOD's `header` reads it.
+
+    SerialEM records the pixel there as pixels per centimetre or per inch, and
+    IMOD turns it back into angstroms; both were measured with IMOD 5.1.12 on
+    synthetic files. Without a unit, without the tags, or at a print density,
+    the file says nothing, and IMOD then shows 1.0, its "unknown"; this returns
+    None so that the size has to be given instead.
+    """
+
+    x_tag = page.tags.get("XResolution")
+    y_tag = page.tags.get("YResolution")
+    if x_tag is None or y_tag is None:
+        return None
+    unit_tag = page.tags.get("ResolutionUnit")
+    unit = 2 if unit_tag is None else int(unit_tag.value)
+    angstrom_per_unit = _ANGSTROM_PER_RESOLUTION_UNIT.get(unit)
+    if angstrom_per_unit is None:
+        return None
+    spacings = []
+    for tag in (x_tag, y_tag):
+        numerator, denominator = tag.value
+        if numerator <= 0 or denominator <= 0:
+            return None
+        spacings.append(angstrom_per_unit * denominator / numerator)
+    x_spacing, y_spacing = spacings
+    if not isclose(x_spacing, y_spacing, rel_tol=1e-5):
+        raise ValueError(
+            f"{path}: TIFF X and Y resolution give different pixel sizes, "
+            f"{x_spacing:g} and {y_spacing:g} angstrom"
+        )
+    if x_spacing > _MAX_TIFF_PIXEL_ANGSTROM:
+        return None
+    return float(x_spacing)
 
 
 def read_movie(path: Path) -> NDArray[Any]:
@@ -115,12 +161,19 @@ def read_movie(path: Path) -> NDArray[Any]:
 def common_pixel_spacing(label: str, paths: list[Path]) -> float:
     """The one pixel size the movies' headers agree on, or a refusal naming why not."""
 
-    spacings = [(path, inspect_movie(path).pixel_spacing_angstrom) for path in paths]
+    return agreed_pixel_spacing(
+        label, [(path, inspect_movie(path).pixel_spacing_angstrom) for path in paths]
+    )
+
+
+def agreed_pixel_spacing(label: str, spacings: list[tuple[Path, float | None]]) -> float:
+    """As `common_pixel_spacing`, for header values already read."""
+
     without = [path for path, spacing in spacings if spacing is None]
     if without:
         raise ValueError(
-            f"{label}: {without[0]} has no pixel size in its header (TIFF movies "
-            "never do); give the raw pixel size explicitly"
+            f"{label}: {without[0]} has no pixel size in its header; give the raw "
+            "pixel size explicitly"
         )
     reference_path, reference = spacings[0]
     assert reference is not None
@@ -128,7 +181,7 @@ def common_pixel_spacing(label: str, paths: list[Path]) -> float:
         assert spacing is not None
         if not isclose(spacing, reference, rel_tol=1e-5, abs_tol=1e-6):
             raise ValueError(
-                f"{label}: inconsistent raw MRC pixel spacing; "
+                f"{label}: inconsistent raw pixel spacing in the movie headers; "
                 f"{reference_path} has {reference} angstrom, {path} has {spacing} angstrom"
             )
     return reference
