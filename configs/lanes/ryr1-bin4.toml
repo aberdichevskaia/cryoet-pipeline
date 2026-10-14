@@ -37,18 +37,17 @@ project = "outputs/ryr1"
 # `series` is left out: init takes every series the frames pattern finds, which
 # in this folder is 039 096 097 125 161.
 
-# MDC partitions, from `sinfo -s` on 2026-10-14: normal (the default, 7 days) and
-# gpu (7 days), which mixes max and maxg nodes. max023 and max027 have an A40
-# (46 GB, compute 8.6), enough for MotionCor3, MemBrain-seg (>= 7.5) and pytom;
-# the other GPU nodes were not checked. lane.sbatch's preflight refuses a GPU that
-# MotionCor3 or MemBrain-seg cannot run on, and a GPU type can then be named in
-# --gres.
+# MDC partitions, from `sinfo` on 2026-10-14: normal (the default, 7 days) and
+# gpu (7 days). gpu mixes T4 (15 GB), V100 (compute 7.0), A40, H100, H200 and B300
+# nodes; both first gpu jobs landed on a V100 and lane.sbatch's preflight refused
+# it, as MemBrain-seg needs >= 7.5. So the GPU stages ask for an A40 (8.6, 45 GB),
+# of which there are over twenty nodes.
 [[run.stage]]
 name = "motion"
 from = "prepare-tilt-series"
 until = "prepare-tilt-series"
 time = "3:00:00"
-sbatch = ["--partition=gpu", "--gres=gpu:1", "--cpus-per-task=8", "--mem=64G"]
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 [[run.stage]]
 name = "cpu"
@@ -62,7 +61,7 @@ name = "gpu"
 from = "segment-tomogram"
 until = "extract-particles"
 time = "16:00:00"
-sbatch = ["--partition=gpu", "--gres=gpu:1", "--cpus-per-task=8", "--mem=64G"]
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 [data]
 frames = "/fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5"
@@ -186,6 +185,11 @@ mask_radius_px = 30
 # Sets the angular sampling only: the ~400 A diagonal, the particle's longest
 # dimension (starting value; RyR1's shell is ~280 A on a side).
 particle_diameter_angstrom = 400.0
+# RyR1 is C4, and EMD-54612 was refined with C4 imposed, which RELION does about
+# the map's z axis through the box centre: a quarter of the rotations then cover
+# every distinct orientation. The 400 A diameter makes the angular step fine, so
+# the search is several times Gag's without this.
+z_axis_symmetry = 4
 number_of_particles = 2000            # a cap for review, not a population size
 number_of_false_positives = 100.0
 tophat_filter = false

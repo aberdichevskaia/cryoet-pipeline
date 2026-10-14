@@ -375,3 +375,12 @@ def test_motioncor3_is_not_left_to_torch_to_find_the_gpu():
     config["motion"]["backend"] = "average"
     command = dict(run_series.build_steps(config, Path("p"), "TS_01"))["prepare-tilt-series"]
     assert "--device" not in command
+
+
+def test_a_symmetric_template_cuts_the_search():
+    steps = dict(run_series.build_steps(_lane("ryr1-bin4"), Path("p"), "039"))
+    command = steps["pick-particles"]
+    assert command[command.index("--pytom-z-axis-symmetry") + 1] == "4"
+    # A lane that says nothing about symmetry renders nothing.
+    assert "--pytom-z-axis-symmetry" not in dict(
+        run_series.build_steps(_lane("gag-bin8"), Path("p"), "TS_01"))["pick-particles"]

@@ -416,6 +416,7 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-particle-diameter", pick["particle_diameter_angstrom"]),
              *flag("pytom-extract-particle-diameter",
                    pick.get("extract_particle_diameter_angstrom")),
+             *flag("pytom-z-axis-symmetry", pick.get("z_axis_symmetry")),
              *flag("pytom-number-of-particles", pick["number_of_particles"]),
              *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
              *flag("pytom-tophat-filter", pick.get("tophat_filter")),

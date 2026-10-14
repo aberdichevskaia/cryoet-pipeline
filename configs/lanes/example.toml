@@ -224,6 +224,10 @@ per_tilt_weighting = true
 spectral_whitening = true
 tophat_filter = false
 gpu_ids = "0"
+# Rotational symmetry of the template about its z axis (e.g. 4 for a C4 map):
+# cuts the angular search that many times. Only for a template whose symmetry
+# axis is its z axis, through the box centre, as RELION and Dynamo impose it.
+# z_axis_symmetry = 4
 # If picking runs out of GPU memory, split the tomogram: "x,y,z" pieces.
 # volume_split = "2,2,1"
 # Only for particles that sit on or next to membranes (needs [segment]): search
