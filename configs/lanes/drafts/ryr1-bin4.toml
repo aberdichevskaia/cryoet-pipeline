@@ -83,7 +83,10 @@ backend = "motioncor3"
 patch_x = 7
 patch_y = 5
 gpu = 0
-storage_policy = "working"
+# MRC rather than the Zarr of "working", so that the stack opens in 3dmod: the
+# tilt axis is read off it by eye (3dmod -b 4 outputs/ryr1/stacks/039/039.st).
+# At 1.68 A the sums and stacks are ~30 GB either way.
+storage_policy = "debug"
 # Super-resolution to the physical pixel: 0.84 -> 1.68 A.
 ftbin = 2
 # Required: without a gain reference MotionCor3 sums unnormalised frames without
