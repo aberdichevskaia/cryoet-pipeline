@@ -61,10 +61,7 @@ LABEL="${VARIANT}-cls${CLASSES}-s${SEED}"
 
 cd "$REPO"
 
-set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
-set -u
+source scripts/activate_env.sh
 
 echo "host        $(hostname)"
 echo "started     $(date -Is)"

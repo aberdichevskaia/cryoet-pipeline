@@ -36,16 +36,13 @@ cd "$REPO"
 
 export IMOD_DIR=/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12
 
+source scripts/activate_env.sh
+
 # `set -u` applies to our code, not to environment scripts that were not written
 # for it: IMOD-linux.sh appends to MANPATH assuming it already exists, which is
-# true in an interactive shell and false in a batch one. conda's hook is wrapped
-# for the same reason. Strictness resumes immediately after.
-#
-# conda is also not initialised in a non-interactive shell, so `conda activate`
-# on its own would fail here regardless.
+# true in an interactive shell and false in a batch one. Strictness resumes
+# immediately after.
 set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
 source "$IMOD_DIR/IMOD-linux.sh"
 set -u
 

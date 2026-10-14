@@ -37,9 +37,8 @@ SERIES=TS_0005
 cd "$REPO"
 
 export IMOD_DIR=/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12
+source scripts/activate_env.sh
 set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
 source "$IMOD_DIR/IMOD-linux.sh"
 set -u
 

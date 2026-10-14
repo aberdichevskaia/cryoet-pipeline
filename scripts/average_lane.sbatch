@@ -17,9 +17,10 @@
 # MASK is the alignment mask: a diameter in A, or an MRC file in the particle
 # box, which is used as Dynamo uses one, so a mask made for the Dynamo project
 # can serve both. Optional: ITERATIONS (default 3), START_LOWPASS_ANGSTROM
-# (the halves' common start; default 60), OVERWRITE=1, and VARIANT to average
+# (the halves' common start; default 60), OVERWRITE=1, VARIANT to average
 # picks under another label than the lane's, such as the ones `cryoet
-# filter-picks --output-variant` registers.
+# filter-picks --output-variant` registers, and ENV_MANAGER=conda|micromamba
+# (scripts/activate_env.sh).
 #
 # The thresholds keep LCCmax >= the minimum, the rule the Dynamo selection
 # uses, so the two branches start from the same particles. Box and variant come
@@ -41,10 +42,7 @@ for name in CONFIG THRESHOLDS MASK; do
     fi
 done
 
-set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
-set -u
+source scripts/activate_env.sh
 
 lane() {  # lane SECTION KEY: one value of the lane config; a list prints space-separated
     python3 -c '
@@ -83,6 +81,7 @@ for series in "${SERIES_LIST[@]}"; do minimums+=("$(threshold "$series")"); done
 echo "job         $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname)"
 echo "started     $(date -Is)"
 echo "project     $PROJECT   variant $variant   box $box   mask ${mask[*]}"
+echo "env         $CONDA_PREFIX ($ENV_MANAGER)"
 echo
 
 manifests=()

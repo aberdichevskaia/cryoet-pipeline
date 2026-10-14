@@ -91,10 +91,7 @@ cd "$REPO"
 
 # No IMOD here: averaging calls nothing from it. Sourcing IMOD-linux.sh in this
 # job only adds a path that can go stale and fail a run that never needed it.
-set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
-set -u
+source scripts/activate_env.sh
 
 echo "host        $(hostname)"
 echo "started     $(date -Is)"

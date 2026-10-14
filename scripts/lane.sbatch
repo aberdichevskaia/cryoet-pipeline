@@ -10,7 +10,8 @@
 #   PROJECT  CONFIG  SERIES (space-separated)  FROM  UNTIL
 # and, for the stages that use them, MOTIONCOR3, MEMBRAIN_EXE, MEMBRAIN_CKPT,
 # PYTOMO_MP_DIR. OVERWRITE=1 adds --overwrite to every step, for re-running a
-# step that already wrote part of its output.
+# step that already wrote part of its output. Optional: IMOD_DIR (the Munich
+# install otherwise) and ENV_MANAGER=conda|micromamba (scripts/activate_env.sh).
 #
 # Jobs of one project may run at the same time, one per series: each command
 # merges its own entries into the registry under a lock when it finishes
@@ -39,11 +40,10 @@ done
 # The shared IMOD install unless the environment names another.
 export IMOD_DIR=${IMOD_DIR:-/ictstr01/groups/shared/users/peng_marr/a.berdichevskaia/apps/IMOD/imod_5.1.12}
 
+source scripts/activate_env.sh
 # `set -u` is for our code, not for environment scripts that were not written
-# for it (IMOD-linux.sh appends to an unset MANPATH; conda's hook likewise).
+# for it (IMOD-linux.sh appends to an unset MANPATH).
 set +u
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate cryoet-pipeline
 source "$IMOD_DIR/IMOD-linux.sh"
 set -u
 # MotionCor3 needs the env's libtiff.so.6.
@@ -57,6 +57,7 @@ echo "started     $(date -Is)"
 echo "project     $PROJECT   config $CONFIG"
 echo "series      $SERIES"
 echo "steps       $(echo $STEPS)"
+echo "env         $CONDA_PREFIX ($ENV_MANAGER)"
 echo "cryoet      $(command -v cryoet)"
 echo "imod        $(command -v tiltxcorr || echo 'not on PATH')"
 echo "ctffind     $(command -v ctffind5 || command -v ctffind || echo 'not on PATH')"
