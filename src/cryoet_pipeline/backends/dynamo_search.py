@@ -83,6 +83,7 @@ from cryoet_pipeline.backends.subtomogram import (
     _class_average_id,
     _class_average_path,
     _combine_particle_stacks,
+    _CombinedParticles,
     _int_parameter,
     _load_reference_mrc,
     _nonnegative_float_parameter,
@@ -108,13 +109,14 @@ from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
     AxisOrder,
+    DynamoAverageQc,
     DynamoSearchQc,
     QcStatus,
     RetentionPolicy,
     StorageRole,
     TiltSeriesManifest,
 )
-from cryoet_pipeline.particles import write_particle_star
+from cryoet_pipeline.particles import ParticleRecord, write_particle_star
 from cryoet_pipeline.rotations import matrix_to_relion_euler, relion_euler_to_matrix
 from cryoet_pipeline.wedge import WEDGE_BOUNDARY_POLICY
 
@@ -825,14 +827,16 @@ def _project_average(particles, matrices, shifts, tilt_ranges, mask, box: int):
     return average, fweight
 
 
-def _fourier_weight_summary(fweight: np.ndarray) -> dict[str, float]:
+def _fourier_weight_summary(
+    fweight: np.ndarray, threshold: float = FOURIER_WEIGHT_THRESHOLD
+) -> dict[str, float]:
     """The merged weight inside the Nyquist sphere; the cube's corners are always empty."""
     radius = np.sqrt(np.sum(_xyz(len(fweight)).astype(float) ** 2, axis=0))
     inside = fweight[radius < len(fweight) / 2]
     return {
         "minimum": float(inside.min()),
         "median": float(np.median(inside)),
-        "fraction_below_threshold": float(np.mean(inside < FOURIER_WEIGHT_THRESHOLD)),
+        "fraction_below_threshold": float(np.mean(inside < threshold)),
     }
 
 
@@ -943,6 +947,114 @@ def _half_map_fsc(half_maps, mask, spacing: float) -> dict[str, object]:
     return report
 
 
+@dataclass(frozen=True)
+class _DynamoInputs:
+    """What both Dynamo backends average: the particles, their poses, the mask, the wedges."""
+
+    pairs: list[tuple[Artifact, TiltSeriesManifest]]
+    combined: _CombinedParticles
+    box: int
+    spacing: float
+    mask_path: Path | None
+    mask_diameter: float | None
+    """The normalisation sphere's diameter in A; None when the mask is a file."""
+    normalization_mask: np.ndarray
+    wedge_ranges: list[tuple[float, float]]
+    """The distinct tilt ranges, as the QC reports them."""
+    records: list[ParticleRecord]
+    matrices: list[np.ndarray]
+    shifts: list[np.ndarray]
+    raw: list[np.ndarray]
+    tilt_ranges: list[tuple[float, float]]
+    """One per particle, from its own series."""
+
+
+def _dynamo_inputs(
+    backend: str,
+    particles: Sequence[Artifact],
+    manifests: Sequence[TiltSeriesManifest],
+    context: BackendContext,
+    device: torch.device,
+) -> _DynamoInputs:
+    """Load and check the stacks, poses, mask and wedges for a Dynamo backend."""
+
+    if len(particles) != len(manifests):
+        raise ValueError(
+            f"{len(particles)} particle stacks were given for {len(manifests)} "
+            "manifests; each stack needs the manifest of the series it came from"
+        )
+    if not particles:
+        raise ValueError("averaging needs at least one particle stack")
+    for stack, stack_manifest in zip(particles, manifests, strict=True):
+        _validate_particle_stack(stack, stack_manifest)
+    pairs = sorted(
+        zip(particles, manifests, strict=True),
+        key=lambda pair: pair[1].tilt_series_id,
+    )
+    for key, allowed in (("num_classes", 1), ("alignment_frame", "reference")):
+        value = context.parameters.get(key)
+        if value is not None and value != allowed:
+            raise ValueError(f"{backend} does not support {key}={value!r}")
+    for key in ("particle_metadata_path", "class_number"):
+        if context.parameters.get(key) is not None:
+            raise ValueError(f"{backend} does not read {key}; start from the stack's poses")
+    if _nonnegative_float_parameter(context, "wedge_tilt_axis_deg", default=0.0) != 0.0:
+        raise ValueError(f"{backend} models one wedge about y; the tilt axis must be 0")
+
+    combined = _combine_particle_stacks(pairs, device=device)
+    box = combined.box_size
+    if box < 4 or box % 2:
+        raise ValueError(f"{backend} needs an even box of at least 4 voxels, got {box}")
+    spacing = _pixel_spacing_angstrom(pairs[0][0])
+    particle_diameter = _positive_float_parameter(
+        context, "particle_diameter_angstrom", default=box * spacing
+    )
+    mask_path = _optional_path_parameter(context, "alignment_mask_path")
+    mask_diameter = _optional_float_parameter(context, "alignment_mask_diameter_angstrom")
+    if mask_path is not None:
+        if mask_diameter is not None:
+            raise ValueError(
+                f"{backend} takes the alignment mask as a file or as a diameter, not both"
+            )
+        # One mask, two uses, as in Dynamo: thresholded for the search, its
+        # whole support for normalising the particles before averaging.
+        normalization_mask = _load_alignment_mask(mask_path, box)
+    else:
+        mask_diameter = mask_diameter or particle_diameter
+        normalization_mask = search_mask(box, mask_diameter / spacing)
+    geometries = _wedge_geometry_per_particle(
+        pairs,
+        combined,
+        min_tilt_override=_optional_float_parameter(context, "wedge_min_tilt_deg"),
+        max_tilt_override=_optional_float_parameter(context, "wedge_max_tilt_deg"),
+        tilt_axis_deg=0.0,
+    )
+    wedge_ranges = sorted({(g.min_tilt_deg, g.max_tilt_deg) for g in geometries})
+    for low, high in wedge_ranges:
+        if not low < 0 < high:
+            raise ValueError(
+                f"{backend}'s wedge needs a tilt range spanning zero, got [{low}, {high}]"
+            )
+    records = list(combined.records)
+    if [record.index for record in records] != list(range(len(records))):
+        raise ValueError("combined particle records are not in stack order")
+    return _DynamoInputs(
+        pairs=pairs,
+        combined=combined,
+        box=box,
+        spacing=spacing,
+        mask_path=mask_path,
+        mask_diameter=mask_diameter,
+        normalization_mask=normalization_mask,
+        wedge_ranges=wedge_ranges,
+        records=records,
+        matrices=[relion_euler_to_matrix(r.rot_deg, r.tilt_deg, r.psi_deg) for r in records],
+        shifts=[np.array([r.shift_x_px, r.shift_y_px, r.shift_z_px]) for r in records],
+        raw=[volume.detach().cpu().numpy().astype(np.float64) for volume in combined.volumes],
+        tilt_ranges=[(g.min_tilt_deg, g.max_tilt_deg) for g in geometries],
+    )
+
+
 class DynamoSearchRefinementBackend:
     """Dynamo's local search and Dynamo's project averaging. The default backend."""
 
@@ -956,26 +1068,6 @@ class DynamoSearchRefinementBackend:
     ) -> list[Artifact]:
         """Return the refined average and a QC artifact; the metadata sits beside them."""
 
-        if len(particles) != len(manifests):
-            raise ValueError(
-                f"{len(particles)} particle stacks were given for {len(manifests)} "
-                "manifests; each stack needs the manifest of the series it came from"
-            )
-        if not particles:
-            raise ValueError("averaging needs at least one particle stack")
-        for stack, stack_manifest in zip(particles, manifests, strict=True):
-            _validate_particle_stack(stack, stack_manifest)
-        pairs = sorted(
-            zip(particles, manifests, strict=True),
-            key=lambda pair: pair[1].tilt_series_id,
-        )
-        for key, allowed in (("num_classes", 1), ("alignment_frame", "reference")):
-            value = context.parameters.get(key)
-            if value is not None and value != allowed:
-                raise ValueError(f"dynamo-search does not support {key}={value!r}")
-        for key in ("particle_metadata_path", "class_number"):
-            if context.parameters.get(key) is not None:
-                raise ValueError(f"dynamo-search does not read {key}; start from the stack's poses")
         num_iterations = _positive_int_parameter(context, "num_iterations", default=1)
         workers = _positive_int_parameter(context, "workers", default=available_cpus())
         settings = SearchSettings(
@@ -1008,8 +1100,6 @@ class DynamoSearchRefinementBackend:
                 context, "shift_search_mode", default=DEFAULT_SETTINGS.area_search_modus
             ),
         )
-        if _nonnegative_float_parameter(context, "wedge_tilt_axis_deg", default=0.0) != 0.0:
-            raise ValueError("dynamo-search models one wedge about y; the tilt axis must be 0")
         initial_reference_path = _optional_path_parameter(context, "initial_reference_path")
         gold_standard = _bool_parameter(context, "gold_standard", default=False)
         start_lowpass = _optional_float_parameter(context, "gold_standard_start_lowpass_angstrom")
@@ -1018,43 +1108,14 @@ class DynamoSearchRefinementBackend:
         overwrite = _bool_parameter(context, "overwrite", default=False)
         device = torch_device_for_preference(context.device)
 
-        combined = _combine_particle_stacks(pairs, device=device)
-        box = combined.box_size
-        if box < 4 or box % 2:
-            raise ValueError(f"dynamo-search needs an even box of at least 4 voxels, got {box}")
+        inputs = _dynamo_inputs(self.name, particles, manifests, context, device)
+        pairs, combined, box, spacing = inputs.pairs, inputs.combined, inputs.box, inputs.spacing
         if settings.low > box / 2:
             raise ValueError(f"search_lowpass_px {settings.low} lies beyond Nyquist ({box / 2})")
-        spacing = _pixel_spacing_angstrom(pairs[0][0])
-        particle_diameter = _positive_float_parameter(
-            context, "particle_diameter_angstrom", default=box * spacing
-        )
-        mask_path = _optional_path_parameter(context, "alignment_mask_path")
-        mask_diameter = _optional_float_parameter(context, "alignment_mask_diameter_angstrom")
-        if mask_path is not None:
-            if mask_diameter is not None:
-                raise ValueError(
-                    "dynamo-search takes the alignment mask as a file or as a diameter, not both"
-                )
-            # One mask, two uses, as in Dynamo: thresholded for the search, its
-            # whole support for normalising the particles before averaging.
-            normalization_mask = _load_alignment_mask(mask_path, box)
-        else:
-            mask_diameter = mask_diameter or particle_diameter
-            normalization_mask = search_mask(box, mask_diameter / spacing)
+        mask_path, mask_diameter = inputs.mask_path, inputs.mask_diameter
+        normalization_mask = inputs.normalization_mask
         mask = (normalization_mask > 0.5).astype(float)
-        geometries = _wedge_geometry_per_particle(
-            pairs,
-            combined,
-            min_tilt_override=_optional_float_parameter(context, "wedge_min_tilt_deg"),
-            max_tilt_override=_optional_float_parameter(context, "wedge_max_tilt_deg"),
-            tilt_axis_deg=0.0,
-        )
-        ranges = sorted({(g.min_tilt_deg, g.max_tilt_deg) for g in geometries})
-        for low, high in ranges:
-            if not low < 0 < high:
-                raise ValueError(
-                    f"dynamo-search's wedge needs a tilt range spanning zero, got [{low}, {high}]"
-                )
+        ranges = inputs.wedge_ranges
         scope = averaging_scope(combined.tilt_series_ids)
         paths = _averaging_paths(
             context.output_dir, scope, backend_name=self.name, label=variant_label(context)
@@ -1063,17 +1124,13 @@ class DynamoSearchRefinementBackend:
         paths.average_dir.mkdir(parents=True, exist_ok=True)
         paths.qc_dir.mkdir(parents=True, exist_ok=True)
 
-        records = list(combined.records)
-        if [record.index for record in records] != list(range(len(records))):
-            raise ValueError("combined particle records are not in stack order")
+        records = list(inputs.records)
         starting_poses = [
             (r.rot_deg, r.tilt_deg, r.psi_deg, r.shift_x_px, r.shift_y_px, r.shift_z_px)
             for r in records
         ]
-        matrices = [relion_euler_to_matrix(r.rot_deg, r.tilt_deg, r.psi_deg) for r in records]
-        shifts = [np.array([r.shift_x_px, r.shift_y_px, r.shift_z_px]) for r in records]
-        raw = [volume.detach().cpu().numpy().astype(np.float64) for volume in combined.volumes]
-        tilt_ranges = [(g.min_tilt_deg, g.max_tilt_deg) for g in geometries]
+        matrices, shifts = list(inputs.matrices), list(inputs.shifts)
+        raw, tilt_ranges = inputs.raw, inputs.tilt_ranges
         if initial_reference_path is not None:
             reference = (
                 _load_reference_mrc(initial_reference_path, expected_box_size=box, device=device)
@@ -1334,6 +1391,163 @@ class DynamoSearchRefinementBackend:
                 "backend": self.name,
                 "tilt_series_ids": list(combined.tilt_series_ids),
                 "status": status.value,
+            },
+            storage_role=StorageRole.QC,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=paths.report.stat().st_size,
+        )
+        return [average, qc]
+
+
+SEARCH_PARAMETERS = (
+    "num_iterations",
+    "workers",
+    "cone_range_deg",
+    "cone_sampling_deg",
+    "inplane_range_deg",
+    "inplane_sampling_deg",
+    "refine_levels",
+    "refine_factor",
+    "search_highpass_px",
+    "search_lowpass_px",
+    "shift_range_px",
+    "shift_search_mode",
+    "initial_reference_path",
+    "gold_standard",
+    "gold_standard_start_lowpass_angstrom",
+)
+"""What `dynamo-search` reads to search, which `dynamo-average` refuses rather than ignores."""
+
+DYNAMO_AVERAGE_FMIN = 1
+"""Dynamo's `fmin`: a Fourier component is kept where the summed wedges reach `fmin`
+particles' worth, `fmin / N` of their maximum. The value of the console call that
+makes a project's starting average, and so of `dynamo-search`'s own start."""
+
+
+class DynamoAverageBackend:
+    """Dynamo's `dynamo_average` at the poses the stacks give: an average with no search.
+
+    What `dynamo_average(data, 'table', t, 'fcompensate', true, 'fmin', 1, 'nmask',
+    mask)` makes in Dynamo's console, and what `dynamo-search` starts from when it
+    is given no reference: `average_class`, replayed against Dynamo to 4e-7. The
+    particles keep their poses, so this is the map before any refinement. With
+    template-matched poses it is also what a template prints into noise, which
+    only the same average at random positions can tell apart
+    (scripts/decoy_picks.py).
+    """
+
+    name = "dynamo-average"
+
+    def average(
+        self,
+        particles: Sequence[Artifact],
+        manifests: Sequence[TiltSeriesManifest],
+        context: BackendContext,
+    ) -> list[Artifact]:
+        """Return the average at the stacks' own poses and a QC artifact."""
+
+        searching = [
+            key for key in SEARCH_PARAMETERS if context.parameters.get(key) not in (None, False)
+        ]
+        if searching:
+            raise ValueError(
+                f"{self.name} does not search, so it does not read {', '.join(searching)}"
+            )
+        overwrite = _bool_parameter(context, "overwrite", default=False)
+        device = torch_device_for_preference(context.device)
+        inputs = _dynamo_inputs(self.name, particles, manifests, context, device)
+        combined = inputs.combined
+        scope = averaging_scope(combined.tilt_series_ids)
+        paths = _averaging_paths(
+            context.output_dir, scope, backend_name=self.name, label=variant_label(context)
+        )
+        _require_available_paths(paths.outputs, overwrite=overwrite)
+        paths.average_dir.mkdir(parents=True, exist_ok=True)
+        paths.qc_dir.mkdir(parents=True, exist_ok=True)
+
+        angles, dynamo_shifts = _dynamo_poses(inputs.matrices, inputs.shifts, inputs.box)
+        result = average_class(
+            inputs.raw,
+            angles,
+            dynamo_shifts,
+            inputs.tilt_ranges,
+            inputs.normalization_mask,
+            fmin=DYNAMO_AVERAGE_FMIN,
+        )
+        # The poses go out as they came in: the STAR says what was averaged.
+        records = [replace(record, class_number=1) for record in inputs.records]
+        write_particle_star(paths.particle_metadata, records)
+        spacing = inputs.pairs[0][0].pixel_spacing_angstrom
+        average_path = _class_average_path(paths, 1, num_classes=1)
+        _write_average_mrc(average_path, result.average, pixel_spacing_angstrom=spacing)
+
+        report = DynamoAverageQc(
+            backend=self.name,
+            tilt_series_ids=combined.tilt_series_ids,
+            particle_stack_ids=combined.stack_ids,
+            particle_count=len(records),
+            particle_counts=combined.counts,
+            alignment_mask_diameter_angstrom=inputs.mask_diameter,
+            alignment_mask_path=None if inputs.mask_path is None else str(inputs.mask_path),
+            normalization_mask_voxels=int(np.count_nonzero(inputs.normalization_mask)),
+            wedge_tilt_ranges_deg=[list(one) for one in inputs.wedge_ranges],
+            wedge_boundary_policy=WEDGE_BOUNDARY_POLICY,
+            fmin=DYNAMO_AVERAGE_FMIN,
+            fourier_weight_threshold=result.threshold,
+            fourier_weight=_fourier_weight_summary(result.fweight, result.threshold),
+            status=QcStatus.PASS,
+        )
+        _write_json(paths.report, report.model_dump(mode="json"))
+        average = Artifact(
+            id=_class_average_id(
+                scope, self.name, 1, num_classes=1, variant=variant_suffix(context)
+            ),
+            variant=variant_label(context),
+            kind=ArtifactKind.SUBTOMOGRAM_AVERAGE,
+            path=average_path,
+            parent_ids=list(combined.stack_ids),
+            shape=(inputs.box, inputs.box, inputs.box),
+            dtype="float32",
+            axis_order=AxisOrder.ZYX,
+            pixel_spacing_angstrom=spacing,
+            parameters={
+                "backend": self.name,
+                "tilt_series_ids": list(combined.tilt_series_ids),
+                "particle_stack_ids": list(combined.stack_ids),
+                "class_number": 1,
+                "num_classes": 1,
+                "particle_count": len(records),
+                "iterations_run": 0,
+                "alignment_mask_diameter_angstrom": inputs.mask_diameter,
+                "alignment_mask_path": None if inputs.mask_path is None else str(inputs.mask_path),
+                "averaging": report.averaging,
+                "fmin": DYNAMO_AVERAGE_FMIN,
+                "wedge_boundary_policy": WEDGE_BOUNDARY_POLICY,
+                "metadata_path": str(paths.particle_metadata),
+                "qc_path": str(paths.report),
+                "gold_standard": False,
+            },
+            software_versions={
+                "numpy": _package_version("numpy"),
+                "torch": _package_version("torch"),
+            },
+            storage_role=StorageRole.CANONICAL,
+            retention_policy=RetentionPolicy.KEEP,
+            can_recompute=True,
+            size_bytes=_path_size_bytes(average_path),
+        )
+        qc = Artifact(
+            id=f"{scope}:qc:subtomogram_averaging:{self.name}{variant_suffix(context)}",
+            variant=variant_label(context),
+            kind=ArtifactKind.QC,
+            path=paths.report,
+            parent_ids=[average.id],
+            parameters={
+                "qc_type": "subtomogram_averaging",
+                "backend": self.name,
+                "tilt_series_ids": list(combined.tilt_series_ids),
+                "status": report.status.value,
             },
             storage_role=StorageRole.QC,
             retention_policy=RetentionPolicy.KEEP,

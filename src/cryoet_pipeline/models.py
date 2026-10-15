@@ -1241,6 +1241,39 @@ class DynamoSearchQc(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class DynamoAverageQc(BaseModel):
+    """Machine-readable statistics for the `dynamo-average` backend: no search."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    backend: str
+    tilt_series_ids: list[str]
+    particle_stack_ids: list[str]
+    particle_count: int = Field(ge=1)
+    particle_counts: list[int] = Field(default_factory=list)
+    """Particles taken from each stack, positionally matching `particle_stack_ids`."""
+    iterations_run: int = Field(default=0, ge=0, le=0)
+    """Always 0: every particle is averaged at the pose its stack gives it."""
+    alignment_mask_diameter_angstrom: float | None = Field(default=None, gt=0.0)
+    """The normalisation sphere's diameter; None when the mask came from a file."""
+    alignment_mask_path: str | None = None
+    normalization_mask_voxels: int = Field(ge=2)
+    wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    wedge_boundary_policy: str
+    averaging: str = "dynamo_average (fcompensate)"
+    """Dynamo's console average of a table: each particle at its pose, normalised in
+    the mask's support, the summed wedge divided out where it reaches `fmin / N` of
+    its maximum, the result normalised in the mask once more."""
+    fmin: int = Field(ge=1)
+    fourier_weight_threshold: float = Field(gt=0.0, le=1.0)
+    fourier_weight: dict[str, float] | None = None
+    """The summed, max-normalised wedge weight inside the Nyquist sphere: minimum,
+    median, and the fraction of components below the threshold, which are zeroed."""
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FscQc(BaseModel):
     """Machine-readable Fourier shell correlation report."""
 

@@ -37,6 +37,7 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `pick-particles` | `pytom-match-pick` | ✓ | pytom-match-pick, **CUDA** | Template matching. No CPU path. |
 | `extract-particles` | `cubic-crop` | ✓ | — | Crops cubic subvolumes at pick locations. |
 | `average-particles` | `dynamo-search` | ✓ | — | Dynamo's local search + Dynamo's averaging, K=1; `--gold-standard` for independent halves. See [dynamo_search.md](dynamo_search.md). |
+| | `dynamo-average` | | — | Dynamo's `dynamo_average` at the stacks' own poses, no search: the map before refinement. Takes the mask and wedge options only. |
 | | `cone-search` | | — | Cone search + multi-reference classification. |
 | | `fft-refinement` | | — | Simple per-Euler-angle baseline. |
 

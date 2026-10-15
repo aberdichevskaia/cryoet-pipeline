@@ -829,6 +829,116 @@ def test_dynamo_search_refuses_what_it_does_not_model(tmp_path, parameters, matc
         _run(tmp_path, stack, **parameters)
 
 
+def _run_average(tmp_path, stack, **parameters):
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CPU,
+        parameters={"particle_diameter_angstrom": 220.0, "overwrite": True, **parameters},
+    )
+    return average_and_register(
+        core.DynamoAverageBackend(), [stack], [_manifest()], context, registry
+    )
+
+
+def _poses(records):
+    return np.array(
+        [[r.rot_deg, r.tilt_deg, r.psi_deg, r.shift_x_px, r.shift_y_px, r.shift_z_px]
+         for r in records]
+    )
+
+
+def test_dynamo_average_is_dynamos_console_average_at_the_poses_given(tmp_path):
+    """`dynamo_average(..., 'fcompensate', true, 'fmin', 1, 'nmask', mask)` of the
+    stack's own poses, as replayed against Dynamo, and the poses go out unchanged."""
+    truth, perturbed = _true_and_perturbed(6, 10.0)
+    stack = _wedged_particles(tmp_path, perturbed, truth=truth)
+    average, qc = _run_average(tmp_path, stack)
+    particles = _loaded_particles(stack)
+    mask = core.search_mask(24, 22.0)
+    tilts = [(-60.0, 60.0)] * len(particles)
+    start = read_particle_star(Path(stack.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(start, 24)
+    expected = core.average_class(particles, angles, shifts, tilts, mask, fmin=1)
+    assert _relative(mrcfile.read(average.path).astype(np.float64), expected.average) < 1e-5
+    written = read_particle_star(Path(average.parameters["metadata_path"]))
+    np.testing.assert_allclose(_poses(written), _poses(start), atol=1e-5)
+    assert all(r.class_number == 1 for r in written)
+    assert average.kind is ArtifactKind.SUBTOMOGRAM_AVERAGE and qc.kind is ArtifactKind.QC
+    assert average.parameters["backend"] == "dynamo-average"
+    assert average.parameters["iterations_run"] == 0
+    report = json.loads(qc.path.read_text())
+    assert report["backend"] == "dynamo-average" and report["status"] == "pass"
+    assert report["iterations_run"] == 0 and report["fmin"] == 1
+    assert report["fourier_weight_threshold"] == pytest.approx(expected.threshold)
+    assert report["fourier_weight_threshold"] == pytest.approx(1 / 6)
+    assert report["alignment_mask_diameter_angstrom"] == 220.0
+    assert report["normalization_mask_voxels"] == mask.sum()
+    assert report["wedge_tilt_ranges_deg"] == [[-60.0, 60.0]]
+
+
+def test_dynamo_average_is_the_phantom_only_at_the_right_poses(tmp_path):
+    """The phantom, not the port, is the reference: this checks the poses end to end.
+
+    Measured on these seeds, 12 particles: 0.985 within the mask at the true poses,
+    0.614 with the poses scrambled. A transposed or mis-centred pose conversion
+    lands with the scrambled one.
+    """
+    truth, _ = _true_and_perturbed(12, 0.0)
+    scrambled = [
+        tuple(float(v) for v in row)
+        for row in np.random.default_rng(5).uniform(-180, 180, (12, 3))
+    ]
+    phantom = _granular_phantom(24).numpy().astype(np.float64)
+    inside = core.search_mask(24, 22.0) > 0
+    correlation = {}
+    for label, poses in (("true", truth), ("scrambled", scrambled)):
+        folder = tmp_path / label
+        folder.mkdir()
+        average, _ = _run_average(folder, _wedged_particles(folder, poses, truth=truth))
+        written = mrcfile.read(average.path).astype(np.float64)
+        correlation[label] = np.corrcoef(written[inside], phantom[inside])[0, 1]
+    assert correlation["true"] > 0.97, correlation
+    assert correlation["scrambled"] < 0.8, correlation
+
+
+def test_dynamo_average_normalises_on_a_mask_files_support(tmp_path):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    path = tmp_path / "mask.mrc"
+    with mrcfile.new(path) as handle:
+        handle.set_data(_soft_mask().astype(np.float32))
+    soft = mrcfile.read(path).astype(np.float64)
+    average, qc = _run_average(tmp_path, stack, alignment_mask_path=str(path))
+    particles = _loaded_particles(stack)
+    start = read_particle_star(Path(stack.parameters["metadata_path"]))
+    angles, shifts = _dynamo_table(start, 24)
+    expected = core.average_class(particles, angles, shifts, [(-60.0, 60.0)] * 2, soft, fmin=1)
+    assert _relative(mrcfile.read(average.path).astype(np.float64), expected.average) < 1e-5
+    report = json.loads(qc.path.read_text())
+    assert report["alignment_mask_path"] == str(path.resolve())
+    assert report["alignment_mask_diameter_angstrom"] is None
+    assert report["normalization_mask_voxels"] == np.count_nonzero(soft)
+
+
+@pytest.mark.parametrize(
+    ("parameters", "match"),
+    [
+        ({"num_iterations": 1}, "does not search"),
+        ({"cone_range_deg": 10.0, "shift_range_px": 2.0}, "cone_range_deg, shift_range_px"),
+        ({"initial_reference_path": "start.mrc"}, "does not search"),
+        ({"gold_standard": True}, "does not search"),
+        ({"num_classes": 2}, "num_classes"),
+        ({"wedge_tilt_axis_deg": 30.0}, "tilt axis"),
+        ({"wedge_min_tilt_deg": 5.0, "wedge_max_tilt_deg": 60.0}, "spanning zero"),
+    ],
+)
+def test_dynamo_average_refuses_what_it_does_not_do(tmp_path, parameters, match):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    with pytest.raises(ValueError, match=match):
+        _run_average(tmp_path, stack, **parameters)
+
+
 def _cli(tmp_path, monkeypatch, *arguments):
     stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
     registry = ArtifactRegistry.empty()
@@ -915,8 +1025,65 @@ def test_cli_defaults_to_dynamo_search_and_leaves_grids_to_each_backend(tmp_path
         ("--gold-standard-start-lowpass-angstrom", "60"),
         ("--shift-search-mode", "3"),
         ("--alignment-mask", "mask.mrc", "--alignment-mask-diameter-angstrom", "300"),
+        ("--backend", "dynamo-average", "--num-iterations", "2"),
+        ("--backend", "dynamo-average", "--cone-range-deg", "10"),
+        ("--backend", "dynamo-average", "--shift-range-px", "1"),
+        ("--backend", "dynamo-average", "--initial-reference", "start.mrc"),
+        ("--backend", "dynamo-average", "--workers", "2"),
+        ("--backend", "dynamo-average", "--gold-standard"),
+        ("--backend", "dynamo-average", "--num-classes", "2"),
     ],
 )
 def test_cli_refuses_options_the_chosen_backend_would_not_read(tmp_path, monkeypatch, arguments):
     result, captured = _cli(tmp_path, monkeypatch, *arguments)
     assert result.exit_code != 0 and not captured, result.output
+
+
+def test_cli_reaches_dynamo_average_with_its_mask_and_wedge(tmp_path, monkeypatch):
+    result, captured = _cli(tmp_path / "plain", monkeypatch, "--backend", "dynamo-average")
+    assert isinstance(captured["backend"], core.DynamoAverageBackend), result.output
+    assert not any(captured["parameters"].get(key) for key in core.SEARCH_PARAMETERS)
+    result, captured = _cli(
+        tmp_path / "masked",
+        monkeypatch,
+        "--backend",
+        "dynamo-average",
+        "--alignment-mask",
+        "mask.mrc",
+        "--wedge-min-tilt-deg",
+        "-50",
+    )
+    assert captured["parameters"]["alignment_mask_path"] == Path("mask.mrc"), result.output
+    assert captured["parameters"]["wedge_min_tilt_deg"] == -50.0
+
+
+def test_cli_says_nothing_about_resolution_for_an_average_nothing_refined(tmp_path):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    registry = ArtifactRegistry.empty()
+    registry.add(stack)
+    registry_path = tmp_path / "artifacts.json"
+    registry.write(registry_path)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(_manifest().model_dump_json())
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "average-particles",
+            "--manifest",
+            str(manifest),
+            "--registry",
+            str(registry_path),
+            "--out",
+            str(tmp_path / "out"),
+            "--device",
+            "cpu",
+            "--backend",
+            "dynamo-average",
+            "--alignment-mask-diameter-angstrom",
+            "220",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "particles averaged: 2" in result.output
+    assert "resolution" not in result.output
+    assert "_dynamo-average_average.mrc" in result.output

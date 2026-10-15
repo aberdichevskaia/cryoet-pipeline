@@ -134,6 +134,26 @@ Checked against Dynamo's own half-set project on the CZII score-selected set
   Nyquist, 0.25 at 22.9 A back up to 0.68 at 20.0 A. Before the dip it fell
   through 0.5 at 25.3 A, which QC reports as `crossing_before_dip_0_5_angstrom`.
 
+## The average before refinement (`--backend dynamo-average`)
+
+Dynamo's console makes a project's starting average with `dynamo_average(data,
+'table', t, 'fcompensate', true, 'fmin', 1, 'nmask', mask)`. `dynamo-search`
+starts from the same average when it is given no reference (`average_class`,
+replayed against Dynamo's to 4e-7 on sel45), and `dynamo-average` writes it on its
+own: every particle at the pose its stack gives it, the same mask and wedge
+handling, no search. The poses go out unchanged in the STAR beside the map.
+
+```bash
+cryoet average-particles --manifest ... --registry ... --out ... \
+  --backend dynamo-average --alignment-mask-diameter-angstrom 300
+```
+
+It reads the mask (`--alignment-mask` or `--alignment-mask-diameter-angstrom`)
+and the wedge overrides, and refuses every search option. With template-matched
+poses the map resembles the template even when the picks are noise, since each
+box is turned to where noise fitted the template best; read it against the same
+average of `scripts/decoy_picks.py`'s random positions.
+
 ## Parameters
 
 | option | default | meaning |

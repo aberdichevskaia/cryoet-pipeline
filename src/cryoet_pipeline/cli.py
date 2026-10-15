@@ -33,7 +33,10 @@ from cryoet_pipeline.backends.defocus_hint import (
     Ctffind5DefocusHintBackend,
     estimate_defocus_hint_and_register,
 )
-from cryoet_pipeline.backends.dynamo_search import DynamoSearchRefinementBackend
+from cryoet_pipeline.backends.dynamo_search import (
+    DynamoAverageBackend,
+    DynamoSearchRefinementBackend,
+)
 from cryoet_pipeline.backends.fiducials import (
     ImodAutofidseedBackend,
     ImodBeadtrackBackend,
@@ -2187,6 +2190,10 @@ def _echo_averaging_summary(report: dict[str, Any]) -> None:
     if starting is not None and final is not None:
         typer.echo(f"correlation: {starting:.4f} before refinement, {final:.4f} after")
 
+    if report.get("iterations_run") == 0:
+        # An average at the given poses: nothing was refined, so there are no
+        # half-sets whose agreement could be called a resolution.
+        return
     if not report.get("gold_standard", False):
         typer.echo(
             "resolution: not reported - the half-sets were refined against a shared "
@@ -3475,9 +3482,10 @@ def average_particles(
         str,
         typer.Option(
             help="Subtomogram averaging backend: dynamo-search (Dynamo's local search "
-            "and Dynamo's project averaging; one class), cone-search (cone "
-            "orientation search, multi-reference classification) or fft-refinement "
-            "(simple baseline)."
+            "and Dynamo's project averaging; one class), dynamo-average (Dynamo's "
+            "dynamo_average at the stacks' own poses: the map before any refinement, "
+            "no search), cone-search (cone orientation search, multi-reference "
+            "classification) or fft-refinement (simple baseline)."
         ),
     ] = "dynamo-search",
     num_classes: Annotated[
@@ -3810,17 +3818,38 @@ def average_particles(
             raise typer.BadParameter(
                 "particle frame does not support an alignment mask", param_hint="alignment-frame"
             )
-    searching = backend in ("cone-search", "dynamo-search")
-    if alignment_mask_diameter_angstrom is not None and not searching:
+    dynamo = backend in ("dynamo-search", "dynamo-average")
+    if alignment_mask_diameter_angstrom is not None and not (dynamo or backend == "cone-search"):
         raise typer.BadParameter(
-            "an alignment mask is supported only by cone-search and dynamo-search",
+            "an alignment mask is supported only by cone-search, dynamo-search and "
+            "dynamo-average",
             param_hint="alignment-mask-diameter-angstrom",
         )
-    if alignment_mask is not None and backend != "dynamo-search":
+    if alignment_mask is not None and not dynamo:
         raise typer.BadParameter(
-            "an alignment mask file is supported only by dynamo-search",
+            "an alignment mask file is supported only by dynamo-search and dynamo-average",
             param_hint="alignment-mask",
         )
+    if backend == "dynamo-average":
+        # Refused rather than ignored: a grid given to an average that does not
+        # search would look as though it had been used.
+        searched = {
+            "num-iterations": num_iterations,
+            "cone-range-deg": cone_range_deg,
+            "cone-sampling-deg": cone_sampling_deg,
+            "inplane-range-deg": inplane_range_deg,
+            "inplane-sampling-deg": inplane_sampling_deg,
+            "shift-range-px": shift_range_px,
+            "refine-factor": refine_factor,
+            "initial-reference": initial_reference,
+        }
+        for hint, value in searched.items():
+            if value is not None:
+                raise typer.BadParameter(
+                    f"--{hint} is not read by dynamo-average, which averages at the "
+                    "stacks' own poses without searching",
+                    param_hint=hint,
+                )
     if alignment_mask is not None and alignment_mask_diameter_angstrom is not None:
         raise typer.BadParameter(
             "give the alignment mask as a file or as a diameter, not both",
@@ -3865,9 +3894,9 @@ def average_particles(
             raise typer.BadParameter(
                 f"--{hint} is read only by dynamo-search", param_hint=hint
             )
-    if backend == "dynamo-search" and num_classes != 1:
+    if dynamo and num_classes != 1:
         raise typer.BadParameter(
-            "dynamo-search refines one class; use cone-search to classify",
+            f"{backend} makes one class; use cone-search to classify",
             param_hint="num-classes",
         )
     if fourier_compensation and not missing_wedge:
@@ -3878,10 +3907,11 @@ def average_particles(
     if (
         (wedge_min_tilt_deg is not None or wedge_max_tilt_deg is not None)
         and not missing_wedge
-        and backend != "dynamo-search"
+        and not dynamo
     ):
         raise typer.BadParameter(
-            "a wedge tilt range is read only by dynamo-search, or with --missing-wedge",
+            "a wedge tilt range is read only by dynamo-search and dynamo-average, or "
+            "with --missing-wedge",
             param_hint="wedge-min-tilt-deg",
         )
     tilt_series_manifests = [
@@ -4761,10 +4791,12 @@ def _subtomogram_averaging_backend(name: str) -> SubtomogramAveragingBackend:
         return ConeSearchRefinementBackend()
     if normalized == "dynamo-search":
         return DynamoSearchRefinementBackend()
+    if normalized == "dynamo-average":
+        return DynamoAverageBackend()
 
     raise typer.BadParameter(
         f"unsupported subtomogram averaging backend {name!r}; "
-        "expected: dynamo-search, cone-search, fft-refinement",
+        "expected: dynamo-search, dynamo-average, cone-search, fft-refinement",
         param_hint="backend",
     )
 
