@@ -216,6 +216,20 @@ def test_a_fixed_peak_count_and_the_template_box_reach_their_commands():
     assert template[template.index("--template-mask-sigma-px") + 1] == "1.0"
 
 
+def test_ctf_weighting_renders_as_either_flag_or_neither():
+    # pick-particles weights by |CTF| unless told not to, so `false` must render
+    # a flag of its own rather than nothing.
+    config = _lane("ribo-mdc")
+    for value, expected in ((False, "--no-pytom-ctf-weighting"), (True, "--pytom-ctf-weighting")):
+        config["pick"]["ctf_weighting"] = value
+        _assert_valid_commands(config, f"ctf-{value}")
+        command = dict(run_series.build_steps(config, Path("p"), "TS_X"))["pick-particles"]
+        assert expected in command
+    del config["pick"]["ctf_weighting"]
+    command = dict(run_series.build_steps(config, Path("p"), "TS_X"))["pick-particles"]
+    assert not any("ctf-weighting" in part for part in command)
+
+
 def test_a_cut_off_and_a_false_positive_budget_together_are_refused():
     config = _lane("ribo-mdc")
     config["pick"]["cut_off"] = 0.0

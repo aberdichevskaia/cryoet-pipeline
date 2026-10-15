@@ -44,6 +44,12 @@
 #
 # Task 0 reproduces the lane's map; 0 -> 1 is the advice on top of the lane's
 # corrections; 1 -> 2 -> 3 removes the corrections; 3 -> 4 is the low-pass alone.
+#
+# Result, 2026-10-15 (jobs 3640899 TS_0463, 3643100 TS_0306): task 3 won on both,
+# 93% and 99% in the band where noise gives 40% and 75%, against the lane's 89%
+# and 71%; full table in configs/lanes/ribo-mdc.toml [pick]. The ribo lanes now
+# run task 3's settings, so this job's check below refuses them: it was written
+# for the lane as it was, and is kept as the record of how the choice was made.
 # Every task extracts the lane's best-N with no floor, so the five pick lists are
 # the same size and comparable to each other and to a biologist's.
 #

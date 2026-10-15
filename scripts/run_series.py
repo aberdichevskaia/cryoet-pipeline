@@ -435,6 +435,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-tophat-filter", pick.get("tophat_filter")),
              *flag("pytom-low-pass", pick.get("low_pass_angstrom")),
              *flag("pytom-random-phase-correction", pick.get("random_phase_correction")),
+             # pick-particles weights by |CTF| unless told not to, so off is a flag too.
+             *([] if pick.get("ctf_weighting") is None else [
+                 "--pytom-ctf-weighting" if pick["ctf_weighting"]
+                 else "--no-pytom-ctf-weighting"
+             ]),
              *flag("pytom-per-tilt-weighting", pick.get("per_tilt_weighting")),
              *flag("pytom-spectral-whitening", pick.get("spectral_whitening")),
              *flag("pytom-gpu-ids", pick["gpu_ids"]),
