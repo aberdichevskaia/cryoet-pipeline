@@ -370,6 +370,9 @@ def test_motioncor3_is_not_left_to_torch_to_find_the_gpu():
     steps = dict(run_series.build_steps(_lane("gag-bin8"), Path("p"), "TS_01"))
     command = steps["prepare-tilt-series"]
     assert command[command.index("--device") + 1] == "cuda"
+    # Nor is pytom, which refused the same way when torch could not see the GPU.
+    command = steps["pick-particles"]
+    assert command[command.index("--device") + 1] == "cuda"
 
     config = copy.deepcopy(_lane("gag-bin8"))
     config["motion"]["backend"] = "average"

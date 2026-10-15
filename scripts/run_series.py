@@ -413,6 +413,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
         (
             "pick-particles",
             ["pick-particles", *common,
+             # pytom finds the GPU itself, as MotionCor3 does; see prepare-tilt-series.
+             *flag("device", "cuda"),
              *flag("pytom-particle-diameter", pick["particle_diameter_angstrom"]),
              *flag("pytom-extract-particle-diameter",
                    pick.get("extract_particle_diameter_angstrom")),

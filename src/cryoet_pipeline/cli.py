@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -141,6 +146,7 @@ from cryoet_pipeline.picks_visualization import (
     write_picks_visualization,
 )
 from cryoet_pipeline.project import initialize_project
+from cryoet_pipeline.reports.collect import SeriesArtifacts
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
 
@@ -3078,6 +3084,234 @@ def visualize_picks(
     )
     typer.echo(f"open with: chimerax {export.chimerax_script_path}")
     typer.echo(f"open with: 3dmod {export.tomogram_path} {export.imod_model_path}")
+
+
+@app.command("report")
+def report(
+    project: Annotated[
+        Path,
+        typer.Option(help="Project directory: the one holding artifacts.json and manifests/."),
+    ],
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="Label of the picks to report on, as given to pick-particles or "
+            "filter-picks. Each series' tomogram, CTF fit, membranes and template are then "
+            "found through those picks' own lineage."
+        ),
+    ] = None,
+    series: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--series",
+            help="Tilt-series to report on; repeat for several. Omitted: every series with "
+            "a manifest in the project.",
+        ),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="PDF to write. Omitted: <project>/reports/report.pdf, or "
+            "report-<variant>.pdf with --variant."
+        ),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            help="Lane TOML to append to the report verbatim, so that the PDF says what "
+            "was run."
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Replace an existing PDF."),
+    ] = False,
+) -> None:
+    """Write a PDF for biologists: each series' tomogram, CTF, membranes and picks."""
+
+    try:
+        from cryoet_pipeline.reports.pdf import write_report
+    except ImportError as exc:
+        raise typer.BadParameter(
+            f"the report draws with matplotlib, which is not installed ({exc}); install the "
+            "viz extra: pip install -e '.[viz]'",
+            param_hint="project",
+        ) from exc
+    from cryoet_pipeline.reports.collect import load_series
+
+    registry_path = project / "artifacts.json"
+    if not registry_path.is_file():
+        raise typer.BadParameter(f"no registry at {registry_path}", param_hint="project")
+    manifests = [
+        TiltSeriesManifest.model_validate_json(path.read_text())
+        for path in sorted((project / "manifests").glob("*.json"))
+    ]
+    if series:
+        known = {manifest.tilt_series_id for manifest in manifests}
+        unknown = sorted(set(series) - known)
+        if unknown:
+            raise typer.BadParameter(
+                f"no manifest for {', '.join(unknown)} in {project / 'manifests'}",
+                param_hint="series",
+            )
+        manifests = [manifest for manifest in manifests if manifest.tilt_series_id in series]
+    if not manifests:
+        raise typer.BadParameter(f"no manifests in {project / 'manifests'}", param_hint="project")
+    destination = out or project / "reports" / (
+        f"report-{variant}.pdf" if variant else "report.pdf"
+    )
+    if destination.exists() and not overwrite:
+        raise typer.BadParameter(
+            f"{destination} exists; pass --overwrite to replace it", param_hint="out"
+        )
+
+    artifact_registry = ArtifactRegistry.load(registry_path)
+    reports = []
+    for manifest in manifests:
+        typer.echo(f"reading {manifest.tilt_series_id}")
+        resolved = _report_artifacts(artifact_registry, manifest, variant=variant)
+        reports.append(load_series(artifact_registry, resolved))
+    typer.echo("drawing")
+    outcome = write_report(
+        destination,
+        reports,
+        project=project.resolve().name,
+        variant=variant,
+        written=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        software=_software_description(),
+        config=(config.name, config.read_text()) if config is not None else None,
+    )
+    typer.echo(f"wrote {outcome.path} ({outcome.pages} pages)")
+    if outcome.problems:
+        typer.echo(f"{len(outcome.problems)} parts could not be shown:")
+        for problem in outcome.problems:
+            typer.echo(f"  {problem}")
+
+
+def _report_artifacts(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+    *,
+    variant: str | None,
+) -> SeriesArtifacts:
+    """What one series' report pages are drawn from, by the lookups every command uses.
+
+    The picks by label, and the rest through the picks' own lineage, as
+    visualize-picks does: picks narrowed by filter-picks carry a label of their
+    own that the tomogram they were found in does not. Without picks, the
+    tomogram by label, so that a series which stopped early still shows how far
+    it got. A lookup that fails becomes a line in the report instead of an
+    error, so one ambiguous series does not cost the others their pages.
+    """
+
+    problems: list[str] = []
+
+    def attempt(what: str, lookup: Callable[[], Any]) -> Any:
+        try:
+            return lookup()
+        except typer.BadParameter as exc:
+            problems.append(f"{what}: {exc.message}")
+            return None
+
+    def registered(kind: ArtifactKind) -> bool:
+        return any(
+            artifact.covers(manifest.tilt_series_id) for artifact in registry.by_kind(kind)
+        )
+
+    picks = (
+        attempt("picks", lambda: _picks_artifact(registry, manifest, variant=variant))
+        if registered(ArtifactKind.PICKS)
+        else None
+    )
+    if picks is not None:
+        tomogram = attempt(
+            "tomogram",
+            lambda: _tomogram_from_picks(registry, picks, manifest, variant=variant),
+        )
+        templates = _template_from_picks(registry, picks) or attempt(
+            "template", lambda: _template_artifacts(registry, manifest, variant=variant)
+        )
+        segmentations = registry.ancestors_of_kind(picks.id, ArtifactKind.SEGMENTATION)
+        segmentation = (
+            segmentations[0]
+            if len(segmentations) == 1
+            else attempt(
+                "membranes",
+                lambda: _optional_segmentation_artifact(registry, manifest, variant=variant),
+            )
+        )
+    else:
+        tomogram = (
+            attempt("tomogram", lambda: _tomogram_artifact(registry, manifest, variant=variant))
+            if registered(ArtifactKind.TOMOGRAM)
+            else None
+        )
+        templates = attempt(
+            "template", lambda: _template_artifacts(registry, manifest, variant=variant)
+        )
+        segmentation = attempt(
+            "membranes",
+            lambda: _optional_segmentation_artifact(registry, manifest, variant=variant),
+        )
+    if (
+        segmentation is not None
+        and tomogram is not None
+        and not registry.descends_from(segmentation.id, tomogram.id)
+    ):
+        problems.append(
+            f"membranes: {segmentation.id} was not segmented from {tomogram.id}, so it is "
+            "not drawn over it"
+        )
+        segmentation = None
+
+    # The fit the tomogram was corrected with, when it was; otherwise the series'
+    # fit by label, as picking finds it for CTF weighting.
+    fitted = (
+        registry.ancestors_of_kind(tomogram.id, ArtifactKind.CTF_MODEL)
+        if tomogram is not None
+        else []
+    )
+    ctf_model = fitted[0] if fitted else None
+    if ctf_model is None and registered(ArtifactKind.CTF_MODEL):
+        ctf_model = attempt(
+            "CTF", lambda: _ctf_model_artifact(registry, manifest, variant=variant)
+        )
+    return SeriesArtifacts(
+        manifest=manifest,
+        picks=picks,
+        tomogram=tomogram,
+        template=templates[0] if templates else None,
+        template_mask=templates[1] if templates else None,
+        segmentation=segmentation,
+        ctf_model=ctf_model,
+        problems=tuple(problems),
+    )
+
+
+def _software_description() -> str:
+    """This package's version and, from a git checkout, the commit it was run from."""
+
+    try:
+        description = f"cryoet-pipeline {package_version('cryoet-pipeline')}"
+    except PackageNotFoundError:
+        description = "cryoet-pipeline"
+    source = str(Path(__file__).resolve().parent)
+    try:
+        commit = subprocess.run(
+            ["git", "-C", source, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        changes = subprocess.run(
+            ["git", "-C", source, "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return description
+    if commit.returncode == 0 and commit.stdout.strip():
+        description += f", commit {commit.stdout.strip()}"
+        if changes.returncode == 0 and changes.stdout.strip():
+            description += " with uncommitted changes"
+    return description
 
 
 @app.command("extract-particles")

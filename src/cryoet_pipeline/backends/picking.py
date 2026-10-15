@@ -37,6 +37,10 @@ from cryoet_pipeline.models import (
 )
 from cryoet_pipeline.particles import pytom_template_shape
 from cryoet_pipeline.runtime import DevicePreference
+from cryoet_pipeline.score_preview import score_preview_from_mrc, write_score_preview
+
+_PREVIEW_FALLBACK_SLAB_PX = 10
+"""Slab depth for the map preview when neither a diameter nor a template box is known."""
 
 
 class PytomMatchPickBackend:
@@ -231,6 +235,21 @@ class PytomMatchPickBackend:
             temporary_report.write_text(
                 json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n"
             )
+            # A picture of the correlation map, kept from every match: the
+            # volume is a gigabyte and kept only on request, and without one or
+            # the other nothing can show afterwards where the peaks were.
+            temporary_preview = temporary_root / "scores_preview.npz"
+            scores_preview_error = _write_scores_preview(
+                destination_dir,
+                temporary_preview,
+                slab_thickness_px=_preview_slab_thickness_px(context, voxel_spacing, job_json),
+            )
+            if scores_preview_error is None:
+                _replace_output(temporary_preview, paths.scores_preview)
+            elif paths.scores_preview.exists():
+                # An earlier run's picture beside these picks would show a map
+                # they were not read off.
+                _remove_path(paths.scores_preview)
 
             _replace_output(job_json, paths.job_json)
             _replace_output(particles_star, paths.particles_star)
@@ -305,6 +324,10 @@ class PytomMatchPickBackend:
                 "pytom_angles_volume_path": (
                     str(paths.angles_volume) if paths.angles_volume.is_file() else None
                 ),
+                "pytom_scores_preview_path": (
+                    str(paths.scores_preview) if scores_preview_error is None else None
+                ),
+                "pytom_scores_preview_error": scores_preview_error,
                 "pytom_whitening_filter_path": (
                     str(paths.whitening_filter) if paths.whitening_filter.is_file() else None
                 ),
@@ -354,6 +377,7 @@ def _template_match_artifact(
         return None
     scores = picks.parameters.get("pytom_scores_volume_path")
     angles = picks.parameters.get("pytom_angles_volume_path")
+    preview = picks.parameters.get("pytom_scores_preview_path")
     volumes_kept = isinstance(scores, str) and isinstance(angles, str)
     return Artifact(
         id=(
@@ -374,13 +398,14 @@ def _template_match_artifact(
             "scores_volume_path": scores,
             "angles_volume_path": angles,
             "volumes_retained": volumes_kept,
+            "scores_preview_path": preview,
         },
         storage_role=StorageRole.CANONICAL,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=True,
         size_bytes=sum(
             _path_size_bytes(Path(one))
-            for one in (job_json, scores, angles)
+            for one in (job_json, scores, angles, preview)
             if isinstance(one, str)
         ),
     )
@@ -451,6 +476,7 @@ class _PickingPaths:
         log: Path,
         scores_volume: Path,
         angles_volume: Path,
+        scores_preview: Path,
         whitening_filter: Path,
         extraction_graph: Path,
     ) -> None:
@@ -462,6 +488,7 @@ class _PickingPaths:
         self.log = log
         self.scores_volume = scores_volume
         self.angles_volume = angles_volume
+        self.scores_preview = scores_preview
         self.whitening_filter = whitening_filter
         self.extraction_graph = extraction_graph
 
@@ -520,6 +547,7 @@ def _picking_paths(
         job_json=picks_dir / f"{prefix}_job.json",
         scores_volume=picks_dir / f"{prefix}_scores.mrc",
         angles_volume=picks_dir / f"{prefix}_angles.mrc",
+        scores_preview=qc_dir / f"{prefix}_scores_preview.npz",
         whitening_filter=picks_dir / f"{prefix}_whitening_filter.npy",
         extraction_graph=qc_dir / f"{prefix}_extraction_graph.svg",
         report=qc_dir / f"{prefix}_qc.json",
@@ -977,6 +1005,48 @@ def _template_box_px(job_json: Path) -> int | None:
 
     shape = pytom_template_shape(job_json)
     return max(shape) if shape is not None else None
+
+
+def _preview_slab_thickness_px(
+    context: BackendContext, voxel_spacing_angstrom: float, job_json: Path
+) -> int:
+    """One particle diameter in voxels, the depth one particle's peak occupies.
+
+    From the diameter matching was given when there is one. A search given an
+    angular step instead has no diameter, and half the template box stands in:
+    a box holds its particle with room to spare, so half of it is a little
+    under one diameter, which errs towards splitting a peak over two slabs
+    rather than stacking two particles in one.
+    """
+
+    diameter = _optional_positive_float_parameter(context, "pytom_particle_diameter")
+    if diameter is not None:
+        return max(1, round(diameter / voxel_spacing_angstrom))
+    box = _template_box_px(job_json)
+    if box is not None:
+        return max(1, box // 2)
+    return _PREVIEW_FALLBACK_SLAB_PX
+
+
+def _write_scores_preview(
+    match_output: Path, destination: Path, *, slab_thickness_px: int
+) -> str | None:
+    """Write the correlation map's slab maxima, or say why not instead of failing.
+
+    By now the match has cost its GPU time, so a picture that cannot be made
+    must not take the picks down with it. The reason is returned to be recorded,
+    so that a missing picture is explained rather than silent.
+    """
+
+    candidates = sorted(match_output.rglob("*_scores.mrc"))
+    if len(candidates) != 1:
+        return f"pytom wrote {len(candidates)} *_scores.mrc files where one was expected"
+    try:
+        preview = score_preview_from_mrc(candidates[0], slab_thickness_px=slab_thickness_px)
+        write_score_preview(preview, destination)
+    except (OSError, ValueError, MemoryError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _z_spread_verdict(

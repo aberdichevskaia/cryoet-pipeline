@@ -186,6 +186,20 @@ anyway, especially for alignment and CTF. `visualize-picks` writes each tomogram
 with its picks overlaid, for ChimeraX (`.cxc`) and 3dmod (`.mrc` + `.mod`). Open
 one or two before you go on.
 
+For an overview of the whole project, write the report: one PDF with a table of
+all tilt-series and each step's verdict, then, per tilt-series, the tomogram, its
+membranes, the CTF fit, the picks against noise, the correlation map and
+galleries of picks by score. It reads the project and runs nothing. It needs
+matplotlib: `python -m pip install -e ".[io,viz]"`.
+
+```bash
+cryoet report --project outputs/<project> --variant bin8 --config configs/lanes/<name>-bin8.toml
+```
+
+The PDF goes to `outputs/<project>/reports/report-bin8.pdf`. The correlation
+map page exists only for picks made since `pick-particles` started saving a
+picture of the map; older picks get every other page.
+
 ### 4. Review the picks and set thresholds
 
 Template matching keeps every candidate it was asked for, including the false

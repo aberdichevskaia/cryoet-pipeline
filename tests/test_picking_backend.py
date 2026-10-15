@@ -34,6 +34,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.runtime import DevicePreference
+from cryoet_pipeline.score_preview import read_score_preview
 
 
 def test_pytom_match_pick_writes_star_and_qc(tmp_path: Path) -> None:
@@ -1252,8 +1253,38 @@ def test_the_picks_record_the_split_their_search_ran_with(tmp_path: Path) -> Non
     assert reloaded.parameters["pytom_volume_split"] == [3, 2, 1]
 
 
+def test_every_match_keeps_a_picture_of_its_correlation_map(tmp_path: Path) -> None:
+    """The volume is a gigabyte and kept only on request; its slab maxima always.
+
+    The slabs are one particle diameter deep — 100 A at 13.5 A per voxel is 7
+    voxels, so this two-slice volume is a single slab — and hold the highest
+    score of each column, which is where a peak is.
+    """
+
+    scores = np.arange(24, dtype=np.float32).reshape(2, 3, 4) / 100.0
+    picks, _, _ = _pick_with(tmp_path / "run", scores=scores)
+
+    path = Path(picks.parameters["pytom_scores_preview_path"])
+    assert path.is_file()
+    assert path.parent.name == "picking"
+    assert picks.parameters["pytom_scores_preview_error"] is None
+    # The volume itself is still only kept when asked for.
+    assert picks.parameters["pytom_scores_volume_path"] is None
+    preview = read_score_preview(path)
+    assert preview.slab_starts.tolist() == [0]
+    assert preview.slab_stops.tolist() == [2]
+    np.testing.assert_allclose(preview.slab_max[0], scores.max(axis=0), rtol=1e-3)
+
+
+def test_a_match_without_a_map_says_so_rather_than_failing(tmp_path: Path) -> None:
+    picks, _, _ = _pick_with(tmp_path / "run")
+
+    assert picks.parameters["pytom_scores_preview_path"] is None
+    assert "0 *_scores.mrc" in picks.parameters["pytom_scores_preview_error"]
+
+
 def _pick_with(
-    root: Path, **parameters: object
+    root: Path, *, scores: np.ndarray | None = None, **parameters: object
 ) -> tuple[Artifact, list[str], ArtifactRegistry]:
     """One run through the backend on fakes: the picks, the match command, the registry."""
 
@@ -1285,6 +1316,9 @@ def _pick_with(
         else:
             destination = Path(command[command.index("-d") + 1])
             (destination / "TS_TEST_job.json").write_text("{}")
+            if scores is not None:
+                with mrcfile.new(destination / "TS_TEST_scores.mrc") as handle:
+                    handle.set_data(scores)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     _, picks, _ = pick_and_register(
