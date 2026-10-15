@@ -14,32 +14,37 @@ from matplotlib.collections import PatchCollection
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec, SubplotSpec
 from matplotlib.patches import Circle
+from matplotlib.ticker import FuncFormatter
 
 from cryoet_pipeline.reports import style
-from cryoet_pipeline.reports.collect import PickTable, SeriesReport
+from cryoet_pipeline.reports.collect import PickTable, SeriesReport, TomogramInfo
 from cryoet_pipeline.reports.imaging import (
     GALLERY_SLAB_PX,
     Band,
     Depth,
     block_max,
-    block_mean,
     central_views,
     crop_centered,
     display_range,
-    mean_over_depths,
     random_positions,
     rank_bands,
     reduction_factor,
     slab_half_width_px,
     smooth,
+    sphere_sections,
     stable_seed,
 )
 from cryoet_pipeline.reports.sections.tomogram import (
     DEPTH_LETTERS,
+    Z_NOTE,
     add_scale_bar,
+    depth_title,
+    mark_depths,
     open_volume,
     picture,
     show,
+    slab_caption,
+    z_nm,
 )
 
 TILES_PER_BAND = 8
@@ -48,28 +53,84 @@ TILES_PER_BAND = 8
 BAND_TITLES = {"high": "High scores", "middle": "Middle scores", "low": "Low scores"}
 
 
-def picks_page(report: SeriesReport, bands: list[Band]) -> Figure:
+def picks_page(report: SeriesReport, depths: list[Depth]) -> Figure:
+    """The picks on the tomogram: three XY slices and one XZ slice, as on the tomogram page."""
+
     picks = report.picks
-    assert picks is not None
+    info = report.tomogram
+    assert picks is not None and info is not None
+    volume = open_volume(info.artifact.path)
+    half = slab_half_width_px(info.voxel_spacing_angstrom)
+    depth_px, height_px, width_px = info.shape
+    radius, radius_source = report.particle_radius()
+
+    tops = [picture(volume, 0, depth.center, half) for depth in depths]
+    side = picture(volume, 1, height_px // 2, half)
+    limits = display_range([image for image, _ in (*tops, side)])
+
     figure = style.new_page(f"{report.series} · Picks", _subtitle(report))
     grid = GridSpec(
-        2, 3, figure=figure, left=0.055, right=0.975, top=0.84, bottom=0.16,
-        hspace=0.45, wspace=0.3,
+        2, 3, figure=figure, left=0.035, right=0.975, top=style.CONTENT_TOP,
+        bottom=style.CONTENT_BOTTOM - 0.02, height_ratios=[1.25, 1.0], hspace=0.22,
+        wspace=0.08,
     )
-    _map_panel(figure.add_subplot(grid[0, 0]), report)
-    _height_panel(figure.add_subplot(grid[0, 1]), report)
+    # The histogram's axis labels need the room the pictures above do not.
+    lower = GridSpecFromSubplotSpec(1, 3, subplot_spec=grid[1, :], wspace=0.3,
+                                    width_ratios=[1.0, 1.0, 0.85])
+    for column, (letter, depth, (image, factor)) in enumerate(
+        zip(DEPTH_LETTERS, depths, tops, strict=False)
+    ):
+        axes = figure.add_subplot(grid[0, column])
+        show(axes, image, factor, limits)
+        sections = sphere_sections(picks.z_px, depth.center, half, radius)
+        _circles(axes, picks.x_px, picks.y_px, sections)
+        cut = int(np.count_nonzero(np.isfinite(sections)))
+        style.image_axes(axes, f"{depth_title(letter, depth, info)} · {cut} picks")
+        if column == 0:
+            add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, height_px)
+
+    axes = figure.add_subplot(lower[0, 0:2])
+    image, factor = side
+    show(axes, image, factor, limits, aspect="equal")
+    sections = sphere_sections(picks.y_px, height_px // 2, half, radius)
+    _circles(axes, picks.x_px, picks.z_px, sections)
+    mark_depths(axes, depths, width_px)
+    cut = int(np.count_nonzero(np.isfinite(sections)))
+    style.image_axes(axes, f"XZ slice through the middle in y: x across, z up · {cut} picks")
+    add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, depth_px)
+
+    _height_panel(figure.add_subplot(lower[0, 2]), report, info)
+
+    style.caption(
+        figure,
+        f"Circles: a sphere with {radius_source} ({radius:.1f} voxels, "
+        f"{radius * info.voxel_spacing_angstrom / 10:.1f} nm) around every pick, cut by the "
+        "slab as 3dmod draws spheres: full size where the slab passes through a pick's centre, "
+        "smaller for picks just above or below it. " + slab_caption(info),
+    )
+    return figure
+
+
+def scores_page(report: SeriesReport, bands: list[Band]) -> Figure:
+    picks = report.picks
+    assert picks is not None
+    figure = style.new_page(f"{report.series} · Pick scores", _subtitle(report))
+    grid = GridSpec(
+        2, 3, figure=figure, left=0.065, right=0.975, top=style.CONTENT_TOP,
+        bottom=style.CONTENT_BOTTOM, hspace=0.5, wspace=0.32,
+    )
+    _rank_panel(figure.add_subplot(grid[0, 0:2]), picks, bands)
+    _noise_panel(figure.add_subplot(grid[1, 0:2]), picks)
     _template_panel(figure, grid[0, 2], report)
-    _rank_panel(figure.add_subplot(grid[1, 0]), picks, bands)
-    _noise_panel(figure.add_subplot(grid[1, 1]), picks)
     _numbers_panel(figure.add_subplot(grid[1, 2]), report)
     style.caption(
         figure,
         "σ: a score divided by the standard deviation of the search's own noise. The "
         "one-false-positive height is the score noise alone reaches about once in this whole "
-        "search: a pick above it is unlikely to be noise on its own. Below it, picks count as "
-        "evidence only as a group, through how many more there are than noise alone gives "
-        "(the gap between the two lines, bottom middle). Dots on the score curve are the picks "
-        "shown in the galleries.",
+        "search, so a pick above it is unlikely to be noise on its own. Below it, picks count "
+        "as evidence only as a group: through how far the blue line runs above the grey one "
+        "(bottom). Ranks are on a log scale, so the best picks get room. Dots: the picks the "
+        "galleries show.",
     )
     return figure
 
@@ -92,49 +153,19 @@ def _subtitle(report: SeriesReport) -> str:
     return " · ".join(parts)
 
 
-def _map_panel(axes: Axes, report: SeriesReport) -> None:
+def _height_panel(axes: Axes, report: SeriesReport, info: TomogramInfo) -> None:
     picks = report.picks
     assert picks is not None
-    info = report.tomogram
-    if info is None or picks.count == 0:
-        style.image_axes(axes, "Where the picks are, seen from above")
-        axes.text(0.5, 0.5, "no tomogram" if info is None else "no picks",
-                  transform=axes.transAxes, ha="center", color=style.INK_SECONDARY)
-        return
-    volume = open_volume(info.artifact.path)
-    low, high = np.quantile(picks.z_px, [0.05, 0.95])
-    image = smooth(mean_over_depths(volume, int(math.floor(low)), int(math.ceil(high)) + 1))
-    factor = reduction_factor(image.shape)
-    reduced = block_mean(image, factor)
-    show(axes, reduced, factor, display_range([reduced]))
-    axes.scatter(
-        picks.x_px, picks.y_px, s=9, facecolors="none", edgecolors=style.PICK_COLOUR,
-        linewidths=0.5,
-    )
-    style.image_axes(axes, "Where the picks are, seen from above")
-    add_scale_bar(axes, info, info.shape[2], info.shape[1])
-
-
-def _height_panel(axes: Axes, report: SeriesReport) -> None:
-    picks = report.picks
-    assert picks is not None
-    axes.set_title("How high the picks sit", loc="left")
-    info = report.tomogram
+    axes.set_title("Where the picks sit in z", loc="left")
     if picks.count == 0:
         axes.text(0.5, 0.5, "no picks", transform=axes.transAxes, ha="center")
         return
-    voxel_nm = info.voxel_spacing_angstrom / 10.0 if info is not None else None
-    if info is None or voxel_nm is None:
-        heights = picks.z_px
-        top = float(heights.max()) + 1.0
-        axes.set_xlabel("Height (voxels)")
-    else:
-        heights = picks.z_px * voxel_nm
-        top = info.depth_nm
-        axes.set_xlabel("Height above the bottom of the volume (nm)")
+    voxel_nm = info.voxel_spacing_angstrom / 10.0
+    heights = picks.z_px * voxel_nm
+    top = info.depth_nm
     edges = np.linspace(0.0, top, 31)
     axes.hist(heights, bins=edges.tolist(), color=style.SERIES_BLUE, rwidth=0.85)
-    if voxel_nm is not None and report.template is not None:
+    if report.template is not None:
         margin = report.template.box_px / 2.0 * voxel_nm
         if 2 * margin < top:
             for edge in (margin, top - margin):
@@ -143,23 +174,24 @@ def _height_panel(axes: Axes, report: SeriesReport) -> None:
             axes.hlines(even, margin, top - margin, color=style.INK_SECONDARY, linewidth=0.9)
             axes.annotate(
                 "if spread evenly", (margin, even), xytext=(2, 3),
-                textcoords="offset points", ha="left", fontsize=6.5,
+                textcoords="offset points", ha="left", fontsize=style.FONT_TINY,
                 color=style.INK_SECONDARY,
             )
     axes.set_xlim(0.0, top)
+    axes.set_xlabel("z (nm above the bottom of the tomogram)")
     axes.set_ylabel("Picks")
     axes.grid(True, axis="y")
 
 
 def _template_panel(figure: Figure, cell: SubplotSpec, report: SeriesReport) -> None:
-    inner = GridSpecFromSubplotSpec(2, 3, subplot_spec=cell, height_ratios=[1.0, 0.8],
-                                    hspace=0.15, wspace=0.08)
+    inner = GridSpecFromSubplotSpec(2, 3, subplot_spec=cell, height_ratios=[1.0, 1.0],
+                                    hspace=0.1, wspace=0.08)
     template = report.template
     if template is None:
         axes = figure.add_subplot(inner[:, :])
         axes.axis("off")
         axes.set_title("Template", loc="left")
-        axes.text(0.0, 0.8, "The template these picks were matched with\nis not on disk.",
+        axes.text(0.0, 0.8, "The template these picks were\nmatched with is not on disk.",
                   va="top", color=style.INK_SECONDARY)
         return
     volume = template.template
@@ -176,13 +208,11 @@ def _template_panel(figure: Figure, cell: SubplotSpec, report: SeriesReport) -> 
         axes.imshow(section, cmap="gray", vmin=low, vmax=high, origin="lower")
         if mask_section is not None and mask_section.max() > 0:
             axes.contour(mask_section, levels=[0.5 * float(mask_section.max())],
-                         colors=style.MASK_COLOUR, linewidths=0.7)
-        style.image_axes(axes, ("Template · " if column == 0 else "") + name)
+                         colors=style.MASK_COLOUR, linewidths=0.8)
+        style.image_axes(axes, name)
     text = figure.add_subplot(inner[1, :])
     text.axis("off")
-    lines = []
-    if template.source:
-        lines.append(f"From {template.source}")
+    lines = [f"Template from {template.source}" if template.source else "Template"]
     box = f"Box {template.box_px} voxels"
     if template.voxel_spacing_angstrom is not None:
         box += f" at {template.voxel_spacing_angstrom:.2f} Å"
@@ -192,10 +222,10 @@ def _template_panel(figure: Figure, cell: SubplotSpec, report: SeriesReport) -> 
     if template.mask_radius_px is not None:
         lines.append(f"Mask radius {template.mask_radius_px:g} voxels (blue)")
     if template.inverted is not None:
-        lines.append("Contrast inverted to match the tomogram" if template.inverted
+        lines.append("Contrast inverted to match" if template.inverted
                      else "Contrast as in the source map")
-    text.text(0.0, 0.95, "\n".join(lines), va="top", fontsize=7, linespacing=1.45,
-              color=style.INK_SECONDARY)
+    text.text(0.0, 0.95, "\n".join(lines), va="top", fontsize=style.FONT_SMALL,
+              linespacing=1.45, color=style.INK_SECONDARY)
 
 
 def _rank_panel(axes: Axes, picks: PickTable, bands: list[Band]) -> None:
@@ -205,41 +235,45 @@ def _rank_panel(axes: Axes, picks: PickTable, bands: list[Band]) -> None:
                   ha="center", color=style.INK_SECONDARY)
         return
     rank_curve(axes, picks, bands, labels=True)
-    axes.set_xlabel("Rank")
+    axes.set_xlabel("Rank (log scale)")
     axes.set_ylabel(_score_label(picks))
 
 
 def rank_curve(axes: Axes, picks: PickTable, bands: list[Band], *, labels: bool) -> None:
-    """Scores from best to worst, with the gallery's thirds and the picks it shows.
+    """Scores from best to worst on a log rank axis, with the gallery's thirds marked.
 
     One drawing for the series page and the overview, so that the two cannot
-    disagree about what a band is. `labels` names the bands and the
-    one-false-positive line; small multiples name them once, not in every panel.
+    disagree about what a band is. The rank axis is logarithmic because the part
+    worth reading is at the start: a curve that bends after its first few dozen
+    picks spends most of a linear axis on its flat tail. `labels` names the
+    bands and the one-false-positive line; small multiples name them once.
     """
 
     sigma = picks.sigma
     values = sigma if sigma is not None else picks.score
     ordered = values[picks.ranked()]
     ranks = np.arange(1, ordered.size + 1)
-    axes.plot(ranks, ordered, color=style.SERIES_BLUE, linewidth=1.3)
+    axes.plot(ranks, ordered, color=style.SERIES_BLUE, linewidth=1.4)
     for band in bands:
         shown = band.positions
-        axes.scatter(ranks[shown], ordered[shown], s=14, color=style.SERIES_BLUE,
+        axes.scatter(ranks[shown], ordered[shown], s=18, color=style.SERIES_BLUE,
                      edgecolors="white", linewidths=0.6, zorder=3)
         if band.first_rank > 1:
             axes.axvline(band.first_rank - 0.5, color=style.INK_MUTED, linewidth=0.6)
         if labels:
-            axes.text((band.first_rank + band.last_rank) / 2.0, 0.98, band.name,
+            axes.text(math.sqrt(band.first_rank * band.last_rank), 0.98, band.name,
                       transform=axes.get_xaxis_transform(), ha="center", va="top",
-                      fontsize=6.5, color=style.INK_SECONDARY)
+                      fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
     if sigma is not None and picks.floor_sigma is not None:
         axes.axhline(picks.floor_sigma, color=style.INK_SECONDARY, linewidth=0.8)
         if labels:
-            axes.annotate("one-false-positive height", (1.0, picks.floor_sigma),
-                          xycoords=("axes fraction", "data"), xytext=(0, 2),
-                          textcoords="offset points", ha="right", va="bottom", fontsize=6.5,
-                          color=style.INK_SECONDARY)
-    axes.set_xlim(0.5, ordered.size + 0.5)
+            axes.annotate("one-false-positive height", (0.0, picks.floor_sigma),
+                          xycoords=("axes fraction", "data"), xytext=(4, 3),
+                          textcoords="offset points", ha="left", va="bottom",
+                          fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
+    axes.set_xscale("log")
+    axes.set_xlim(0.8, ordered.size * 1.25)
+    axes.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
     axes.grid(True, axis="y")
 
 
@@ -306,8 +340,8 @@ def _score_overview_page(
         + ("all on one score axis, in σ" if limits is not None else "each on its own score axis"),
     )
     grid = GridSpec(
-        OVERVIEW_ROWS, OVERVIEW_COLUMNS, figure=figure, left=0.06, right=0.975, top=0.85,
-        bottom=0.17, hspace=0.6, wspace=0.2,
+        OVERVIEW_ROWS, OVERVIEW_COLUMNS, figure=figure, left=0.065, right=0.975,
+        top=style.CONTENT_TOP, bottom=style.CONTENT_BOTTOM, hspace=0.75, wspace=0.22,
     )
     for index, report in enumerate(reports):
         picks = report.picks
@@ -319,21 +353,21 @@ def _score_overview_page(
             axes.set_ylim(*limits)
         title = f"{report.series} · {picks.count:,} picks"
         if picks.above_floor is not None:
-            title += f" · {picks.above_floor:,} above the height"
+            title += f", {picks.above_floor:,} above"
         if report.series in contents:
             title += f" · p. {contents[report.series]}"
-        axes.set_title(title, loc="left", fontsize=8)
+        axes.set_title(title, loc="left", fontsize=style.FONT_SMALL)
         if column == 0 or limits is None:
             axes.set_ylabel(_score_label(picks))
         if index + OVERVIEW_COLUMNS >= len(reports):
-            axes.set_xlabel("Rank")
+            axes.set_xlabel("Rank (log scale)")
     style.caption(
         figure,
-        "Read each curve from the left. A steep start that flattens into a long tail is a group "
-        "of high-scoring peaks above many similar weak ones. The grey line is the "
-        "one-false-positive height. Thin vertical lines split each tomogram's picks into "
-        "thirds, as its galleries do, and the dots are the picks the galleries show. Each rank "
-        "axis runs to that tomogram's own number of picks; p. is where its pages start.",
+        "A steep start that flattens into a long tail is a group of high-scoring peaks above "
+        "many similar weak ones. The grey line is the one-false-positive height, and 'above' "
+        "counts the picks over it. Thin vertical lines split each tomogram's picks into "
+        "thirds, as its galleries do; the dots are the picks the galleries show. p. is where "
+        "the tomogram's own pages start.",
     )
     return figure
 
@@ -352,9 +386,9 @@ def _noise_panel(axes: Axes, picks: PickTable) -> None:
     observed = np.asarray([np.count_nonzero(sigma >= height) for height in heights])
     expected = picks.expected_from_noise(heights)
     assert expected is not None
-    axes.step(heights, observed, where="post", color=style.SERIES_BLUE, linewidth=1.3,
+    axes.step(heights, observed, where="post", color=style.SERIES_BLUE, linewidth=1.4,
               label="picks")
-    axes.plot(heights, expected, color=style.INK_SECONDARY, linewidth=1.0,
+    axes.plot(heights, expected, color=style.INK_SECONDARY, linewidth=1.1,
               label="noise alone (expected)")
     if picks.floor_sigma is not None:
         axes.axvline(picks.floor_sigma, color=style.INK_MUTED, linewidth=0.6)
@@ -375,8 +409,8 @@ def _numbers_panel(axes: Axes, report: SeriesReport) -> None:
     artifact = report.artifacts.picks
     membrane_filter = artifact.parameters.get("membrane_filter") if artifact else None
     if isinstance(membrane_filter, dict) and "picks" in membrane_filter:
-        lines.append(f"  kept {membrane_filter.get('kept')} of {membrane_filter['picks']} "
-                     "by distance to a membrane")
+        lines.append(f"  kept {membrane_filter.get('kept')} of {membrane_filter['picks']}")
+        lines.append("  by distance to a membrane")
     if picks.floor_sigma is not None:
         lines.append(f"One-false-positive height: {picks.floor_sigma:.2f}σ")
         if picks.above_floor is not None:
@@ -386,27 +420,26 @@ def _numbers_panel(axes: Axes, report: SeriesReport) -> None:
         lines.append(f"Best pick: {float(sigma.max()):.2f}σ")
         lines.append(f"Lowest pick: {float(sigma.min()):.2f}σ")
     if picks.excess_at_cut_off is not None:
-        lines.append(f"Picks beyond what noise gives: {picks.excess_at_cut_off:+.0f}")
+        lines.append(f"Beyond what noise gives: {picks.excess_at_cut_off:+.0f}")
     if picks.search_space is not None:
-        lines.append(f"Positions × orientations searched: {picks.search_space:.2e}")
+        lines.append(f"Positions × orientations: {picks.search_space:.2e}")
     info = report.tomogram
     if info is not None and picks.z_sd_px is not None:
-        voxel_nm = info.voxel_spacing_angstrom / 10.0
-        spread = f"Height spread: {picks.z_sd_px * voxel_nm:.0f} nm"
+        spread = f"Spread in z: {z_nm(picks.z_sd_px, info):.0f} nm"
         if picks.uniform_z_sd_px is not None:
-            spread += f" (if even: {picks.uniform_z_sd_px * voxel_nm:.0f} nm)"
+            spread += f" (even: {z_nm(picks.uniform_z_sd_px, info):.0f} nm)"
         lines.append(spread)
     lines.append(
-        "Correlation map: " + (report.correlation.source if report.correlation else "not saved")
+        "Correlation map: " + ("saved" if report.correlation else "not saved")
     )
     record = report.qc.get("particle_picking")
     if record is not None:
         lines.append("")
         lines.append(f"QC: {style.STATUS_LABELS.get(record.status, record.status)}")
         for warning in record.warnings:
-            lines.extend(textwrap.wrap(warning, 58))
-    axes.text(0.0, 0.98, "\n".join(lines), transform=axes.transAxes, va="top", fontsize=7,
-              linespacing=1.45)
+            lines.extend(textwrap.wrap(warning, 40))
+    axes.text(0.0, 0.98, "\n".join(lines), transform=axes.transAxes, va="top",
+              fontsize=style.FONT_SMALL, linespacing=1.45)
 
 
 def correlation_page(report: SeriesReport, depths: list[Depth]) -> Figure:
@@ -437,15 +470,16 @@ def correlation_page(report: SeriesReport, depths: list[Depth]) -> Figure:
         upper = max(upper, picks.floor_sigma + 0.5)
     map_limits = (float(np.median(values)), upper)
 
-    thickness_nm = (depths[0].stop - depths[0].start) * info.voxel_spacing_angstrom / 10.0
+    thickness_nm = z_nm(depths[0].stop - depths[0].start, info)
     figure = style.new_page(
         f"{report.series} · Correlation map",
-        f"Best score in each {thickness_nm:.0f} nm slab, in {unit} · map {correlation.source} · "
-        "picks whose centre lies in the slab are circled",
+        f"Best score in each {thickness_nm:.0f} nm slab of z, in {unit} · picks whose centre "
+        "lies in the slab are circled",
     )
     grid = GridSpec(
-        2, 4, figure=figure, left=0.035, right=0.965, top=0.85, bottom=0.16,
-        width_ratios=[1.0, 1.0, 1.0, 0.04], hspace=0.16, wspace=0.06,
+        2, 4, figure=figure, left=0.035, right=0.955, top=style.CONTENT_TOP,
+        bottom=style.PICTURE_BOTTOM + 0.02, width_ratios=[1.0, 1.0, 1.0, 0.04], hspace=0.18,
+        wspace=0.06,
     )
     radius = report.particle_radius_px
     mappable = None
@@ -453,53 +487,58 @@ def correlation_page(report: SeriesReport, depths: list[Depth]) -> Figure:
         zip(DEPTH_LETTERS, depths, tops, maps, strict=False)
     ):
         inside = (np.rint(picks.z_px) >= depth.start) & (np.rint(picks.z_px) < depth.stop)
-        top_nm = depth.start * info.voxel_spacing_angstrom / 10.0
-        bottom_nm = depth.stop * info.voxel_spacing_angstrom / 10.0
+        radii = np.where(inside, radius, np.nan)
         axes = figure.add_subplot(grid[0, column])
         show(axes, image, factor, limits)
-        _circles(axes, picks.x_px[inside], picks.y_px[inside], radius)
-        style.image_axes(axes, f"{letter} · {top_nm:.0f}–{bottom_nm:.0f} nm up · "
-                               f"{int(inside.sum())} picks")
+        _circles(axes, picks.x_px, picks.y_px, radii)
+        style.image_axes(
+            axes,
+            f"{letter} · z = {z_nm(depth.start, info):.0f}–{z_nm(depth.stop, info):.0f} nm · "
+            f"{int(inside.sum())} picks",
+        )
         if column == 0:
-            add_scale_bar(axes, info, info.shape[2], info.shape[1])
+            add_scale_bar(axes, info.voxel_spacing_angstrom, info.shape[2], info.shape[1])
         axes = figure.add_subplot(grid[1, column])
         show(axes, slab, map_factor, map_limits, cmap=style.MAGNITUDE_MAP)
         mappable = axes.images[0]
-        _circles(axes, picks.x_px[inside], picks.y_px[inside], radius)
+        _circles(axes, picks.x_px, picks.y_px, radii)
         style.image_axes(axes)
     assert mappable is not None
     colorbar = figure.colorbar(mappable, cax=figure.add_subplot(grid[1, 3]))
-    colorbar.set_label(f"Best score in the slab ({unit})", fontsize=7)
-    colorbar.outline.set_visible(False)
-    colorbar.ax.tick_params(labelsize=6)
+    style.colour_bar_style(colorbar, f"Best score in the slab ({unit})")
     if picks.floor_sigma is not None and picks.search_sigma is not None:
         colorbar.ax.axhline(picks.floor_sigma, color=style.INK, linewidth=0.8)
 
     note = (
-        "Top: the tomogram at the middle of each slab (protein dark, 10 nm average). "
-        "Bottom: the correlation map over the whole slab; bright is where the template fits. "
-        "A circle without a bright spot should not happen; a bright spot without a circle is a "
-        "peak the picking left out: below the cut-off, outside the search mask, or too close to "
-        "a better pick."
+        "Top: the tomogram at the middle of each slab (protein dark). Bottom: the correlation "
+        "map over the whole slab; bright is where the template fits. A circle without a bright "
+        "spot should not happen; a bright spot without one is a peak picking left out (below "
+        "the cut-off, outside the mask, or next to a better pick)."
     )
     if picks.floor_sigma is not None and picks.search_sigma is not None:
         note += " The line on the colour bar is the one-false-positive height."
     if correlation.agreement is not None:
         note += (
             f" Check: at {correlation.agreement:.0%} of picks the map holds the pick's own "
-            "score, as it should at all of them; much less means the map and the coordinates "
-            "disagree, and the circles are misplaced."
+            "score, as it should at all of them."
         )
+    note += " " + Z_NOTE
     style.caption(figure, note)
     return figure
 
 
-def _circles(axes: Axes, x: np.ndarray, y: np.ndarray, radius: float) -> None:
-    if x.size == 0:
+def _circles(axes: Axes, x: np.ndarray, y: np.ndarray, radii: np.ndarray) -> None:
+    """A ring per pick, each its own size; NaN radii are left out."""
+
+    keep = np.isfinite(radii)
+    if not keep.any():
         return
-    patches = [Circle((float(cx), float(cy)), radius) for cx, cy in zip(x, y, strict=True)]
+    patches = [
+        Circle((float(cx), float(cy)), float(radius))
+        for cx, cy, radius in zip(x[keep], y[keep], radii[keep], strict=True)
+    ]
     axes.add_collection(
-        PatchCollection(patches, facecolor="none", edgecolor=style.PICK_COLOUR, linewidth=0.7)
+        PatchCollection(patches, facecolor="none", edgecolor=style.PICK_COLOUR, linewidth=0.8)
     )
 
 
@@ -573,7 +612,7 @@ def build_gallery(report: SeriesReport, bands: list[Band]) -> Gallery:
                                  stable_seed(report.series))
     gallery["random"] = GalleryBand(
         "random",
-        "Random positions · anywhere in x and y, at depths drawn from the picks'",
+        "Random positions · anywhere in x and y, at z values drawn from the picks'",
         [tile((int(z), int(y), int(x)), f"random {number}")
          for number, (z, y, x) in enumerate(positions, 1)],
     )
@@ -587,33 +626,32 @@ def gallery_page(report: SeriesReport, gallery: Gallery, keys: tuple[str, str]) 
     figure = style.new_page(f"{report.series} · Picks by score: {names}",
                             "Each tile: XY | XZ | YZ through the pick's centre")
     cmap = style.GRAY_WITH_GAPS
-    top, bottom = 0.885, 0.13
+    top, bottom = 0.875, style.PICTURE_BOTTOM - 0.01
     block = (top - bottom) / 2.0
     columns = 4
     left, right, gap = 0.035, 0.965, 0.012
     width = (right - left - gap * (columns - 1)) / columns
-    row_height = (block - 0.05) / 2.0
+    row_height = (block - 0.055) / 2.0
     for block_index, band in enumerate(shown):
         block_top = top - block_index * block
-        figure.text(left, block_top - 0.005, band.header, fontsize=9, fontweight="bold",
-                    va="top")
+        figure.text(left, block_top - 0.005, band.header, fontsize=style.FONT_TEXT,
+                    fontweight="bold", va="top")
         for number, one in enumerate(band.tiles):
             row, column = divmod(number, columns)
             axes = figure.add_axes((
                 left + column * (width + gap),
-                block_top - 0.04 - (row + 1) * row_height,
+                block_top - 0.045 - (row + 1) * row_height,
                 width,
-                row_height - 0.025,
+                row_height - 0.03,
             ))
             axes.imshow(one.image, cmap=cmap, vmin=gallery.limits[0], vmax=gallery.limits[1],
                         origin="lower")
             style.image_axes(axes, one.title)
     style.caption(
         figure,
-        f"{GALLERY_SLAB_PX}-voxel central slabs through each pick, protein dark, smoothed like "
-        "the tomogram pages, all tiles of this tilt-series on one grey scale. Ranks are spread "
-        "evenly through each third of the picks. Compare the low third with the random "
-        "positions: if they look alike, the low-scoring picks are probably not particles.",
+        f"{GALLERY_SLAB_PX}-voxel central slabs through each pick, protein dark, all tiles of "
+        "this tilt-series on one grey scale. Ranks are spread evenly through each third of the "
+        "picks. Compare the low third with the random positions: if they look alike, the "
+        "low-scoring picks are probably not particles.",
     )
     return figure
-

@@ -295,6 +295,24 @@ def choose_depths(
     ]
 
 
+def sphere_sections(
+    centres: np.ndarray, plane: float, half_width: float, radius: float
+) -> np.ndarray:
+    """How large a sphere around each pick appears in a slab, NaN where it misses it.
+
+    The slab spans `plane - half_width .. plane + half_width` along the axis the
+    centres are given on. A sphere whose centre lies inside it shows at its full
+    radius; one centred above or below shows the section nearest its centre,
+    smaller the further away it is, as 3dmod draws spheres on neighbouring
+    sections. So every particle the slab cuts is marked, and none it misses.
+    """
+
+    distance = np.maximum(np.abs(centres - plane) - half_width, 0.0)
+    squared = radius**2 - distance**2
+    with np.errstate(invalid="ignore"):
+        return np.where(squared > 0.0, np.sqrt(np.maximum(squared, 0.0)), np.nan)
+
+
 def nice_length(target: float) -> float:
     """The largest of 1, 2 or 5 times a power of ten that does not exceed `target`."""
 

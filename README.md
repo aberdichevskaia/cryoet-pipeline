@@ -187,9 +187,11 @@ with its picks overlaid, for ChimeraX (`.cxc`) and 3dmod (`.mrc` + `.mod`). Open
 one or two before you go on.
 
 For an overview of the whole project, write the report: one PDF with a table of
-all tilt-series and each step's verdict, then, per tilt-series, the tomogram, its
-membranes, the CTF fit, the picks against noise, the correlation map and
-galleries of picks by score. It reads the project and runs nothing. It needs
+all tilt-series and each step's verdict, the score curves of all tomograms side
+by side, then, per tilt-series, the tilt alignment (residual and beads or
+patches per tilt, a few aligned tilts), the CTF fit, the tomogram, its
+membranes, the picks on the tomogram and their scores against noise, the
+correlation map and galleries of picks by score. It reads the project and runs nothing. It needs
 matplotlib: `python -m pip install -e ".[io,viz]"`.
 
 ```bash

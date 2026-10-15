@@ -24,7 +24,7 @@ from matplotlib.figure import Figure
 from cryoet_pipeline.reports import style
 from cryoet_pipeline.reports.collect import SeriesReport, summary_row
 from cryoet_pipeline.reports.imaging import choose_depths, rank_bands, slab_half_width_px
-from cryoet_pipeline.reports.sections import ctf, front, picking, tomogram
+from cryoet_pipeline.reports.sections import alignment, ctf, front, picking, tomogram
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,12 @@ def write_report(
         front_matter.append(
             PlannedPage("picks per tomogram", lambda: front.picks_per_tomogram_page(rows))
         )
+    # Likewise one curve: a single picked series has it on its own picks page.
+    if sum(report.picks is not None and report.picks.has_scores for report in reports) > 1:
+        front_matter.extend(
+            PlannedPage("scores by tomogram", build)
+            for build in picking.score_overview_pages(reports, contents)
+        )
     front_matter.extend(
         PlannedPage("warnings", build) for build in front.warning_pages(reports)
     )
@@ -113,7 +119,7 @@ def write_report(
 
 
 def series_pages(report: SeriesReport) -> list[PlannedPage]:
-    """The pages one series gets, decided by what exists for it."""
+    """The pages one series gets, in the pipeline's order, decided by what exists for it."""
 
     label = report.series
     picks = report.picks
@@ -131,16 +137,26 @@ def series_pages(report: SeriesReport) -> list[PlannedPage]:
     )
 
     pages: list[PlannedPage] = []
+    if report.alignment is not None:
+        pages.append(PlannedPage(f"{label} · tilt alignment",
+                                 lambda: alignment.alignment_page(report)))
+        if report.alignment.aligned_stack is not None:
+            pages.append(PlannedPage(f"{label} · aligned tilts",
+                                     lambda: alignment.aligned_tilts_page(report)))
+    if report.ctf is not None:
+        pages.append(PlannedPage(f"{label} · CTF", lambda: ctf.ctf_page(report)))
     if info is not None:
         pages.append(PlannedPage(f"{label} · tomogram",
                                  lambda: tomogram.tomogram_page(report, depths)))
         if report.artifacts.segmentation is not None:
             pages.append(PlannedPage(f"{label} · membranes",
                                      lambda: tomogram.membranes_page(report, depths)))
-    if report.ctf is not None:
-        pages.append(PlannedPage(f"{label} · CTF", lambda: ctf.ctf_page(report)))
     if picks is not None:
-        pages.append(PlannedPage(f"{label} · picks", lambda: picking.picks_page(report, bands)))
+        if info is not None and picks.count:
+            pages.append(PlannedPage(f"{label} · picks",
+                                     lambda: picking.picks_page(report, depths)))
+        pages.append(PlannedPage(f"{label} · pick scores",
+                                 lambda: picking.scores_page(report, bands)))
         if info is not None and report.correlation is not None and picks.count:
             pages.append(PlannedPage(f"{label} · correlation map",
                                      lambda: picking.correlation_page(report, depths)))

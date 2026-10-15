@@ -17,17 +17,19 @@ from cryoet_pipeline.reports.collect import (
     qc_step,
 )
 
-TABLE_ROWS_PER_PAGE = 22
-CONTENTS_ROWS_PER_COLUMN = 30
-WARNING_LINES_PER_PAGE = 40
-CONFIG_LINES_PER_PAGE = 54
+TABLE_ROWS_PER_PAGE = 18
+CONTENTS_ROWS_PER_COLUMN = 24
+WARNING_LINES_PER_PAGE = 32
+CONFIG_LINES_PER_PAGE = 46
 
 HOW_TO_READ = (
-    "Each tilt-series has its own pages, listed in the contents: the tomogram, its membranes "
-    "if they were segmented, the CTF fit, the picks, the correlation map, and galleries of "
-    "picks by score.",
+    "Each tilt-series has its own pages, listed in the contents: the tilt alignment, the "
+    "aligned tilts, the CTF fit, the tomogram, its membranes if they were segmented, the "
+    "picks on the tomogram, their scores, the correlation map, and galleries of picks by "
+    "score.",
     "Grey pictures show protein dark, as in 3dmod. They are averages of slabs about 10 nm "
-    "thick, lightly smoothed, because a single slice at this binning is mostly noise.",
+    "thick, lightly smoothed, because a single slice at this binning is mostly noise. z is "
+    "the height above the bottom of the tomogram.",
     "Scores are in σ: how many standard deviations of the search's own noise a peak stands "
     "above zero. The one-false-positive height is the score that noise alone reaches about "
     "once in the whole search, so a pick above it is unlikely to be noise on its own. Below "
@@ -61,18 +63,20 @@ def title_page(
     )
     for index, (value, label) in enumerate(tiles):
         x = 0.035 + index * 0.235
-        figure.text(x, 0.82, value, fontsize=28, va="top")
-        figure.text(x, 0.755, label, fontsize=8.5, color=style.INK_SECONDARY, va="top")
+        figure.text(x, 0.835, value, fontsize=style.FONT_HERO, va="top")
+        figure.text(x, 0.765, label, fontsize=style.FONT_TEXT, color=style.INK_SECONDARY,
+                    va="top")
 
-    figure.text(0.035, 0.64, "How to read this report", fontsize=11, fontweight="bold",
-                va="top")
-    y = 0.595
+    figure.text(0.035, 0.675, "How to read this report", fontsize=style.FONT_PANEL_TITLE + 1,
+                fontweight="bold", va="top")
+    y = 0.63
     for paragraph in HOW_TO_READ:
-        lines = textwrap.wrap(paragraph, 150)
-        figure.text(0.05, y, "•", fontsize=8.5, va="top")
-        figure.text(0.062, y, "\n".join(lines), fontsize=8.5, va="top", linespacing=1.4)
-        y -= 0.026 * len(lines) + 0.022
-    figure.text(0.035, 0.07, f"Written by {software}.", fontsize=7.5,
+        lines = textwrap.wrap(paragraph, 128)
+        figure.text(0.05, y, "•", fontsize=style.FONT_TEXT, va="top")
+        figure.text(0.062, y, "\n".join(lines), fontsize=style.FONT_TEXT, va="top",
+                    linespacing=1.35)
+        y -= 0.0285 * len(lines) + 0.02
+    figure.text(0.035, 0.05, f"Written by {software}.", fontsize=style.FONT_SMALL,
                 color=style.INK_SECONDARY)
     return figure
 
@@ -94,12 +98,12 @@ def _contents_page(rows: list[SummaryRow], contents: Mapping[str, int]) -> Figur
     for index, row in enumerate(rows):
         column, line = divmod(index, CONTENTS_ROWS_PER_COLUMN)
         x = 0.035 + column * 0.47
-        y = 0.86 - line * 0.025
-        figure.text(x, y, row.series, fontsize=8.5, fontweight="bold", va="top")
-        figure.text(x + 0.13, y, _contents_note(row), fontsize=8, color=style.INK_SECONDARY,
-                    va="top")
-        figure.text(x + 0.43, y, str(contents.get(row.series, "")), fontsize=8.5, ha="right",
-                    va="top")
+        y = style.CONTENT_TOP - line * 0.03
+        figure.text(x, y, row.series, fontsize=style.FONT_TEXT, fontweight="bold", va="top")
+        figure.text(x + 0.14, y, _contents_note(row), fontsize=style.FONT_SMALL,
+                    color=style.INK_SECONDARY, va="top")
+        figure.text(x + 0.43, y, str(contents.get(row.series, "")), fontsize=style.FONT_TEXT,
+                    ha="right", va="top")
     return figure
 
 
@@ -124,8 +128,8 @@ def summary_table_pages(rows: Sequence[SummaryRow]) -> list[Callable[[], Figure]
 
 _TABLE_COLUMNS = (
     "Series",
-    "Views\nused / all",
-    "Tilts\n(°)",
+    "Tilts\nused / all",
+    "Tilt range\n(°)",
     "Defocus\n(µm)",
     "CTF fit\nat 0° (Å)",
     "Alignment\nresidual (nm)",
@@ -169,7 +173,7 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
         text.append(values)
         colours.append(cells)
 
-    axes = figure.add_axes((0.035, 0.2, 0.93, 0.68))
+    axes = figure.add_axes((0.035, 0.24, 0.93, style.CONTENT_TOP - 0.24))
     axes.axis("off")
     table = axes.table(
         cellText=text or [[""] * len(labels)],
@@ -179,8 +183,8 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
         loc="upper center",
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(7)
-    table.scale(1.0, 1.45)
+    table.set_fontsize(style.FONT_SMALL)
+    table.scale(1.0, 1.55)
     for (row_index, _), cell in table.get_celld().items():
         cell.set_edgecolor(style.GRID)
         cell.set_linewidth(0.5)
@@ -192,11 +196,11 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
     legend = "; ".join(f"{qc_step(step).short}: {qc_step(step).label.lower()}" for step in steps)
     style.caption(
         figure,
-        "Views: used in the tomogram / collected. CTF fit at 0°: how far CTFFIND fitted Thon "
-        "rings on the view nearest 0°. Alignment residual: mean fine-alignment residual. Above "
+        "Tilts: used in the tomogram / collected. CTF fit at 0°: how far CTFFIND fitted Thon "
+        "rings on the tilt nearest 0°. Alignment residual: mean fine-alignment residual. Above "
         "the height: picks above the one-false-positive height. "
         + (f"Verdict columns: {legend}." if legend else ""),
-        y=0.15,
+        y=0.2,
     )
     return figure
 
@@ -232,11 +236,11 @@ def picks_per_tomogram_page(rows: Sequence[SummaryRow]) -> Figure:
         )
         axes.legend(loc="lower left", bbox_to_anchor=(0.0, 1.01), ncol=2)
     axes.set_yticks(positions, labels=[row.series for row in shown],
-                    fontsize=7 if len(shown) <= 40 else 5.5)
+                    fontsize=style.FONT_SMALL if len(shown) <= 30 else style.FONT_TINY - 2)
     if len(shown) <= 25:
         for position, total in zip(positions, totals, strict=True):
             axes.annotate(f"{total:,}", (total, position), xytext=(3, 0),
-                          textcoords="offset points", va="center", fontsize=6.5,
+                          textcoords="offset points", va="center", fontsize=style.FONT_TINY,
                           color=style.INK_SECONDARY)
     axes.set_xlabel("Picks")
     axes.grid(True, axis="x")
@@ -269,7 +273,7 @@ def warning_lines(reports: Sequence[SeriesReport]) -> list[tuple[str, bool]]:
             continue
         lines.append((report.series, True))
         for entry in entries:
-            wrapped = textwrap.wrap(entry, 165)
+            wrapped = textwrap.wrap(entry, 140)
             lines.append(("• " + wrapped[0], False))
             lines.extend(("   " + rest, False) for rest in wrapped[1:])
         lines.append(("", False))
@@ -291,14 +295,14 @@ def _warning_page(lines: list[tuple[str, bool]]) -> Figure:
         "Warnings and problems",
         "What each step's QC warned about, and what this report could not read",
     )
-    y = 0.87
+    y = style.CONTENT_TOP
     for text, heading in lines:
-        if heading and y < 0.87:
-            y -= 0.006
-        figure.text(0.035, y, text, fontsize=8 if heading else 7.5,
+        if heading and y < style.CONTENT_TOP:
+            y -= 0.008
+        figure.text(0.035, y, text, fontsize=style.FONT_TEXT if heading else style.FONT_SMALL,
                     fontweight="bold" if heading else "normal", va="top",
                     color=style.INK if heading else style.INK_SECONDARY)
-        y -= 0.0195
+        y -= 0.0235
     return figure
 
 
@@ -323,13 +327,13 @@ def _artifact_table(reports: list[SeriesReport]) -> Figure:
                          artifacts.segmentation, artifacts.template):
             row.append(_short_id(artifact.id, report.series) if artifact is not None else "–")
         text.append(row)
-    axes = figure.add_axes((0.035, 0.1, 0.93, 0.78))
+    axes = figure.add_axes((0.035, 0.1, 0.93, style.CONTENT_TOP - 0.1))
     axes.axis("off")
     table = axes.table(cellText=text or [[""] * len(labels)], colLabels=labels,
                        cellLoc="left", loc="upper center")
     table.auto_set_font_size(False)
-    table.set_fontsize(6.5)
-    table.scale(1.0, 1.4)
+    table.set_fontsize(style.FONT_TINY)
+    table.scale(1.0, 1.5)
     for (row_index, _), cell in table.get_celld().items():
         cell.set_edgecolor(style.GRID)
         cell.set_linewidth(0.5)
@@ -355,24 +359,25 @@ def config_pages(name: str, text: str) -> list[Callable[[], Figure]]:
 def _config_page(name: str, lines: list[str]) -> Figure:
     figure = style.new_page(f"Appendix · Lane configuration · {name}",
                             "As given to the report, verbatim")
-    figure.text(0.035, 0.88, "\n".join(line[:170] for line in lines), family="DejaVu Sans Mono",
-                fontsize=6.6, va="top", linespacing=1.3)
+    figure.text(0.035, style.CONTENT_TOP, "\n".join(line[:150] for line in lines),
+                family="DejaVu Sans Mono", fontsize=style.FONT_TINY, va="top", linespacing=1.3)
     return figure
 
 
 def error_page(label: str, error: BaseException) -> Figure:
     figure = style.new_page(f"{label} · could not be drawn",
                             "The rest of the report is unaffected")
-    message = textwrap.fill(f"{type(error).__name__}: {error}", 150)
-    figure.text(0.035, 0.85, message, fontsize=8.5, va="top", color=style.INK_SECONDARY)
+    message = textwrap.fill(f"{type(error).__name__}: {error}", 125)
+    figure.text(0.035, style.CONTENT_TOP, message, fontsize=style.FONT_TEXT, va="top",
+                color=style.INK_SECONDARY)
     return figure
 
 
 def empty_series_page(report: SeriesReport) -> Figure:
     figure = style.new_page(report.series, "Nothing to draw for this tilt-series yet")
-    lines = [textwrap.fill(problem, 150) for problem in report.problems] or [
+    lines = [textwrap.fill(problem, 125) for problem in report.problems] or [
         "The registry holds no tomogram, CTF fit or picks for it."
     ]
-    figure.text(0.035, 0.85, "\n\n".join(lines), fontsize=8.5, va="top",
+    figure.text(0.035, style.CONTENT_TOP, "\n\n".join(lines), fontsize=style.FONT_TEXT, va="top",
                 color=style.INK_SECONDARY)
     return figure

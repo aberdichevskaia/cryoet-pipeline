@@ -1,4 +1,4 @@
-"""The look every report page shares: page size, ink, colours, header and footer.
+"""The look every report page shares: page size, type, ink, colours, header and footer.
 
 Colours follow one rule each. Text is ink, never a series colour. Data series
 take categorical hues in a fixed order. Magnitudes take one blue ramp, light to
@@ -6,7 +6,10 @@ dark. Status colours mean only pass, warning and fail, and always sit beside
 the word, so that no verdict is carried by colour alone.
 
 Overlays keep one colour per thing across every page: picks are orange,
-membranes aqua, the template mask blue.
+membranes aqua, the template mask and tracked fiducials blue.
+
+Type sizes are roles rather than numbers, so that making the report larger or
+smaller is one change here and every page follows.
 """
 
 from __future__ import annotations
@@ -22,6 +25,30 @@ from matplotlib.patches import Rectangle
 PAGE_SIZE = (11.69, 8.27)
 """A4 landscape, in inches: wide enough for three tomogram panels and a summary table."""
 
+FONT_PAGE_TITLE = 17.0
+FONT_SUBTITLE = 11.0
+FONT_PANEL_TITLE = 11.0
+FONT_TEXT = 10.0
+"""Body text, axis labels, the titles of picture panels."""
+FONT_CAPTION = 9.5
+FONT_SMALL = 9.0
+"""Tick labels, legends, table cells, footers."""
+FONT_TINY = 8.5
+"""Labels written inside a plot or a picture: reference lines, scale bars, colour bars."""
+FONT_HERO = 30.0
+
+TITLE_Y = 0.958
+SUBTITLE_Y = 0.906
+CONTENT_TOP = 0.85
+"""Where the panels of a page may start, below the title and subtitle."""
+CAPTION_Y = 0.118
+"""The top of a page's caption; four lines of it end above the footer."""
+CONTENT_BOTTOM = 0.2
+"""Where plots with axis labels end, leaving the caption its room."""
+PICTURE_BOTTOM = 0.16
+"""Where pictures without axis labels end."""
+FOOTER_Y = 0.014
+
 INK = "#0b0b0b"
 INK_SECONDARY = "#52514e"
 INK_MUTED = "#8a8984"
@@ -36,6 +63,7 @@ SERIES_AQUA = "#1baf7a"
 PICK_COLOUR = SERIES_ORANGE
 MEMBRANE_COLOUR = SERIES_AQUA
 MASK_COLOUR = SERIES_BLUE
+FIDUCIAL_COLOUR = SERIES_BLUE
 
 _BLUE_RAMP = (
     "#cde2fb",
@@ -72,11 +100,12 @@ STATUS_LABELS = {"pass": "PASS", "warning": "WARN", "fail": "FAIL", "unknown": "
 
 RC: dict[str, Any] = {
     "font.family": "DejaVu Sans",
-    "font.size": 8,
+    "font.size": FONT_TEXT,
     "text.color": INK,
     "axes.edgecolor": SPINE,
     "axes.labelcolor": INK_SECONDARY,
-    "axes.titlesize": 9,
+    "axes.labelsize": FONT_TEXT,
+    "axes.titlesize": FONT_PANEL_TITLE,
     "axes.titlecolor": INK,
     "axes.linewidth": 0.6,
     "axes.spines.top": False,
@@ -87,9 +116,9 @@ RC: dict[str, Any] = {
     "grid.linestyle": "-",
     "xtick.color": INK_SECONDARY,
     "ytick.color": INK_SECONDARY,
-    "xtick.labelsize": 7,
-    "ytick.labelsize": 7,
-    "legend.fontsize": 7,
+    "xtick.labelsize": FONT_SMALL,
+    "ytick.labelsize": FONT_SMALL,
+    "legend.fontsize": FONT_SMALL,
     "legend.frameon": False,
     "lines.linewidth": 1.5,
     "image.interpolation": "nearest",
@@ -111,21 +140,24 @@ def tint(colour: str, strength: float = 0.35) -> tuple[float, float, float]:
 
 def new_page(title: str, subtitle: str | None = None) -> Figure:
     figure = Figure(figsize=PAGE_SIZE)
-    figure.text(0.035, 0.955, title, fontsize=15, fontweight="bold", va="top")
+    figure.text(0.035, TITLE_Y, title, fontsize=FONT_PAGE_TITLE, fontweight="bold", va="top")
     if subtitle:
-        figure.text(0.035, 0.915, subtitle, fontsize=9, color=INK_SECONDARY, va="top")
+        figure.text(0.035, SUBTITLE_Y, subtitle, fontsize=FONT_SUBTITLE, color=INK_SECONDARY,
+                    va="top")
     return figure
 
 
 def footer(figure: Figure, left: str, page: int, pages: int) -> None:
-    figure.text(0.035, 0.018, left, fontsize=7, color=INK_MUTED)
-    figure.text(0.965, 0.018, f"page {page} of {pages}", fontsize=7, color=INK_MUTED, ha="right")
+    figure.text(0.035, FOOTER_Y, left, fontsize=FONT_SMALL, color=INK_MUTED)
+    figure.text(0.965, FOOTER_Y, f"page {page} of {pages}", fontsize=FONT_SMALL,
+                color=INK_MUTED, ha="right")
 
 
-def caption(figure: Figure, text: str, y: float = 0.088) -> None:
+def caption(figure: Figure, text: str, y: float = CAPTION_Y) -> None:
     """Explanatory text under a page's panels, in secondary ink."""
 
-    figure.text(0.035, y, text, fontsize=7.5, color=INK_SECONDARY, va="top", wrap=True)
+    figure.text(0.035, y, text, fontsize=FONT_CAPTION, color=INK_SECONDARY, va="top", wrap=True,
+                linespacing=1.3)
 
 
 def image_axes(axes: Axes, title: str | None = None) -> None:
@@ -134,7 +166,14 @@ def image_axes(axes: Axes, title: str | None = None) -> None:
     for spine in axes.spines.values():
         spine.set_visible(False)
     if title:
-        axes.set_title(title, fontsize=8, loc="left")
+        axes.set_title(title, fontsize=FONT_TEXT, loc="left")
+
+
+def colour_bar_style(colorbar: Any, label: str | None = None) -> None:
+    if label:
+        colorbar.set_label(label, fontsize=FONT_SMALL)
+    colorbar.outline.set_visible(False)
+    colorbar.ax.tick_params(labelsize=FONT_TINY)
 
 
 def scale_bar(axes: Axes, length_px: float, label: str, *, image_width_px: float,
@@ -160,12 +199,12 @@ def scale_bar(axes: Axes, length_px: float, label: str, *, image_width_px: float
         y0 + height * 2.0,
         label,
         color="white",
-        fontsize=6.5,
+        fontsize=FONT_TINY,
         ha="center",
         va="bottom",
         zorder=5,
     )
-    text.set_path_effects([patheffects.withStroke(linewidth=1.5, foreground=INK)])
+    text.set_path_effects([patheffects.withStroke(linewidth=1.8, foreground=INK)])
 
 
 def status_cell(status: str) -> tuple[str, tuple[float, float, float]]:

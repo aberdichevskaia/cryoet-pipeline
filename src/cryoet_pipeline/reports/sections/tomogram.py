@@ -28,6 +28,8 @@ from cryoet_pipeline.reports.imaging import (
 
 DEPTH_LETTERS = "abc"
 
+Z_NOTE = "z is the height above the bottom of the tomogram."
+
 
 def open_volume(path: Any) -> Any:
     return cast(Any, zarr.open(path, mode="r"))
@@ -38,9 +40,8 @@ def slab_caption(info: TomogramInfo) -> str:
     thickness_nm = (2 * half + 1) * info.voxel_spacing_angstrom / 10.0
     return (
         f"Protein is dark. Each panel is the mean of a {thickness_nm:.0f} nm slab "
-        f"({2 * half + 1} voxels), smoothed with a {SMOOTHING_SIGMA_PX:g}-voxel Gaussian; "
-        "all panels on this page share one grey scale (1st to 99th percentile). "
-        "y and z increase upwards, as in 3dmod."
+        f"({2 * half + 1} voxels), smoothed with a {SMOOTHING_SIGMA_PX:g}-voxel Gaussian, all on "
+        f"one grey scale. {Z_NOTE} x, y and z increase to the right and upwards, as in 3dmod."
     )
 
 
@@ -69,20 +70,26 @@ def show(
     )
 
 
-def add_scale_bar(axes: Axes, info: TomogramInfo, width_px: float, height_px: float) -> None:
-    width_nm = width_px * info.voxel_spacing_angstrom / 10.0
+def add_scale_bar(
+    axes: Axes, voxel_spacing_angstrom: float, width_px: float, height_px: float
+) -> None:
+    width_nm = width_px * voxel_spacing_angstrom / 10.0
     length_nm = nice_length(width_nm / 5.0)
     style.scale_bar(
         axes,
-        length_nm * 10.0 / info.voxel_spacing_angstrom,
+        length_nm * 10.0 / voxel_spacing_angstrom,
         f"{length_nm:g} nm",
         image_width_px=width_px,
         image_height_px=height_px,
     )
 
 
+def z_nm(z_px: float, info: TomogramInfo) -> float:
+    return z_px * info.voxel_spacing_angstrom / 10.0
+
+
 def depth_title(letter: str, depth: Depth, info: TomogramInfo) -> str:
-    return f"{letter} · {depth.center * info.voxel_spacing_angstrom / 10.0:.0f} nm up"
+    return f"{letter} · XY slice at z = {z_nm(depth.center, info):.0f} nm"
 
 
 def mark_depths(axes: Axes, depths: list[Depth], width_px: float) -> None:
@@ -93,10 +100,10 @@ def mark_depths(axes: Axes, depths: list[Depth], width_px: float) -> None:
             depth.center,
             letter,
             color="white",
-            fontsize=7,
+            fontsize=style.FONT_TINY,
             va="bottom",
         )
-        label.set_path_effects([patheffects.withStroke(linewidth=1.5, foreground=style.INK)])
+        label.set_path_effects([patheffects.withStroke(linewidth=1.8, foreground=style.INK)])
 
 
 def tomogram_page(report: SeriesReport, depths: list[Depth]) -> Figure:
@@ -113,32 +120,32 @@ def tomogram_page(report: SeriesReport, depths: list[Depth]) -> Figure:
 
     figure = style.new_page(f"{report.series} · Tomogram", _tomogram_subtitle(report))
     grid = GridSpec(
-        2, 3, figure=figure, left=0.035, right=0.965, top=0.85, bottom=0.15,
-        height_ratios=[1.25, 1.0], hspace=0.18, wspace=0.06,
+        2, 3, figure=figure, left=0.035, right=0.965, top=style.CONTENT_TOP,
+        bottom=style.PICTURE_BOTTOM, height_ratios=[1.25, 1.0], hspace=0.2, wspace=0.06,
     )
     for column, (letter, depth, (image, factor)) in enumerate(
         zip(DEPTH_LETTERS, depths, tops, strict=False)
     ):
         axes = figure.add_subplot(grid[0, column])
         show(axes, image, factor, limits)
-        style.image_axes(axes, depth_title(letter, depth, info) + " · XY")
+        style.image_axes(axes, depth_title(letter, depth, info))
         if column == 0:
-            add_scale_bar(axes, info, width_px, height_px)
+            add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, height_px)
 
     axes = figure.add_subplot(grid[1, 0:2])
     show(axes, side_xz[0], side_xz[1], limits, aspect="equal")
     mark_depths(axes, depths, width_px)
-    style.image_axes(axes, "XZ, through the middle in y")
-    add_scale_bar(axes, info, width_px, depth_px)
+    style.image_axes(axes, "XZ slice through the middle in y: x across, z up")
+    add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, depth_px)
 
     axes = figure.add_subplot(grid[1, 2])
     show(axes, side_yz[0], side_yz[1], limits, aspect="equal")
     mark_depths(axes, depths, height_px)
-    style.image_axes(axes, "YZ, through the middle in x")
+    style.image_axes(axes, "YZ slice through the middle in x")
 
     style.caption(
         figure,
-        slab_caption(info) + " Letters a to c mark the depths of the top row on the side views.",
+        slab_caption(info) + " Letters a to c on the side views mark the depths of the top row.",
     )
     return figure
 
@@ -147,14 +154,17 @@ def _tomogram_subtitle(report: SeriesReport) -> str:
     info = report.tomogram
     assert info is not None
     z, y, x = info.shape
-    parts = [f"{x} × {y} × {z} voxels at {info.voxel_spacing_angstrom:.2f} Å"]
+    parts = [
+        f"{x} × {y} × {z} voxels (x × y × z) at {info.voxel_spacing_angstrom:.2f} Å, "
+        f"{z_nm(z, info):.0f} nm deep"
+    ]
     manifest = report.artifacts.manifest
     if info.included_z_values is not None:
         angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
         angles = [
             angle_by_z[z_value] for z_value in info.included_z_values if z_value in angle_by_z
         ]
-        text = f"{len(info.included_z_values)} of {len(manifest.images)} views"
+        text = f"{len(info.included_z_values)} of {len(manifest.images)} tilts"
         if angles:
             text += f", {min(angles):+.0f}° to {max(angles):+.0f}°"
         parts.append(text)
@@ -189,8 +199,8 @@ def membranes_page(report: SeriesReport, depths: list[Depth]) -> Figure:
         subtitle += f" · {fraction:.1%} of the volume segmented as membrane"
     figure = style.new_page(f"{report.series} · Membranes", subtitle)
     grid = GridSpec(
-        2, 3, figure=figure, left=0.035, right=0.965, top=0.85, bottom=0.15,
-        height_ratios=[1.25, 1.0], hspace=0.18, wspace=0.06,
+        2, 3, figure=figure, left=0.035, right=0.965, top=style.CONTENT_TOP,
+        bottom=style.PICTURE_BOTTOM, height_ratios=[1.25, 1.0], hspace=0.2, wspace=0.06,
     )
     for column, (letter, depth, (image, factor)) in enumerate(
         zip(DEPTH_LETTERS, depths, tops, strict=False)
@@ -199,29 +209,28 @@ def membranes_page(report: SeriesReport, depths: list[Depth]) -> Figure:
         show(axes, image, factor, limits)
         outline = _mask_slab(mask, 0, depth.center, half)
         _outline(axes, block_mean(outline, factor), factor)
-        style.image_axes(axes, depth_title(letter, depth, info) + " · XY")
+        style.image_axes(axes, depth_title(letter, depth, info))
         if column == 0:
-            add_scale_bar(axes, info, width_px, height_px)
+            add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, height_px)
 
     axes = figure.add_subplot(grid[1, 0])
     share = _depth_share(mask)
     factor = reduction_factor(share.shape)
     reduced = block_mean(share, factor)
     show(axes, reduced, factor, (0.0, max(float(reduced.max()), 1e-6)), cmap=style.MAGNITUDE_MAP)
-    style.image_axes(axes, "Seen from above: share of the depth that is membrane")
+    style.image_axes(axes, "Seen from above: membrane share of z")
     colorbar = figure.colorbar(
         axes.images[0], ax=axes, orientation="horizontal", fraction=0.05, pad=0.03,
         format=PercentFormatter(xmax=1.0, decimals=0),
     )
-    colorbar.outline.set_visible(False)
-    colorbar.ax.tick_params(labelsize=6)
+    style.colour_bar_style(colorbar)
 
     axes = figure.add_subplot(grid[1, 1:3])
     image, factor = side
     show(axes, image, factor, limits, aspect="equal")
     _outline(axes, block_mean(_mask_slab(mask, 1, height_px // 2, half), factor), factor)
     mark_depths(axes, depths, width_px)
-    style.image_axes(axes, "XZ, through the middle in y")
+    style.image_axes(axes, "XZ slice through the middle in y: x across, z up")
 
     style.caption(
         figure,
@@ -260,5 +269,5 @@ def _outline(axes: Axes, reduced_mask: np.ndarray, factor: int) -> None:
         reduced_mask,
         levels=[0.5],
         colors=style.MEMBRANE_COLOUR,
-        linewidths=0.7,
+        linewidths=0.8,
     )

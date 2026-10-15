@@ -1,4 +1,4 @@
-"""Defocus and the reach of the CTF fit, per view, against tilt angle and dose."""
+"""Defocus and the reach of the CTF fit, per tilt, against tilt angle and dose."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ def ctf_page(report: SeriesReport) -> Figure:
     assert ctf is not None
     figure = style.new_page(f"{report.series} · CTF ({ctf.backend})", _subtitle(ctf))
     grid = GridSpec(
-        2, 4, figure=figure, left=0.06, right=0.965, top=0.84, bottom=0.15,
-        height_ratios=[1.0, 0.9], hspace=0.38, wspace=0.28,
+        2, 4, figure=figure, left=0.065, right=0.965, top=style.CONTENT_TOP,
+        bottom=style.PICTURE_BOTTOM, height_ratios=[1.0, 0.9], hspace=0.42, wspace=0.3,
     )
 
     colours = _view_colours(ctf)
@@ -38,9 +38,7 @@ def ctf_page(report: SeriesReport) -> Figure:
             fraction=0.025,
             pad=0.015,
         )
-        colorbar.set_label("Dose before the view (e⁻/Å²)", fontsize=7)
-        colorbar.outline.set_visible(False)
-        colorbar.ax.tick_params(labelsize=6)
+        style.colour_bar_style(colorbar, "Dose before the tilt (e⁻/Å²)")
 
     shown = _thumbnail_views(ctf)
     if ctf.diagnostic_path is not None:
@@ -54,36 +52,48 @@ def ctf_page(report: SeriesReport) -> Figure:
                 style.image_axes(axes, _thumbnail_title(ctf, view))
     text = figure.add_subplot(grid[1, 3])
     text.axis("off")
-    text.text(0.0, 1.0, _numbers(report, ctf), va="top", fontsize=7.5, linespacing=1.5)
+    text.text(0.0, 1.0, _numbers(report, ctf), va="top", fontsize=style.FONT_SMALL,
+              linespacing=1.5)
 
     note = (
-        "Each point is one view; its bar spans the two defocus values of an astigmatic fit. "
+        "Each point is one tilt; its bar spans the two defocus values of an astigmatic fit. "
         "The fit limit is the finest spacing to which CTFFIND still found Thon rings: lower is "
         "better, and it normally worsens with tilt, as the sample gets thicker in projection, "
         "and with dose."
     )
     if ctf.dose is None:
-        note += " The mdoc records no PriorRecordDose, so the views are not coloured by dose."
+        note += " The mdoc records no PriorRecordDose, so the tilts are not coloured by dose."
     if ctf.diagnostic_path is not None:
-        note += " Bottom: CTFFIND's own diagnostic images for three of the views."
+        note += " Bottom: CTFFIND's own diagnostic images for three of the tilts."
     style.caption(figure, note)
     return figure
 
 
+def fit_sampling(ctf: CtfTable) -> str | None:
+    """Which binning and pixel the CTF was fitted at, in words."""
+
+    if ctf.pixel_spacing_angstrom is None:
+        return None
+    text = f"{ctf.pixel_spacing_angstrom:.2f} Å per pixel"
+    if ctf.nyquist_angstrom is not None:
+        text += f", Nyquist {ctf.nyquist_angstrom:.1f} Å"
+    if ctf.fit_binning is not None:
+        return f"fitted at bin {ctf.fit_binning} ({text})"
+    return f"fitted at {text}"
+
+
 def _subtitle(ctf: CtfTable) -> str:
     parts = []
+    sampling = fit_sampling(ctf)
+    if sampling is not None:
+        parts.append(sampling)
     if ctf.voltage_kv is not None:
         parts.append(f"{ctf.voltage_kv:.0f} kV")
     if ctf.spherical_aberration_mm is not None:
         parts.append(f"Cs {ctf.spherical_aberration_mm:g} mm")
     if ctf.amplitude_contrast is not None:
         parts.append(f"amplitude contrast {ctf.amplitude_contrast:g}")
-    if ctf.pixel_spacing_angstrom is not None:
-        fitted = f"fitted on {ctf.pixel_spacing_angstrom:.2f} Å pixels"
-        if ctf.nyquist_angstrom is not None:
-            fitted += f" (Nyquist {ctf.nyquist_angstrom:.1f} Å)"
-        parts.append(fitted)
-    parts.append(f"{len(ctf.z_value)} views")
+    parts.append(f"{len(ctf.z_value)} tilts")
     return " · ".join(parts)
 
 
@@ -94,7 +104,7 @@ def _dose_norm(ctf: CtfTable) -> Normalize:
 
 
 def _view_colours(ctf: CtfTable) -> np.ndarray:
-    """One RGBA row per view: by dose when the mdoc recorded it, else all the series blue."""
+    """One RGBA row per tilt: by dose when the mdoc recorded it, else all the series blue."""
 
     if ctf.dose is None:
         return np.tile(to_rgba(style.SERIES_BLUE), (len(ctf.z_value), 1))
@@ -102,26 +112,30 @@ def _view_colours(ctf: CtfTable) -> np.ndarray:
     return np.asarray([style.MARKER_MAP(norm(float(value))) for value in ctf.dose])
 
 
+def _reference_label(axes: Axes, text: str, y: float) -> None:
+    axes.annotate(
+        text,
+        (1.0, y),
+        xycoords=("axes fraction", "data"),
+        ha="right",
+        va="bottom",
+        fontsize=style.FONT_TINY,
+        color=style.INK_SECONDARY,
+    )
+
+
 def _defocus_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
     angles = ctf.tilt_angle_deg
     low = np.minimum(ctf.defocus1_um, ctf.defocus2_um)
     high = np.maximum(ctf.defocus1_um, ctf.defocus2_um)
-    axes.vlines(angles, low, high, colors=cast(Any, colours), linewidth=1.2)
-    axes.scatter(angles, ctf.mean_defocus_um, c=colours, s=18, zorder=3, linewidths=0)
+    axes.vlines(angles, low, high, colors=cast(Any, colours), linewidth=1.3)
+    axes.scatter(angles, ctf.mean_defocus_um, c=colours, s=24, zorder=3, linewidths=0)
     if ctf.hint_defocus_um is not None:
         axes.axhline(ctf.hint_defocus_um, color=style.INK_MUTED, linewidth=0.8, zorder=1)
-        axes.annotate(
-            "estimate at 0°",
-            (1.0, ctf.hint_defocus_um),
-            xycoords=("axes fraction", "data"),
-            ha="right",
-            va="bottom",
-            fontsize=6.5,
-            color=style.INK_SECONDARY,
-        )
+        _reference_label(axes, "estimate at 0°", ctf.hint_defocus_um)
     axes.set_xlabel("Tilt angle (°)")
     axes.set_ylabel("Defocus (µm)")
-    axes.set_title("Defocus per view", loc="left")
+    axes.set_title("Defocus per tilt", loc="left")
     axes.grid(True, axis="y")
 
 
@@ -132,7 +146,7 @@ def _fit_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
         axes.text(
             0.5,
             0.5,
-            f"{ctf.backend} records no per-view fit limit",
+            f"{ctf.backend} records no per-tilt fit limit",
             transform=axes.transAxes,
             ha="center",
             color=style.INK_SECONDARY,
@@ -142,26 +156,18 @@ def _fit_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
     fit = ctf.fit_resolution_angstrom
     finite = np.isfinite(fit)
     axes.scatter(
-        ctf.tilt_angle_deg[finite], fit[finite], c=colours[finite], s=18, zorder=3, linewidths=0
+        ctf.tilt_angle_deg[finite], fit[finite], c=colours[finite], s=24, zorder=3, linewidths=0
     )
     if ctf.nyquist_angstrom is not None:
         axes.axhline(ctf.nyquist_angstrom, color=style.INK_MUTED, linewidth=0.8, zorder=1)
-        axes.annotate(
-            "Nyquist of the fitted stack",
-            (1.0, ctf.nyquist_angstrom),
-            xycoords=("axes fraction", "data"),
-            ha="right",
-            va="bottom",
-            fontsize=6.5,
-            color=style.INK_SECONDARY,
-        )
+        _reference_label(axes, "Nyquist of the fitted stack", ctf.nyquist_angstrom)
         axes.set_ylim(bottom=min(ctf.nyquist_angstrom, float(np.nanmin(fit))) * 0.9)
     axes.set_ylabel("Fit limit (Å, lower is better)")
     axes.grid(True, axis="y")
 
 
 def _thumbnail_views(ctf: CtfTable) -> list[int]:
-    """The view nearest 0°, the one nearest 30° on the other side, and the most tilted."""
+    """The tilt nearest 0°, the one nearest 30° on the other side, and the most tilted."""
 
     most_tilted = int(np.argmax(np.abs(ctf.tilt_angle_deg)))
     other_side = 30.0 if ctf.tilt_angle_deg[most_tilted] < 0 else -30.0
@@ -182,7 +188,11 @@ def _thumbnail_title(ctf: CtfTable, view: int) -> str:
 def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
     mean = ctf.mean_defocus_um
     astigmatism_nm = np.abs(ctf.defocus1_um - ctf.defocus2_um) * 1000.0
-    lines = [
+    lines = []
+    sampling = fit_sampling(ctf)
+    if sampling is not None:
+        lines.extend(textwrap.wrap(sampling[0].upper() + sampling[1:], 36))
+    lines += [
         f"Mean defocus {float(np.mean(mean)):.2f} µm",
         f"  range {float(np.min(mean)):.2f} to {float(np.max(mean)):.2f} µm",
         f"Mean astigmatism {float(np.mean(astigmatism_nm)):.0f} nm",
@@ -200,5 +210,5 @@ def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
         lines.append("")
         lines.append(f"QC: {style.STATUS_LABELS.get(record.status, record.status)}")
         for warning in record.warnings:
-            lines.extend(textwrap.wrap(warning, 48))
+            lines.extend(textwrap.wrap(warning, 38))
     return "\n".join(lines)

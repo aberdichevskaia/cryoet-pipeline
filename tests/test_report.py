@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import mrcfile
@@ -35,22 +36,26 @@ from cryoet_pipeline.reports.collect import (
     SeriesArtifacts,
     SeriesReport,
     SummaryRow,
+    _per_view_residuals,
     lineage_qc,
+    load_alignment,
     load_ctf,
     load_series,
     map_agreement,
+    per_view_table,
 )
 from cryoet_pipeline.reports.imaging import (
     choose_depths,
     crop_centered,
     random_positions,
     rank_bands,
+    sphere_sections,
 )
 from cryoet_pipeline.score_preview import score_preview_from_volume, write_score_preview
 
 pytest.importorskip("matplotlib")
 
-from cryoet_pipeline.reports.sections import front, picking  # noqa: E402
+from cryoet_pipeline.reports.sections import ctf, front, picking  # noqa: E402
 
 _ANGLES = [-40.0, -20.0, 0.0, 20.0, 40.0]
 # Dose-symmetric: 0 deg first, then +20, -20, +40, -40. PriorRecordDose is the
@@ -72,10 +77,11 @@ def test_the_report_has_a_page_for_everything_each_series_has(tmp_path: Path) ->
     pdf = project / "reports" / "report-bin8.pdf"
     assert pdf.read_bytes().startswith(b"%PDF")
     # Front: title, contents, table, warnings; no picks-per-tomogram chart, since
-    # only one series has picks. TS_A: tomogram, membranes, CTF, picks,
-    # correlation map, two gallery pages. TS_B: tomogram. TS_C: a page saying
-    # there is nothing yet. Appendix: one table.
-    assert "(14 pages)" in result.output
+    # only one series has picks. TS_A: tilt alignment, aligned tilts, CTF,
+    # tomogram, membranes, picks, pick scores, correlation map, two gallery
+    # pages. TS_B: tomogram. TS_C: a page saying there is nothing yet.
+    # Appendix: one table.
+    assert "(17 pages)" in result.output
     assert "could not be shown" not in result.output
 
 
@@ -89,6 +95,87 @@ def test_picks_per_tomogram_is_a_bar_per_series_with_picks() -> None:
 
     axes = figure.axes[0]
     assert [label.get_text() for label in axes.get_yticklabels()] == ["TS_1", "TS_2"]
+
+
+def test_alignment_pairs_each_tilt_with_its_residual_and_its_beads(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    tomogram = registry.get("TS_A:tomogram:fine:bin8")
+
+    info = load_alignment(registry, tomogram, lineage_qc(registry, [tomogram]))
+
+    assert info is not None
+    assert info.method == "gold beads"
+    assert info.z_value.tolist() == [4, 3, 2, 1, 0]
+    # The last table tiltalign printed, not the earlier fit's.
+    assert info.residual_nm is not None
+    assert info.residual_nm.tolist() == [0.6, 0.4, 0.3, 0.5, 1.1]
+    # One bead was lost on the last tilt.
+    assert info.points_per_view is not None
+    assert info.points_per_view.tolist() == [6, 6, 6, 6, 5]
+    assert info.aligned_z_values == (4, 3, 2, 1, 0)
+    assert info.fiducial_count == 6
+    # A tomogram that was never aligned here has no alignment to show, and that is fine.
+    plain = registry.get("TS_B:tomogram:fine")
+    assert load_alignment(registry, plain, {}) is None
+
+
+def test_a_per_tilt_table_for_other_tilts_is_not_paired() -> None:
+    table = (
+        " view   rotation    tilt    deltilt     mag      dmag      skew    resid-nm\n"
+        "    1      85.0     -20.0     0.00    1.0000    0.0000      0.00      0.30\n"
+        "    2      85.0      20.0     0.00    1.0000    0.0000      0.00      0.40\n"
+    )
+
+    assert [row["resid-nm"] for row in per_view_table(table)] == [0.3, 0.4]
+    assert _per_view_residuals(table, np.asarray([-20.0, 20.0])) is not None
+    assert _per_view_residuals(table, np.asarray([-25.0, 25.0])) is None
+    assert _per_view_residuals(table, np.asarray([-20.0, 0.0, 20.0])) is None
+
+
+def test_a_slab_shows_each_pick_at_the_size_of_its_sphere_there() -> None:
+    centres = np.asarray([20.0, 23.0, 26.0, 40.0])
+
+    radii = sphere_sections(centres, plane=20.0, half_width=2.0, radius=5.0)
+
+    # Inside the slab: full size. One voxel beyond its edge: smaller. Far away: absent.
+    assert radii[0] == pytest.approx(5.0)
+    assert radii[1] == pytest.approx(np.sqrt(25.0 - 1.0))
+    assert radii[2] == pytest.approx(np.sqrt(25.0 - 16.0))
+    assert np.isnan(radii[3])
+
+
+def test_the_mask_radius_is_converted_to_tomogram_voxels(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    report = load_series(
+        registry,
+        SeriesArtifacts(
+            manifest=_manifest("TS_A"),
+            picks=registry.get("TS_A:picks:full:pytom-match-pick:bin8"),
+            tomogram=registry.get("TS_A:tomogram:fine:bin8"),
+            template=registry.get("TS_A:template:bin8"),
+            template_mask=registry.get("TS_A:template_mask:bin8"),
+        ),
+    )
+    assert report.template is not None and report.tomogram is not None
+    # Same voxel size: the mask radius as recorded.
+    assert report.particle_radius_px == pytest.approx(6.0)
+    # A template at half the tomogram's voxel size has a radius half as many tomogram voxels.
+    report.template = replace(report.template, voxel_spacing_angstrom=_VOXEL / 2.0)
+    assert report.particle_radius_px == pytest.approx(3.0)
+    assert "mask" in report.particle_radius()[1]
+
+
+def test_the_ctf_page_knows_the_binning_it_was_fitted_at(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    ctf_model = registry.get("TS_A:ctf_model:ctffind5")
+
+    table = load_ctf(registry, ctf_model, _manifest("TS_A"), lineage_qc(registry, [ctf_model]))
+
+    assert table.fit_binning == 2
+    assert ctf.fit_sampling(table) == "fitted at bin 2 (2.70 Å per pixel, Nyquist 5.4 Å)"
 
 
 def test_the_score_overview_puts_every_tomogram_on_one_sigma_axis() -> None:
@@ -376,15 +463,55 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
             ],
         ).model_dump_json()
     )
+    # Beads tracked on a bin4 stack, in the alignment's view order; one bead is lost
+    # on the steepest tilt.
+    tracking_path = out / "tracking.mrc"
+    tracking_images = rng.normal(0.0, 1.0, size=(5, 64, 72)).astype(np.float32)
+    beads = [(10.0, 12.0), (30.0, 40.0), (50.0, 20.0), (60.0, 50.0), (20.0, 55.0), (40.0, 8.0)]
+    residual_rows = []
+    for view in range(5):
+        for number, (x, y) in enumerate(beads):
+            if view == 4 and number == 5:
+                continue
+            tracking_images[view, int(y) - 1 : int(y) + 2, int(x) - 1 : int(x) + 2] -= 4.0
+            residual_rows.append(f"{x:.2f} {y:.2f} {view} 0.10 -0.20")
+    with mrcfile.new(tracking_path) as handle:
+        handle.set_data(tracking_images)
+        handle.voxel_size = 5.0
+    tracking = _artifact(f"{series}:aligned_tilt_stack:fiducial", ArtifactKind.ALIGNED_TILT_STACK,
+                         tracking_path, series, pixel_spacing_angstrom=5.0, binning=4,
+                         parameters={"purpose": "fiducial_tracking",
+                                     "included_z_values": [4, 3, 2, 1, 0]})
+    registry.add(tracking)
+    model = _artifact(f"{series}:fiducial_model", ArtifactKind.FIDUCIAL_MODEL, out / "beads.json",
+                      series, parents=[tracking.id], parameters={"backend": "imod-beadtrack"})
+    registry.add(model)
+    residual_file = out / "fine.resid"
+    residual_file.write_text(f"{len(residual_rows)} residuals\n" + "\n".join(residual_rows) + "\n")
+    log = out / "tiltalign.log"
+    table = "".join(
+        f"  {view:3d}  85.0  {_ANGLES[z]:7.1f}  0.00  1.0000  0.0000  0.00  {residual:6.2f}\n"
+        for view, (z, residual) in enumerate(zip((4, 3, 2, 1, 0), (0.6, 0.4, 0.3, 0.5, 1.1),
+                                                 strict=True), 1)
+    )
+    header = " view   rotation    tilt    deltilt     mag      dmag      skew    resid-nm\n"
+    # An earlier fit's table comes first, as tiltalign prints one per fit.
+    log.write_text(header + table.replace("1.10", "9.99") + "\n\n" + header + table + "\n")
     alignment = _artifact(f"{series}:alignment:fine", ArtifactKind.ALIGNMENT, alignment_path,
-                          series, parameters={"stage": "fine"})
+                          series, parents=[tracking.id, model.id],
+                          parameters={"stage": "fine", "tiltalign_log_path": str(log),
+                                      "residual_file_path": str(residual_file),
+                                      "excluded_z_values": []})
     registry.add(alignment)
     _qc(registry, out, series, "fine_alignment", alignment.id,
         {"status": "warning", "warnings": ["one view has a large residual"],
-         "residual_mean_nm": 1.4})
+         "residual_mean_nm": 1.4, "residual_sd_nm": 0.3, "fiducial_count": 6,
+         "global_leave_out_error_nm": 1.6, "projection_point_count": 29,
+         "pruned_point_count": 1, "applied_tilt_angle_offset_deg": 0.4,
+         "recommended_x_axis_tilt_deg": -0.2, "minimum_tilt_rotation_deg": 85.0})
 
     ctf_stack = _artifact(f"{series}:aligned_tilt_stack:bin2", ArtifactKind.ALIGNED_TILT_STACK,
-                          out / "ctf_stack.mrc", series, parents=[alignment.id])
+                          out / "ctf_stack.mrc", series, parents=[alignment.id], binning=2)
     registry.add(ctf_stack)
     summary = out / "ctffind.txt"
     fits = [14.0, 10.0, 8.0, 11.0, 15.0]
@@ -412,9 +539,15 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
     _qc(registry, out, series, "ctf_estimation", ctf_model.id,
         {"status": "pass", "warnings": [], "nyquist_angstrom": 5.4, "mean_defocus_um": 3.1})
 
+    corrected_path = out / "corrected.mrc"
+    with mrcfile.new(corrected_path) as handle:
+        handle.set_data(rng.normal(size=(5, _SHAPE[1], _SHAPE[2])).astype(np.float32))
+        handle.voxel_size = _VOXEL
     corrected = _artifact(f"{series}:aligned_tilt_stack:ctf_corrected:bin8",
-                          ArtifactKind.ALIGNED_TILT_STACK, out / "corrected.mrc", series,
-                          parents=[ctf_model.id, alignment.id], variant="bin8")
+                          ArtifactKind.ALIGNED_TILT_STACK, corrected_path, series,
+                          parents=[ctf_model.id, alignment.id], variant="bin8",
+                          pixel_spacing_angstrom=_VOXEL, binning=8,
+                          parameters={"included_z_values": [4, 3, 2, 1, 0]})
     registry.add(corrected)
 
     volume = rng.normal(0.0, 1.0, size=_SHAPE).astype(np.float32)
