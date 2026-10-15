@@ -227,6 +227,13 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             "[template] needs exactly one of emdb_id (fetched from EMDB) and "
             "source_map (a local MRC map)"
         )
+    if "cut_off" in pick and "number_of_false_positives" in pick:
+        # pick-particles refuses the pair too, but only once its job has started.
+        raise SystemExit(
+            "[pick] sets both cut_off and number_of_false_positives, which are "
+            "alternatives: cut_off = 0 keeps the best number_of_particles peaks with "
+            "no score floor, number_of_false_positives sets a floor from the noise"
+        )
     if pick.get("use_segmentation_mask") and seg is None:
         raise SystemExit(
             "[pick] use_segmentation_mask needs membranes, but there is no [segment] section"
@@ -406,6 +413,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("template-particle-diameter-angstrom", tmpl.get("particle_diameter_angstrom")),
              *flag("template-low-pass-angstrom", tmpl["low_pass_angstrom"]),
              *flag("template-mask-radius-px", tmpl.get("mask_radius_px")),
+             *flag("template-mask-sigma-px", tmpl.get("mask_sigma_px")),
+             *flag("template-box-size-px", tmpl.get("box_size_px")),
              *flag("pytom-create-template-executable", exe["pytom_create_template"]),
              *flag("pytom-create-mask-executable", exe["pytom_create_mask"]),
              *flag("variant", lane)],
@@ -421,6 +430,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-z-axis-symmetry", pick.get("z_axis_symmetry")),
              *flag("pytom-number-of-particles", pick["number_of_particles"]),
              *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
+             # 0 keeps the best number_of_particles peaks with no score floor.
+             *flag("pytom-cut-off", pick.get("cut_off")),
              *flag("pytom-tophat-filter", pick.get("tophat_filter")),
              *flag("pytom-low-pass", pick.get("low_pass_angstrom")),
              *flag("pytom-random-phase-correction", pick.get("random_phase_correction")),

@@ -714,14 +714,17 @@ def test_pytom_match_pick_checks_extraction_options_before_the_gpu_run(
     with pytest.raises(TypeError, match="pytom_number_of_particles"):
         run({})
 
-    with pytest.raises(ValueError, match="at most one of"):
-        run(
-            {
-                "pytom_number_of_particles": 100,
-                "pytom_cut_off": 0.5,
-                "pytom_number_of_false_positives": 1.0,
-            }
-        )
+    for cut_off in (0.5, 0.0):
+        # Zero means "the best N, no floor", and it conflicts with a
+        # false-positive budget just as any other cut-off does.
+        with pytest.raises(ValueError, match="at most one of"):
+            run(
+                {
+                    "pytom_number_of_particles": 100,
+                    "pytom_cut_off": cut_off,
+                    "pytom_number_of_false_positives": 1.0,
+                }
+            )
 
     # An explicit angular search leaves matching with no diameter, and extraction
     # still needs one to keep peaks apart.

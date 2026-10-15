@@ -199,6 +199,31 @@ def test_the_template_comes_from_exactly_one_of_emdb_and_a_local_map():
         run_series.build_steps(config, Path("p"), "TS_X")
 
 
+def test_a_fixed_peak_count_and_the_template_box_reach_their_commands():
+    config = _lane("ribo-mdc")
+    config["pick"].pop("number_of_false_positives", None)
+    config["pick"]["cut_off"] = 0.0
+    config["template"]["box_size_px"] = 60
+    config["template"]["mask_sigma_px"] = 1.0
+    _assert_valid_commands(config, "top-n")
+    steps = dict(run_series.build_steps(config, Path("p"), "TS_X"))
+    pick = steps["pick-particles"]
+    # Zero is a setting ("no floor"), so it must not be dropped as falsy.
+    assert pick[pick.index("--pytom-cut-off") + 1] == "0.0"
+    assert "--pytom-number-of-false-positives" not in pick
+    template = steps["prepare-template"]
+    assert template[template.index("--template-box-size-px") + 1] == "60"
+    assert template[template.index("--template-mask-sigma-px") + 1] == "1.0"
+
+
+def test_a_cut_off_and_a_false_positive_budget_together_are_refused():
+    config = _lane("ribo-mdc")
+    config["pick"]["cut_off"] = 0.0
+    config["pick"]["number_of_false_positives"] = 100.0
+    with pytest.raises(SystemExit, match="alternatives"):
+        run_series.build_steps(config, Path("p"), "TS_X")
+
+
 def test_a_gain_reference_reaches_motion_correction():
     config = _lane("gag-bin8")
     config["motion"].update(gain_reference="data/gain.mrc", gain_rotation=1, gain_flip=2)

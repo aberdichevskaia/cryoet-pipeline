@@ -236,20 +236,26 @@ thickness = 320
 [template]
 emdb_id = "EMD-16721"     # human 80S ribosome, untreated cells, same data
 low_pass_angstrom = 19.6  # bin8 Nyquist
-# The mask radius is set rather than derived, because the derivation came out
-# more generous than the runbook's own guidance. It takes the measured density
-# extent and multiplies by _DERIVED_MARGIN = 1.2, and the measurement itself
-# already overshoots the particle: it caught 32 px where the literature diameter
-# is 290 A = 29.6 px, because a low-passed map has a low-density periphery. The
-# two margins compound:
+# Mask and box as pytom's own tutorial and usage notes have them (checked
+# 2026-10-15): the radius a little past the particle, a soft edge ("a smooth
+# fall-off to prevent aliasing artifacts"; --sigma "0.5-1.0 are usually
+# sufficient for tomograms with 20A-10A voxel sizes"), and a box with "some
+# overhang on purpose ... to ensure sufficient sampling in Fourier space of the
+# weighting functions". The tutorial puts its ~300 A ribosome in 60 px at
+# 13.79 A, 2.8x the diameter.
 #
-#   particle radius     290 / 2 / 9.784 = 14.8 px
-#   derived radius      32 * 1.2 / 2    = 19.2 px   +30% on the radius
-#   in volume           (19.2/14.8)^3   = 2.2x      so half the mask is noise
+#   particle radius   290 / 2 / 9.784 = 14.8 px
+#   mask radius       14.8 + 3        = 18 px, plus a 1 px gaussian edge
+#   box               2 * 290 / 9.784 = 59.3 -> 60 px
 #
-# The runbook asks for 10-20% overhang, because the mask exists to keep the noise
-# around the particle out of the correlation. 17 px gives +15%.
-mask_radius_px = 17
+# Until then the mask was 17 px with a hard edge, and the box 39 px: EMD-16721's
+# own 380 A box, 1.3x the particle, taken by default. Not derived from the
+# measured extent: that catches 32 px of a low-passed map's periphery, and with
+# the 1.2 margin on top half the mask would be noise. The 3 px past the widest
+# point is a colleague's rule; pytom's tutorial uses about 1 px plus the edge.
+mask_radius_px = 18
+mask_sigma_px = 1.0
+box_size_px = 60
 
 [pick]
 # 290 A is the human 80S diameter that pytom's own documentation uses as its
@@ -257,22 +263,20 @@ mask_radius_px = 17
 # extent from prepare-template reads a few per cent under true (~274 A), so the
 # literature value is the conservative choice here.
 particle_diameter_angstrom = 290.0
-number_of_particles = 2000
-# Measured, not assumed. One expected false positive over 84 million voxels
-# demands a cut-off of 0.13440, and the whole real population — if it is real —
-# lives between 0.115 and 0.138, so that threshold takes almost none of it:
+# The best 600 peaks per tomogram with no score floor (cut_off = 0); the
+# threshold is then read off the score curves in the report. 600 is about twice
+# the ribosomes a biologist counted in the five MDC tomograms (288-362), the
+# usual rule of thumb; the published work on this dataset took the best 800 and
+# let classification find the real ones.
 #
-#   fp = 1, tophat on    cut-off 0.13440    0 particles
-#   fp = 100, tophat off cut-off 0.12227  254 particles
-#   the same, weighted   cut-off 0.10530  385 particles
-#
-# Extracting generously and cleaning up by classification is the normal practice
-# anyway; a single statistical threshold is not meant to produce a pure set.
-#
-# Honest gap: those two settings were never separated. fp=1 was only ever run
-# with the top-hat filter and fp=100 only without it, so which of the two
-# produced the zero is not established. This is the pair that was measured.
-number_of_false_positives = 100.0
+# This replaces a false-positive floor (number_of_false_positives = 100, cut-off
+# from the noise model). On these tomograms the lane's score map did not see the
+# specimen at all (2026-10-15: on TS_0005 44% of its top 100 peaks in the
+# lamella, where noise puts 48%), so no floor could have made its picks real. A
+# floor means something once the map does; until then a fixed count is the
+# honest setting. The two are alternatives and run_series refuses both at once.
+number_of_particles = 600
+cut_off = 0.0
 tophat_filter = false
 gpu_ids = "0"
 
@@ -285,6 +289,12 @@ gpu_ids = "0"
 # 35 A keeps the ribosome's shape, which is what distinguishes it, and drops the
 # detail that at this binning is mostly noise. Going coarser starts matching
 # any blob of about the right size.
+#
+# Under test, not settled (2026-10-15): pytom's tutorial matches at 1.3-1.45x
+# Nyquist (35-40 A on 13.79 A voxels), which here would be about 25 A, and a
+# colleague advises going close to Nyquist. Against that, these tomograms showed
+# no measurable specimen power finer than ~45 A. scripts/pick_ablation.sbatch
+# compares 25 with 35 in real pytom; change this after it has.
 low_pass_angstrom = 35.0
 # Estimates the noise background by matching a phase-randomised template, which
 # is what the number-of-false-positives cut-off is calibrated against. Off, that

@@ -1513,7 +1513,8 @@ def _validate_extraction_options(context: BackendContext) -> None:
     if (
         _optional_positive_float_parameter(context, "pytom_number_of_false_positives")
         is not None
-        and _optional_positive_float_parameter(context, "pytom_cut_off") is not None
+        # Zero is a cut-off too ("no floor"), so it is read as one here.
+        and _optional_non_negative_float_parameter(context, "pytom_cut_off") is not None
     ):
         raise ValueError(
             "at most one of 'pytom_number_of_false_positives' or 'pytom_cut_off' may be set"
