@@ -33,6 +33,7 @@ from cryoet_pipeline.models import (
 from cryoet_pipeline.reports.collect import (
     PickTable,
     SeriesArtifacts,
+    SeriesReport,
     SummaryRow,
     lineage_qc,
     load_ctf,
@@ -49,7 +50,7 @@ from cryoet_pipeline.score_preview import score_preview_from_volume, write_score
 
 pytest.importorskip("matplotlib")
 
-from cryoet_pipeline.reports.sections import front  # noqa: E402
+from cryoet_pipeline.reports.sections import front, picking  # noqa: E402
 
 _ANGLES = [-40.0, -20.0, 0.0, 20.0, 40.0]
 # Dose-symmetric: 0 deg first, then +20, -20, +40, -40. PriorRecordDose is the
@@ -88,6 +89,37 @@ def test_picks_per_tomogram_is_a_bar_per_series_with_picks() -> None:
 
     axes = figure.axes[0]
     assert [label.get_text() for label in axes.get_yticklabels()] == ["TS_1", "TS_2"]
+
+
+def test_the_score_overview_puts_every_tomogram_on_one_sigma_axis() -> None:
+    reports = [_scored_report(f"TS_{number}", strong) for number, strong in
+               ((1, 30), (2, 90), (3, 5), (4, 0))]
+    contents = {"TS_1": 7, "TS_2": 14, "TS_3": 21, "TS_4": 28}
+
+    builders = picking.score_overview_pages(reports, contents)
+    figure = builders[0]()
+
+    assert len(builders) == 1
+    panels = [axes for axes in figure.axes if axes.get_title(loc="left")]
+    assert [axes.get_title(loc="left").split(" · ")[0] for axes in panels] == [
+        "TS_1", "TS_2", "TS_3", "TS_4"
+    ]
+    assert panels[1].get_title(loc="left").endswith("p. 14")
+    # Shared, and wide enough for the best pick of all and the floor of all.
+    assert len({axes.get_ylim() for axes in panels}) == 1
+    low, high = panels[0].get_ylim()
+    assert low < 5.33 and high > max(float(report.picks.sigma.max()) for report in reports)
+    # Ten tomograms take two pages of nine.
+    assert len(picking.score_overview_pages((reports * 3)[:10], contents)) == 2
+
+
+def test_the_score_overview_gives_each_its_own_axis_without_sigma() -> None:
+    reports = [_scored_report("TS_1", 30), _scored_report("TS_2", 10, sigma=None)]
+
+    figure = picking.score_overview_pages(reports, {})[0]()
+
+    panels = [axes for axes in figure.axes if axes.get_title(loc="left")]
+    assert panels[1].get_ylabel() == "Score (pytom LCCmax)"
 
 
 def test_an_existing_report_is_kept_unless_asked(tmp_path: Path) -> None:
@@ -263,6 +295,23 @@ def test_loading_keeps_going_past_a_part_it_cannot_read(tmp_path: Path) -> None:
     assert report.picks is not None and report.picks.count == 36
     assert report.correlation is not None
     assert report.correlation.agreement == pytest.approx(1.0)
+
+
+def _scored_report(series: str, strong: int, *, sigma: float | None = _SIGMA) -> SeriesReport:
+    """Picks shaped like a real search: `strong` high peaks, then a long flat tail."""
+
+    rng = np.random.default_rng(len(series) + strong)
+    scores = np.concatenate(
+        [rng.uniform(0.09, 0.17, strong), rng.uniform(0.066, 0.075, 240)]
+    )
+    zeros = np.zeros(scores.size)
+    return SeriesReport(
+        artifacts=SeriesArtifacts(manifest=_manifest(series)),
+        picks=PickTable(
+            x_px=zeros, y_px=zeros, z_px=zeros, score=scores, search_sigma=sigma,
+            floor_sigma=5.33 if sigma is not None else None,
+        ),
+    )
 
 
 # --- the synthetic project -------------------------------------------------------------

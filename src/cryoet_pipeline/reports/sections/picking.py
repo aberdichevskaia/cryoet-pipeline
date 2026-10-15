@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 import textwrap
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -26,6 +28,7 @@ from cryoet_pipeline.reports.imaging import (
     display_range,
     mean_over_depths,
     random_positions,
+    rank_bands,
     reduction_factor,
     slab_half_width_px,
     smooth,
@@ -201,6 +204,19 @@ def _rank_panel(axes: Axes, picks: PickTable, bands: list[Band]) -> None:
         axes.text(0.5, 0.5, "these picks carry no scores", transform=axes.transAxes,
                   ha="center", color=style.INK_SECONDARY)
         return
+    rank_curve(axes, picks, bands, labels=True)
+    axes.set_xlabel("Rank")
+    axes.set_ylabel(_score_label(picks))
+
+
+def rank_curve(axes: Axes, picks: PickTable, bands: list[Band], *, labels: bool) -> None:
+    """Scores from best to worst, with the gallery's thirds and the picks it shows.
+
+    One drawing for the series page and the overview, so that the two cannot
+    disagree about what a band is. `labels` names the bands and the
+    one-false-positive line; small multiples name them once, not in every panel.
+    """
+
     sigma = picks.sigma
     values = sigma if sigma is not None else picks.score
     ordered = values[picks.ranked()]
@@ -212,19 +228,114 @@ def _rank_panel(axes: Axes, picks: PickTable, bands: list[Band]) -> None:
                      edgecolors="white", linewidths=0.6, zorder=3)
         if band.first_rank > 1:
             axes.axvline(band.first_rank - 0.5, color=style.INK_MUTED, linewidth=0.6)
-        axes.text((band.first_rank + band.last_rank) / 2.0, 0.98, band.name,
-                  transform=axes.get_xaxis_transform(), ha="center", va="top",
-                  fontsize=6.5, color=style.INK_SECONDARY)
+        if labels:
+            axes.text((band.first_rank + band.last_rank) / 2.0, 0.98, band.name,
+                      transform=axes.get_xaxis_transform(), ha="center", va="top",
+                      fontsize=6.5, color=style.INK_SECONDARY)
     if sigma is not None and picks.floor_sigma is not None:
         axes.axhline(picks.floor_sigma, color=style.INK_SECONDARY, linewidth=0.8)
-        axes.annotate("one-false-positive height", (1.0, picks.floor_sigma),
-                      xycoords=("axes fraction", "data"), xytext=(0, 2),
-                      textcoords="offset points", ha="right", va="bottom", fontsize=6.5,
-                      color=style.INK_SECONDARY)
+        if labels:
+            axes.annotate("one-false-positive height", (1.0, picks.floor_sigma),
+                          xycoords=("axes fraction", "data"), xytext=(0, 2),
+                          textcoords="offset points", ha="right", va="bottom", fontsize=6.5,
+                          color=style.INK_SECONDARY)
     axes.set_xlim(0.5, ordered.size + 0.5)
-    axes.set_xlabel("Rank")
-    axes.set_ylabel("Score (σ)" if sigma is not None else "Score (pytom LCCmax)")
     axes.grid(True, axis="y")
+
+
+def _score_label(picks: PickTable) -> str:
+    return "Score (σ)" if picks.sigma is not None else "Score (pytom LCCmax)"
+
+
+OVERVIEW_COLUMNS = 3
+OVERVIEW_ROWS = 3
+
+
+def score_overview_pages(
+    reports: Sequence[SeriesReport], contents: Mapping[str, int]
+) -> list[Callable[[], Figure]]:
+    """Every tomogram's score curve, side by side, nine to a page.
+
+    One score axis for all of them when every search recorded its noise
+    scale: raw pytom scores are not comparable between tomograms, scores in
+    sigma are, and comparing tomograms is what this page is for. `contents` is
+    read when a page is drawn, after every series has its page number.
+    """
+
+    scored = [report for report in reports if report.picks is not None and report.picks.has_scores]
+    limits = _shared_sigma_limits(scored)
+    per_page = OVERVIEW_COLUMNS * OVERVIEW_ROWS
+    return [
+        partial(_score_overview_page, scored[start : start + per_page], contents, limits)
+        for start in range(0, len(scored), per_page)
+    ]
+
+
+def _shared_sigma_limits(reports: Sequence[SeriesReport]) -> tuple[float, float] | None:
+    """One y range for every panel, or None when some search did not record sigma."""
+
+    values: list[np.ndarray] = []
+    floors: list[float] = []
+    for report in reports:
+        assert report.picks is not None
+        sigma = report.picks.sigma
+        if sigma is None:
+            return None
+        values.append(sigma)
+        if report.picks.floor_sigma is not None:
+            floors.append(report.picks.floor_sigma)
+    if not values:
+        return None
+    low = min(float(np.min(sigma)) for sigma in values)
+    high = max(float(np.max(sigma)) for sigma in values)
+    if floors:
+        low = min(low, *floors)
+        high = max(high, *floors)
+    margin = 0.05 * (high - low) if high > low else 1.0
+    return low - margin, high + margin
+
+
+def _score_overview_page(
+    reports: list[SeriesReport],
+    contents: Mapping[str, int],
+    limits: tuple[float, float] | None,
+) -> Figure:
+    figure = style.new_page(
+        "Scores by tomogram",
+        "Each tomogram's picks from best to worst, "
+        + ("all on one score axis, in σ" if limits is not None else "each on its own score axis"),
+    )
+    grid = GridSpec(
+        OVERVIEW_ROWS, OVERVIEW_COLUMNS, figure=figure, left=0.06, right=0.975, top=0.85,
+        bottom=0.17, hspace=0.6, wspace=0.2,
+    )
+    for index, report in enumerate(reports):
+        picks = report.picks
+        assert picks is not None
+        row, column = divmod(index, OVERVIEW_COLUMNS)
+        axes = figure.add_subplot(grid[row, column])
+        rank_curve(axes, picks, rank_bands(picks.count, TILES_PER_BAND), labels=index == 0)
+        if limits is not None:
+            axes.set_ylim(*limits)
+        title = f"{report.series} · {picks.count:,} picks"
+        if picks.above_floor is not None:
+            title += f" · {picks.above_floor:,} above the height"
+        if report.series in contents:
+            title += f" · p. {contents[report.series]}"
+        axes.set_title(title, loc="left", fontsize=8)
+        if column == 0 or limits is None:
+            axes.set_ylabel(_score_label(picks))
+        if index + OVERVIEW_COLUMNS >= len(reports):
+            axes.set_xlabel("Rank")
+    style.caption(
+        figure,
+        "Read each curve from the left. A steep start that flattens into a long tail is a group "
+        "of high-scoring peaks above many similar weak ones. The grey line is the "
+        "one-false-positive height. Thin vertical lines split each tomogram's picks into "
+        "thirds, as its galleries do, and the dots are the picks the galleries show. Each rank "
+        "axis runs to that tomogram's own number of picks; p. is where its pages start.",
+    )
+    return figure
 
 
 def _noise_panel(axes: Axes, picks: PickTable) -> None:
