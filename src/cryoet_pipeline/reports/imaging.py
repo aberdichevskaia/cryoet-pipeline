@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -169,7 +170,11 @@ def central_views(box: np.ndarray, slab_px: int = GALLERY_SLAB_PX) -> list[np.nd
     for axis in range(3):
         middle = box.shape[axis] // 2
         indices = range(max(0, middle - half), min(box.shape[axis], middle + half + 1))
-        with np.errstate(invalid="ignore"):
+        # A tile reaching past the volume has lines with no voxel inside it; they
+        # stay NaN, which draws as a gap. nanmean says so with a warning, not a
+        # floating-point flag, so np.errstate does not quiet it.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", "Mean of empty slice", RuntimeWarning)
             views.append(np.nanmean(np.take(box, list(indices), axis=axis), axis=axis))
     # take() along z leaves (Y, X); along y (Z, X); along x (Z, Y).
     return views

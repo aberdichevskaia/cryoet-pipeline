@@ -395,6 +395,54 @@ def test_a_filtered_list_finds_its_template_and_membrane_through_its_lineage(
     assert cli._template_from_picks(registry, picks) == (template, mask)
 
 
+def test_picks_matched_against_template_files_find_the_registered_pair(tmp_path: Path) -> None:
+    """The pick ablation passes its templates as files, made under labels of their own.
+
+    Its picks have no template in their lineage and their label finds none, but
+    they record the files; when those are a registered template and its mask,
+    that pair is what the report and visualize-picks should show.
+    """
+
+    def artifact(id_: str, kind: ArtifactKind, variant: str, **parameters: object) -> Artifact:
+        return Artifact(
+            id=id_,
+            kind=kind,
+            path=tmp_path / f"{id_.replace(':', '_')}.mrc",
+            variant=variant,
+            parameters={"tilt_series_id": "TS_TEST", **parameters},
+        )
+
+    template = artifact("TS_TEST:template:tpl60", ArtifactKind.TEMPLATE, "bin8-abl-tpl60")
+    mask = artifact(
+        "TS_TEST:template_mask:tpl60",
+        ArtifactKind.TEMPLATE_MASK,
+        "bin8-abl-tpl60",
+        template_id=template.id,
+    )
+    other_mask = tmp_path / "another_mask.mrc"
+
+    def picks(template_path: object, mask_path: object) -> Artifact:
+        return artifact(
+            "TS_TEST:picks:abl",
+            ArtifactKind.PICKS,
+            "bin8-abl-new25-pl",
+            pytom_template_path=template_path,
+            pytom_template_mask_path=mask_path,
+        )
+
+    registry = ArtifactRegistry.empty()
+    for one in (template, mask):
+        registry.add(one)
+    matched = picks(str(template.path), str(mask.path))
+    assert cli._template_from_picks(registry, matched) == (template, mask)
+    # A file that is not registered, or a mask other than the template's own,
+    # names no pair, and the caller falls back to the label.
+    unregistered = picks(str(tmp_path / "x.mrc"), str(mask.path))
+    assert cli._template_from_picks(registry, unregistered) is None
+    assert cli._template_from_picks(registry, picks(str(template.path), str(other_mask))) is None
+    assert cli._template_from_picks(registry, picks(None, None)) is None
+
+
 def test_picks_searched_without_a_membrane_are_refused(tmp_path: Path) -> None:
     registry_path, manifest_path = _series_registry(tmp_path, with_segmentation=False)
 

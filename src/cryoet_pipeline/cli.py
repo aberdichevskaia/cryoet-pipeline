@@ -4755,11 +4755,30 @@ def _template_from_picks(
 ) -> tuple[Artifact, Artifact] | None:
     """The template and mask these picks were matched with, from their lineage.
 
-    None when the lineage does not name exactly one template with exactly one
-    mask, so the caller falls back to looking them up by label.
+    Picks matched against template files given on the command line have none in
+    their lineage. They still record the files, and when those are a registered
+    template and its mask, under whatever label, that pair is the answer: the
+    pick ablation makes its templates under labels of their own, which a lookup
+    by the picks' label cannot find.
+
+    None when neither way names exactly one template with exactly one mask, so
+    the caller falls back to looking them up by label.
     """
 
     templates = registry.ancestors_of_kind(picks.id, ArtifactKind.TEMPLATE)
+    recorded_mask: Path | None = None
+    if not templates:
+        recorded = picks.parameters.get("pytom_template_path")
+        mask_path = picks.parameters.get("pytom_template_mask_path")
+        if not isinstance(recorded, str) or not isinstance(mask_path, str):
+            return None
+        target = Path(recorded).resolve()
+        templates = [
+            artifact
+            for artifact in registry.by_kind(ArtifactKind.TEMPLATE)
+            if artifact.path.resolve() == target
+        ]
+        recorded_mask = Path(mask_path).resolve()
     if len(templates) != 1:
         return None
     masks = [
@@ -4768,6 +4787,9 @@ def _template_from_picks(
         if artifact.parameters.get("template_id") == templates[0].id
     ]
     if len(masks) != 1:
+        return None
+    if recorded_mask is not None and masks[0].path.resolve() != recorded_mask:
+        # The template's own mask is not the one the match used.
         return None
     return templates[0], masks[0]
 
