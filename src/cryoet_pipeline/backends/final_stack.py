@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -117,8 +118,11 @@ class ImodFinalAlignedStackBackend:
                 transform_by_z,
                 binning=output_binning,
             )
-            output_y = _ceil_div(stack_shape[1], output_binning)
-            output_x = _ceil_div(stack_shape[2], output_binning)
+            output_y, output_x = _output_size_yx(
+                stack_shape,
+                alignment.transforms,
+                binning=output_binning,
+            )
             command = [
                 str(newstack),
                 "-input",
@@ -164,11 +168,7 @@ class ImodFinalAlignedStackBackend:
             [transform.tilt_angle_deg for transform in alignment.transforms],
         )
         info = validate_complete_mrc(paths.stack)
-        expected_shape = (
-            len(alignment.transforms),
-            _ceil_div(stack_shape[1], output_binning),
-            _ceil_div(stack_shape[2], output_binning),
-        )
+        expected_shape = (len(alignment.transforms), output_y, output_x)
         if info.shape != expected_shape:
             raise ValueError(
                 f"final aligned stack has shape {info.shape}, "
@@ -201,6 +201,12 @@ class ImodFinalAlignedStackBackend:
                 ),
                 "included_z_values": ordered_z_values,
                 "excluded_z_values": alignment.excluded_z_values,
+                "image_rotation_deg": _image_rotation_deg(alignment.transforms),
+                "size_swapped": (output_y, output_x)
+                != (
+                    _ceil_div(stack_shape[1], output_binning),
+                    _ceil_div(stack_shape[2], output_binning),
+                ),
                 "order": "tilt_angle_ascending",
                 "imod_xf_path": str(paths.transform),
                 "tilt_file_path": str(paths.tilt_file),
@@ -357,6 +363,53 @@ def _fine_alignment_pixel_spacing(
 
 def _ceil_div(value: int, divisor: int) -> int:
     return (value + divisor - 1) // divisor
+
+
+def _image_rotation_deg(transforms: Sequence[AlignmentTransform]) -> float:
+    """The in-plane rotation the fine transforms apply, as the median over views.
+
+    An IMOD `.xf` maps x' = A11 x + A12 y + DX, y' = A21 x + A22 y + DY, so a
+    rotation by theta has A11 = cos theta and A21 = sin theta. Read from the
+    matrices rather than from the solved tilt-axis angle because they are what
+    newstack applies.
+    """
+
+    angles = sorted(
+        math.degrees(math.atan2(transform.a21, transform.a11))
+        for transform in transforms
+    )
+    middle = len(angles) // 2
+    if len(angles) % 2:
+        return angles[middle]
+    return (angles[middle - 1] + angles[middle]) / 2.0
+
+
+def _output_size_yx(
+    stack_shape: tuple[int, int, int],
+    transforms: Sequence[AlignmentTransform],
+    *,
+    binning: int,
+) -> tuple[int, int]:
+    """The aligned stack's (y, x) size, swapped when the images turn by ~90 deg.
+
+    The fine transforms rotate each view so that the tilt axis is vertical. A
+    series collected with the axis near horizontal turns by nearly 90 degrees,
+    and newstack draws the turned image into whatever -size it is given: the
+    unturned size crops the image along its long side and leaves the short side
+    empty. On the K3's 5760 x 4092 frame of RyR1 (axis at 84 deg) that cut ~30%
+    of every view along the tilt axis and left ~30% of the frame blank, at the
+    mean. Views near 180 deg either way read as a small rotation through the
+    median's wrap-around, which keeps them unswapped, as they should be. IMOD's own rule,
+    from copytomocoms, swaps X and Y when the rotation is between 45 and 135
+    degrees either way, and this follows it.
+    """
+
+    height = _ceil_div(stack_shape[1], binning)
+    width = _ceil_div(stack_shape[2], binning)
+    rotation = abs(_image_rotation_deg(transforms))
+    if 45.0 < rotation < 135.0:
+        return width, height
+    return height, width
 
 
 def _format_transform(

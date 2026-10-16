@@ -48,7 +48,8 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
         input_path = Path(command[command.index("-input") + 1])
         output_path = Path(command[command.index("-output") + 1])
         transform_path = Path(command[command.index("-xform") + 1])
-        assert command[command.index("-size") + 1] == "3,4"
+        # The views turn by ~85 deg, so the 3 x 4 binned frame comes out 4 x 3.
+        assert command[command.index("-size") + 1] == "4,3"
         assert command[command.index("-taper") + 1] == "1,0"
         with mrcfile.open(input_path, permissive=True) as binned:
             expected = source_data[[3, 2, 0]].reshape(3, 4, 2, 3, 2).mean(
@@ -61,7 +62,7 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
         assert transforms[0][0:4] == pytest.approx((0.087, 0.996, -0.996, 0.087))
         assert transforms[0][4:] == pytest.approx((-2.0, 3.0))
         with mrcfile.new(output_path) as output:
-            output.set_data(np.zeros((3, 4, 3), dtype=np.float32))
+            output.set_data(np.zeros((3, 3, 4), dtype=np.float32))
             output.voxel_size = 1.4
         return subprocess.CompletedProcess(
             command,
@@ -84,7 +85,9 @@ def test_final_stack_backend_applies_fine_transforms_in_solved_order(
     )
 
     assert artifact.kind == ArtifactKind.ALIGNED_TILT_STACK
-    assert artifact.shape == (3, 4, 3)
+    assert artifact.shape == (3, 3, 4)
+    assert artifact.parameters["size_swapped"] is True
+    assert artifact.parameters["image_rotation_deg"] == pytest.approx(-85.0, abs=0.1)
     assert artifact.axis_order == AxisOrder.TYX
     assert artifact.pixel_spacing_angstrom == pytest.approx(1.4)
     assert artifact.parameters["purpose"] == "final_alignment"
@@ -132,10 +135,10 @@ def test_final_stack_backend_rounds_canvas_up_for_partial_bins(
         env: Mapping[str, str],
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env
-        assert command[command.index("-size") + 1] == "4,5"
+        assert command[command.index("-size") + 1] == "5,4"
         output_path = Path(command[command.index("-output") + 1])
         with mrcfile.new(output_path) as output:
-            output.set_data(np.zeros((3, 5, 4), dtype=np.float32))
+            output.set_data(np.zeros((3, 4, 5), dtype=np.float32))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     artifact = ImodFinalAlignedStackBackend(fake_runner).build(
@@ -149,7 +152,68 @@ def test_final_stack_backend_rounds_canvas_up_for_partial_bins(
         ),
     )
 
-    assert artifact.shape == (3, 5, 4)
+    assert artifact.shape == (3, 4, 5)
+
+
+@pytest.mark.parametrize(
+    ("angle_deg", "expected_size", "expected_shape"),
+    [
+        (0.0, "3,4", (3, 4, 3)),
+        (-30.0, "3,4", (3, 4, 3)),
+        (60.0, "4,3", (3, 3, 4)),
+        (-96.0, "4,3", (3, 3, 4)),
+        (170.0, "3,4", (3, 4, 3)),
+    ],
+)
+def test_final_stack_backend_swaps_size_only_for_a_quarter_turn(
+    tmp_path: Path,
+    angle_deg: float,
+    expected_size: str,
+    expected_shape: tuple[int, int, int],
+) -> None:
+    # copytomocoms swaps X and Y for a rotation between 45 and 135 deg either way.
+    source_data = np.arange(192, dtype=np.float32).reshape(4, 8, 6)
+    source, fine_alignment = _input_artifacts(tmp_path, source_data)
+    result = TiltAlignment.model_validate_json(fine_alignment.path.read_text())
+    cos, sin = np.cos(np.radians(angle_deg)), np.sin(np.radians(angle_deg))
+    rotated = result.model_copy(
+        update={
+            "transforms": [
+                transform.model_copy(
+                    update={"a11": cos, "a12": -sin, "a21": sin, "a22": cos}
+                )
+                for transform in result.transforms
+            ]
+        }
+    )
+    fine_alignment.path.write_text(rotated.model_dump_json())
+    imod_dir = _fake_imod_dir(tmp_path)
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        assert command[command.index("-size") + 1] == expected_size
+        output_path = Path(command[command.index("-output") + 1])
+        with mrcfile.new(output_path) as output:
+            output.set_data(np.zeros(expected_shape, dtype=np.float32))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    artifact = ImodFinalAlignedStackBackend(fake_runner).build(
+        source,
+        fine_alignment,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"imod_dir": imod_dir, "output_binning": 2},
+        ),
+    )
+
+    assert artifact.shape == expected_shape
 
 
 def _input_artifacts(
