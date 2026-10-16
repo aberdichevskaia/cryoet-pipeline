@@ -152,6 +152,7 @@ def _ctffind_runner(
     echo_prompts: bool = True,
     prompt_shift: int = 0,
     always_ask_about_movies: bool = False,
+    version: str = "5.0.2",
 ):
     """Fake CTFFIND driven interactively, plus newstack.
 
@@ -190,7 +191,7 @@ def _ctffind_runner(
         asks_about_movies = input_is_a_stack or always_ask_about_movies
         questions = _STACK_QUESTIONS if asks_about_movies else _SINGLE_IMAGE_QUESTIONS
 
-        echo = ["**   Welcome to Ctffind   **", "            Version : 5.0.2"]
+        echo = ["**   Welcome to Ctffind   **", f"            Version : {version}"]
         for index, question in enumerate(questions):
             source = index + prompt_shift
             answer = answers[source] if 0 <= source < len(answers) else ""
@@ -276,6 +277,42 @@ def test_ctffind5_estimation_fits_the_whole_stack_in_one_call(tmp_path: Path) ->
 
     report = CtfEstimationQc.model_validate_json(qc_artifact.path.read_text())
     assert report.num_tilts == 2
+    # Which CTFFIND fitted it, from its banner.
+    assert ctf_model.software_versions == {"ctffind": "5.0.2"}
+
+
+def test_ctffind5_estimation_names_a_ctffind4_on_path(tmp_path: Path) -> None:
+    """CTFFIND 4 skips the tilt and thickness questions; say that, not "out of step".
+
+    MDC job 3670792 (2026-10-16) found CTFFIND 4.1.14 as `ctffind` and stopped at
+    question 17 with a message about the question sequence.
+    """
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+
+    with pytest.raises(RuntimeError, match=r"is CTFFIND 4\.1\.14"):
+        Ctffind5CtfEstimationBackend(_ctffind_runner(version="4.1.14")).estimate(
+            aligned_stack,
+            alignment,
+            _manifest(),
+            _context(
+                tmp_path,
+                {"imod_dir": _fake_imod_dir(tmp_path), "ctffind_executable": ctffind},
+            ),
+        )
+
+
+def test_ctffind_version_skips_the_library_line() -> None:
+    from cryoet_pipeline.backends.ctf import ctffind_version
+
+    banner = (
+        "        **   Welcome to Ctffind   **\n\n"
+        "    Library Version : 2.0.0-alpha-295-b21db55-dirty\n"
+        "            Version : 5.0.2\n"
+    )
+    assert ctffind_version(banner) == "5.0.2"
+    assert ctffind_version("no banner here") is None
 
 
 def test_two_ctf_lanes_coexist_in_one_registry(tmp_path: Path) -> None:

@@ -258,6 +258,10 @@ box_size_px = 52          # 699 A at 13.44 A/px, 2 x the 340 A particle; even
 
 [executables]
 motioncor3 = "$MOTIONCOR3"
+# CTFFIND 5 by name: MDC job 3670792 (2026-10-16) found CTFFIND 4.1.14 as
+# `ctffind` on PATH, which the ctffind5 backend refuses, where the lane's run of
+# 2026-10-14 had found a CTFFIND 5. Export CTFFIND5 before submitting.
+ctffind = "$CTFFIND5"
 pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
 pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
 pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"

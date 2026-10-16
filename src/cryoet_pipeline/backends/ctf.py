@@ -242,7 +242,11 @@ class Ctffind5CtfEstimationBackend:
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
             },
-            software_versions={"ctffind": "external"},
+            # Which CTFFIND fitted the model, from its banner: on 2026-10-16 a job
+            # found CTFFIND 4.1.14 on PATH where the lane's run had found 5.
+            software_versions={
+                "ctffind": ctffind_version(command_log[-1][1].stdout or "") or "external"
+            },
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
@@ -375,6 +379,16 @@ class Ctffind5CtfEstimationBackend:
             stdin=stdin_text,
         )
         command_log.append(([*command, f"<<stdin>>\n{stdin_text}"], result))
+        # CTFFIND 4 asks neither the tilt nor the thickness question, so the
+        # dialogue check below would stop on its expert-options question and
+        # blame the sequence. The banner names the real cause.
+        version = ctffind_version(result.stdout or "")
+        if version is not None and int(version.split(".")[0]) < 5:
+            raise RuntimeError(
+                f"{executable} is CTFFIND {version}, and this backend answers CTFFIND "
+                "5's questions; put ctffind5 on PATH ahead of it, or pass "
+                "--ctffind-executable"
+            )
         # Before the exit code, because a misaligned answer list aborts CTFFIND
         # with a generic "answer is not recognized" and the mismatch it echoed
         # just above is the part worth reporting.
@@ -1204,6 +1218,20 @@ def _ctffind_stdin(dialogue: Sequence[tuple[str, str]]) -> str:
     """Render a dialogue as the answer-per-line text CTFFIND reads from stdin."""
 
     return "".join(f"{answer}\n" for _, answer in dialogue)
+
+
+_CTFFIND_VERSION = re.compile(r"^\s*Version\s*:\s*(?P<version>\d+(?:\.\d+)*)", re.MULTILINE)
+
+
+def ctffind_version(output: str) -> str | None:
+    """The version CTFFIND's banner states, e.g. "5.0.2"; None without a banner.
+
+    Anchored at the start of the line, so CTFFIND5's "Library Version : 2.0.0..."
+    line is not taken for it.
+    """
+
+    match = _CTFFIND_VERSION.search(output)
+    return match.group("version") if match else None
 
 
 _PROMPT_ECHO = re.compile(r"^(?P<label>\S.*?)\s{2,}:[ \t]*(?P<value>.*?)\s*$", re.MULTILINE)

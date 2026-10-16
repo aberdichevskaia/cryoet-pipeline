@@ -11,7 +11,11 @@
 #         --export=ALL,PROJECT=outputs/ryr1,CONFIG=configs/lanes/ryr1-bin8.toml,SERIES=039 \
 #         scripts/ctf_window_test.sbatch
 #
-# IMOD_DIR has to name the MDC install (lane.sbatch falls back to Munich's).
+# IMOD_DIR has to name the MDC install (lane.sbatch falls back to Munich's), and
+# CTFFIND5 the CTFFIND 5 executable when the lane names it as "$CTFFIND5":
+# job 3670792 found CTFFIND 4.1.14 as `ctffind` on PATH and could not use it.
+# KEEP_STACK=1 skips the rebuild of the bin-2 stack, for a rerun after a job
+# that already rebuilt it (3670792 did, before it stopped).
 #
 # What is known (report-bin4.pdf, written 2026-10-15; per-view values read off
 # its CTF plots): on every series the views fitted to 7-9 A sit inside about
@@ -70,8 +74,6 @@ source scripts/activate_env.sh
 set +u
 source "$IMOD_DIR/IMOD-linux.sh"
 set -u
-command -v ctffind >/dev/null || command -v ctffind5 >/dev/null \
-    || { echo "no ctffind on PATH" >&2; exit 1; }
 
 lane_command() {
     python3 scripts/run_series.py --project "$PROJECT" --config "$CONFIG" \
@@ -84,13 +86,19 @@ FIT=$(lane_command estimate-ctf)
 # The lane may set its own window or tilt; each variant here sets both.
 FIT=$(sed -E -e 's/ --ctffind-defocus-search-window-angstrom [^ ]+//' \
              -e 's/ --(no-)?ctffind-determine-sample-tilt//' <<<"$FIT")
+if [[ "$FIT" == *'$CTFFIND5'* && ! -x "${CTFFIND5:-}" ]]; then
+    echo "the lane names CTFFIND as \$CTFFIND5, which is not an executable: '${CTFFIND5:-}'" >&2
+    exit 1
+fi
 
 echo "job       $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname), $(date -Is)"
 echo "series    $SERIES in $PROJECT"
-echo "ctffind   $(command -v ctffind5 || command -v ctffind)"
+echo "ctffind   ${CTFFIND5:-$(command -v ctffind5 || command -v ctffind || echo 'not on PATH')}"
 echo
 
-eval "$STACK --overwrite"
+if [[ "${KEEP_STACK:-0}" != 1 ]]; then
+    eval "$STACK --overwrite"
+fi
 
 fit() {  # label window [extra flags]
     local label=$1 window=$2

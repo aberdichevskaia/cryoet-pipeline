@@ -368,6 +368,9 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("ctffind-defocus-search-window-angstrom",
                    ctf.get("defocus_search_window_angstrom")),
              *flag("ctffind-defocus-step-angstrom", ctf.get("defocus_step_angstrom")),
+             # Otherwise ctffind5, then ctffind, from PATH: at MDC the latter can be
+             # CTFFIND 4.1.14, which this backend refuses.
+             *flag("ctffind-executable", exe.get("ctffind")),
              *([] if ctf.get("determine_sample_tilt") is None else [
                  "--ctffind-determine-sample-tilt" if ctf["determine_sample_tilt"]
                  else "--no-ctffind-determine-sample-tilt"
