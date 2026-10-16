@@ -144,6 +144,13 @@ from cryoet_pipeline.pick_geometry import (
     filter_picks_by_membrane,
     summary_lines,
 )
+from cryoet_pipeline.pick_selection import (
+    ScoreThreshold,
+    measure_score_selection,
+    select_picks_by_score,
+    selection_paths,
+    thresholds_from_json,
+)
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
@@ -2974,6 +2981,181 @@ def filter_picks(
     artifact_registry.commit(registry)
     typer.echo(f"wrote picks: {result.star_path}")
     typer.echo(f"registered {result.artifacts[0].id}")
+    typer.echo(f"updated {registry}")
+
+
+@app.command("select-picks")
+def select_picks(
+    manifest: Annotated[
+        list[Path],
+        typer.Option(
+            help="Tilt-series manifest JSON written by init. Repeat it to select several "
+            "series in one run, each at its own threshold or all at one."
+        ),
+    ],
+    registry: Annotated[
+        Path,
+        typer.Option(help="Artifact registry JSON to update."),
+    ],
+    out: Annotated[Path, typer.Option(help="Project output directory.")],
+    output_variant: Annotated[
+        str,
+        typer.Option(
+            help="Label for the kept picks. Extraction, the Dynamo export, averaging and "
+            "the report select them by it, as `--variant <label>`."
+        ),
+    ],
+    variant: Annotated[
+        str | None,
+        typer.Option(help="Label of the picks to select from, e.g. the lane's own."),
+    ] = None,
+    minimum_sigma: Annotated[
+        float | None,
+        typer.Option(
+            help="Keep picks at or above this many σ of their own search's noise, the unit "
+            "the report's score curves are drawn in. One value for every series."
+        ),
+    ] = None,
+    minimum_score: Annotated[
+        float | None,
+        typer.Option(
+            help="Keep picks at or above this raw pytom LCCmax. One value for every series."
+        ),
+    ] = None,
+    thresholds_sigma: Annotated[
+        Path | None,
+        typer.Option(
+            help="JSON object giving each series its own threshold in σ: "
+            '{"TS_0306": 7.5, ...}.'
+        ),
+    ] = None,
+    thresholds_score: Annotated[
+        Path | None,
+        typer.Option(
+            help="JSON object giving each series its own raw pytom LCCmax, the layout "
+            "scripts/qc_dynamo_picks.py writes as thresholds.json."
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Count what each threshold would keep and write the QC, registering nothing.",
+        ),
+    ] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option(help="Overwrite the selection's outputs and registry entries."),
+    ] = False,
+) -> None:
+    """Keep the picks that score at least a threshold, per series or one for all."""
+
+    given = {
+        "minimum-sigma": minimum_sigma,
+        "minimum-score": minimum_score,
+        "thresholds-sigma": thresholds_sigma,
+        "thresholds-score": thresholds_score,
+    }
+    chosen = [name for name, value in given.items() if value is not None]
+    if len(chosen) != 1:
+        raise typer.BadParameter(
+            "give exactly one of --minimum-sigma, --minimum-score, --thresholds-sigma and "
+            f"--thresholds-score; got {', '.join('--' + name for name in chosen) or 'none'}",
+            param_hint="minimum-sigma",
+        )
+    manifests = [TiltSeriesManifest.model_validate_json(path.read_text()) for path in manifest]
+    names = [one.tilt_series_id for one in manifests]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise typer.BadParameter(
+            f"the same tilt-series was given more than once: {', '.join(duplicates)}",
+            param_hint="manifest",
+        )
+    try:
+        if thresholds_sigma is not None:
+            thresholds = thresholds_from_json(thresholds_sigma, "sigma", names)
+        elif thresholds_score is not None:
+            thresholds = thresholds_from_json(thresholds_score, "score", names)
+        elif minimum_sigma is not None:
+            one = ScoreThreshold(minimum_sigma, "sigma", "--minimum-sigma")
+            thresholds = dict.fromkeys(names, one)
+        else:
+            assert minimum_score is not None
+            one = ScoreThreshold(minimum_score, "score", "--minimum-score")
+            thresholds = dict.fromkeys(names, one)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--" + chosen[0]) from exc
+
+    artifact_registry = ArtifactRegistry.load(registry)
+    # Every series is measured and checked before any is written, so a threshold
+    # that keeps nothing in the third series, or outputs already there, leave the
+    # project as it was rather than two series selected and one not.
+    planned = []
+    for tilt_series_manifest in manifests:
+        series = tilt_series_manifest.tilt_series_id
+        picks = _picks_artifact(artifact_registry, tilt_series_manifest, variant=variant)
+        threshold = thresholds[series]
+        if picks.variant == output_variant:
+            raise typer.BadParameter(
+                f"the selected picks need a label of their own; {picks.id} already carries "
+                f"{output_variant!r}",
+                param_hint="output-variant",
+            )
+        try:
+            measurement = measure_score_selection(picks, threshold)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--" + chosen[0]) from exc
+        if not dry_run and not measurement.keep_rows:
+            raise typer.BadParameter(
+                f"{series}: no pick reaches {threshold.describe()}; no series was selected",
+                param_hint="--" + chosen[0],
+            )
+        star_path, report_path = selection_paths(picks, series, out, output_variant)
+        outputs = [report_path] if dry_run else [star_path, report_path]
+        existing = [path for path in outputs if path.exists()]
+        if existing and not overwrite:
+            raise typer.BadParameter(
+                f"outputs already exist: {', '.join(map(str, existing))}; pass --overwrite "
+                "to replace them",
+                param_hint="output-variant",
+            )
+        planned.append((tilt_series_manifest, picks, threshold, measurement))
+
+    results = []
+    for tilt_series_manifest, picks, threshold, measurement in planned:
+        result = select_picks_by_score(
+            picks,
+            tilt_series_manifest,
+            output_root=out,
+            label=output_variant,
+            threshold=threshold,
+            overwrite=overwrite,
+            dry_run=dry_run,
+            measurement=measurement,
+        )
+        summary = result.summary
+        converted = summary["minimum_score"]
+        sigma = summary["minimum_sigma"]
+        typer.echo(
+            f"{tilt_series_manifest.tilt_series_id}: keeps {summary['kept']} of "
+            f"{summary['picks']} at {threshold.describe()}"
+            + (
+                f" (LCCmax {converted:.4f})"
+                if threshold.unit == "sigma"
+                else (f" ({sigma:.2f}σ)" if isinstance(sigma, float) else "")
+            )
+        )
+        for warning in cast(list[str], summary["warnings"]):
+            typer.echo(f"  warning: {warning}")
+        results.append(result)
+    if dry_run:
+        typer.echo("dry run: nothing registered")
+        return
+    for result in results:
+        artifact_registry.extend(result.artifacts, replace=overwrite)
+    artifact_registry.commit(registry)
+    for result in results:
+        typer.echo(f"registered {result.artifacts[0].id}: {result.star_path}")
     typer.echo(f"updated {registry}")
 
 

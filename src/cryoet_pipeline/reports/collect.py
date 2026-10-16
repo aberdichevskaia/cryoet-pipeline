@@ -57,6 +57,7 @@ QC_STEPS: tuple[QcStep, ...] = (
     QcStep("template_preparation", "Template", "Templ"),
     QcStep("particle_picking", "Picking", "Pick"),
     QcStep("picks_membrane_filter", "Pick filter", "Filter"),
+    QcStep("picks_score_selection", "Score selection", "Cut"),
 )
 """The steps a report has a column for, in pipeline order.
 

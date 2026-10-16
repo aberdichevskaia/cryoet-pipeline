@@ -515,6 +515,25 @@ it, which is how you answer whether a given pick sits on real density. Use
 `--sphere-radius-px` to change the size the picks are drawn at in 3dmod; it
 defaults to the radius the template mask was built with.
 
+To keep only the picks above a score, read a threshold off the report's score
+curves and register the kept ones under a label of their own; extraction, the
+Dynamo export, averaging and the report then select them with `--variant`:
+
+```bash
+cryoet select-picks \
+  --manifest outputs/dev/manifests/TS_01.json --manifest outputs/dev/manifests/TS_43.json \
+  --registry outputs/dev/artifacts.json --out outputs/dev \
+  --variant bin8 --output-variant bin8-sel \
+  --minimum-sigma 7.5        # one threshold for every series, in σ as the report plots
+  # or --thresholds-sigma thresholds.json   {"TS_01": 7.5, "TS_43": 8.0}
+  # or --minimum-score / --thresholds-score, in pytom's raw LCCmax
+```
+
+σ is each tomogram's own search noise, so one σ means the same in every series
+while a raw score does not. `--dry-run` prints what each threshold keeps and
+registers nothing. A value that looks like the other unit (a σ under 1, a score
+over 1) is refused rather than read as given.
+
 Then extract subvolumes, refine and classify them, and estimate resolution:
 
 ```bash
