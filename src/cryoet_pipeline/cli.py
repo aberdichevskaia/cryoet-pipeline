@@ -2297,7 +2297,12 @@ def prepare_template(
     ] = "pytom",
     template_particle_diameter_angstrom: Annotated[
         float | None,
-        typer.Option(min=0.0, help="Particle diameter, A; sizes the spherical mask."),
+        typer.Option(
+            min=0.0,
+            help="Particle diameter where it is widest, A. Sizes the spherical mask "
+            "(that radius plus 3 px) and the box (twice the diameter), unless they "
+            "are given.",
+        ),
     ] = None,
     template_mask_radius_px: Annotated[
         float | None,
@@ -2318,11 +2323,20 @@ def prepare_template(
     ] = None,
     template_mask_sigma_px: Annotated[
         float | None,
-        typer.Option(min=0.0, help="Gaussian falloff at the mask edge, pixels."),
+        typer.Option(
+            min=0.0,
+            help="Gaussian falloff at the mask edge, pixels; 1 when not given, and "
+            "0 for a hard edge.",
+        ),
     ] = None,
     template_box_size_px: Annotated[
         int | None,
-        typer.Option(min=1, help="Template box size; defaults to what the resampling yields."),
+        typer.Option(
+            min=1,
+            help="Template box size. Defaults to twice the particle diameter when one "
+            "is given, else to what the resampling yields; pytom keeps the map's own "
+            "box when that is larger.",
+        ),
     ] = None,
     template_low_pass_angstrom: Annotated[
         float | None,

@@ -134,6 +134,11 @@ emdb_id = "EMD-2638"      # immature HIV-1 Gag lattice, 9.4 A helical reconstruc
 # and a 250 A one is refused for the same reason. 12 px is a 130 A sphere, inside
 # the box with room for how the resampled box rounds.
 mask_radius_px = 12
+# The map's own box, held: the 2x-diameter default (2026-10-16) would make it
+# 50 px, and pytom pads a map with zeros, so this lattice would end in a hard
+# step 14 px out, just past the mask. The mask now gets the default 1 px soft
+# edge, which this box cuts at 0.018 of full height; prepare-template warns.
+box_size_px = 28
 low_pass_angstrom = 10.8  # bin8 Nyquist, as lane B low-passes to its Nyquist
 
 [pick]

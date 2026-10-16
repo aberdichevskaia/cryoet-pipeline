@@ -67,10 +67,12 @@ class PytomTemplateBackend:
         mirror = _bool_parameter(context, "template_mirror", default=False)
         low_pass = _optional_positive_float_parameter(context, "template_low_pass_angstrom")
         box_size = _optional_positive_int_parameter(context, "template_box_size_px")
+        if box_size is None:
+            box_size = _box_size_from_diameter(context, voxel_size_angstrom=output_voxel_size)
         input_voxel_size = _optional_positive_float_parameter(
             context, "template_input_voxel_size_angstrom"
         )
-        mask_sigma = _optional_positive_float_parameter(context, "template_mask_sigma_px")
+        mask_sigma = _mask_sigma_px(context)
         emdb_id = _optional_string_parameter(context, "template_emdb_id")
 
         paths = _template_paths(
@@ -224,6 +226,12 @@ class PytomTemplateBackend:
                 "tight mask wants 10-20%, and the two margins compound because "
                 "the measured extent already exceeds the particle"
             )
+        clipped = _clipped_edge_warning(
+            mask_radii, sigma_px=mask_sigma, box_size=actual_box_size
+        )
+        if clipped is not None:
+            status = QcStatus.WARNING
+            warnings.append(clipped)
         shape_warnings = _mask_versus_density_warnings(
             mask_radii,
             template_statistics,
@@ -280,6 +288,9 @@ class PytomTemplateBackend:
             "source_map_path": str(source_map.resolve()),
             "emdb_id": emdb_id,
             "box_size_px": actual_box_size,
+            # What was asked of pytom, given or from the diameter; None left it
+            # to the map. pytom keeps the map's own box when that is larger.
+            "box_size_requested_px": box_size,
             "inverted": invert,
             # Recorded on the artifact, not only in QC, so a later step can ask
             # how big the reference actually is without reopening the map.
@@ -576,6 +587,39 @@ class _MaskRadii:
         return self.x == self.y == self.z
 
 
+MASK_MARGIN_PX = 3.0
+"""Pixels added to the particle's radius at its widest when a diameter sizes the mask.
+
+The rule agreed for every lane (2026-10-16): the radius where the particle is
+widest, plus 3 px, then a soft edge. A fixed margin in pixels rather than a
+fraction, so that it scales with what the low-pass blurs at the tomogram's own
+binning rather than with the particle.
+"""
+
+DEFAULT_MASK_SIGMA_PX = 1.0
+"""The soft edge every mask gets unless told otherwise; 0 asks for a hard one.
+
+pytom_create_mask without `--sigma` draws a binary sphere, and a hard mask edge
+rings in Fourier space. 1 px is what both ribosome lanes settled on (2026-10-15).
+"""
+
+BOX_TO_DIAMETER = 2.0
+"""Template box over the particle's widest diameter, when no box is given.
+
+pytom's tutorial leaves an overhang around the particle for sampling the
+weighting functions (60 px for a 300 A ribosome at 13.79 A, 2.8x); twice the
+diameter is the rule agreed for every lane (2026-10-16).
+"""
+
+_PYTOM_MASK_TAIL_SIGMAS = math.sqrt(4.5)
+"""How far pytom's soft edge reaches past the radius, in units of `--sigma`.
+
+pytom_tm.mask draws exp(-(d / sigma)^2) at a distance d past the radius and
+zeroes it below exp(-cutoff_sd^2 / 2) with cutoff_sd = 3, so the edge ends at
+d = sqrt(4.5) sigma, about 2.1 sigma.
+"""
+
+
 _DERIVED_MARGIN = 1.2
 """Overhang on the measured extent, following pytom-match-pick's own advice.
 
@@ -584,6 +628,41 @@ a tight mask removes noise from around the particle. The measurement this
 multiplies reads a hard edge about 8% under true, so 1.2 lands near the bottom of
 that band — which is the side the documentation leans to.
 """
+
+
+def _mask_sigma_px(context: BackendContext) -> float | None:
+    """The mask's soft edge in pixels, or None for a hard edge (asked for as 0)."""
+
+    value = context.parameters.get("template_mask_sigma_px")
+    if value is None:
+        return DEFAULT_MASK_SIGMA_PX
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("context parameter 'template_mask_sigma_px' must be numeric")
+    sigma = float(value)
+    if not math.isfinite(sigma) or sigma < 0.0:
+        raise ValueError("context parameter 'template_mask_sigma_px' must be zero or positive")
+    return sigma if sigma > 0.0 else None
+
+
+def _box_size_from_diameter(
+    context: BackendContext,
+    *,
+    voxel_size_angstrom: float,
+) -> int | None:
+    """Twice the particle's diameter in tomogram pixels, rounded up to even.
+
+    None without a diameter, which leaves the box to pytom: the deposited map's
+    own box after resampling. pytom pads a smaller map up to this size and only
+    warns, keeping its own, when the map is already larger.
+    """
+
+    diameter = _optional_positive_float_parameter(
+        context, "template_particle_diameter_angstrom"
+    )
+    if diameter is None:
+        return None
+    size = math.ceil(BOX_TO_DIAMETER * diameter / voxel_size_angstrom)
+    return size + size % 2
 
 
 def _mask_radii_px(
@@ -595,6 +674,10 @@ def _mask_radii_px(
 ) -> tuple[_MaskRadii, bool]:
     """Size the mask, and say whether the size had to be derived.
 
+    A diameter gives the radius where the particle is widest, and the mask takes
+    that plus `MASK_MARGIN_PX`; the soft edge, when there is one, falls off
+    beyond it. So the diameter wanted is the particle's widest, not its mean.
+
     Deriving it is safe to add because asking for neither parameter used to be
     an error, so no command line that works today changes behaviour. The derived
     value is a sphere on the largest measured axis, never an ellipsoid: a
@@ -604,7 +687,9 @@ def _mask_radii_px(
 
     A map whose density fills its box — a lattice, say — derives a radius that
     does not fit, and the existing box check refuses it. That refusal is the
-    right answer: nothing about such a map says where one particle ends.
+    right answer: nothing about such a map says where one particle ends. A soft
+    edge cut off by the box is warned about, not refused, in
+    `_clipped_edge_warning`.
     """
 
     derived = False
@@ -616,7 +701,7 @@ def _mask_radii_px(
             context, "template_particle_diameter_angstrom"
         )
         if diameter is not None:
-            radius = diameter / 2.0 / voxel_size_angstrom
+            radius = diameter / 2.0 / voxel_size_angstrom + MASK_MARGIN_PX
         elif measured_extent_px is not None and max(measured_extent_px) > 0.0:
             radius = max(measured_extent_px) * _DERIVED_MARGIN / 2.0
             derived = True
@@ -655,6 +740,35 @@ def _mask_radii_px(
             "really that large"
         )
     return radii, derived
+
+
+def _clipped_edge_warning(
+    radii: _MaskRadii,
+    *,
+    sigma_px: float | None,
+    box_size: int,
+) -> str | None:
+    """Say so when the box cuts the mask's soft edge before it has fallen off.
+
+    pytom's edge ends ~2.1 sigma past the radius; where the box face comes
+    first, the mask steps from its value there to nothing, which is a hard edge
+    of that height. A warning rather than a refusal: a few per cent at the face
+    is a small step, and a box held at the map's own size can have reasons.
+    """
+
+    if sigma_px is None:
+        return None
+    room = box_size / 2.0 - max(radii.x, radii.y, radii.z)
+    if room >= _PYTOM_MASK_TAIL_SIGMAS * sigma_px:
+        return None
+    height = math.exp(-((max(room, 0.0) / sigma_px) ** 2))
+    return (
+        f"the mask's soft edge (sigma {sigma_px:g} px) runs "
+        f"{_PYTOM_MASK_TAIL_SIGMAS * sigma_px:.1f} px past its radius, but the "
+        f"{box_size} px box leaves {room:.1f} px: the mask is still {height:.3f} at the "
+        "box face and steps to zero there. A larger box, a smaller radius or a "
+        "narrower edge removes the step"
+    )
 
 
 @dataclass(frozen=True)

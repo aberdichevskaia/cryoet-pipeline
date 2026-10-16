@@ -115,9 +115,15 @@ def _runner_factory(
             captured.append(command_list)
         output = Path(command_list[command_list.index("-o") + 1])
         if "create_template" in command_list[0]:
+            # pytom pads the map up to a requested box larger than its own.
+            requested = (
+                int(command_list[command_list.index("-b") + 1])
+                if "-b" in command_list
+                else _BOX_SIZE
+            )
             _write_volume(
                 output,
-                _blob(_BOX_SIZE, negative=template_negative)
+                _blob(max(requested, _BOX_SIZE), negative=template_negative)
                 if template_data is None
                 else template_data,
             )
@@ -194,6 +200,8 @@ def test_prepare_template_draws_a_slab_mask_for_an_extended_reference(
                 "template_mask_radius_px": 12.0,
                 "template_mask_radius_y_px": 12.0,
                 "template_mask_radius_z_px": 3.0,
+                # Room for the default soft edge past the 12 px semi-axes.
+                "template_box_size_px": 32,
                 "template_emdb_id": "2638",
             },
         ),
@@ -235,6 +243,7 @@ def test_prepare_template_keeps_a_sphere_when_only_one_radius_is_given(
                 "pytom_create_template_executable": create_template,
                 "pytom_create_mask_executable": create_mask,
                 "template_mask_radius_px": 10.0,
+                "template_box_size_px": 32,
                 "template_emdb_id": "2638",
             },
         ),
@@ -319,7 +328,9 @@ def test_prepare_template_writes_template_mask_and_qc(tmp_path: Path) -> None:
     assert mask.parameters["template_id"] == template.id
     assert template.parent_ids == [tomogram.id]
     assert template.pixel_spacing_angstrom == pytest.approx(_VOXEL_SIZE)
-    assert template.shape == (_BOX_SIZE, _BOX_SIZE, _BOX_SIZE)
+    # Twice the 150 A diameter is 31.6 px at 9.504 A/px, rounded up to even.
+    assert template.shape == (32, 32, 32)
+    assert template.parameters["box_size_requested_px"] == 32
     assert template.parameters["emdb_id"] == "2638"
     assert template.path.is_file()
     assert mask.path.is_file()
@@ -329,17 +340,21 @@ def test_prepare_template_writes_template_mask_and_qc(tmp_path: Path) -> None:
         f"{_VOXEL_SIZE:.6f}"
     )
     assert "--invert" in template_command
+    assert template_command[template_command.index("-b") + 1] == "32"
 
     mask_command = captured[1]
     # The mask must be built at the template's actual box size, not a guess.
-    assert mask_command[mask_command.index("-b") + 1] == str(_BOX_SIZE)
-    # 150 A diameter at 9.504 A/px is a radius of ~7.89 px.
-    assert float(mask_command[mask_command.index("-r") + 1]) == pytest.approx(7.891, abs=1e-3)
+    assert mask_command[mask_command.index("-b") + 1] == "32"
+    # 150 A diameter at 9.504 A/px is a radius of ~7.89 px, and the mask is 3 px wider.
+    assert float(mask_command[mask_command.index("-r") + 1]) == pytest.approx(10.891, abs=1e-3)
+    # With a soft edge unless a hard one is asked for.
+    assert mask_command[mask_command.index("-s") + 1] == "1.000000"
+    assert mask.parameters["mask_sigma_px"] == pytest.approx(1.0)
 
     report = json.loads(qc_artifact.path.read_text())
     assert report["status"] == QcStatus.PASS.value
     assert report["inverted"] is True
-    assert report["box_size_px"] == _BOX_SIZE
+    assert report["box_size_px"] == 32
     assert report["emdb_id"] == "2638"
 
 
@@ -851,3 +866,76 @@ def test_derived_mask_overhangs_the_particle_as_the_documentation_advises() -> N
     assert derived is True
     overhang = radii.x / true_radius
     assert 1.0 < overhang < 1.25, f"mask radius {radii.x} is {overhang:.2f}x the particle's"
+
+
+@pytest.mark.parametrize(
+    ("extra", "template_box", "mask_sigma"),
+    [
+        # A diameter sizes the box at twice itself: 2 x 150 A / 9.504 A, up to even.
+        ({"template_particle_diameter_angstrom": 150.0}, "32", "1.000000"),
+        # A box that was given wins over the diameter's.
+        (
+            {"template_particle_diameter_angstrom": 150.0, "template_box_size_px": 40},
+            "40",
+            "1.000000",
+        ),
+        # Without a diameter the box is left to pytom, the map's own.
+        ({"template_mask_radius_px": 6.0}, None, "1.000000"),
+        # A hard edge only when asked for, as 0.
+        (
+            {"template_particle_diameter_angstrom": 150.0, "template_mask_sigma_px": 0.0},
+            "32",
+            None,
+        ),
+    ],
+)
+def test_prepare_template_sizes_box_and_edge_by_the_rule(
+    tmp_path: Path,
+    extra: dict[str, object],
+    template_box: str | None,
+    mask_sigma: str | None,
+) -> None:
+    tomogram = _tomogram(tmp_path)
+    create_template, create_mask = _executables(tmp_path)
+    captured: list[list[str]] = []
+
+    PytomTemplateBackend(_runner_factory(captured=captured)).prepare(
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                **extra,
+            },
+        ),
+    )
+
+    template_command, mask_command = captured
+    if template_box is None:
+        assert "-b" not in template_command
+    else:
+        assert template_command[template_command.index("-b") + 1] == template_box
+    if mask_sigma is None:
+        assert "-s" not in mask_command
+    else:
+        assert mask_command[mask_command.index("-s") + 1] == mask_sigma
+
+
+def test_a_soft_edge_cut_off_by_the_box_is_warned_about() -> None:
+    """The edge reaches ~2.1 sigma past the radius; a box that cuts it leaves a step."""
+
+    from cryoet_pipeline.backends.template import _clipped_edge_warning
+
+    sphere = _MaskRadii(x=12.0, y=12.0, z=12.0)
+
+    # Gag's 12 px mask in its map's own 28 px box: 2 px of room for a 2.1 px edge.
+    warning = _clipped_edge_warning(sphere, sigma_px=1.0, box_size=28)
+    assert warning is not None
+    assert "0.018 at the box face" in warning
+    # Room enough, or no soft edge at all: nothing to say.
+    assert _clipped_edge_warning(sphere, sigma_px=1.0, box_size=30) is None
+    assert _clipped_edge_warning(sphere, sigma_px=None, box_size=24) is None

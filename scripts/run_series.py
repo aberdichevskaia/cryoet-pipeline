@@ -410,7 +410,10 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             ["prepare-template", *common,
              *flag("emdb-id", tmpl.get("emdb_id")),
              *flag("source-map", tmpl.get("source_map")),
-             *flag("template-particle-diameter-angstrom", tmpl.get("particle_diameter_angstrom")),
+             # The particle's widest diameter sizes the mask (radius + 3 px) and
+             # the box (2x); [pick] already names it, so [template] need not.
+             *flag("template-particle-diameter-angstrom",
+                   tmpl.get("particle_diameter_angstrom", pick["particle_diameter_angstrom"])),
              *flag("template-low-pass-angstrom", tmpl["low_pass_angstrom"]),
              *flag("template-mask-radius-px", tmpl.get("mask_radius_px")),
              *flag("template-mask-sigma-px", tmpl.get("mask_sigma_px")),

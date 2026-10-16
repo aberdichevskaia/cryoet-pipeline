@@ -210,15 +210,21 @@ test_time_augmentation = true
 emdb_id = "EMD-XXXXX"                 # fetched from EMDB
 # source_map = "data/my-dataset/reference.mrc"   # or a local map
 low_pass_angstrom = 20.0              # EDIT: about 2 x the tomogram pixel size
-# The mask radius in tomogram pixels: about 10-20% larger than the particle
-# radius. Without it, the radius is derived from the map, which tends to be generous.
-# mask_radius_px = 17
+# Mask and box come from [pick] particle_diameter_angstrom, which is why that has
+# to be the particle's diameter where it is WIDEST: the mask radius is half of it
+# plus 3 px, with a 1 px soft edge, and the box is twice the diameter. Set these
+# only to override that, e.g. for a lattice map with no single particle in it.
+# mask_radius_px = 18
+# mask_sigma_px = 1.0                 # 0 for a hard edge
+# box_size_px = 60
 
 [pick]
-particle_diameter_angstrom = 250.0    # EDIT: your particle; sets the angular sampling
+particle_diameter_angstrom = 250.0    # EDIT: your particle at its widest; sets the angular
+                                      # sampling and the template's mask and box
 number_of_particles = 2000            # candidates kept per tomogram, before your review
 number_of_false_positives = 100.0
-low_pass_angstrom = 30.0              # EDIT: keeps the particle's shape, drops noisy detail
+low_pass_angstrom = 30.0              # EDIT: a little above the tomogram's Nyquist
+                                      # (2 x pixel), ~1.3x: Nyquist 19.6 A -> 25 A
 random_phase_correction = true
 per_tilt_weighting = true
 spectral_whitening = true
@@ -239,7 +245,7 @@ gpu_ids = "0"
 # segmentation_mask_dilation_px = 40
 
 [extract]
-box_size_px = 48          # EDIT: about 1.5 x the particle diameter in tomogram pixels; even
+box_size_px = 48          # EDIT: about 2 x the particle diameter in tomogram pixels; even
 
 [executables]
 # Leave as is; set these environment variables before submitting.
