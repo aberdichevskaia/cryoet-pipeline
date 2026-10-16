@@ -671,15 +671,16 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
     and the compensated average normalized over the mask once more.
     """
     nmask = _cube(nmask)
-    rows = list(zip(particles, angles, shifts, tilt_ranges, strict=True))
-    if not rows or np.any(nmask < 0) or not np.any(nmask):
+    if np.any(nmask < 0) or not np.any(nmask):
         raise ValueError("a class needs at least one particle and a nonnegative, nonempty mask")
     if type(fmin) is not int or fmin < 1:
         raise ValueError(f"fmin counts particles and must be a positive integer, got {fmin!r}")
     total = np.zeros(nmask.shape)
     contributions = np.zeros(nmask.shape)
     weights = np.zeros(nmask.shape)
-    for particle, angle, shift, tilts in rows:
+    count = 0
+    # One particle at a time, so `particles` may be a generator reading them from disk.
+    for particle, angle, shift, tilts in zip(particles, angles, shifts, tilt_ranges, strict=True):
         if _cube(particle).shape != nmask.shape:
             raise ValueError("particle and mask shapes differ")
         inverse_angles = -_triple(angle)[::-1]
@@ -690,7 +691,9 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
         contributions += valid
         rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True)
         weights += rotated_wedge
-    count = len(rows)
+        count += 1
+    if not count:
+        raise ValueError("a class needs at least one particle and a nonnegative, nonempty mask")
     # explicitBalanceNan: every voxel divided by the particles that really reached it.
     raw = np.divide(total, contributions, out=np.zeros_like(total), where=contributions > 0)
     raw = normalize_roi(raw, nmask)
