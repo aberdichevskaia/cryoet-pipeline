@@ -1482,6 +1482,41 @@ class DynamoAverageBackend:
         average_path = _class_average_path(paths, 1, num_classes=1)
         _write_average_mrc(average_path, result.average, pixel_spacing_angstrom=spacing)
 
+        # Each rlnRandomSubset half averaged alone, the same way at the same poses,
+        # so the two can be compared before anything was selected or refined.
+        warnings: list[str] = []
+        halves = half_set_indices(records)
+        half_counts = {half: len(indices) for half, indices in halves.items()}
+        half_maps: dict[int, np.ndarray] = {}
+        if min(half_counts.values()) < 2:
+            warnings.append(
+                f"no half maps: rlnRandomSubset puts {half_counts[1]} and {half_counts[2]} "
+                "particles in the halves, and each needs at least two"
+            )
+        else:
+            for half, indices in sorted(halves.items()):
+                half_maps[half] = average_class(
+                    [inputs.raw[i] for i in indices],
+                    [angles[i] for i in indices],
+                    [dynamo_shifts[i] for i in indices],
+                    [inputs.tilt_ranges[i] for i in indices],
+                    inputs.normalization_mask,
+                    fmin=DYNAMO_AVERAGE_FMIN,
+                ).average
+                _write_average_mrc(
+                    paths.half_maps[half], half_maps[half], pixel_spacing_angstrom=spacing
+                )
+            if min(half_counts.values()) < _MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION:
+                warnings.append(
+                    f"a half holds {min(half_counts.values())} particles, fewer than "
+                    f"{_MINIMUM_PARTICLES_PER_HALF_FOR_RESOLUTION}: its FSC is noise"
+                )
+        half_map_fsc = (
+            _half_map_fsc(half_maps, inputs.normalization_mask, inputs.spacing)
+            if half_maps
+            else None
+        )
+
         report = DynamoAverageQc(
             backend=self.name,
             tilt_series_ids=combined.tilt_series_ids,
@@ -1496,7 +1531,10 @@ class DynamoAverageBackend:
             fmin=DYNAMO_AVERAGE_FMIN,
             fourier_weight_threshold=result.threshold,
             fourier_weight=_fourier_weight_summary(result.fweight, result.threshold),
-            status=QcStatus.PASS,
+            half_counts={str(h): n for h, n in half_counts.items()} if half_maps else None,
+            half_map_fsc=half_map_fsc,
+            status=QcStatus.WARNING if warnings else QcStatus.PASS,
+            warnings=warnings,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
         average = Artifact(
@@ -1527,6 +1565,13 @@ class DynamoAverageBackend:
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
                 "gold_standard": False,
+                # The maps only: their FSC is in the QC, and no resolution is
+                # recorded, since the halves were not refined apart.
+                **(
+                    {"half_map_paths": {str(h): str(paths.half_maps[h]) for h in sorted(half_maps)}}
+                    if half_maps
+                    else {}
+                ),
             },
             software_versions={
                 "numpy": _package_version("numpy"),
@@ -1535,7 +1580,8 @@ class DynamoAverageBackend:
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
-            size_bytes=_path_size_bytes(average_path),
+            size_bytes=_path_size_bytes(average_path)
+            + sum(_path_size_bytes(paths.half_maps[h]) for h in half_maps),
         )
         qc = Artifact(
             id=f"{scope}:qc:subtomogram_averaging:{self.name}{variant_suffix(context)}",

@@ -868,8 +868,26 @@ def test_dynamo_average_is_dynamos_console_average_at_the_poses_given(tmp_path):
     assert average.kind is ArtifactKind.SUBTOMOGRAM_AVERAGE and qc.kind is ArtifactKind.QC
     assert average.parameters["backend"] == "dynamo-average"
     assert average.parameters["iterations_run"] == 0
+    assert "resolution_angstrom" not in average.parameters
+    # Each rlnRandomSubset half is the same console average of its own particles.
+    for half, path in average.parameters["half_map_paths"].items():
+        members = [i for i, r in enumerate(start) if r.half_set == int(half)]
+        expected_half = core.average_class(
+            [particles[i] for i in members],
+            [angles[i] for i in members],
+            [shifts[i] for i in members],
+            [tilts[i] for i in members],
+            mask,
+            fmin=1,
+        )
+        assert _relative(mrcfile.read(path).astype(np.float64), expected_half.average) < 1e-5
     report = json.loads(qc.path.read_text())
-    assert report["backend"] == "dynamo-average" and report["status"] == "pass"
+    assert report["backend"] == "dynamo-average"
+    assert report["half_counts"] == {"1": 3, "2": 3}
+    for label in ("masked", "unmasked"):
+        assert len(report["half_map_fsc"][label]["correlation"]) == 12
+    assert report["status"] == "warning"
+    assert report["warnings"] == ["a half holds 3 particles, fewer than 10: its FSC is noise"]
     assert report["iterations_run"] == 0 and report["fmin"] == 1
     assert report["fourier_weight_threshold"] == pytest.approx(expected.threshold)
     assert report["fourier_weight_threshold"] == pytest.approx(1 / 6)
@@ -901,6 +919,16 @@ def test_dynamo_average_is_the_phantom_only_at_the_right_poses(tmp_path):
         correlation[label] = np.corrcoef(written[inside], phantom[inside])[0, 1]
     assert correlation["true"] > 0.97, correlation
     assert correlation["scrambled"] < 0.8, correlation
+
+
+def test_dynamo_average_makes_no_half_maps_from_halves_too_small_to_average(tmp_path):
+    stack = _wedged_particles(tmp_path, [(10.0, 20.0, 30.0), (40.0, 50.0, 60.0)])
+    average, qc = _run_average(tmp_path, stack)
+    assert "half_map_paths" not in average.parameters
+    report = json.loads(qc.path.read_text())
+    assert report["half_counts"] is None and report["half_map_fsc"] is None
+    assert report["status"] == "warning"
+    assert report["warnings"][0].startswith("no half maps: rlnRandomSubset puts 1 and 1")
 
 
 def test_dynamo_average_normalises_on_a_mask_files_support(tmp_path):

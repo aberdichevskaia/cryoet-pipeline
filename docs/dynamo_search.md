@@ -154,6 +154,19 @@ poses the map resembles the template even when the picks are noise, since each
 box is turned to where noise fitted the template best; read it against the same
 average of `scripts/decoy_picks.py`'s random positions.
 
+Beside the map it writes the two `rlnRandomSubset` halves, each the same average
+of its own particles at the same poses, and their FSC (masked and unmasked) in the
+QC, as `--gold-standard` reports its halves. No resolution is recorded: nothing
+was refined apart, and both halves' poses came from matching one template, so
+they agree on the template even where the particles do not. To plot the curve:
+
+```bash
+cryoet compute-fsc --mode map-to-model --threshold 0.143 \
+  --average-map <scope>_dynamo-average_<label>_half1.mrc \
+  --model-map <scope>_dynamo-average_<label>_half2.mrc \
+  --out fsc_halves.json --plot fsc_halves.png
+```
+
 ## Parameters
 
 | option | default | meaning |

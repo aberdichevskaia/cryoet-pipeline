@@ -1270,6 +1270,13 @@ class DynamoAverageQc(BaseModel):
     fourier_weight: dict[str, float] | None = None
     """The summed, max-normalised wedge weight inside the Nyquist sphere: minimum,
     median, and the fraction of components below the threshold, which are zeroed."""
+    half_counts: dict[str, int] | None = None
+    """Particles in each rlnRandomSubset half; None when the halves were not made."""
+    half_map_fsc: dict[str, Any] | None = None
+    """FSC between the two halves averaged the same way at the same poses, `masked`
+    (the normalisation mask) and `unmasked`, as dynamo-search reports its halves.
+    Not a resolution: nothing was refined apart, and template-matched poses lean
+    both halves on the same template."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 
