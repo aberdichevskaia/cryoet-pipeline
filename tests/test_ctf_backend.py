@@ -467,6 +467,64 @@ def test_ctffind5_estimation_skips_first_pass_with_explicit_defocus(tmp_path: Pa
     assert float(_answer_to("Maximum defocus", stdins[0])) == pytest.approx(41000.0)
 
 
+def test_ctffind5_estimation_can_fit_the_sample_tilt(tmp_path: Path) -> None:
+    """A yes to the tilt question draws no further questions, so the list is unchanged."""
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    stdins: list[str] = []
+
+    artifacts = Ctffind5CtfEstimationBackend(_ctffind_runner(stdins=stdins)).estimate(
+        aligned_stack,
+        alignment,
+        _manifest(),
+        _context(
+            tmp_path,
+            {
+                "imod_dir": _fake_imod_dir(tmp_path),
+                "ctffind_executable": ctffind,
+                "ctf_expected_defocus_um": 4.0,
+                "ctffind_determine_sample_tilt": True,
+                "ctffind_defocus_search_window_angstrom": 5000.0,
+            },
+        ),
+    )
+
+    (full,) = stdins
+    assert len(full.splitlines()) == len(_STACK_QUESTIONS)
+    assert _answer_to("Determine sample tilt?", full) == "yes"
+    assert _answer_to("Determine samnple thickness?", full) == "no"
+    # The per-view window around the 4 um hint.
+    assert float(_answer_to("Minimum defocus", full)) == pytest.approx(35000.0)
+    assert float(_answer_to("Maximum defocus", full)) == pytest.approx(45000.0)
+    ctf_model = artifacts[0]
+    assert ctf_model.parameters["determines_sample_tilt"] is True
+    assert ctf_model.parameters["defocus_search_window_angstrom"] == pytest.approx(5000.0)
+
+
+def test_ctffind5_refuses_sample_tilt_with_a_phase_shift(tmp_path: Path) -> None:
+    """CTFFIND5 asks the tilt question only without a phase-shift search."""
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+
+    with pytest.raises(ValueError, match="phase shift"):
+        Ctffind5CtfEstimationBackend(_ctffind_runner()).estimate(
+            aligned_stack,
+            alignment,
+            _manifest(),
+            _context(
+                tmp_path,
+                {
+                    "imod_dir": _fake_imod_dir(tmp_path),
+                    "ctffind_executable": ctffind,
+                    "ctffind_determine_sample_tilt": True,
+                    "ctffind_search_phase_shift": True,
+                },
+            ),
+        )
+
+
 def test_ctffind5_estimation_rejects_view_count_mismatch(tmp_path: Path) -> None:
     _, alignment, aligned_stack = _input_artifacts(tmp_path)
     ctffind = _fake_executable(tmp_path / "ctffind")

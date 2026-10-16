@@ -234,6 +234,8 @@ class Ctffind5CtfEstimationBackend:
                 "astigmatism_frame": "aligned_stack",
                 "includes_astigmatism": settings.include_astigmatism,
                 "includes_phase_shift": settings.search_phase_shift,
+                "determines_sample_tilt": settings.determine_sample_tilt,
+                "defocus_search_window_angstrom": window,
                 "hint_defocus_um": hint_defocus_angstrom / 10000.0,
                 "summary_path": str(paths.summary),
                 "diagnostic_path": str(paths.diagnostic),
@@ -810,6 +812,7 @@ class _CtffindSettings:
     maximum_phase_shift_rad: float
     phase_shift_step_rad: float
     warnings: tuple[str, ...]
+    determine_sample_tilt: bool = False
 
 
 def _optics_parameters(context: BackendContext) -> _Optics:
@@ -996,10 +999,19 @@ def _ctffind_settings(
         )
         min_resolution_angstrom = adjusted
 
-    if _bool_parameter(context, "ctffind_determine_sample_tilt", default=False):
-        raise NotImplementedError(
-            "CTFFIND5 sample-tilt determination adds follow-up prompts that this adapter "
-            "does not answer yet; leave it disabled"
+    # CTFFIND5 fits each view's tilt from the spectra of its tiles and then the
+    # defocus with that gradient, which a 40-degree view of a 0.7 um field spreads
+    # over ~0.6 um. DoInteractiveUserInput asks nothing more after a yes here
+    # (cisTEM master, read 2026-10-16), and _verify_dialogue fails loudly if the
+    # installed version does. It offers the question only without a phase shift.
+    determine_sample_tilt = _bool_parameter(
+        context, "ctffind_determine_sample_tilt", default=False
+    )
+    search_phase_shift = _bool_parameter(context, "ctffind_search_phase_shift", default=False)
+    if determine_sample_tilt and search_phase_shift:
+        raise ValueError(
+            "CTFFIND5 does not offer sample-tilt determination together with an "
+            "additional phase shift; choose one"
         )
     if _bool_parameter(context, "ctffind_determine_sample_thickness", default=False):
         raise NotImplementedError(
@@ -1030,7 +1042,8 @@ def _ctffind_settings(
         restrain_astigmatism_angstrom=_optional_positive_float_parameter(
             context, "ctffind_restrain_astigmatism_angstrom"
         ),
-        search_phase_shift=_bool_parameter(context, "ctffind_search_phase_shift", default=False),
+        search_phase_shift=search_phase_shift,
+        determine_sample_tilt=determine_sample_tilt,
         minimum_phase_shift_rad=_float_parameter(
             context, "ctffind_min_phase_shift_rad", default=0.0
         ),
@@ -1179,7 +1192,9 @@ def _ctffind_dialogue(
     else:
         dialogue.append(("Find additional phase shift?", "no"))
         # Tilt determination is offered only without an additional phase shift.
-        dialogue.append(("Determine sample tilt?", "no"))
+        dialogue.append(
+            ("Determine sample tilt?", "yes" if settings.determine_sample_tilt else "no")
+        )
     dialogue.append(("Determine samnple thickness?", "no"))
     dialogue.append(("Do you want to set expert options?", "no"))
     return tuple(dialogue)

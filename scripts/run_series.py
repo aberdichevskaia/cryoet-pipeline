@@ -363,7 +363,15 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("ctf-spherical-aberration-mm", ctf["spherical_aberration_mm"]),
              *flag("ctf-amplitude-contrast", ctf.get("amplitude_contrast")),
              *flag("ctffind-min-defocus-angstrom", ctf.get("min_defocus_angstrom")),
-             *flag("ctffind-max-defocus-angstrom", ctf.get("max_defocus_angstrom"))],
+             *flag("ctffind-max-defocus-angstrom", ctf.get("max_defocus_angstrom")),
+             # The per-view pass searches this far either side of the 0-degree fit.
+             *flag("ctffind-defocus-search-window-angstrom",
+                   ctf.get("defocus_search_window_angstrom")),
+             *flag("ctffind-defocus-step-angstrom", ctf.get("defocus_step_angstrom")),
+             *([] if ctf.get("determine_sample_tilt") is None else [
+                 "--ctffind-determine-sample-tilt" if ctf["determine_sample_tilt"]
+                 else "--no-ctffind-determine-sample-tilt"
+             ])],
         ),
         # The lane parts here.
         (

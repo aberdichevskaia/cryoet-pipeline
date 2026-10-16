@@ -1481,6 +1481,13 @@ def estimate_ctf(
         bool,
         typer.Option(help="Search for an additional phase shift (phase plate)."),
     ] = False,
+    ctffind_determine_sample_tilt: Annotated[
+        bool,
+        typer.Option(
+            help="Let CTFFIND5 fit each view's tilt and the defocus gradient it "
+            "makes across the image. Not offered with a phase-shift search.",
+        ),
+    ] = False,
     ctffind_min_phase_shift_rad: Annotated[
         float,
         typer.Option(help="Minimum searched phase shift, radians."),
@@ -1576,6 +1583,7 @@ def estimate_ctf(
         "ctffind_include_astigmatism": ctffind_include_astigmatism,
         "ctffind_exhaustive_search": ctffind_exhaustive_search,
         "ctffind_search_phase_shift": ctffind_search_phase_shift,
+        "ctffind_determine_sample_tilt": ctffind_determine_sample_tilt,
         "ctffind_min_phase_shift_rad": ctffind_min_phase_shift_rad,
         "ctffind_max_phase_shift_rad": ctffind_max_phase_shift_rad,
         "ctffind_phase_shift_step_rad": ctffind_phase_shift_step_rad,
