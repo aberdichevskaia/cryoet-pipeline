@@ -19,7 +19,8 @@ A format and pose adapter, nothing more: the voxels are copied, not processed. T
 poses go through `native_to_dynamo`, the conversion the dynamo-search backend uses
 and the CZII export was checked against Dynamo with. The table keeps the native
 pick position plus 0.5 in columns 24-26, as that export did, and the missing wedge
-as a single y-axis range per series, from the manifest's tilt angles.
+as a single y-axis range per series, from the views its tomogram was reconstructed
+from (the manifest's tilt angles only when the tomogram does not record them).
 """
 
 from __future__ import annotations
@@ -56,6 +57,33 @@ def particle_stack(registry: ArtifactRegistry, series: str, variant: str | None)
             f"{[a.id for a in found] or 'none'}"
         )
     return found[0]
+
+
+def reconstructed_tilt_range(
+    registry: ArtifactRegistry, stack, manifest: TiltSeriesManifest
+) -> tuple[tuple[float, float], str]:
+    """The tilt range of the views the particles' tomogram was built from, and its source.
+
+    The manifest lists every view collected, and alignment drops some: on the MDC
+    EMPIAR-11538 series min_std_ratio cut the dark extremes, so TS_0306's tomogram
+    holds -40..+58 of the manifest's -52..+68. The manifest's extremes would give
+    Dynamo a wedge with data where the tomogram has none. The tomogram records its
+    views as `included_z_values`; a series whose tomogram does not falls back to
+    the manifest, and the export says which it used.
+    """
+    angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
+    tomogram_id = stack.parameters.get("input_tomogram_id")
+    if isinstance(tomogram_id, str):
+        try:
+            included = registry.get(tomogram_id).parameters.get("included_z_values")
+        except KeyError:
+            included = None
+        if isinstance(included, list):
+            angles = [angle_by_z[z] for z in included if z in angle_by_z]
+            if angles:
+                return (float(min(angles)), float(max(angles))), "reconstruction"
+    angles = manifest.tilt_angles_deg
+    return (float(min(angles)), float(max(angles))), "manifest"
 
 
 def table_row(tag: int, tomogram: int, record, box: int, tilt_range, spacing: float) -> list:
@@ -109,7 +137,7 @@ def main() -> None:
     registry = ArtifactRegistry.load(args.project / "artifacts.json")
     (args.out / "particles").mkdir(parents=True, exist_ok=True)
 
-    rows, particles, wedges = [], [], {}
+    rows, particles, wedges, wedge_sources = [], [], {}, {}
     box = spacing = None
     tag = 0
     for tomogram, series in enumerate(args.series, start=1):
@@ -117,11 +145,13 @@ def main() -> None:
         manifest = TiltSeriesManifest.model_validate_json(
             (args.project / "manifests" / f"{series}.json").read_text()
         )
-        angles = manifest.tilt_angles_deg
-        tilt_range = (float(min(angles)), float(max(angles)))
+        tilt_range, source = reconstructed_tilt_range(registry, stack, manifest)
         if not tilt_range[0] < 0 < tilt_range[1]:
             raise SystemExit(f"{series}: tilt range {tilt_range} does not span zero")
         wedges[series] = list(tilt_range)
+        wedge_sources[series] = source
+        low, high = tilt_range
+        print(f"{series}: wedge {low:+.1f} to {high:+.1f} deg, from the {source}")
         star = Path(str(stack.parameters["metadata_path"]))
         records = read_particle_star(star)
         data = zarr.open(stack.path, mode="r")
@@ -173,7 +203,7 @@ def main() -> None:
             "conversion": "cryoet_pipeline.backends.dynamo_search.native_to_dynamo",
         },
         "table_columns": TABLE_COLUMNS,
-        "wedge": {"ranges": wedges, "axis": "y", "ftype": 1},
+        "wedge": {"ranges": wedges, "range_source": wedge_sources, "axis": "y", "ftype": 1},
         "particles": particles,
         "limitations": [
             "Voxels are copied from extraction unchanged: no normalisation, no contrast "

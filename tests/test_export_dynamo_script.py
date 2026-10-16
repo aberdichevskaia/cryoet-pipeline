@@ -101,3 +101,55 @@ def test_the_export_is_read_by_the_pick_review_and_keeps_poses_and_voxels(tmp_pa
         particle = mrcfile.read(out / record["file"])
         np.testing.assert_array_equal(particle, stacks[record["run"]][native["index"]])
     assert json.loads((out / "export_complete.json").read_text())["particles"] == 9
+    assert manifest["wedge"]["range_source"] == {"TS_A": "manifest", "TS_B": "manifest"}
+
+
+def test_the_wedge_is_the_reconstructions_not_the_manifests(tmp_path):
+    """Views dropped in alignment are still in the manifest, not in the tomogram.
+
+    TS_A's five views run -60..+60 and its tomogram records views 1-3 only
+    (-30..+30), so Dynamo must not be told it holds data out to 60 degrees; TS_B's
+    tomogram records nothing and keeps the manifest's range.
+    """
+    project = tmp_path / "project"
+    registry = ArtifactRegistry.empty()
+    for name, count, seed, included in (("TS_A", 3, 1, [1, 2, 3]), ("TS_B", 2, 2, None)):
+        artifact, _ = _series(project, name, count, seed)
+        if name == "TS_A":
+            base = _manifest()
+            five = base.model_copy(
+                update={
+                    "tilt_series_id": name,
+                    "images": [
+                        base.images[0].model_copy(update={"z_value": z, "tilt_angle_deg": angle})
+                        for z, angle in enumerate([-60.0, -30.0, 0.0, 30.0, 60.0])
+                    ],
+                }
+            )
+            (project / "manifests" / f"{name}.json").write_text(five.model_dump_json())
+        tomogram = Artifact(
+            id=f"{name}:tomogram:bin8",
+            variant="bin8",
+            kind=ArtifactKind.TOMOGRAM,
+            path=project / f"{name}.zarr",
+            parameters={"tilt_series_id": name}
+            | ({"included_z_values": included} if included is not None else {}),
+        )
+        registry.add(tomogram)
+        registry.add(
+            artifact.model_copy(
+                update={"parameters": artifact.parameters | {"input_tomogram_id": tomogram.id}}
+            )
+        )
+    registry.write(project / "artifacts.json")
+    out = tmp_path / "export"
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/export_dynamo.py"), "--project", str(project),
+         "--variant", "bin8", "--series", "TS_A", "--series", "TS_B", "--out", str(out)],
+        check=True,
+    )
+    manifest = json.loads((out / "export_manifest.json").read_text())
+    assert manifest["wedge"]["ranges"] == {"TS_A": [-30.0, 30.0], "TS_B": [-60.0, 60.0]}
+    assert manifest["wedge"]["range_source"] == {"TS_A": "reconstruction", "TS_B": "manifest"}
+    table = np.loadtxt(out / "initial.tbl")
+    assert [tuple(row[13:15]) for row in table] == [(-30.0, 30.0)] * 3 + [(-60.0, 60.0)] * 2
