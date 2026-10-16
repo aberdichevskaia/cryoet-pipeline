@@ -146,10 +146,13 @@ from cryoet_pipeline.pick_geometry import (
 )
 from cryoet_pipeline.pick_selection import (
     ScoreThreshold,
+    default_thresholds_path,
     measure_score_selection,
+    score_hints,
     select_picks_by_score,
     selection_paths,
     thresholds_from_json,
+    write_thresholds_template,
 )
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
@@ -3026,7 +3029,9 @@ def select_picks(
         Path | None,
         typer.Option(
             help="JSON object giving each series its own threshold in σ: "
-            '{"TS_0306": 7.5, ...}.'
+            '{"TS_0306": 7.5, ...}. Without any threshold option the file in its fixed '
+            "place is used, <out>/picks/<variant>_thresholds_sigma.json, which a first "
+            "run writes with every series null for you to fill in."
         ),
     ] = None,
     thresholds_score: Annotated[
@@ -3048,7 +3053,13 @@ def select_picks(
         typer.Option(help="Overwrite the selection's outputs and registry entries."),
     ] = False,
 ) -> None:
-    """Keep the picks that score at least a threshold, per series or one for all."""
+    """Keep the picks that score at least a threshold, per series or one for all.
+
+    With no threshold option, the per-series thresholds come from
+    <out>/picks/<variant>_thresholds_sigma.json. The first run writes that file, every
+    series null beside hints on where its scores lie, and stops; it selects once
+    each series there has a number. One threshold for all needs no file.
+    """
 
     given = {
         "minimum-sigma": minimum_sigma,
@@ -3057,12 +3068,13 @@ def select_picks(
         "thresholds-score": thresholds_score,
     }
     chosen = [name for name, value in given.items() if value is not None]
-    if len(chosen) != 1:
+    if len(chosen) > 1:
         raise typer.BadParameter(
-            "give exactly one of --minimum-sigma, --minimum-score, --thresholds-sigma and "
-            f"--thresholds-score; got {', '.join('--' + name for name in chosen) or 'none'}",
+            "give at most one of --minimum-sigma, --minimum-score, --thresholds-sigma and "
+            f"--thresholds-score; got {', '.join('--' + name for name in chosen)}",
             param_hint="minimum-sigma",
         )
+    hint = "--" + (chosen[0] if chosen else "thresholds-sigma")
     manifests = [TiltSeriesManifest.model_validate_json(path.read_text()) for path in manifest]
     names = [one.tilt_series_id for one in manifests]
     duplicates = sorted({name for name in names if names.count(name) > 1})
@@ -3071,6 +3083,40 @@ def select_picks(
             f"the same tilt-series was given more than once: {', '.join(duplicates)}",
             param_hint="manifest",
         )
+    artifact_registry = ArtifactRegistry.load(registry)
+    if not chosen:
+        # No threshold given: the per-series file in its fixed place, made here
+        # the first time with every series null, and used once each is filled.
+        template = default_thresholds_path(out, variant)
+        try:
+            hints = {
+                one.tilt_series_id: score_hints(
+                    _picks_artifact(artifact_registry, one, variant=variant)
+                )
+                for one in manifests
+            }
+            unfilled = write_thresholds_template(template, hints)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint=hint) from exc
+        if unfilled:
+            typer.echo(f"thresholds file: {template}")
+            for series in unfilled:
+                facts = hints[series]
+                typer.echo(
+                    f"  {series}: to fill · {facts['picks']} picks"
+                    + (
+                        f", best {facts['best_sigma']}σ, lowest {facts['lowest_sigma']}σ, "
+                        f"one false positive at {facts['one_false_positive_sigma']}σ"
+                        if "best_sigma" in facts
+                        else ""
+                    )
+                )
+            typer.echo(
+                "Give each a threshold in σ there and run this again, or pass "
+                "--minimum-sigma for one threshold for every series."
+            )
+            raise typer.Exit(code=1)
+        thresholds_sigma = template
     try:
         if thresholds_sigma is not None:
             thresholds = thresholds_from_json(thresholds_sigma, "sigma", names)
@@ -3084,9 +3130,7 @@ def select_picks(
             one = ScoreThreshold(minimum_score, "score", "--minimum-score")
             thresholds = dict.fromkeys(names, one)
     except ValueError as exc:
-        raise typer.BadParameter(str(exc), param_hint="--" + chosen[0]) from exc
-
-    artifact_registry = ArtifactRegistry.load(registry)
+        raise typer.BadParameter(str(exc), param_hint=hint) from exc
     # Every series is measured and checked before any is written, so a threshold
     # that keeps nothing in the third series, or outputs already there, leave the
     # project as it was rather than two series selected and one not.
@@ -3104,11 +3148,11 @@ def select_picks(
         try:
             measurement = measure_score_selection(picks, threshold)
         except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_hint="--" + chosen[0]) from exc
+            raise typer.BadParameter(str(exc), param_hint=hint) from exc
         if not dry_run and not measurement.keep_rows:
             raise typer.BadParameter(
                 f"{series}: no pick reaches {threshold.describe()}; no series was selected",
-                param_hint="--" + chosen[0],
+                param_hint=hint,
             )
         star_path, report_path = selection_paths(picks, series, out, output_variant)
         outputs = [report_path] if dry_run else [star_path, report_path]

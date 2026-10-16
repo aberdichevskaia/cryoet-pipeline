@@ -523,11 +523,29 @@ Dynamo export, averaging and the report then select them with `--variant`:
 cryoet select-picks \
   --manifest outputs/dev/manifests/TS_01.json --manifest outputs/dev/manifests/TS_43.json \
   --registry outputs/dev/artifacts.json --out outputs/dev \
-  --variant bin8 --output-variant bin8-sel \
-  --minimum-sigma 7.5        # one threshold for every series, in σ as the report plots
-  # or --thresholds-sigma thresholds.json   {"TS_01": 7.5, "TS_43": 8.0}
-  # or --minimum-score / --thresholds-score, in pytom's raw LCCmax
+  --variant bin8 --output-variant bin8-sel
 ```
+
+With no threshold, as above, the thresholds come from a file in a fixed place,
+`<out>/picks/<variant>_thresholds_sigma.json`. The first run writes it with every
+series null and stops; fill in a number per series and run the same command again:
+
+```json
+{
+  "TS_01": 7.5,
+  "TS_43": 8.0,
+  "_how": "Minimum score per tomogram, in σ of its own search ...",
+  "_hints": {
+    "TS_01": {"picks": 600, "best_sigma": 12.3, "lowest_sigma": 6.4, "one_false_positive_sigma": 7.36}
+  }
+}
+```
+
+Keys starting with `_` are notes and are not read; the hints say where each
+series' scores lie. A series left null is refused, by name. Instead of the file,
+`--minimum-sigma 7.5` gives every series one threshold, `--thresholds-sigma FILE`
+reads another file of the same layout, and `--minimum-score` / `--thresholds-score`
+take pytom's raw LCCmax, as `scripts/qc_dynamo_picks.py` writes it.
 
 σ is each tomogram's own search noise, so one σ means the same in every series
 while a raw score does not. `--dry-run` prints what each threshold keeps and

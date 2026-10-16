@@ -210,8 +210,7 @@ def test_one_threshold_serves_every_series(tmp_path):
 @pytest.mark.parametrize(
     ("arguments", "match"),
     [
-        ((), "exactly one"),
-        (("--minimum-sigma", "7", "--minimum-score", "0.1"), "exactly one"),
+        (("--minimum-sigma", "7", "--minimum-score", "0.1"), "at most one"),
         (("--minimum-score", "7.5"), "in σ"),
         (("--minimum-sigma", "0.12"), "raw pytom score"),
         (("--minimum-sigma", "50"), "no pick reaches 50σ"),
@@ -256,3 +255,75 @@ def test_a_selection_is_not_written_twice_without_overwrite(tmp_path):
     assert replaced.exit_code == 0, replaced.output
     registry = ArtifactRegistry.load(registry_path)
     assert _kept_scores(registry.get("TS_A:picks:full:pytom-match-pick:bin8-sel").path) == [0.20]
+
+
+def _template(tmp_path: Path) -> Path:
+    return tmp_path / "out" / "picks" / "bin8_thresholds_sigma.json"
+
+
+def test_a_run_with_no_threshold_writes_the_template_and_selects_nothing(tmp_path):
+    registry_path, manifests = _project(tmp_path)
+    before = registry_path.read_text()
+    result = _invoke(tmp_path, registry_path, manifests)
+    assert result.exit_code == 1, result.output
+    template = _template(tmp_path)
+    assert f"thresholds file: {template}" in result.output
+    assert "TS_A: to fill · 4 picks, best 10.0σ, lowest 5.0σ" in result.output
+    document = json.loads(template.read_text())
+    assert [key for key in document if not key.startswith("_")] == ["TS_A", "TS_B"]
+    assert document["TS_A"] is None and document["TS_B"] is None
+    assert document["_hints"]["TS_B"]["best_sigma"] == 15.0
+    assert document["_hints"]["TS_B"]["one_false_positive_sigma"] > 5.0
+    assert "--minimum-sigma" in document["_how"]
+    assert registry_path.read_text() == before
+    assert not list((tmp_path / "out").rglob("*_particles.star"))
+
+
+def test_a_filled_template_is_used_without_being_named(tmp_path):
+    registry_path, manifests = _project(tmp_path)
+    assert _invoke(tmp_path, registry_path, manifests).exit_code == 1
+    template = _template(tmp_path)
+    document = json.loads(template.read_text())
+    document.update({"TS_A": 7.0, "TS_B": 10.0})
+    template.write_text(json.dumps(document))
+    result = _invoke(tmp_path, registry_path, manifests)
+    assert result.exit_code == 0, result.output
+    assert "TS_A: keeps 3 of 4 at 7σ" in result.output
+    assert "TS_B: keeps 1 of 3 at 10σ" in result.output
+    selected = ArtifactRegistry.load(registry_path).get("TS_A:picks:full:pytom-match-pick:bin8-sel")
+    assert selected.parameters["score_selection"]["source"] == str(template)
+
+
+def test_a_half_filled_template_names_what_is_left_and_keeps_what_was_filled(tmp_path):
+    registry_path, manifests = _project(tmp_path)
+    # The template made for TS_A alone, filled, then asked for both series.
+    assert _invoke(tmp_path, registry_path, manifests[:1]).exit_code == 1
+    template = _template(tmp_path)
+    document = json.loads(template.read_text())
+    assert list(document["_hints"]) == ["TS_A"]
+    document["TS_A"] = 7.0
+    template.write_text(json.dumps(document))
+    result = _invoke(tmp_path, registry_path, manifests)
+    assert result.exit_code == 1, result.output
+    assert "TS_B: to fill" in result.output and "TS_A: to fill" not in result.output
+    document = json.loads(template.read_text())
+    assert document["TS_A"] == 7.0 and document["TS_B"] is None
+    assert sorted(document["_hints"]) == ["TS_A", "TS_B"]
+
+
+def test_one_threshold_for_all_needs_no_template(tmp_path):
+    registry_path, manifests = _project(tmp_path)
+    assert _invoke(tmp_path, registry_path, manifests, "--minimum-sigma", "7").exit_code == 0
+    assert not _template(tmp_path).exists()
+
+
+def test_a_template_value_in_the_wrong_unit_is_refused(tmp_path):
+    registry_path, manifests = _project(tmp_path)
+    _invoke(tmp_path, registry_path, manifests)
+    template = _template(tmp_path)
+    document = json.loads(template.read_text())
+    document.update({"TS_A": 0.14, "TS_B": 10.0})
+    template.write_text(json.dumps(document))
+    result = _invoke(tmp_path, registry_path, manifests)
+    assert result.exit_code != 0
+    assert "raw pytom score" in " ".join(result.output.split())

@@ -6,6 +6,11 @@ tomogram's own search, as the report plots them, or as pytom's raw LCCmax, as
 One value for every tomogram, or one per tomogram from a JSON object
 `{"TS_0306": 7.5, ...}`.
 
+The per-tomogram file has a fixed place, `<project>/picks/<label>_thresholds_sigma.json`
+(`default_thresholds_path`). select-picks run with no threshold writes it there with
+every series null and hints on where its scores lie, and refuses to select until
+each series has a number, unless one threshold for all is given instead.
+
 The kept picks are registered under a label of their own, as `filter-picks`
 registers its membrane selection: a copy of the original's record with its STAR
 file narrowed. Everything downstream that reads picks — the tomogram they were
@@ -102,6 +107,84 @@ def thresholds_from_json(
             raise ValueError(f"{path}: the threshold for {name} must be a number, got {value!r}")
         thresholds[name] = ScoreThreshold(float(value), unit, str(path))
     return thresholds
+
+
+TEMPLATE_HOW = (
+    "Minimum score per tomogram, in σ of its own search, as the report's 'Scores from "
+    "best to worst' plots it. Replace each null with a number and run select-picks "
+    "again, or pass --minimum-sigma for one threshold for every tomogram. _hints shows "
+    "where each tomogram's picks lie: a threshold above best_sigma keeps none."
+)
+
+
+def default_thresholds_path(output_root: Path, variant: str | None) -> Path:
+    """Where select-picks keeps the per-tomogram thresholds for one pick list's label.
+
+    One file per label, because a threshold belongs to the scores of one search:
+    the same series picked again under another label gets a file of its own.
+    """
+
+    name = f"{variant}_thresholds_sigma.json" if variant else "thresholds_sigma.json"
+    return output_root / "picks" / name
+
+
+def score_hints(picks: Artifact) -> dict[str, float | int | None]:
+    """Where a pick list's scores lie in σ, for choosing a threshold without the report open."""
+
+    columns, rows = read_star_loop(picks.path)
+    hints: dict[str, float | int | None] = {"picks": len(rows)}
+    statistics = None
+    job_json = picks.parameters.get("pytom_job_json_path")
+    if isinstance(job_json, str):
+        statistics = _search_statistics(Path(job_json))
+    if statistics is None or "rlnLCCmax" not in columns or not rows:
+        return hints
+    position = columns.index("rlnLCCmax")
+    sigma = [float(row[position]) / statistics.sigma for row in rows]
+    hints.update(
+        {
+            "best_sigma": round(max(sigma), 2),
+            "lowest_sigma": round(min(sigma), 2),
+            "one_false_positive_sigma": round(statistics.one_false_positive_z, 2),
+        }
+    )
+    return hints
+
+
+def write_thresholds_template(
+    path: Path, hints: dict[str, dict[str, float | int | None]]
+) -> list[str]:
+    """Make or extend the thresholds file: every series in `hints` present, unfilled ones null.
+
+    A value already there is kept, whatever it is, so running again never undoes an
+    edit; it is checked when it is used. The hints are refreshed for the series
+    given and kept for the others. Returns the given series still without a number.
+    """
+
+    document: dict[str, object] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text())
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path} is not valid JSON ({exc}); fix or remove it") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(f"{path} must hold a JSON object mapping each series to a number")
+        document = loaded
+    values = {key: value for key, value in document.items() if not key.startswith("_")}
+    for series in hints:
+        values.setdefault(series, None)
+    old_hints = document.get("_hints")
+    merged_hints = {**(old_hints if isinstance(old_hints, dict) else {}), **hints}
+    written: dict[str, object] = {series: values[series] for series in sorted(values)}
+    written["_how"] = TEMPLATE_HOW
+    written["_hints"] = {series: merged_hints[series] for series in sorted(merged_hints)}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(written, indent=2, ensure_ascii=False) + "\n")
+    return [
+        series
+        for series in hints
+        if isinstance(values[series], bool) or not isinstance(values[series], (int, float))
+    ]
 
 
 @dataclass(frozen=True)
