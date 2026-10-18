@@ -6,6 +6,13 @@
         --picks-id TS_0005:picks:full:pytom-match-pick:bin8-top800 \\
         --out outputs/ribo/picks/TS_0005
 
+or, naming the real picks by series and label and keeping fewer of them, to mix
+into a real export as a spike-in (scripts/export_dynamo.py --decoy-variant):
+
+    python3 scripts/decoy_picks.py --registry outputs/ribo-mdc/artifacts.json \\
+        --series TS_0306 --real-variant bin8 --count 120 --variant bin8-decoy \\
+        --out outputs/ribo-mdc/picks/TS_0306
+
 Four class averages of this dataset came back looking alike, and two of them
 reproduced across classification seeds beyond anything four hundred shuffles
 reached. Both observations are consistent with real particles and equally
@@ -68,6 +75,7 @@ from cryoet_pipeline.models import (
     RetentionPolicy,
     StorageRole,
 )
+from cryoet_pipeline.particles import pytom_template_shape
 
 _STAR_COLUMNS = (
     "rlnCoordinateX",
@@ -241,14 +249,82 @@ def _box_spread(
     return np.array(spreads)
 
 
+def _real_picks(registry: ArtifactRegistry, series: str, variant: str) -> Artifact:
+    """The one real pick list of `series` labelled `variant`; decoys never count."""
+
+    found = [
+        artifact
+        for artifact in registry.by_kind(ArtifactKind.PICKS)
+        if artifact.covers(series)
+        and artifact.variant == variant
+        and artifact.parameters.get("backend") != "decoy"
+    ]
+    if len(found) != 1:
+        raise SystemExit(
+            f"{series}: expected one pick list labelled {variant!r}, found "
+            f"{[artifact.id for artifact in found] or 'none'}; name it with --picks-id"
+        )
+    return found[0]
+
+
+def _template_box_px(real: Artifact, given: int | None) -> int:
+    """The template box the real picks were matched with.
+
+    Extraction moves a pick by half a voxel when that box is even, and refuses picks
+    that do not say which it was. The decoys take the real list's box, so they are
+    cropped exactly as the real picks are; only their positions differ.
+    """
+
+    sources = {}
+    if given is not None:
+        sources["--template-box-px"] = given
+    declared = real.parameters.get("pick_template_box_px")
+    if isinstance(declared, int):
+        sources["the real picks"] = declared
+    job_json = real.parameters.get("pytom_job_json_path")
+    if job_json is not None:
+        shape = pytom_template_shape(Path(str(job_json)))
+        if shape is not None and len(set(shape)) == 1:
+            sources["their pytom job"] = shape[0]
+    if len(set(sources.values())) > 1:
+        raise SystemExit("the template box contradicts itself: "
+                         + ", ".join(f"{name} says {box}" for name, box in sources.items()))
+    if not sources:
+        raise SystemExit(
+            f"{real.id} does not say which template box pytom matched with, and "
+            "extraction refuses picks that do not; pass it as --template-box-px"
+        )
+    return next(iter(sources.values()))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--registry", required=True, type=Path)
     parser.add_argument(
         "--picks-id",
-        required=True,
+        default=None,
         help="The real picks artifact to mirror. Its count, orientations, scores "
-        "and tomogram are all taken from it.",
+        "and tomogram are all taken from it. Or name it with --series and "
+        "--real-variant.",
+    )
+    parser.add_argument("--series", default=None,
+                        help="With --real-variant: the series whose real picks to mirror.")
+    parser.add_argument("--real-variant", default=None,
+                        help="With --series: the label of the real pick list.")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=None,
+        help="How many decoys: by default as many as there are real picks. Fewer take "
+        "the orientations and scores of that many real picks chosen at random, for a "
+        "spike-in that leaves the real set mostly as it was.",
+    )
+    parser.add_argument(
+        "--template-box-px",
+        type=int,
+        default=None,
+        help="The template box pytom matched the real picks with, when they do not "
+        "record it themselves.",
     )
     parser.add_argument("--out", required=True, type=Path, help="Directory for the STAR.")
     parser.add_argument(
@@ -303,7 +379,11 @@ def main() -> int:
             return 1
 
     registry = ArtifactRegistry.load(args.registry)
-    real = registry.get(args.picks_id)
+    if (args.picks_id is None) == (args.series is None or args.real_variant is None):
+        print("name the real picks either with --picks-id or with --series and --real-variant")
+        return 1
+    real = (registry.get(args.picks_id) if args.picks_id is not None
+            else _real_picks(registry, args.series, args.real_variant))
     if real.kind is not ArtifactKind.PICKS:
         print(f"{args.picks_id} is a {real.kind}, not picks")
         return 1
@@ -320,6 +400,17 @@ def main() -> int:
 
     rows = _read_pytom_star(real.path)
     print(f"{real.path.name}: {len(rows)} real picks in {series}")
+    template_box = _template_box_px(real, args.template_box_px)
+    count = len(rows) if args.count is None else args.count
+    if not 1 <= count <= len(rows):
+        print(f"--count must be between 1 and the {len(rows)} real picks")
+        return 1
+    # Their own generator, so a full-size control draws the same positions as before.
+    carried = rows if count == len(rows) else [
+        rows[i] for i in np.sort(
+            np.random.default_rng(args.seed + 3).choice(len(rows), size=count, replace=False)
+        )
+    ]
     print(f"{tomogram_id}: {depth} x {height} x {width} (z, y, x)")
 
     real_positions = np.array([[row.x_px, row.y_px, row.z_px] for row in rows])
@@ -384,15 +475,15 @@ def main() -> int:
 
     rng = np.random.default_rng(args.seed)
     positions = _draw_positions(
-        len(rows),
+        count,
         bounds=bounds,
         depths=depths,
         minimum_separation_px=separation,
         rng=rng,
     )
-    if len(positions) < len(rows):
+    if len(positions) < count:
         print(
-            f"\nonly {len(positions)} of {len(rows)} positions fit at "
+            f"\nonly {len(positions)} of {count} positions fit at "
             f"{separation:.1f} px separation. Past the jamming limit of random "
             "sequential addition, the sampler cannot place more however long it "
             "tries, so this is an impossible constraint rather than an unlucky "
@@ -411,7 +502,7 @@ def main() -> int:
     # yields a shorter control, which the message above has already said.
     lines = ["data_particles", "", "loop_"]
     lines.extend(f"_{name} #{position}" for position, name in enumerate(_STAR_COLUMNS, 1))
-    for row, (x, y, z) in zip(rows, positions, strict=False):
+    for row, (x, y, z) in zip(carried, positions, strict=False):
         lines.append(
             f"{x:.3f} {y:.3f} {z:.3f} "
             f"{row.rot_deg:.6f} {row.tilt_deg:.6f} {row.psi_deg:.6f} "
@@ -528,6 +619,8 @@ def main() -> int:
             "minimum_separation_px": separation,
             "seed": args.seed,
             "particle_count": len(positions),
+            "real_particle_count": len(rows),
+            "pick_template_box_px": template_box,
             # Recorded because it is what makes the control's result readable
             # later: a comparison whose control held different material is a
             # different comparison, and that fact is not recoverable from the

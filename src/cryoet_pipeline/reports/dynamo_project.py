@@ -220,10 +220,13 @@ def read_dynamo_classification(
     manifest_path = manifest or (base / "export_manifest.json")
     series: dict[int, str] = {}
     scores: dict[int, float] = {}
+    decoys: frozenset[int] = frozenset()
+    decoy_variant = None
     manifest_spacing = None
     manifest_wedges: dict[str, Any] = {}
     if manifest_path.exists():
-        series, scores, manifest_spacing, manifest_wedges = _read_manifest(manifest_path)
+        (series, scores, manifest_spacing, manifest_wedges, decoys,
+         decoy_variant) = _read_manifest(manifest_path)
     elif manifest is not None:
         problems.append(f"manifest {manifest} is missing")
     apix_setting = _as_float(vpr.get("apix") or card.get("apix"))
@@ -290,6 +293,7 @@ def read_dynamo_classification(
         starting=starting, box=box, spacing=spacing, spacing_source=spacing_source,
         series=series, wedges=manifest_wedges, nref=nref, mra=mra, notes=notes,
         references=references, particles=particles, iterations=iterations,
+        decoys=decoys, decoy_variant=decoy_variant,
     )
     planned = sum(int(_as_float(vpr.get(f"ite_r{r}")) or 0) for r in ROUNDS) if vpr else None
     return ClassificationRun(
@@ -309,6 +313,7 @@ def read_dynamo_classification(
         series=series,
         scores=scores,
         score_label="picking score (LCCmax, from the export manifest)",
+        decoys=decoys & frozenset(int(tag) for tag in tags),
         problems=problems,
     )
 
@@ -493,10 +498,12 @@ def _cached(build: Callable[[], np.ndarray]) -> Callable[[], np.ndarray]:
 
 def _read_manifest(
     path: Path,
-) -> tuple[dict[int, str], dict[int, float], float | None, dict[str, Any]]:
+) -> tuple[dict[int, str], dict[int, float], float | None, dict[str, Any], frozenset[int],
+           str | None]:
     data = json.loads(path.read_text())
     series: dict[int, str] = {}
     scores: dict[int, float] = {}
+    decoys = set()
     for entry in data.get("particles", []):
         tag = int(entry["tag"])
         if entry.get("run"):
@@ -504,9 +511,13 @@ def _read_manifest(
         score = (entry.get("native_record") or {}).get("score")
         if score is not None and math.isfinite(float(score)):
             scores[tag] = float(score)
+        if entry.get("decoy") is True:
+            decoys.add(tag)
     spacing = data.get("pixel_spacing_angstrom")
     wedges = (data.get("wedge") or {}).get("ranges") or {}
-    return series, scores, float(spacing) if spacing else None, wedges
+    variant = data.get("decoy_variant")
+    return (series, scores, float(spacing) if spacing else None, wedges, frozenset(decoys),
+            str(variant) if variant else None)
 
 
 def _seed_notes(path: Path) -> dict[int, str]:
@@ -565,6 +576,7 @@ def _parameters(
     spacing: float | None, spacing_source: str, series: Mapping[int, str],
     wedges: Mapping[str, Any], nref: int, mra: bool, notes: Mapping[int, str],
     references: Mapping[int, Volume], particles: Path, iterations: list[IterationResult],
+    decoys: frozenset[int] = frozenset(), decoy_variant: str | None = None,
 ) -> list[Parameter]:
     rows: list[Parameter] = []
 
@@ -579,6 +591,9 @@ def _parameters(
     add("Data", "pixel size",
         f"{spacing:.3f} Å, from {spacing_source}" if spacing else "not recorded")
     add("Data", "particle folder", _relative(particles, base))
+    if decoys:
+        add("Data", "decoys", f"{len(decoys):,} boxes at random positions"
+            + (f" ({decoy_variant})" if decoy_variant else "") + ", counted with the series")
     # One row per tomogram: its particles and the tilt range of its wedge, by tilt-series name
     # when the manifest gives them, by the table's tomogram number otherwise.
     counts: dict[str, int] = {}

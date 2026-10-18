@@ -21,6 +21,7 @@ from cryoet_pipeline.reports.classification import (  # noqa: E402
     Volume,
     central_views,
     class_changes,
+    decoy_shares,
     gallery_tile,
     plan_pages,
     sample_tags,
@@ -149,13 +150,15 @@ def project(tmp_path: Path) -> Path:
     return folder
 
 
-def write_manifest(project: Path) -> None:
+def write_manifest(project: Path, decoys: tuple[int, ...] = ()) -> None:
     particles = [{"tag": tag, "run": "TS_A" if tag <= 6 else "TS_B",
-                  "native_record": {"score": 0.1 + 0.01 * tag}} for tag in TAGS]
+                  "native_record": {"score": 0.1 + 0.01 * tag}, "decoy": tag in decoys}
+                 for tag in TAGS]
     (project.parent / "export_manifest.json").write_text(json.dumps({
         "pixel_spacing_angstrom": 10.0,
         "wedge": {"ranges": {"TS_A": [-50.0, 60.0], "TS_B": [-40.0, 55.0]}},
         "particles": particles,
+        "decoy_variant": "bin8-decoy" if decoys else None,
     }))
 
 
@@ -296,3 +299,25 @@ def test_sample_tags_is_stable_and_sorted() -> None:
     assert np.array_equal(first, sample_tags(tags, 8))
     assert np.array_equal(first, np.sort(first)) and len(first) == 8
     assert np.array_equal(sample_tags(tags[:5], 8), tags[:5])
+
+
+def test_decoys_are_counted_per_class(project: Path, tmp_path: Path) -> None:
+    write_manifest(project, decoys=(11, 12))
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    assert run.decoys == frozenset({11, 12})
+    values = {(p.group, p.name): p.value for p in run.parameters}
+    assert values[("Data", "decoys")].startswith("2 boxes at random positions (bin8-decoy)")
+
+    shares = decoy_shares(run, run.iterations[1])
+    assert (shares[1].decoys, shares[1].real) == (0, 6)
+    assert (shares[2].decoys, shares[2].real) == (2, 4)
+    assert shares[2].decoy_share == 1.0 and shares[2].real_share == pytest.approx(0.4)
+    assert shares[2].enrichment == pytest.approx(2.5)
+    low, high = shares[2].decoy_interval()
+    assert low == pytest.approx(0.3424, abs=1e-4) and high == pytest.approx(1.0)
+
+    pages = [page.label for page in plan_pages(run, written="now", software="test")]
+    assert pages.index("decoys") == pages.index("class sizes") + 1
+    outcome = write_classification_report(tmp_path / "report.pdf", run, written="now",
+                                          software="test")
+    assert outcome.problems == []

@@ -144,6 +144,8 @@ class ClassificationRun:
     scores: dict[int, float] = field(default_factory=dict)
     """Each tag's picking score, when known."""
     score_label: str = "picking score"
+    decoys: frozenset[int] = frozenset()
+    """Tags of boxes at random positions mixed in as a control, when there are any."""
     problems: list[str] = field(default_factory=list)
     """Everything that could not be read, one line each."""
 
@@ -204,6 +206,8 @@ def plan_pages(run: ClassificationRun, *, written: str, software: str) -> list[P
         pages.append(PlannedPage("starting references", partial(references_page, run, channels)))
     if run.iterations:
         pages.append(PlannedPage("class sizes", partial(class_sizes_page, run)))
+        if run.decoys:
+            pages.append(PlannedPage("decoys", partial(decoys_page, run)))
     for iteration in run.iterations:
         for channels in _chunks(sorted(iteration.classes), MAPS_PER_PAGE) or [[]]:
             pages.append(PlannedPage(f"iteration {iteration.number}",
@@ -424,6 +428,131 @@ def class_sizes_page(run: ClassificationRun) -> Figure:
     return figure
 
 
+def decoy_shares(run: ClassificationRun, iteration: IterationResult) -> dict[int, DecoyShare]:
+    """Each class's share of all decoys and of all real particles after `iteration`."""
+
+    decoys = len(run.decoys)
+    real = len(run.tags) - decoys
+    shares = {}
+    for channel, result in sorted(iteration.classes.items()):
+        held = sum(1 for tag in result.members if int(tag) in run.decoys)
+        shares[channel] = DecoyShare(held, decoys, len(result.members) - held, real)
+    return shares
+
+
+@dataclass(frozen=True)
+class DecoyShare:
+    decoys: int
+    all_decoys: int
+    real: int
+    all_real: int
+
+    @property
+    def decoy_share(self) -> float:
+        return self.decoys / self.all_decoys if self.all_decoys else math.nan
+
+    @property
+    def real_share(self) -> float:
+        return self.real / self.all_real if self.all_real else math.nan
+
+    @property
+    def enrichment(self) -> float:
+        """Decoy share over real share: 1 when the class takes decoys as it takes picks."""
+
+        return self.decoy_share / self.real_share if self.real_share else math.inf
+
+    def decoy_interval(self, z: float = 1.96) -> tuple[float, float]:
+        """Wilson's 95% interval for the decoy share."""
+
+        n = self.all_decoys
+        if not n:
+            return math.nan, math.nan
+        p = self.decoys / n
+        denominator = 1 + z * z / n
+        centre = (p + z * z / (2 * n)) / denominator
+        half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator
+        return centre - half, centre + half
+
+
+def decoys_page(run: ClassificationRun) -> Figure:
+    decoys = len(run.decoys)
+    total = len(run.tags)
+    figure = style.new_page(
+        "Where the decoys went",
+        f"{decoys:,} boxes at random positions among {total:,} particles "
+        f"({100 * decoys / total:.0f}%), classified blind with the rest",
+    )
+    channels = sorted(run.references)
+    rows = []
+    for iteration in run.iterations:
+        shares = decoy_shares(run, iteration)
+        cells = [str(iteration.number)]
+        for channel in channels:
+            share = shares.get(channel)
+            if share is None:
+                cells.append("dropped" if channel in iteration.searched else "–")
+            else:
+                cells.append(f"{100 * share.decoy_share:.0f}% vs {100 * share.real_share:.0f}% "
+                             f"(×{share.enrichment:.2f})")
+        rows.append(cells)
+    labels = ["Iteration", *(f"Channel {k}" for k in channels)]
+    axes = figure.add_axes((0.035, 0.5, 0.5, style.CONTENT_TOP - 0.5))
+    axes.axis("off")
+    table = axes.table(cellText=rows, colLabels=labels, cellLoc="center", loc="upper left")
+    table.auto_set_font_size(False)
+    table.set_fontsize(style.FONT_SMALL)
+    table.scale(1.0, 1.45)
+    for (row_index, _), cell in table.get_celld().items():
+        cell.set_edgecolor(style.GRID)
+        cell.set_linewidth(0.5)
+        if row_index == 0:
+            cell.set_text_props(fontweight="bold", color=style.INK_SECONDARY)
+    table.auto_set_column_width(list(range(len(labels))))
+
+    last = run.iterations[-1]
+    lines = [f"After iteration {last.number}:"]
+    for channel, share in decoy_shares(run, last).items():
+        low, high = share.decoy_interval()
+        lines.append(
+            f"class {channel}: {share.decoys:,} of {share.all_decoys:,} decoys "
+            f"({100 * share.decoy_share:.1f}%, 95% interval {100 * low:.1f}–{100 * high:.1f}%) "
+            f"against {share.real:,} of {share.all_real:,} real particles "
+            f"({100 * share.real_share:.1f}%): ×{share.enrichment:.2f}"
+        )
+    figure.text(0.035, 0.44, "\n".join(lines), fontsize=style.FONT_TEXT, va="top",
+                linespacing=1.5)
+
+    if len(run.iterations) > 1:
+        chart = figure.add_axes((0.62, 0.5, 0.34, style.CONTENT_TOP - 0.53))
+        numbers = [iteration.number for iteration in run.iterations]
+        for channel in channels:
+            values = [
+                decoy_shares(run, iteration)[channel].enrichment
+                if channel in iteration.classes else np.nan
+                for iteration in run.iterations
+            ]
+            chart.plot(numbers, values, marker="o",
+                       color=CHANNEL_COLOURS[(channel - 1) % len(CHANNEL_COLOURS)],
+                       label=f"channel {channel}")
+        chart.axhline(1.0, color=style.INK_MUTED, linewidth=0.8, linestyle="--")
+        chart.set_xlabel("iteration")
+        chart.set_ylabel("decoy share / real share")
+        chart.set_xticks(numbers)
+        chart.set_ylim(bottom=0)
+        chart.grid(True, axis="y")
+        chart.legend(loc="best")
+    style.caption(
+        figure,
+        "In each cell: the share of all decoys the class holds, against the share of all real "
+        "particles it holds, and their ratio. A ratio of 1 everywhere means the classification "
+        "treats a box centred on nothing like a pick. The reading, written before the run: a class "
+        "collects junk if it holds at least twice the share of decoys it holds of real "
+        "particles, and the 95% interval of its decoy share leaves out its real share.",
+        y=0.2,
+    )
+    return figure
+
+
 def iteration_page(run: ClassificationRun, iteration: IterationResult,
                    channels: Sequence[int]) -> Figure:
     dropped = [k for k in iteration.searched if k not in iteration.classes]
@@ -461,16 +590,20 @@ def iteration_page(run: ClassificationRun, iteration: IterationResult,
 def composition_page(run: ClassificationRun) -> Figure:
     last = run.iterations[-1]
     channels = sorted(last.classes)
-    figure = style.new_page(f"The classes after iteration {last.number}",
-                            "Where their particles come from, and how they scored in picking")
+    subtitle = "Where their particles come from, and how they scored in picking"
+    if run.decoys:
+        subtitle += " · real particles only"
+    figure = style.new_page(f"The classes after iteration {last.number}", subtitle)
+    real = [int(tag) for tag in run.tags if int(tag) not in run.decoys]
+    members_of = {k: [int(tag) for tag in last.classes[k].members if int(tag) not in run.decoys]
+                  for k in channels}
     with_scores = bool(run.scores)
     if run.series:
-        names = sorted(set(run.series.values()))
-        totals = {name: sum(1 for tag in run.tags if run.series.get(int(tag)) == name)
-                  for name in names}
+        names = sorted({run.series[tag] for tag in real if tag in run.series})
+        totals = {name: sum(1 for tag in real if run.series.get(tag) == name) for name in names}
         rows = []
         for channel in channels:
-            members = last.classes[channel].members
+            members = members_of[channel]
             cells = [f"class {channel}"]
             for name in names:
                 count = sum(1 for tag in members if run.series.get(int(tag)) == name)
@@ -494,9 +627,9 @@ def composition_page(run: ClassificationRun) -> Figure:
     if with_scores:
         left = 0.6 if run.series else 0.08
         axes = figure.add_axes((left, 0.26, 0.96 - left, style.CONTENT_TOP - 0.3))
-        groups = [np.array([run.scores[int(tag)] for tag in last.classes[k].members
-                            if int(tag) in run.scores]) for k in channels]
-        everyone = np.array([run.scores[int(tag)] for tag in run.tags if int(tag) in run.scores])
+        groups = [np.array([run.scores[tag] for tag in members_of[k] if tag in run.scores])
+                  for k in channels]
+        everyone = np.array([run.scores[tag] for tag in real if tag in run.scores])
         data = [*groups, everyone]
         labels = [f"class {k}" for k in channels] + ["all"]
         shown = [values if values.size else np.array([np.nan]) for values in data]
@@ -517,7 +650,9 @@ def composition_page(run: ClassificationRun) -> Figure:
         "particles the class holds. Right: the picking scores of each class's particles "
         "(box: middle half, line: median, whiskers: 1.5 box lengths). A class of picks "
         "with lower scores than the rest is a candidate for false picks; similar scores "
-        "say nothing either way.",
+        "say nothing either way."
+        + (" Decoys are left out: their scores are copies of real picks' scores."
+           if run.decoys else ""),
         y=0.2,
     )
     return figure
@@ -777,6 +912,8 @@ def _draw_tile_row(figure: Figure, run: ClassificationRun, tiles: list[tuple[int
 def _tile_label(run: ClassificationRun, tag: int) -> str:
     """Tag and score on one line, the tilt-series under them: one line would not fit a tile."""
 
+    if tag in run.decoys:
+        return f"#{tag}\ndecoy" + (f" · {run.series[tag]}" if tag in run.series else "")
     first = f"#{tag}" + (f" · {run.scores[tag]:.3f}" if tag in run.scores else "")
     return first + (f"\n{run.series[tag]}" if tag in run.series else "")
 

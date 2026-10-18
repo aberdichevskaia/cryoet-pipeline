@@ -153,3 +153,38 @@ def test_the_wedge_is_the_reconstructions_not_the_manifests(tmp_path):
     assert manifest["wedge"]["range_source"] == {"TS_A": "reconstruction", "TS_B": "manifest"}
     table = np.loadtxt(out / "initial.tbl")
     assert [tuple(row[13:15]) for row in table] == [(-30.0, 30.0)] * 3 + [(-60.0, 60.0)] * 2
+
+
+def test_decoys_follow_every_real_particle_and_are_marked(tmp_path):
+    """Real particles keep the tags an export without decoys gives them."""
+
+    project = tmp_path / "project"
+    registry = ArtifactRegistry.empty()
+    for name, count, seed in (("TS_A", 3, 1), ("TS_B", 2, 2)):
+        artifact, _ = _series(project, name, count, seed)
+        registry.add(artifact)
+        decoy, _ = _series(project / "decoys", name, 2, seed + 10)
+        registry.add(decoy.model_copy(update={
+            "id": f"{name}:particle_stack:cubic-crop_bin8-decoy", "variant": "bin8-decoy",
+        }))
+    registry.write(project / "artifacts.json")
+    out = tmp_path / "export"
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/export_dynamo.py"), "--project", str(project),
+         "--variant", "bin8", "--decoy-variant", "bin8-decoy", "--series", "TS_A",
+         "--series", "TS_B", "--out", str(out)],
+        check=True,
+    )
+    manifest = json.loads((out / "export_manifest.json").read_text())
+    particles = manifest["particles"]
+    assert [(p["tag"], p["run"], p["decoy"]) for p in particles] == [
+        (1, "TS_A", False), (2, "TS_A", False), (3, "TS_A", False),
+        (4, "TS_B", False), (5, "TS_B", False),
+        (6, "TS_A", True), (7, "TS_A", True), (8, "TS_B", True), (9, "TS_B", True),
+    ]
+    assert manifest["decoy_variant"] == "bin8-decoy" and manifest["decoy_particles"] == 4
+    table = np.loadtxt(out / "initial.tbl")
+    assert table[:, 19].tolist() == [1, 1, 1, 2, 2, 1, 1, 2, 2]
+    assert json.loads((out / "export_complete.json").read_text())["decoys"] == 4
+    assert {run: len(p) for run, p in qc_dynamo_picks.load_picks(out).items()} == {
+        "TS_A": 5, "TS_B": 4}

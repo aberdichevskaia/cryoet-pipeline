@@ -56,6 +56,29 @@ Each particle and channel costs about 4 core-seconds on the Mac, so a
 three-channel iteration of 2,703 particles is about 9 core-hours. A Munich
 cluster core took about twice as long for the same search; MDC's is unmeasured.
 
+## The decoy control
+
+Does a class collect junk, or only split the picks at random? Only junk whose
+identity is known can say. `scripts/decoy_picks.py` draws boxes at random
+positions in the same tomograms (depths from the real picks, the real list's
+spacing), each carrying the orientation and score of a real pick and the real
+list's template box, so extraction crops them exactly as it crops the picks.
+`export_dynamo.py --decoy-variant` puts them after every real particle in one
+export and marks them in the manifest; Dynamo classifies them blind, and the
+report adds a page with each class's share of all decoys against its share of
+all real particles.
+
+```bash
+python scripts/decoy_picks.py --registry outputs/ribo-mdc/artifacts.json --series TS_0306 --real-variant bin8 --count 120 --variant bin8-decoy --out outputs/ribo-mdc/picks/TS_0306
+```
+
+then, per series, `cryoet extract-particles ... --box-size-px 48 --variant
+bin8-decoy`, and the export with `--variant bin8 --decoy-variant bin8-decoy`.
+120 decoys per tomogram make about 18% of the set: enough to count, few enough
+to leave the real set mostly as it was. The reading, written before the run: a
+class collects junk if it holds at least twice the share of decoys it holds of
+real particles and the 95% interval of its decoy share leaves out its real share.
+
 ## The report
 
 ```bash

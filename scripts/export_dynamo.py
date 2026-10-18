@@ -15,6 +15,12 @@ Writes, for the series given (numbered 1..N in that order, Dynamo's column 20):
 `scripts/qc_dynamo_picks.py --export <export-dir>` then plots the score
 distributions and writes a score-filtered `selected.tbl`.
 
+`--decoy-variant <label>` adds, after every real particle, the particle stacks of
+that label (random positions from `scripts/decoy_picks.py`, extracted like the real
+picks) for the same series, and marks them `"decoy": true` in the manifest. Dynamo
+sees them as particles like any other; the classification report counts where
+they went. The real particles keep the tags an export without decoys gives them.
+
 A format and pose adapter, nothing more: the voxels are copied, not processed. The
 poses go through `native_to_dynamo`, the conversion the dynamo-search backend uses
 and the CZII export was checked against Dynamo with. The table keeps the native
@@ -128,7 +134,12 @@ def main() -> None:
                         help="Variant label of the particle stacks (e.g. bin8); "
                         "leave out for unlabelled stacks")
     parser.add_argument("--out", required=True, type=Path, help="Export directory (new)")
+    parser.add_argument("--decoy-variant", default=None,
+                        help="Also export the particle stacks of this label (decoys), "
+                        "after all real particles, marked as decoys in the manifest")
     args = parser.parse_args()
+    if args.decoy_variant is not None and args.decoy_variant == args.variant:
+        raise SystemExit("--decoy-variant must differ from --variant")
 
     if args.out.exists() and any(args.out.iterdir()):
         raise SystemExit(f"{args.out} exists and is not empty; export into a new directory")
@@ -140,18 +151,31 @@ def main() -> None:
     rows, particles, wedges, wedge_sources = [], [], {}, {}
     box = spacing = None
     tag = 0
-    for tomogram, series in enumerate(args.series, start=1):
-        stack = particle_stack(registry, series, args.variant)
+    # Every real particle first, so they keep the tags an export without decoys gives.
+    passes = [(args.variant, False)]
+    if args.decoy_variant is not None:
+        passes.append((args.decoy_variant, True))
+    jobs = [(variant, decoy, tomogram, series) for variant, decoy in passes
+            for tomogram, series in enumerate(args.series, start=1)]
+    for variant, decoy, tomogram, series in jobs:
+        stack = particle_stack(registry, series, variant)
         manifest = TiltSeriesManifest.model_validate_json(
             (args.project / "manifests" / f"{series}.json").read_text()
         )
         tilt_range, source = reconstructed_tilt_range(registry, stack, manifest)
         if not tilt_range[0] < 0 < tilt_range[1]:
             raise SystemExit(f"{series}: tilt range {tilt_range} does not span zero")
-        wedges[series] = list(tilt_range)
-        wedge_sources[series] = source
+        if decoy:
+            # Decoys are cut from the same tomogram, so they share its wedge.
+            if list(tilt_range) != wedges[series]:
+                raise SystemExit(f"{series}: the decoys' wedge {tilt_range} differs from the "
+                                 f"real particles' {wedges[series]}; not the same tomogram?")
+        else:
+            wedges[series] = list(tilt_range)
+            wedge_sources[series] = source
         low, high = tilt_range
-        print(f"{series}: wedge {low:+.1f} to {high:+.1f} deg, from the {source}")
+        kind = "decoys" if decoy else "particles"
+        print(f"{series} {kind}: wedge {low:+.1f} to {high:+.1f} deg, from the {source}")
         star = Path(str(stack.parameters["metadata_path"]))
         records = read_particle_star(star)
         data = zarr.open(stack.path, mode="r")
@@ -181,6 +205,7 @@ def main() -> None:
                 "source_index_zero_based": record.index,
                 "native_record": asdict(record),
                 "file": name,
+                "decoy": decoy,
             })
     if not rows:
         raise SystemExit("no particles to export")
@@ -191,7 +216,9 @@ def main() -> None:
         "schema_version": 1,
         "source_project": str(args.project.resolve()),
         "variant": args.variant,
+        "decoy_variant": args.decoy_variant,
         "selected_particles": len(rows),
+        "decoy_particles": sum(1 for particle in particles if particle["decoy"]),
         "box_size_px": box,
         "pixel_spacing_angstrom": spacing,
         "pose_convention": {
@@ -217,11 +244,14 @@ def main() -> None:
     (args.out / "export_manifest.json").write_text(json.dumps(manifest_out, indent=1) + "\n")
     (args.out / "export_complete.json").write_text(json.dumps({
         "particles": len(rows),
+        "decoys": sum(1 for particle in particles if particle["decoy"]),
         "series": args.series,
         "initial.tbl": sha256(table),
         "export_manifest.json": sha256(args.out / "export_manifest.json"),
     }, indent=1) + "\n")
-    print(f"exported {len(rows)} particles of {len(args.series)} series to {args.out}")
+    decoys = sum(1 for particle in particles if particle["decoy"])
+    print(f"exported {len(rows)} particles of {len(args.series)} series to {args.out}"
+          + (f", {decoys} of them decoys" if args.decoy_variant is not None else ""))
 
 
 if __name__ == "__main__":
