@@ -187,12 +187,31 @@ amplitude_contrast = 0.07
 # per-view fit from it). EMD-54612 records 2-7 um nominal; 1 um spare each side.
 min_defocus_angstrom = 10000
 max_defocus_angstrom = 80000
-# The per-view pass searches +-1000 A around that first fit unless this says
-# otherwise. In ryr1-bin4 the fitted views sat within ~12 deg of zero and their
-# defocus fell ~0.03 um per degree of tilt, so the far views lie ~1 um from the
-# window; scripts/ctf_window_test.sbatch measures whether that is why they
-# failed. Set from its result before the cpu stage:
-# defocus_search_window_angstrom = 5000
+# How far either side of that first fit the per-view pass searches. The default
+# +-1000 A is what stopped ryr1-bin4's fits at ~12 deg: the defocus moves with
+# the tilt, ~0.03 um per degree near 0, so the far views lie ~1 um away.
+# scripts/ctf_window_test.sbatch on 039 (2026-10-16), views fitted finer than
+# 20 A of 29, angles as solved:
+#
+#   +-1000 A           9   -11 to +10 (and +37)
+#   +-5000 A          22   -17 to +49
+#   +-10000 A         26   -29 to +49; -35, -32 and +46 still fail
+#   +-5000 A, tilt    21   -17 to +43, every one at 6.4-7.4 A against 7.2-13
+#
+# The views that come back continue the trend without jumps (4.97 um at -11 to
+# 5.56 at -29, 4.42 at +10 to 3.96 at +49), so they are not stray minima. In
+# ryr1-bin4 096 and 097 fell faster near 0 than 039, so they may need more.
+defocus_search_window_angstrom = 10000
+# Views on which CTFFIND still finds no rings (fit stopped at the 30 A end):
+# with at most this many, correct-ctf leaves them out of the tomogram; with more,
+# they stay in with a defocus interpolated from the fitted views. The QC warns
+# either way. 5 is the default; 039 at +-10000 A had 3 (-35, -32, +46 deg).
+max_excluded_views = 5
+# CTFFIND5's own tilt fit sharpens the fits but brings back no more views, and it
+# is slow: the four-variant job took two hours, nearly all of it this variant
+# (inferred: the other three fit 29 views at a few seconds each), which is ~2 h a
+# series and past this stage's time limit for five. A ~20 A average does not need
+# the 7 A fits.
 # determine_sample_tilt = true
 
 [segment]

@@ -186,18 +186,20 @@ def test_the_score_overview_puts_every_tomogram_on_one_sigma_axis() -> None:
     builders = picking.score_overview_pages(reports, contents)
     figure = builders[0]()
 
-    assert len(builders) == 1
-    panels = [axes for axes in figure.axes if axes.get_title(loc="left")]
-    assert [axes.get_title(loc="left").split(" · ")[0] for axes in panels] == [
-        "TS_1", "TS_2", "TS_3", "TS_4"
+    # Three tomograms to a page, one to a row.
+    assert len(builders) == 2
+    titled = [axes for axes in figure.axes if axes.get_title(loc="left")]
+    assert [axes.get_title(loc="left").split(" · ")[0] for axes in titled] == [
+        "TS_1", "TS_2", "TS_3"
     ]
-    assert panels[1].get_title(loc="left").endswith("p. 14")
+    assert titled[1].get_title(loc="left").endswith("p. 14")
+    # Each row is the same curve twice: on a log rank axis and on a linear one.
+    assert [axes.get_xscale() for axes in figure.axes] == ["log", "linear"] * 3
     # Shared, and wide enough for the best pick of all and the floor of all.
-    assert len({axes.get_ylim() for axes in panels}) == 1
-    low, high = panels[0].get_ylim()
+    assert len({axes.get_ylim() for axes in figure.axes}) == 1
+    low, high = figure.axes[0].get_ylim()
     assert low < 5.33 and high > max(float(report.picks.sigma.max()) for report in reports)
-    # Ten tomograms take two pages of nine.
-    assert len(picking.score_overview_pages((reports * 3)[:10], contents)) == 2
+    assert len(picking.score_overview_pages((reports * 3)[:10], contents)) == 4
 
 
 def test_the_score_overview_gives_each_its_own_axis_without_sigma() -> None:

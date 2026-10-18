@@ -119,7 +119,9 @@ def scores_page(report: SeriesReport, bands: list[Band]) -> Figure:
         2, 3, figure=figure, left=0.065, right=0.975, top=style.CONTENT_TOP,
         bottom=style.CONTENT_BOTTOM, hspace=0.5, wspace=0.32,
     )
-    _rank_panel(figure.add_subplot(grid[0, 0:2]), picks, bands)
+    ranks = GridSpecFromSubplotSpec(1, 2, subplot_spec=grid[0, 0:2], wspace=0.06)
+    log_axes = figure.add_subplot(ranks[0, 0])
+    _rank_panels(log_axes, figure.add_subplot(ranks[0, 1], sharey=log_axes), picks, bands)
     _noise_panel(figure.add_subplot(grid[1, 0:2]), picks)
     _template_panel(figure, grid[0, 2], report)
     _numbers_panel(figure.add_subplot(grid[1, 2]), report)
@@ -127,10 +129,10 @@ def scores_page(report: SeriesReport, bands: list[Band]) -> Figure:
         figure,
         "σ: a score divided by the standard deviation of the search's own noise. The "
         "one-false-positive height is the score noise alone reaches about once in this whole "
-        "search, so a pick above it is unlikely to be noise on its own. Below it, picks count "
-        "as evidence only as a group: through how far the blue line runs above the grey one "
-        "(bottom). Ranks are on a log scale, so the best picks get room. Dots: the picks the "
-        "galleries show.",
+        "search: a pick above it is unlikely to be noise on its own; below it, picks count only "
+        "as a group, by how far the blue line runs above the grey one. Top: rank on a log axis "
+        "(left), giving the best picks room, and on a linear one (right), each third of the "
+        "picks a third of the width. Dots: the picks the galleries show.",
     )
     return figure
 
@@ -228,31 +230,41 @@ def _template_panel(figure: Figure, cell: SubplotSpec, report: SeriesReport) -> 
               linespacing=1.45, color=style.INK_SECONDARY)
 
 
-def _rank_panel(axes: Axes, picks: PickTable, bands: list[Band]) -> None:
-    axes.set_title("Scores from best to worst", loc="left")
+def _rank_panels(log_axes: Axes, linear_axes: Axes, picks: PickTable, bands: list[Band]) -> None:
+    log_axes.set_title("Scores from best to worst", loc="left")
     if not picks.has_scores:
-        axes.text(0.5, 0.5, "these picks carry no scores", transform=axes.transAxes,
-                  ha="center", color=style.INK_SECONDARY)
+        log_axes.text(0.5, 0.5, "these picks carry no scores", transform=log_axes.transAxes,
+                      ha="center", color=style.INK_SECONDARY)
+        linear_axes.axis("off")
         return
-    rank_curve(axes, picks, bands, labels=True)
-    axes.set_xlabel("Rank (log scale)")
-    axes.set_ylabel(_score_label(picks))
+    rank_curve(log_axes, picks, bands, log_scale=True, labels=True)
+    rank_curve(linear_axes, picks, bands, log_scale=False, labels=True)
+    log_axes.set_xlabel("Rank (log scale)")
+    linear_axes.set_xlabel("Rank (linear scale)")
+    log_axes.set_ylabel(_score_label(picks))
+    linear_axes.tick_params(labelleft=False)
 
 
-def rank_curve(axes: Axes, picks: PickTable, bands: list[Band], *, labels: bool) -> None:
-    """Scores from best to worst on a log rank axis, with the gallery's thirds marked.
+def rank_curve(
+    axes: Axes, picks: PickTable, bands: list[Band], *, log_scale: bool, labels: bool
+) -> None:
+    """Scores from best to worst, with the gallery's thirds marked, on one rank axis.
 
-    One drawing for the series page and the overview, so that the two cannot
-    disagree about what a band is. The rank axis is logarithmic because the part
-    worth reading is at the start: a curve that bends after its first few dozen
-    picks spends most of a linear axis on its flat tail. `labels` names the
-    bands and the one-false-positive line; small multiples name them once.
+    Every page that shows it draws it twice, on a log and on a linear rank axis,
+    and always through this function, so that the pages cannot disagree about
+    what a band is. The log axis gives room to the start, where a curve that bends
+    after its first few dozen picks does its bending; the linear one gives each
+    third of the picks a third of the width, as the galleries do. `labels` names
+    the bands and the one-false-positive line, on the linear axis only: there
+    every third is wide enough to carry its name, and on the log axis the last
+    two are squeezed into its right edge.
     """
 
     sigma = picks.sigma
     values = sigma if sigma is not None else picks.score
     ordered = values[picks.ranked()]
     ranks = np.arange(1, ordered.size + 1)
+    named = labels and not log_scale
     axes.plot(ranks, ordered, color=style.SERIES_BLUE, linewidth=1.4)
     for band in bands:
         shown = band.positions
@@ -260,20 +272,25 @@ def rank_curve(axes: Axes, picks: PickTable, bands: list[Band], *, labels: bool)
                      edgecolors="white", linewidths=0.6, zorder=3)
         if band.first_rank > 1:
             axes.axvline(band.first_rank - 0.5, color=style.INK_MUTED, linewidth=0.6)
-        if labels:
-            axes.text(math.sqrt(band.first_rank * band.last_rank), 0.98, band.name,
+        if named:
+            axes.text((band.first_rank + band.last_rank) / 2.0, 0.98, band.name,
                       transform=axes.get_xaxis_transform(), ha="center", va="top",
                       fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
     if sigma is not None and picks.floor_sigma is not None:
         axes.axhline(picks.floor_sigma, color=style.INK_SECONDARY, linewidth=0.8)
-        if labels:
-            axes.annotate("one-false-positive height", (0.0, picks.floor_sigma),
-                          xycoords=("axes fraction", "data"), xytext=(4, 3),
-                          textcoords="offset points", ha="left", va="bottom",
-                          fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
-    axes.set_xscale("log")
-    axes.set_xlim(0.8, ordered.size * 1.25)
-    axes.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+        if named:
+            axes.annotate("one-false-positive height", (1.0, picks.floor_sigma),
+                          xycoords=("axes fraction", "data"), xytext=(-4, 3),
+                          textcoords="offset points", ha="right", va="bottom",
+                          fontsize=style.FONT_TINY, color=style.INK_SECONDARY,
+                          bbox={"facecolor": "white", "edgecolor": "none", "pad": 1.0,
+                                "alpha": 0.85})
+    if log_scale:
+        axes.set_xscale("log")
+        axes.set_xlim(0.8, ordered.size * 1.25)
+        axes.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+    else:
+        axes.set_xlim(0.5, ordered.size + 0.5)
     axes.grid(True, axis="y")
 
 
@@ -281,14 +298,14 @@ def _score_label(picks: PickTable) -> str:
     return "Score (σ)" if picks.sigma is not None else "Score (pytom LCCmax)"
 
 
-OVERVIEW_COLUMNS = 3
 OVERVIEW_ROWS = 3
+"""Tomograms on one overview page: one per row, its log and linear curves side by side."""
 
 
 def score_overview_pages(
     reports: Sequence[SeriesReport], contents: Mapping[str, int]
 ) -> list[Callable[[], Figure]]:
-    """Every tomogram's score curve, side by side, nine to a page.
+    """Every tomogram's score curves, one tomogram to a row, three to a page.
 
     One score axis for all of them when every search recorded its noise
     scale: raw pytom scores are not comparable between tomograms, scores in
@@ -298,10 +315,9 @@ def score_overview_pages(
 
     scored = [report for report in reports if report.picks is not None and report.picks.has_scores]
     limits = _shared_sigma_limits(scored)
-    per_page = OVERVIEW_COLUMNS * OVERVIEW_ROWS
     return [
-        partial(_score_overview_page, scored[start : start + per_page], contents, limits)
-        for start in range(0, len(scored), per_page)
+        partial(_score_overview_page, scored[start : start + OVERVIEW_ROWS], contents, limits)
+        for start in range(0, len(scored), OVERVIEW_ROWS)
     ]
 
 
@@ -340,34 +356,37 @@ def _score_overview_page(
         + ("all on one score axis, in σ" if limits is not None else "each on its own score axis"),
     )
     grid = GridSpec(
-        OVERVIEW_ROWS, OVERVIEW_COLUMNS, figure=figure, left=0.065, right=0.975,
-        top=style.CONTENT_TOP, bottom=style.CONTENT_BOTTOM, hspace=0.75, wspace=0.22,
+        OVERVIEW_ROWS, 2, figure=figure, left=0.065, right=0.975, top=style.CONTENT_TOP,
+        bottom=style.CONTENT_BOTTOM, hspace=0.75, wspace=0.06,
     )
-    for index, report in enumerate(reports):
+    for row, report in enumerate(reports):
         picks = report.picks
         assert picks is not None
-        row, column = divmod(index, OVERVIEW_COLUMNS)
-        axes = figure.add_subplot(grid[row, column])
-        rank_curve(axes, picks, rank_bands(picks.count, TILES_PER_BAND), labels=index == 0)
+        bands = rank_bands(picks.count, TILES_PER_BAND)
+        log_axes = figure.add_subplot(grid[row, 0])
+        linear_axes = figure.add_subplot(grid[row, 1], sharey=log_axes)
+        rank_curve(log_axes, picks, bands, log_scale=True, labels=False)
+        rank_curve(linear_axes, picks, bands, log_scale=False, labels=row == 0)
         if limits is not None:
-            axes.set_ylim(*limits)
+            log_axes.set_ylim(*limits)
         title = f"{report.series} · {picks.count:,} picks"
         if picks.above_floor is not None:
-            title += f", {picks.above_floor:,} above"
+            title += f", {picks.above_floor:,} above the one-false-positive height"
         if report.series in contents:
             title += f" · p. {contents[report.series]}"
-        axes.set_title(title, loc="left", fontsize=style.FONT_SMALL)
-        if column == 0 or limits is None:
-            axes.set_ylabel(_score_label(picks))
-        if index + OVERVIEW_COLUMNS >= len(reports):
-            axes.set_xlabel("Rank (log scale)")
+        log_axes.set_title(title, loc="left", fontsize=style.FONT_TEXT)
+        log_axes.set_ylabel(_score_label(picks))
+        linear_axes.tick_params(labelleft=False)
+        log_axes.set_xlabel("Rank (log scale)")
+        linear_axes.set_xlabel("Rank (linear scale)")
     style.caption(
         figure,
-        "A steep start that flattens into a long tail is a group of high-scoring peaks above "
-        "many similar weak ones. The grey line is the one-false-positive height, and 'above' "
-        "counts the picks over it. Thin vertical lines split each tomogram's picks into "
-        "thirds, as its galleries do; the dots are the picks the galleries show. p. is where "
-        "the tomogram's own pages start.",
+        "Left: rank on a log axis, which gives the best picks room; right: the same picks on a "
+        "linear axis, where each third takes a third of the width. A steep start that flattens "
+        "into a long tail is a group of high-scoring peaks above many similar weak ones. The "
+        "grey line is the one-false-positive height. Thin vertical lines split the picks into "
+        "thirds, as the galleries do; the dots are the picks the galleries show. p. is where the "
+        "tomogram's own pages start.",
     )
     return figure
 
