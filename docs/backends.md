@@ -73,6 +73,25 @@ fitting, not about what follows.
   nearest zero tilt over a wide defocus range for a hint, then the stack over a
   narrow window around it. `--ctf-expected-defocus-um` skips the first pass.
 
+  The window (`--ctffind-defocus-search-window-angstrom`, ±1000 Å by default)
+  has to hold every view's defocus, and the defocus moves with the tilt: on the
+  ryr1 data it fell ~0.03 µm per degree near 0, so ±1000 Å fitted 9 of 29 views
+  and ±10000 Å 26 (`scripts/ctf_window_test.sbatch`, 2026-10-16). A view whose
+  defocus lies outside it is not fitted, and CTFFIND says so only through the
+  fit limit, which stops at the low end of the range (29.7 Å of 30). Such
+  views are *unfitted*: their defocus in the model is interpolated from the
+  fitted views (linear between neighbours, along the outermost views' line past
+  the last), and with at most `--ctf-max-excluded-views` of them (5) `correct-ctf`
+  leaves them out of the corrected stack, and so of the tomogram, while with
+  more they stay in. The QC warns either way. The model records each row's z
+  value, so picking pairs its rows with the views the tomogram kept.
+
+  `--ctffind-determine-sample-tilt` lets CTFFIND5 fit each view's tilt and the
+  defocus gradient across it: sharper fits (6.4-7.4 Å against 7-13 Å on ryr1),
+  no more views, and about two hours a series. The backend refuses a CTFFIND 4
+  by its banner, since that one asks neither the tilt nor the thickness question,
+  and records the version that fitted each model.
+
   The question sequence is not fixed. CTFFIND opens the input file before asking
   anything and asks about movies only when the file holds more than one slice, so
   the hint pass and the full pass answer **different** sequences — that one extra

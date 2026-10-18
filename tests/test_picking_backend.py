@@ -1345,3 +1345,46 @@ def _pick_with(
         registry,
     )
     return picks, commands[0], registry
+
+
+def test_defocus_for_pytom_follows_the_views_the_tomogram_kept(tmp_path: Path) -> None:
+    """The CTF model covers every aligned view; the tomogram may have fewer.
+
+    correct-ctf leaves out views CTFFIND found no Thon rings on, so the rows are
+    paired with the tomogram's views by z value, which the model records.
+    """
+
+    from cryoet_pipeline.backends.picking import _write_defocus_micrometres
+
+    defocus = tmp_path / "TS_TEST.defocus"
+    defocus.write_text(
+        "0 0 0.0 0.0 0.0 3\n"
+        "1 1 -3.0 -3.0 5000.000\n"
+        "2 2 0.0 0.0 4000.000\n"
+        "3 3 3.0 3.0 3000.000\n"
+    )
+    parameters: dict[str, object] = {
+        "pytom_ctf_defocus_path": defocus,
+        "pytom_ctf_defocus_z_values": [2, 0, 1],
+    }
+
+    written = _write_defocus_micrometres(
+        BackendContext(output_dir=tmp_path, device=DevicePreference.CPU, parameters=parameters),
+        tmp_path / "kept.txt",
+        expected_views=2,
+        included_z_values=[0, 1],
+    )
+    assert written is not None
+    assert written.read_text().split() == ["4.000000", "3.000000"]
+
+    # Without the model's z values the counts still have to agree.
+    del parameters["pytom_ctf_defocus_z_values"]
+    with pytest.raises(ValueError, match="covers 3 views"):
+        _write_defocus_micrometres(
+            BackendContext(
+                output_dir=tmp_path, device=DevicePreference.CPU, parameters=parameters
+            ),
+            tmp_path / "unpaired.txt",
+            expected_views=2,
+            included_z_values=[0, 1],
+        )

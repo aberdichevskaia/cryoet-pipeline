@@ -247,7 +247,12 @@ class ImodTiltReconstructionBackend:
                 "alignment_stage": alignment_result.stage,
                 "ctf_corrected": ctf_corrected,
                 "included_z_values": included_z_values,
-                "excluded_z_values": alignment_result.excluded_z_values,
+                # Fine alignment's, and the views correct-ctf left out because
+                # CTFFIND found no Thon rings on them.
+                "excluded_z_values": sorted(
+                    set(alignment_result.excluded_z_values)
+                    | set(_ctf_excluded_z_values(tilt_stack))
+                ),
                 "thickness": geometry.thickness_px,
                 "x_axis_tilt_deg": geometry.x_axis_tilt_deg,
                 "z_shift_px": geometry.z_shift_px,
@@ -450,6 +455,17 @@ def _load_alignment(
     if result.stage != "fine" or alignment.parameters.get("stage") != "fine":
         raise ValueError("reconstruction requires fine alignment")
     return result
+
+
+def _ctf_excluded_z_values(tilt_stack: Artifact) -> list[int]:
+    value = tilt_stack.parameters.get("ctf_excluded_z_values")
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(
+        isinstance(item, int) and not isinstance(item, bool) for item in value
+    ):
+        raise ValueError("ctf_excluded_z_values must be a list of integers")
+    return list(value)
 
 
 def _included_z_values(tilt_stack: Artifact, num_tilts: int) -> list[int]:

@@ -132,6 +132,7 @@ class PytomMatchPickBackend:
                 context,
                 temporary_root / f"{manifest.tilt_series_id}_defocus.txt",
                 expected_views=view_count,
+                included_z_values=_included_z_values(tomogram),
             )
             dose_path = _write_dose_accumulation(
                 manifest,
@@ -1274,6 +1275,7 @@ def _write_defocus_micrometres(
     output_path: Path,
     *,
     expected_views: int,
+    included_z_values: Sequence[int] | None = None,
 ) -> Path | None:
     """Restate the fitted defocus in the one form pytom cannot misread.
 
@@ -1291,6 +1293,22 @@ def _write_defocus_micrometres(
     if not isinstance(source, (str, Path)):
         raise TypeError("context parameter 'pytom_ctf_defocus_path' must be a path")
     entries = read_imod_defocus_file(Path(source))
+    # The model may cover views the tomogram was not built from: correct-ctf
+    # leaves out the ones CTFFIND did not fit. Its rows name their z values.
+    model_z = context.parameters.get("pytom_ctf_defocus_z_values")
+    if (
+        included_z_values is not None
+        and isinstance(model_z, list)
+        and len(model_z) == len(entries)
+    ):
+        row_of = {z: row for row, z in enumerate(model_z)}
+        missing = [z for z in included_z_values if z not in row_of]
+        if missing:
+            raise ValueError(
+                f"the tomogram was built from z values {missing} that the CTF model "
+                "has no defocus for"
+            )
+        entries = [entries[row_of[z]] for z in included_z_values]
     if len(entries) != expected_views:
         raise ValueError(
             f"the CTF model covers {len(entries)} views but the tomogram was "

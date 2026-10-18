@@ -264,6 +264,8 @@ def test_imod_reconstruction_accepts_a_ctf_corrected_stack(tmp_path: Path) -> No
 
     assert tomogram.parent_ids == [corrected_stack.id, alignment.id]
     assert tomogram.parameters["ctf_corrected"] is True
+    # Fine alignment's exclusions only: correct-ctf left nothing out here.
+    assert tomogram.parameters["excluded_z_values"] == [1]
     report = TomogramQc.model_validate_json(qc_artifact.path.read_text())
     assert report.ctf_corrected is True
     assert "CTF correction was not applied" not in report.warnings
@@ -387,3 +389,53 @@ def _fake_imod_dir(tmp_path: Path) -> Path:
     executable.parent.mkdir(parents=True)
     executable.touch()
     return imod_dir
+
+
+def test_imod_reconstruction_counts_views_correct_ctf_left_out(tmp_path: Path) -> None:
+    """A view CTFFIND did not fit is as missing from the tomogram as a dropped one."""
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    corrected_path = tmp_path / "corrected.st"
+    with mrcfile.new(corrected_path, overwrite=True) as corrected:
+        corrected.set_data(np.arange(48, dtype=np.float32).reshape(2, 4, 6))
+        corrected.voxel_size = 2.7
+    corrected_stack = aligned_stack.model_copy(
+        update={
+            "id": "TS_TEST:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip",
+            "path": corrected_path,
+            "parent_ids": [aligned_stack.id],
+            "parameters": {
+                **aligned_stack.parameters,
+                "purpose": "ctf_corrected",
+                "ctf_excluded_z_values": [7],
+            },
+        }
+    )
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack, corrected_stack])
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        with mrcfile.new(Path(command[command.index("-output") + 1]), overwrite=True) as rec:
+            rec.set_data(np.arange(48, dtype=np.float32).reshape(4, 2, 6))
+        return subprocess.CompletedProcess(command, 0, stdout="reconstructed", stderr="")
+
+    tomogram, _ = reconstruct_and_register(
+        ImodTiltReconstructionBackend(fake_runner),
+        corrected_stack,
+        alignment,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"imod_dir": _fake_imod_dir(tmp_path)},
+        ),
+        registry,
+    )
+
+    assert tomogram.parameters["excluded_z_values"] == [1, 7]

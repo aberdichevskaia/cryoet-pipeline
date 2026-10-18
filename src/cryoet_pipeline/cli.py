@@ -1488,6 +1488,16 @@ def estimate_ctf(
             "makes across the image. Not offered with a phase-shift search.",
         ),
     ] = False,
+    ctf_max_excluded_views: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Views CTFFIND finds no Thon rings on are left out of the corrected "
+            "stack when there are at most this many, and kept with a defocus "
+            "interpolated from the fitted views when there are more. Either way "
+            "the QC warns.",
+        ),
+    ] = 5,
     ctffind_min_phase_shift_rad: Annotated[
         float,
         typer.Option(help="Minimum searched phase shift, radians."),
@@ -1584,6 +1594,7 @@ def estimate_ctf(
         "ctffind_exhaustive_search": ctffind_exhaustive_search,
         "ctffind_search_phase_shift": ctffind_search_phase_shift,
         "ctffind_determine_sample_tilt": ctffind_determine_sample_tilt,
+        "ctf_max_excluded_views": ctf_max_excluded_views,
         "ctffind_min_phase_shift_rad": ctffind_min_phase_shift_rad,
         "ctffind_max_phase_shift_rad": ctffind_max_phase_shift_rad,
         "ctffind_phase_shift_step_rad": ctffind_phase_shift_step_rad,
@@ -2796,6 +2807,8 @@ def pick_particles(
         parameters["pytom_ctf_spherical_aberration_mm"] = weighting.spherical_aberration_mm
         parameters["pytom_ctf_amplitude_contrast"] = weighting.amplitude_contrast
         parameters["pytom_tomogram_ctf_model"] = weighting.model
+        if weighting.z_values is not None:
+            parameters["pytom_ctf_defocus_z_values"] = weighting.z_values
     if segmentation_mask_dilation_px is not None:
         parameters["pytom_segmentation_dilation_px"] = segmentation_mask_dilation_px
     parameters["pytom_number_of_particles"] = pytom_number_of_particles
@@ -4795,6 +4808,9 @@ class _CtfWeighting:
     spherical_aberration_mm: float
     amplitude_contrast: float
     model: str
+    z_values: list[int] | None = None
+    """The z value of each row of the defocus file, so that picking can take the
+    rows of the views the tomogram kept."""
 
 
 def _tilt_angles_for_tomogram(
@@ -4809,8 +4825,15 @@ def _tilt_angles_for_tomogram(
     tilts there are. Template matching models the missing wedge from these
     angles, so handing it the collected set would describe a tilt the data never
     contributed.
+
+    The tomogram's own record comes first: reconstruction writes the angles it
+    used. An ancestor stack may hold more views than the tomogram, since
+    correct-ctf can leave out views CTFFIND did not fit.
     """
 
+    own = tomogram.parameters.get("tilt_angles_path")
+    if isinstance(own, (str, Path)) and Path(own).is_file():
+        return Path(own)
     stacks = [
         artifact
         for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
@@ -4860,12 +4883,19 @@ def _ctf_weighting_for_tomogram(
         return None
     if not model.path.is_file():
         return None
+    z_values = model.parameters.get("z_values")
     return _CtfWeighting(
         defocus_path=model.path,
         voltage_kv=float(cast(float, optics["voltage_kv"])),
         spherical_aberration_mm=float(cast(float, optics["spherical_aberration_mm"])),
         amplitude_contrast=float(cast(float, optics["amplitude_contrast"])),
         model="phase-flip",
+        z_values=(
+            list(z_values)
+            if isinstance(z_values, list)
+            and all(isinstance(z, int) and not isinstance(z, bool) for z in z_values)
+            else None
+        ),
     )
 
 

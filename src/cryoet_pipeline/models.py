@@ -604,6 +604,16 @@ class CtfEstimationQc(BaseModel):
     minimum_defocus_um: float
     maximum_defocus_um: float
     mean_astigmatism_um: float | None = None
+    unfitted_z_values: list[int] = Field(default_factory=list)
+    """Views on which the fit stopped at the low end of its range: no Thon rings
+    found, so the defocus CTFFIND returned for them means nothing."""
+    interpolated_z_values: list[int] = Field(default_factory=list)
+    """Views whose defocus in the model is interpolated from the fitted views
+    rather than fitted: every unfitted view, so the model never carries a failed
+    fit."""
+    excluded_z_values: list[int] = Field(default_factory=list)
+    """Unfitted views that correct-ctf leaves out of the corrected stack, set when
+    there are few enough of them; the rest are kept with their interpolation."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 
@@ -648,6 +658,9 @@ class CtfCorrectionQc(BaseModel):
     mean_defocus_um: float
     minimum_defocus_um: float
     maximum_defocus_um: float
+    excluded_z_values: list[int] = Field(default_factory=list)
+    """Views left out of the corrected stack because the CTF model marked them
+    unfitted; `num_tilts` counts the views kept."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import os
@@ -8,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
@@ -28,6 +29,8 @@ from cryoet_pipeline.backends.protocols import (
     variant_suffix,
 )
 from cryoet_pipeline.imod_defocus import (
+    CtffindRow,
+    DefocusEntry,
     parse_ctffind_summary,
     read_imod_defocus_file,
     write_imod_defocus_file,
@@ -159,12 +162,14 @@ class Ctffind5CtfEstimationBackend:
                 maximum_defocus_angstrom=maximum_defocus,
                 command_log=command_log,
             )
-            rows = parse_ctffind_summary(summary_path)
-            if len(rows) != stack_shape[0]:
+            fitted_rows = parse_ctffind_summary(summary_path)
+            if len(fitted_rows) != stack_shape[0]:
                 raise RuntimeError(
-                    f"CTFFIND fitted {len(rows)} views but the aligned stack has "
+                    f"CTFFIND fitted {len(fitted_rows)} views but the aligned stack has "
                     f"{stack_shape[0]}"
                 )
+            unfitted = _unfitted_views(fitted_rows, settings.min_resolution_angstrom)
+            rows = _interpolate_unfitted(fitted_rows, tilt_angles_deg, unfitted)
 
             temporary_defocus = temporary_root / f"{manifest.tilt_series_id}.defocus"
             write_imod_defocus_file(
@@ -193,6 +198,23 @@ class Ctffind5CtfEstimationBackend:
 
         warnings = list(settings.warnings)
         status = QcStatus.PASS
+        z_values = _stack_z_values(tilt_stack, stack_shape[0])
+        unfitted_z = [z_values[index] for index in unfitted] if z_values else []
+        max_excluded = _nonnegative_int_parameter(context, "ctf_max_excluded_views", default=5)
+        excluded_z = unfitted_z if len(unfitted) <= max_excluded else []
+        if unfitted:
+            status = QcStatus.WARNING
+            warnings.append(
+                _unfitted_warning(
+                    unfitted,
+                    tilt_angles_deg,
+                    z_values=z_values,
+                    num_views=stack_shape[0],
+                    low_end_angstrom=settings.min_resolution_angstrom,
+                    excluded=bool(excluded_z),
+                    max_excluded=max_excluded,
+                )
+            )
         report = CtfEstimationQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
@@ -210,6 +232,9 @@ class Ctffind5CtfEstimationBackend:
             minimum_defocus_um=min(defocus_um),
             maximum_defocus_um=max(defocus_um),
             mean_astigmatism_um=sum(astigmatism_um) / len(astigmatism_um),
+            unfitted_z_values=unfitted_z,
+            interpolated_z_values=unfitted_z,
+            excluded_z_values=excluded_z,
             status=status,
             warnings=warnings,
         )
@@ -236,6 +261,13 @@ class Ctffind5CtfEstimationBackend:
                 "includes_phase_shift": settings.search_phase_shift,
                 "determines_sample_tilt": settings.determine_sample_tilt,
                 "defocus_search_window_angstrom": window,
+                # The z value of each row, so a consumer can pair rows with the
+                # views of a stack that left some out.
+                "z_values": z_values,
+                "unfitted_z_values": unfitted_z,
+                "interpolated_z_values": unfitted_z,
+                # What correct-ctf leaves out of the corrected stack.
+                "excluded_z_values": excluded_z,
                 "hint_defocus_um": hint_defocus_angstrom / 10000.0,
                 "summary_path": str(paths.summary),
                 "diagnostic_path": str(paths.diagnostic),
@@ -622,6 +654,18 @@ class ImodCtfPhaseFlipBackend:
             [entry.angle_start_deg for entry in entries],
             require_tilt_file=bool(model_warnings),
         )
+        stack_z = _stack_z_values(tilt_stack, stack_shape[0])
+        dropped_z = _views_to_leave_out(ctf_model, stack_z)
+        kept = [
+            index
+            for index in range(stack_shape[0])
+            if stack_z is None or stack_z[index] not in dropped_z
+        ]
+        if not kept:
+            raise ValueError(
+                f"the CTF model {ctf_model.id} leaves out every view of {tilt_stack.id}"
+            )
+        kept_z = [stack_z[index] for index in kept] if stack_z is not None else None
 
         paths = _correction_paths(
             context.output_dir, manifest, backend_name=self.name,
@@ -692,11 +736,58 @@ class ImodCtfPhaseFlipBackend:
                 raise ValueError(
                     f"CTF-corrected stack has shape {info.shape}, expected {stack_shape}"
                 )
+            commands = [(command, result)]
+            if dropped_z:
+                # Every view is corrected, each with a sane defocus since the model
+                # interpolates the unfitted ones, and only then are those taken
+                # out: the defocus file stays whole and needs no renumbering.
+                temporary_kept = temporary_root / f"{manifest.tilt_series_id}_ctf_kept.st"
+                newstack = resolve_imod_executable("newstack", context)
+                keep_command = [
+                    str(newstack),
+                    "-secs",
+                    ",".join(str(index) for index in kept),
+                    "-input",
+                    str(temporary_corrected),
+                    "-output",
+                    str(temporary_kept),
+                ]
+                keep_result = self._command_runner(
+                    keep_command,
+                    cwd=temporary_root,
+                    env=imod_environment(newstack, context),
+                )
+                commands.append((keep_command, keep_result))
+                write_command_log(paths.log, *commands)
+                if keep_result.returncode != 0 or not temporary_kept.is_file():
+                    raise RuntimeError(
+                        f"IMOD newstack failed to leave out the views the CTF model "
+                        f"excludes (exit code {keep_result.returncode}); see {paths.log}"
+                    )
+                info = validate_complete_mrc(temporary_kept)
+                expected = (len(kept), stack_shape[1], stack_shape[2])
+                # The header reads as 2D when a single section is left.
+                if (info.shape if len(info.shape) == 3 else (1, *info.shape)) != expected:
+                    raise ValueError(
+                        f"stack without the excluded views has shape {info.shape}, "
+                        f"expected {expected}"
+                    )
+                temporary_corrected = temporary_kept
+                angles = _stack_tilt_angles(tilt_stack, entries)
+                write_tilt_angles_file(temporary_angles, [angles[index] for index in kept])
 
             _replace_output(temporary_corrected, paths.corrected_stack)
             _replace_output(temporary_angles, paths.tilt_angles)
 
-        defocus_um = [entry.mean_defocus_nm / 1000.0 for entry in entries]
+        defocus_um = [entries[index].mean_defocus_nm / 1000.0 for index in kept]
+        correction_warnings = list(model_warnings)
+        if dropped_z:
+            correction_warnings.append(
+                f"left out {len(dropped_z)} of {stack_shape[0]} views that the CTF model "
+                f"marks as unfitted (z {', '.join(str(z) for z in dropped_z)}); the "
+                f"corrected stack, and the tomogram built from it, has {len(kept)}"
+            )
+        correction_status = QcStatus.WARNING if correction_warnings else QcStatus.PASS
         corrected_stack_id = (
             f"{manifest.tilt_series_id}:aligned_tilt_stack:ctf_corrected:{self.name}"
             f"{variant_suffix(context)}"
@@ -707,7 +798,7 @@ class ImodCtfPhaseFlipBackend:
             input_stack_id=tilt_stack.id,
             ctf_model_id=ctf_model.id,
             corrected_stack_id=corrected_stack_id,
-            num_tilts=stack_shape[0],
+            num_tilts=len(kept),
             voltage_kv=optics.voltage_kv,
             spherical_aberration_mm=optics.spherical_aberration_mm,
             amplitude_contrast=optics.amplitude_contrast,
@@ -716,8 +807,9 @@ class ImodCtfPhaseFlipBackend:
             mean_defocus_um=sum(defocus_um) / len(defocus_um),
             minimum_defocus_um=min(defocus_um),
             maximum_defocus_um=max(defocus_um),
-            status=QcStatus.WARNING if model_warnings else QcStatus.PASS,
-            warnings=model_warnings,
+            excluded_z_values=dropped_z,
+            status=correction_status,
+            warnings=correction_warnings,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
 
@@ -727,7 +819,7 @@ class ImodCtfPhaseFlipBackend:
             kind=ArtifactKind.ALIGNED_TILT_STACK,
             path=paths.corrected_stack,
             parent_ids=[tilt_stack.id, ctf_model.id],
-            shape=info.shape,
+            shape=(len(kept), stack_shape[1], stack_shape[2]),
             dtype=info.dtype,
             axis_order=AxisOrder.TYX,
             pixel_spacing_angstrom=tilt_stack.pixel_spacing_angstrom,
@@ -741,6 +833,20 @@ class ImodCtfPhaseFlipBackend:
                 "purpose": "ctf_corrected",
                 "backend": self.name,
                 "tilt_series_id": manifest.tilt_series_id,
+                **(
+                    {
+                        # What reconstruction and picking read the views from.
+                        "included_z_values": kept_z,
+                        "excluded_z_values": sorted(
+                            set(_int_list(tilt_stack.parameters.get("excluded_z_values")))
+                            | set(dropped_z)
+                        ),
+                        "ctf_excluded_z_values": dropped_z,
+                        "tilt_file_path": str(paths.tilt_angles),
+                    }
+                    if dropped_z
+                    else {}
+                ),
                 "ctf_model_id": ctf_model.id,
                 "ctf_estimation_backend": ctf_model.parameters.get("backend"),
                 "command_log_path": str(paths.log),
@@ -762,10 +868,47 @@ class ImodCtfPhaseFlipBackend:
             qc_type="ctf_correction",
             backend=self.name,
             manifest=manifest,
-            status=QcStatus.PASS,
+            status=correction_status,
             variant=variant_label(context),
         )
         return [corrected_stack_artifact, qc_artifact]
+
+
+def _views_to_leave_out(ctf_model: Artifact, stack_z: Sequence[int] | None) -> list[int]:
+    """The z values of the stack's views that the CTF model says to leave out."""
+
+    excluded = _int_list(ctf_model.parameters.get("excluded_z_values"))
+    if not excluded:
+        return []
+    if stack_z is None:
+        raise ValueError(
+            f"the CTF model {ctf_model.id} leaves out views by z value, but the stack "
+            "records none to find them by"
+        )
+    return [z for z in stack_z if z in set(excluded)]
+
+
+def _stack_tilt_angles(tilt_stack: Artifact, entries: Sequence[DefocusEntry]) -> list[float]:
+    """The stack's own solved angles, or the model's when it records none.
+
+    The stack's are what reconstruction reads; the model's agree with them to the
+    tolerance `_validate_model_tilt_angles` allows, but are not the same text.
+    """
+
+    value = tilt_stack.parameters.get("tilt_file_path")
+    if isinstance(value, (str, Path)) and Path(value).is_file():
+        angles = [
+            float(line) for line in Path(value).read_text().splitlines() if line.strip()
+        ]
+        if len(angles) == len(entries):
+            return angles
+    return [entry.angle_start_deg for entry in entries]
+
+
+def _int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int) and not isinstance(item, bool)]
 
 
 def estimate_ctf_and_register(
@@ -971,6 +1114,163 @@ def _validate_model_tilt_angles(
                 f"{model_angle:g} versus {stack_angle:g} degrees. The model covers "
                 "different views, so its defocus values do not line up with this stack"
             )
+
+
+_UNFITTED_FRACTION_OF_LOW_END = 0.9
+"""A view is unfitted when its fit reached no finer than this share of the fit
+range's low end: 27 A of the default 30. CTFFIND reports 29.7-29.8 A on a view it
+found no Thon rings on (ryr1, 2026-10-15 and 16), while real fits, even poor ones
+at high tilt, reached 13-17 A there."""
+
+_EXTRAPOLATION_POINTS = 4
+"""How many of the outermost fitted views carry the defocus trend past them."""
+
+
+def _unfitted_views(rows: Sequence[CtffindRow], low_end_angstrom: float) -> list[int]:
+    """Indices of the views CTFFIND found no Thon rings on.
+
+    Such a view's defocus is whatever the search settled on, and correcting with
+    it flips phases at the wrong frequencies: on ryr1 039 it gave 4.10 um where
+    the fitted views' trend puts ~5.8.
+    """
+
+    threshold = _UNFITTED_FRACTION_OF_LOW_END * low_end_angstrom
+    return [
+        index
+        for index, row in enumerate(rows)
+        if row.fit_resolution_angstrom is not None
+        and row.fit_resolution_angstrom >= threshold
+    ]
+
+
+def _interpolate_unfitted(
+    rows: Sequence[CtffindRow],
+    tilt_angles_deg: Sequence[float],
+    unfitted: Sequence[int],
+) -> list[CtffindRow]:
+    """The rows with every unfitted view's defocus taken from the fitted ones.
+
+    Between fitted views the defocus is linear in the tilt angle. Past the last
+    fitted view on either side it follows a line through the outermost few,
+    because the defocus moves with the tilt (ryr1 039: 4.97 um at -11 deg, 5.56
+    at -29) and holding the last value would leave a far view a micrometre off.
+    A line can overshoot a trend that bends, so this is only good a few views
+    past the fitted ones: the search window is what keeps the gap that short.
+
+    No astigmatism, as a failed fit says nothing about it, and the fitted views'
+    mean phase shift, which is 0 unless one was searched for.
+    """
+
+    if not unfitted:
+        return list(rows)
+    skip = set(unfitted)
+    known = sorted(
+        (tilt_angles_deg[index], row.mean_defocus_angstrom)
+        for index, row in enumerate(rows)
+        if index not in skip
+    )
+    if not known:
+        raise RuntimeError(
+            "CTFFIND found Thon rings on none of the views: every fit stopped at the "
+            "low end of its range, so there is no defocus to build a model from"
+        )
+    phase_shift = sum(
+        row.phase_shift_rad for index, row in enumerate(rows) if index not in skip
+    ) / len(known)
+    result = list(rows)
+    for index in unfitted:
+        defocus = _defocus_at(tilt_angles_deg[index], known)
+        result[index] = replace(
+            rows[index],
+            defocus1_angstrom=defocus,
+            defocus2_angstrom=defocus,
+            astigmatism_azimuth_deg=0.0,
+            phase_shift_rad=phase_shift,
+        )
+    return result
+
+
+def _defocus_at(angle: float, known: Sequence[tuple[float, float]]) -> float:
+    """Defocus at `angle` from (angle, defocus) pairs sorted by angle."""
+
+    angles = [point[0] for point in known]
+    if len(known) == 1:
+        return known[0][1]
+    if angle <= angles[0]:
+        return _line_at(angle, known[:_EXTRAPOLATION_POINTS])
+    if angle >= angles[-1]:
+        return _line_at(angle, known[-_EXTRAPOLATION_POINTS:])
+    position = bisect.bisect_right(angles, angle)
+    (left_angle, left), (right_angle, right) = known[position - 1], known[position]
+    if right_angle == left_angle:
+        return (left + right) / 2.0
+    fraction = (angle - left_angle) / (right_angle - left_angle)
+    return left + fraction * (right - left)
+
+
+def _line_at(angle: float, points: Sequence[tuple[float, float]]) -> float:
+    """A least-squares line through `points`, evaluated at `angle`."""
+
+    mean_angle = sum(point[0] for point in points) / len(points)
+    mean_value = sum(point[1] for point in points) / len(points)
+    spread = sum((point[0] - mean_angle) ** 2 for point in points)
+    if spread == 0.0:
+        return mean_value
+    slope = sum(
+        (point[0] - mean_angle) * (point[1] - mean_value) for point in points
+    ) / spread
+    return mean_value + slope * (angle - mean_angle)
+
+
+def _stack_z_values(tilt_stack: Artifact, num_views: int) -> list[int] | None:
+    """The z value of each view of an aligned stack, in its order, if recorded."""
+
+    value = tilt_stack.parameters.get("included_z_values")
+    if (
+        isinstance(value, list)
+        and len(value) == num_views
+        and all(isinstance(z, int) and not isinstance(z, bool) for z in value)
+    ):
+        return list(value)
+    return None
+
+
+def _unfitted_warning(
+    unfitted: Sequence[int],
+    tilt_angles_deg: Sequence[float],
+    *,
+    z_values: Sequence[int] | None,
+    num_views: int,
+    low_end_angstrom: float,
+    excluded: bool,
+    max_excluded: int,
+) -> str:
+    listed = ", ".join(
+        f"{tilt_angles_deg[index]:+.1f} deg"
+        + (f" (z {z_values[index]})" if z_values else f" (view {index + 1})")
+        for index in unfitted
+    )
+    found = (
+        f"{len(unfitted)} of {num_views} views stopped at the low end of the fit range "
+        f"({_UNFITTED_FRACTION_OF_LOW_END * low_end_angstrom:.0f} A or coarser of "
+        f"{low_end_angstrom:.0f}), so CTFFIND found no Thon rings on them: {listed}. "
+    )
+    if excluded:
+        return found + (
+            f"With no more than {max_excluded}, correct-ctf leaves them out of the "
+            "corrected stack and so of the tomogram; the model gives them a defocus "
+            "interpolated from the fitted views all the same"
+        )
+    if z_values is None:
+        return found + (
+            "The stack records no z values to leave them out by, so they stay in, "
+            "with a defocus interpolated from the fitted views"
+        )
+    return found + (
+        f"With more than {max_excluded}, they stay in, with a defocus interpolated "
+        "from the fitted views: linear between fitted neighbours, along the "
+        "outermost fitted views' trend past the last one"
+    )
 
 
 def _ctffind_settings(
@@ -1523,6 +1823,15 @@ def _bool_parameter(context: BackendContext, key: str, *, default: bool) -> bool
     value = context.parameters.get(key, default)
     if not isinstance(value, bool):
         raise TypeError(f"context parameter {key!r} must be a bool")
+    return value
+
+
+def _nonnegative_int_parameter(context: BackendContext, key: str, *, default: int) -> int:
+    value = context.parameters.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"context parameter {key!r} must be an int")
+    if value < 0:
+        raise ValueError(f"context parameter {key!r} must be zero or more")
     return value
 
 

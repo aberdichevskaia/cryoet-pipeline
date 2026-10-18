@@ -9,6 +9,7 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.protocols import BackendContext, variant_label, variant_suffix
 from cryoet_pipeline.cli import (
     _ctf_weighting_for_tomogram,
+    _tilt_angles_for_tomogram,
     _fiducial_seed_artifact,
     _particle_stack_artifact,
     _reconstruction_input_stack_artifact,
@@ -370,6 +371,8 @@ def test_ctf_weighting_comes_from_the_model_that_corrected_this_tomogram(
     weighting = _ctf_weighting_for_tomogram(registry, _manifest(), corrected_tomogram)
     assert weighting is not None
     assert weighting.defocus_path == defocus
+    # A model that records no z values pairs its rows with views by count alone.
+    assert weighting.z_values is None
     assert weighting.voltage_kv == 300.0
     assert weighting.spherical_aberration_mm == 2.7
     assert weighting.amplitude_contrast == 0.07
@@ -406,3 +409,42 @@ def test_averaging_can_name_the_lane_it_averages(tmp_path: Path) -> None:
     )
     with pytest.raises(typer.BadParameter, match="found 2 candidates"):
         _particle_stack_artifact(registry, _manifest())
+
+
+def test_pytom_takes_the_angles_the_tomogram_was_built_from(tmp_path: Path) -> None:
+    """Not an ancestor stack's: correct-ctf can leave out views it still holds."""
+
+    all_views = tmp_path / "final.tlt"
+    all_views.write_text("-3.0\n0.0\n3.0\n")
+    kept_views = tmp_path / "tomogram.tlt"
+    kept_views.write_text("0.0\n3.0\n")
+    registry = ArtifactRegistry.empty()
+    registry.add(
+        Artifact(
+            id="TS_TEST:aligned_tilt_stack:final",
+            kind=ArtifactKind.ALIGNED_TILT_STACK,
+            path=tmp_path / "aligned.st",
+            parameters={
+                "tilt_series_id": "TS_TEST",
+                "purpose": "final_alignment",
+                "tilt_file_path": str(all_views),
+            },
+        )
+    )
+    tomogram = Artifact(
+        id="TS_TEST:tomogram:fine",
+        kind=ArtifactKind.TOMOGRAM,
+        path=tmp_path / "tomogram.zarr",
+        parent_ids=["TS_TEST:aligned_tilt_stack:final"],
+        parameters={"tilt_series_id": "TS_TEST", "tilt_angles_path": str(kept_views)},
+    )
+    registry.add(tomogram)
+
+    assert _tilt_angles_for_tomogram(registry, _manifest(), tomogram) == kept_views
+
+    # A tomogram from before it recorded its angles falls back to its stacks.
+    older = tomogram.model_copy(
+        update={"id": "TS_TEST:tomogram:fine:old", "parameters": {"tilt_series_id": "TS_TEST"}}
+    )
+    registry.add(older)
+    assert _tilt_angles_for_tomogram(registry, _manifest(), older) == all_views

@@ -153,6 +153,8 @@ def _ctffind_runner(
     prompt_shift: int = 0,
     always_ask_about_movies: bool = False,
     version: str = "5.0.2",
+    fit_limits: Sequence[float] | None = None,
+    defocus_per_view: Sequence[float] | None = None,
 ):
     """Fake CTFFIND driven interactively, plus newstack.
 
@@ -210,11 +212,21 @@ def _ctffind_runner(
 
         fitted = _CORRECTED_DATA.shape[0] if input_is_a_stack else 1
         row_count = rows if rows is not None else fitted
+        def view_defocus(index: int) -> float:
+            if defocus_per_view is not None and input_is_a_stack:
+                return defocus_per_view[index]
+            return defocus_angstrom
+
+        def view_fit(index: int) -> float:
+            if fit_limits is not None and input_is_a_stack:
+                return fit_limits[index]
+            return 18.5
+
         diagnostic.with_suffix(".txt").write_text(
             "# CTFFIND fake output\n"
             + "".join(
-                f"{index + 1}.0 {defocus_angstrom} {defocus_angstrom - 500.0} "
-                f"-43.2 0.0 0.10 18.5\n"
+                f"{index + 1}.0 {view_defocus(index)} {view_defocus(index) - 500.0} "
+                f"-43.2 0.0 0.10 {view_fit(index)}\n"
                 for index in range(row_count)
             )
         )
@@ -560,6 +572,204 @@ def test_ctffind5_refuses_sample_tilt_with_a_phase_shift(tmp_path: Path) -> None
                 },
             ),
         )
+
+
+def _estimate_with_fits(
+    tmp_path: Path,
+    fit_limits: Sequence[float],
+    extra: dict[str, object] | None = None,
+) -> tuple[Artifact, CtfEstimationQc]:
+    """Fit the two-view test stack (z 2 at -3.1 deg, z 0 at 0.1) with given fit limits."""
+
+    _, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctffind = _fake_executable(tmp_path / "ctffind")
+    ctf_model, qc_artifact = Ctffind5CtfEstimationBackend(
+        _ctffind_runner(fit_limits=fit_limits, defocus_per_view=[41000.0, 30000.0])
+    ).estimate(
+        aligned_stack,
+        alignment,
+        _manifest(),
+        _context(
+            tmp_path,
+            {
+                "imod_dir": _fake_imod_dir(tmp_path),
+                "ctffind_executable": ctffind,
+                "ctf_expected_defocus_um": 3.0,
+                **(extra or {}),
+            },
+        ),
+    )
+    return ctf_model, CtfEstimationQc.model_validate_json(qc_artifact.path.read_text())
+
+
+def test_an_unfitted_view_is_left_out_when_there_are_few(tmp_path: Path) -> None:
+    """At most five views with no Thon rings: correct-ctf drops them, QC warns."""
+
+    ctf_model, report = _estimate_with_fits(tmp_path, [29.8, 7.5])
+
+    assert ctf_model.parameters["z_values"] == [2, 0]
+    assert ctf_model.parameters["unfitted_z_values"] == [2]
+    assert ctf_model.parameters["excluded_z_values"] == [2]
+    assert report.status == QcStatus.WARNING
+    assert report.unfitted_z_values == [2]
+    assert report.excluded_z_values == [2]
+    warning = next(w for w in report.warnings if "no Thon rings" in w)
+    assert "-3.1 deg (z 2)" in warning
+    assert "leaves them out" in warning
+
+    # The model never carries the failed fit: the view gets the fitted one's
+    # defocus (the mean of its 30000 and 29500 A), without astigmatism.
+    entries = read_imod_defocus_file(ctf_model.path)
+    assert entries[0].defocus_nm == pytest.approx(2975.0)
+    assert entries[0].second_defocus_nm == pytest.approx(2975.0)
+    assert entries[1].defocus_nm == pytest.approx(3000.0)
+
+
+def test_unfitted_views_are_interpolated_when_there_are_many(tmp_path: Path) -> None:
+    ctf_model, report = _estimate_with_fits(
+        tmp_path, [29.8, 7.5], {"ctf_max_excluded_views": 0}
+    )
+
+    assert ctf_model.parameters["unfitted_z_values"] == [2]
+    assert ctf_model.parameters["interpolated_z_values"] == [2]
+    assert ctf_model.parameters["excluded_z_values"] == []
+    assert report.status == QcStatus.WARNING
+    warning = next(w for w in report.warnings if "no Thon rings" in w)
+    assert "they stay in" in warning
+    assert read_imod_defocus_file(ctf_model.path)[0].defocus_nm == pytest.approx(2975.0)
+
+
+def test_a_fit_that_found_rings_somewhere_is_not_unfitted(tmp_path: Path) -> None:
+    """A poor fit is still a fit: ryr1 161 reached 16.7 A at +36 deg."""
+
+    ctf_model, report = _estimate_with_fits(tmp_path, [16.7, 7.5])
+
+    assert ctf_model.parameters["unfitted_z_values"] == []
+    assert report.status == QcStatus.PASS
+    assert read_imod_defocus_file(ctf_model.path)[0].defocus_nm == pytest.approx(4100.0)
+
+
+def test_estimation_refuses_when_no_view_was_fitted(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="none of the views"):
+        _estimate_with_fits(tmp_path, [29.8, 29.7])
+
+
+def test_interpolation_follows_the_trend_past_the_last_fitted_view() -> None:
+    """Linear between fitted views, along the outermost ones' line past them."""
+
+    from cryoet_pipeline.backends.ctf import _interpolate_unfitted
+    from cryoet_pipeline.imod_defocus import CtffindRow
+
+    angles = [-40.0, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 40.0]
+
+    def truth(angle: float) -> float:
+        return 50000.0 - 300.0 * angle  # falling with the tilt, as on ryr1 039
+
+    rows = [
+        CtffindRow(
+            view=index + 1,
+            defocus1_angstrom=truth(angle) + 100.0,
+            defocus2_angstrom=truth(angle) - 100.0,
+            astigmatism_azimuth_deg=30.0,
+            phase_shift_rad=0.0,
+            cross_correlation=0.1,
+            fit_resolution_angstrom=8.0,
+        )
+        for index, angle in enumerate(angles)
+    ]
+    # Garbage where the fit failed: the two outermost views of one side and one
+    # in the middle.
+    unfitted = [0, 1, 4]
+    for index in unfitted:
+        rows[index] = CtffindRow(index + 1, 41000.0, 40000.0, 12.0, 0.0, 0.01, 29.8)
+
+    result = _interpolate_unfitted(rows, angles, unfitted)
+
+    for index in unfitted:
+        assert result[index].mean_defocus_angstrom == pytest.approx(truth(angles[index]))
+        assert result[index].astigmatism_angstrom == pytest.approx(0.0)
+    for index in set(range(len(rows))) - set(unfitted):
+        assert result[index] == rows[index]
+
+
+def test_ctfphaseflip_leaves_out_the_views_the_model_excludes(tmp_path: Path) -> None:
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctf_model = _ctf_model_artifact(tmp_path, aligned_stack)
+    ctf_model = ctf_model.model_copy(
+        update={
+            "parameters": {
+                **ctf_model.parameters,
+                "z_values": [2, 0],
+                "unfitted_z_values": [2],
+                "excluded_z_values": [2],
+            }
+        }
+    )
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack, ctf_model])
+    captured: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, stdin
+        command_list = list(command)
+        captured.append(command_list)
+        if "newstack" in command_list[0]:
+            sections = [
+                int(section)
+                for section in command_list[command_list.index("-secs") + 1].split(",")
+            ]
+            source = Path(command_list[command_list.index("-input") + 1])
+            with mrcfile.open(source, permissive=True) as full:
+                kept = np.array(full.data[sections])
+            with mrcfile.new(
+                Path(command_list[command_list.index("-output") + 1]), overwrite=True
+            ) as output:
+                output.set_data(kept)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        output_path = Path(command_list[command_list.index("-OutputFileName") + 1])
+        with mrcfile.new(output_path, overwrite=True) as output:
+            output.set_data(_CORRECTED_DATA)
+        return subprocess.CompletedProcess(command, 0, stdout="flipped", stderr="")
+
+    corrected_stack, qc_artifact = correct_ctf_and_register(
+        ImodCtfPhaseFlipBackend(fake_runner),
+        aligned_stack,
+        ctf_model,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={"imod_dir": _fake_imod_dir(tmp_path)},
+        ),
+        registry,
+    )
+
+    # Every view is corrected, then z 2 (section 0) is taken out.
+    phaseflip, keep = captured
+    assert "-DefocusFile" in phaseflip
+    assert keep[keep.index("-secs") + 1] == "1"
+    assert corrected_stack.shape == (1, 4, 6)
+    with mrcfile.open(corrected_stack.path, permissive=True) as mrc:
+        np.testing.assert_allclose(mrc.data, _CORRECTED_DATA[1:2])
+
+    # What reconstruction and picking read the views from.
+    assert corrected_stack.parameters["included_z_values"] == [0]
+    assert corrected_stack.parameters["excluded_z_values"] == [1, 2]
+    assert corrected_stack.parameters["ctf_excluded_z_values"] == [2]
+    angles = Path(corrected_stack.parameters["tilt_file_path"]).read_text().split()
+    assert [float(angle) for angle in angles] == pytest.approx([0.1])
+
+    report = CtfCorrectionQc.model_validate_json(qc_artifact.path.read_text())
+    assert report.status == QcStatus.WARNING
+    assert report.num_tilts == 1
+    assert report.excluded_z_values == [2]
+    assert qc_artifact.parameters["status"] == QcStatus.WARNING.value
 
 
 def test_ctffind5_estimation_rejects_view_count_mismatch(tmp_path: Path) -> None:
