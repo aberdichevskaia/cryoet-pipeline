@@ -106,6 +106,8 @@ class IterationResult:
     """The channels that kept particles, by channel."""
     started: str | None = None
     finished: str | None = None
+    summary: str | None = None
+    """What the iteration searched with and how long it took, when the run records it."""
 
 
 @dataclass(frozen=True)
@@ -559,7 +561,9 @@ def iteration_page(run: ClassificationRun, iteration: IterationResult,
     subtitle = f"{len(iteration.classes)} classes"
     if dropped:
         subtitle += " · dropped: " + ", ".join(f"channel {k}" for k in dropped)
-    if iteration.started and iteration.finished:
+    if iteration.summary:
+        subtitle += f" · {iteration.summary}"
+    elif iteration.started and iteration.finished:
         subtitle += f" · ran {iteration.started} to {iteration.finished}"
     figure = style.new_page(f"Iteration {iteration.number}", subtitle)
     total = len(run.tags)

@@ -216,8 +216,10 @@ def test_parameters_describe_the_project(project: Path) -> None:
     assert values[("References", "channel 2")].startswith(
         "average of 4 random particles at random orientations")
     assert values[("Masks", "classification")] == "the alignment mask"
-    assert values[("Search, round 1", "band")] == "Fourier pixels 2 to 4: 80 to 40 Å"
-    assert values[("Search, round 1", "shifts")] == "up to 3 3 3 px, from the box centre (modus 1)"
+    assert values[("Search", "round 1, 2 iterations")] == (
+        "band 80–40 Å (px 2–4) · cone 15°, step 5° · in-plane 15°, step 5° · refine 2×2")
+    assert values[("Search", "shifts")] == "up to 3 3 3 px, from the box centre (modus 1)"
+    assert values[("Search", "channels")] == "3, particles swap (mra 1)"
     assert values[("Execution", "iteration 1")].endswith("(30 min)")
     assert run.series[7] == "TS_B"
     assert run.scores[1] == pytest.approx(0.11)
@@ -232,7 +234,7 @@ def test_without_the_project_file_the_card_gives_round_one(project: Path) -> Non
     assert any("virtual_project.mat is missing" in problem for problem in run.problems)
     assert len(run.iterations) == 2
     values = {(p.group, p.name): p.value for p in run.parameters}
-    assert values[("Search, round 1", "cone")].startswith("15° wide")
+    assert "cone 15°" in values[("Search", "round 1")]
 
 
 def test_a_particle_at_the_identity_pose_is_itself(project: Path) -> None:
@@ -321,3 +323,48 @@ def test_decoys_are_counted_per_class(project: Path, tmp_path: Path) -> None:
     outcome = write_classification_report(tmp_path / "report.pdf", run, written="now",
                                           software="test")
     assert outcome.problems == []
+
+
+def test_a_schedule_shows_one_line_per_round_and_each_iteration_its_own(project: Path) -> None:
+    """Rounds of one iteration each, as the coarse-to-fine schedule makes them."""
+
+    scipy_io = pytest.importorskip("scipy.io")
+    vpr_path = project / "settings" / "virtual_project.mat"
+    card = scipy_io.loadmat(vpr_path, squeeze_me=True, struct_as_record=False)["card"]
+    values = {name: getattr(card, name) for name in card._fieldnames}
+    for round_, (low, step) in enumerate(((4, 7.7), (6, 6.2)), start=1):
+        values |= {f"ite_r{round_}": 1, f"nref_r{round_}": 3, f"mra_r{round_}": 1,
+                   f"low_r{round_}": low, f"high_r{round_}": 2,
+                   f"cone_range_r{round_}": round(3 * step, 1), f"cone_sampling_r{round_}": step,
+                   f"inplane_range_r{round_}": round(3 * step, 1),
+                   f"inplane_sampling_r{round_}": step, f"refine_r{round_}": 2,
+                   f"refine_factor_r{round_}": 2, f"sym_r{round_}": "c1",
+                   f"dim_r{round_}": BOX, f"area_search_r{round_}": np.array([3, 3, 3]),
+                   f"area_search_modus_r{round_}": 1, f"threshold_modus_r{round_}": 0,
+                   f"use_CC_r{round_}": 1, f"localnc_r{round_}": 1}
+    scipy_io.savemat(vpr_path, {"card": values})
+    second = project / "cards" / "ite_0002" / "card_ite_ite_0002.card"
+    second.write_text(second.read_text() + "low=6;\ncone_range=18.6;\ncone_sampling=6.2;\n")
+    write_manifest(project)
+
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    rows = {(p.group, p.name): p.value for p in run.parameters}
+    assert rows[("Search", "round 1, 1 iteration")].startswith("band 80–40 Å (px 2–4) · cone 23.1°")
+    assert rows[("Search", "round 2, 1 iteration")].startswith("band 80–27 Å (px 2–6) · cone 18.6°")
+    assert rows[("Search", "channels")] == "3, particles swap (mra 1)"
+    assert run.iterations[0].summary is None
+    assert run.iterations[1].summary == "low-pass 27 Å, cone 18.6° in 6.2° steps · 30 min"
+
+
+def test_an_iteration_counts_when_the_log_says_it_is_done(project: Path) -> None:
+    """The next iteration's list exists while the MRA plugin is still at work."""
+
+    (project / "log.txt").write_text("iteration: 1\niteration 1 ok\niteration: 2\n")
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    assert [iteration.number for iteration in run.iterations] == [1]
+    assert any("iteration 2 has not finished" in problem and "log.txt" in problem
+               for problem in run.problems)
+    (project / "log.txt").write_text("iteration 1 ok\niteration 2 ok\n")
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    assert [iteration.number for iteration in run.iterations] == [1, 2]
+    assert run.problems == []

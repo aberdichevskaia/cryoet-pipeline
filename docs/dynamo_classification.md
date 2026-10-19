@@ -33,10 +33,36 @@ unchanged.
 Channel k always averages the k-th block of 300 particles of one seeded random
 order, so a project's subsets are disjoint and channel k holds the same
 particles in every project. Every channel starts with the whole table, and
-particles swap between channels (`mra 1`). The search is the card of refine223
-and the CZII MRA arms (cone and in-plane 15/5, two refinement levels, band
-2..16, shifts within 3 px of the box centre with `limm 1`, 5 iterations), made
-for ribosomes at bin8: check it before other data.
+particles swap between channels (`mra 1`). By default the search is the card of
+refine223 and the CZII MRA arms (cone and in-plane 15/5, two refinement levels,
+band 2..16, shifts within 3 px of the box centre with `limm 1`, 5 iterations),
+made for ribosomes at bin8: check it before other data.
+
+`SCHEDULE=coarse_to_fine` searches coarse to fine instead, in five Dynamo rounds
+of one iteration each. The low-pass moves in equal steps of Fourier pixels from
+`FIRST_LOWPASS` (40 Å) to `LAST_LOWPASS` (22 Å), and the angular step follows it
+as atan(resolution / diameter), `DIAMETER` being the particle's (290 Å, the
+80S). The schedule stops short of Nyquist (19.6 Å here): with no independent
+halves, the last frequencies are where a search fits noise most easily. The
+cone and the in-plane range stay three steps wide (Dynamo's `cone_range` is the
+cone's full opening), as in the default card, so every iteration costs about the
+same. At 9.784 Å/px in a 48 px box:
+
+| round | low-pass | step | cone and in-plane |
+|---|---|---|---|
+| 1 | 12 px, 39 Å | 7.7° | 23.1° |
+| 2 | 14 px, 34 Å | 6.6° | 19.8° |
+| 3 | 17 px, 28 Å | 5.4° | 16.2° |
+| 4 | 19 px, 25 Å | 4.9° | 14.7° |
+| 5 | 21 px, 22 Å | 4.4° | 13.2° |
+
+Every round is given every search parameter, `nref` and `mra` included: a
+parameter put without a round goes to round 1 only, and later rounds would fall
+back to Dynamo's defaults, one reference and no swapping.
+
+```bash
+EXPORT=<export folder> NAME=mra_nbb_ctf SEEDS="blob blob noise" SCHEDULE=coarse_to_fine sbatch --export=ALL --job-name=mra_nbb_ctf scripts/dynamo_mra_mdc.sbatch
+```
 
 Two things measured on the Mac (Dynamo 1.1.511, 2026-10-16) bear on the design:
 
@@ -46,11 +72,15 @@ Two things measured on the Mac (Dynamo 1.1.511, 2026-10-16) bear on the design:
   replaced by noise; a `blob` kept one. pytom chose every pick and pose by its
   match to the template, and `subset` seeds are averages at those very poses, so
   any pick, false or not, matches them better than a seed without structure.
-- **Two projects whose parallel pools start together can fail to open them:**
-  the MATLAB Runtime keeps every pool's job files in one folder under the home
-  directory. Submit the jobs about a quarter of an hour apart
-  (`--begin=now+15minutes`, `now+30minutes`, ...). A job whose pool does not open
-  stops with a message and computes nothing.
+- **Two projects whose parallel pools start together can fail to open them,
+  and can break every pool after them:** the MATLAB Runtime keeps every pool's
+  job files in one folder under the home directory. Two pools started together
+  on the Mac wrote one job's type twice (`concurrentconcurrent` in its
+  `Job<N>.metadata.txt`), and from then on every pool failed with
+  "Unknown type" until that job's files were moved aside. Start each job a
+  quarter of an hour after the previous one starts
+  (`--dependency=after:<job>+15`). A job whose pool does not open stops with a
+  message, computes nothing, and lists any pool job record MATLAB cannot read.
 
 Each particle and channel costs about 4 core-seconds on the Mac, so a
 three-channel iteration of 2,703 particles is about 9 core-hours. A Munich
@@ -107,6 +137,8 @@ The pages:
 What the reader relies on, read from real projects: a particle's class is
 column 34 of the refined table of a channel that the next iteration still lists
 (a dropped channel's table is never rewritten and still claims every particle),
-and an iteration is finished once the next iteration's list of channels exists.
+and an iteration is finished once the project's log.txt says `iteration N ok`.
+The next iteration's list of channels is not enough: Dynamo writes it while the
+MRA plugin is still rewriting tables and averages, with every channel in it.
 The code is `src/cryoet_pipeline/reports/dynamo_project.py` (reading) and
 `src/cryoet_pipeline/reports/classification.py` (pages).

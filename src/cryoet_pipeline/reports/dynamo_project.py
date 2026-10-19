@@ -17,10 +17,11 @@ particles: column 34 is each particle's class, column 3 marks the class's own
 members. A channel left with no particle is dropped for good. Its table is not
 rewritten and still claims every particle (column 34 its own number, column 3
 all ones), and the next iteration's list of channels leaves it out. So classes
-are read from a channel the next iteration still lists, and an iteration counts
-as finished once that list exists: Dynamo writes it at the end of every
-iteration, the last one included. A project still running is read up to its
-last finished iteration.
+are read from a channel the next iteration still lists. An iteration counts as
+finished once the project's log.txt says `iteration N ok`, which Dynamo prints
+after the MRA plugin; the next iteration's list is written before that and holds
+every channel until the plugin settles it. A project still running is read up to
+its last finished iteration.
 
 The parameters of every round are in `settings/virtual_project.mat`; without
 scipy the first iteration's card stands in for round 1. Paths in them are
@@ -31,7 +32,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -258,6 +261,11 @@ def read_dynamo_classification(
               or 0)
     if not box and references:
         box = next(iter(references.values())).load().shape[0]
+    iterations = [
+        replace(iteration, summary=_iteration_summary(_iteration_card(project, iteration.number),
+                                                      box, spacing))
+        for iteration in iterations
+    ]
 
     rows: dict[Pose, dict[int, np.ndarray]] = {}
 
@@ -324,6 +332,7 @@ def _iterations(
     results = project / "results"
     iterations: list[IterationResult] = []
     refined: dict[tuple[int, int], np.ndarray] = {}
+    finished = _finished_iterations(project)
     number = 1
     while True:
         here = results / f"ite_{number:04d}"
@@ -333,6 +342,11 @@ def _iterations(
         following = results / f"ite_{number + 1:04d}"
         kept = _channel_list(following / f"currently_surviving_references_ite_{number + 1:04d}.txt")
         averages = here / "averages"
+        if finished is not None and number not in finished:
+            if averages.exists():
+                problems.append(f"iteration {number} has not finished (the project's log.txt has "
+                                "no 'iteration ok' for it yet); the report stops before it")
+            break
         if kept is None:
             if averages.exists():
                 problems.append(f"iteration {number} has not finished (iteration {number + 1} "
@@ -375,8 +389,7 @@ def _iterations(
         if unclaimed:
             problems.append(f"iteration {number}: {unclaimed} particles of the starting table are "
                             "in no class")
-        card_path = project / "cards" / f"ite_{number:04d}" / f"card_ite_ite_{number:04d}.card"
-        card = read_card(card_path) if card_path.exists() else {}
+        card = _iteration_card(project, number)
         iterations.append(IterationResult(
             number,
             tuple(searched),
@@ -388,6 +401,27 @@ def _iterations(
             refined[(number, channel)] = table
         number += 1
     return iterations, refined
+
+
+def _finished_iterations(project: Path) -> set[int] | None:
+    """The iterations the project's log.txt says are done, or None without a log.
+
+    Dynamo prints `iteration N ok` after the MRA plugin has rewritten the tables
+    and averages and settled the next iteration's channels. The next iteration's
+    list of channels alone is not enough: it is written earlier, while the plugin
+    still works, and holds every channel until then.
+    """
+
+    log = project / "log.txt"
+    if not log.exists():
+        return None
+    return {int(found) for found in re.findall(r"^iteration (\d+) ok", log.read_text(),
+                                                 flags=re.MULTILINE)}
+
+
+def _iteration_card(project: Path, number: int) -> dict[str, str]:
+    path = project / "cards" / f"ite_{number:04d}" / f"card_ite_ite_{number:04d}.card"
+    return read_card(path) if path.exists() else {}
 
 
 def _mra_members(tables: Mapping[int, np.ndarray], kept: list[int], number: int,
@@ -634,37 +668,32 @@ def _parameters(
         add("Masks", label, f"{_text(file_name)}: its voxels above 0.5 hold a sphere of radius "
             f"{radius:.1f} px{nm(radius)}")
 
-    for round_ in ROUNDS:
+    rounds = [r for r in ROUNDS if _as_float(setting("ite", r))] if vpr else [1]
+    for round_ in rounds:
         count = _as_float(setting("ite", round_))
-        if vpr and not count:
-            continue
-        if not vpr and round_ > 1:
-            break
-        group = f"Search, round {round_}"
+        name = f"round {round_}"
         if count:
-            add(group, "iterations", _text(count))
-        add(group, "cone", f"{_text(setting('cone_range', round_))}° wide, "
-            f"{_text(setting('cone_sampling', round_))}° steps")
-        add(group, "in-plane", f"{_text(setting('inplane_range', round_))}° wide, "
-            f"{_text(setting('inplane_sampling', round_))}° steps")
-        add(group, "refinement", f"{_text(setting('refine', round_))} levels, factor "
-            f"{_text(setting('refine_factor', round_))}")
-        high, low = _as_float(setting("high", round_)), _as_float(setting("low", round_))
-        band = f"Fourier pixels {_text(setting('high', round_))} to {_text(setting('low', round_))}"
-        if spacing and box and high and low:
-            band += f": {box * spacing / high:.0f} to {box * spacing / low:.0f} Å"
-        add(group, "band", band)
-        modus = _as_float(setting("area_search_modus", round_))
-        mode = AREA_SEARCH_MODES.get(int(modus), "?") if modus is not None else "?"
-        add(group, "shifts", f"up to {_text(setting('area_search', round_))} px, {mode} "
-            f"(modus {_text(setting('area_search_modus', round_))})")
-        add(group, "symmetry, search size",
-            f"{_text(setting('sym', round_))}, {_text(setting('dim', round_))} px")
-        threshold = _as_float(setting("threshold_modus", round_))
-        add(group, "thresholding",
-            THRESHOLD_MODES.get(int(threshold), "?") if threshold is not None else "?")
-        add(group, "CC", f"use_CC {_text(setting('use_CC', round_))}, localnc "
-            f"{_text(setting('localnc', round_))}")
+            name += f", {_text(count)} iteration" + ("" if count == 1 else "s")
+        add("Search", name, _round_search(setting, round_, box, spacing))
+    # The rest once when every round agrees, round by round when not.
+    common: list[tuple[str, Callable[[int], str]]] = [
+        ("channels", lambda r: f"{_text(setting('nref', r))}, "
+         + ("particles swap (mra 1)" if _as_float(setting("mra", r)) else "no swapping")),
+        ("shifts", lambda r: f"up to {_text(setting('area_search', r))} px, "
+         + _area_mode(setting("area_search_modus", r))),
+        ("symmetry, search size", lambda r: f"{_text(setting('sym', r))}, "
+         f"{_text(setting('dim', r))} px"),
+        ("thresholding", lambda r: _threshold_mode(setting("threshold_modus", r))),
+        ("CC", lambda r: f"use_CC {_text(setting('use_CC', r))}, "
+         f"localnc {_text(setting('localnc', r))}"),
+    ]
+    for label, describe in common:
+        values = [describe(r) for r in rounds]
+        if len(set(values)) == 1:
+            add("Search", label, values[0])
+        else:
+            add("Search", label, "; ".join(f"round {r}: {value}"
+                                           for r, value in zip(rounds, values, strict=True)))
 
     add("Execution", "destination, cores",
         f"{_text(vpr.get('destination') or card.get('destination'))}, "
@@ -672,6 +701,51 @@ def _parameters(
     for iteration in iterations:
         add("Execution", f"iteration {iteration.number}", _duration(iteration))
     return rows
+
+
+def _round_search(setting: Callable[..., Any], round_: int, box: int,
+                  spacing: float | None) -> str:
+    """One round's search on one line: band, cone, in-plane, refinement."""
+
+    high, low = _as_float(setting("high", round_)), _as_float(setting("low", round_))
+    pixels = f"px {_text(setting('high', round_))}–{_text(setting('low', round_))}"
+    band = (f"band {box * spacing / high:.0f}–{box * spacing / low:.0f} Å ({pixels})"
+            if spacing and box and high and low else f"band {pixels}")
+    return (f"{band} · cone {_text(setting('cone_range', round_))}°, step "
+            f"{_text(setting('cone_sampling', round_))}° · in-plane "
+            f"{_text(setting('inplane_range', round_))}°, step "
+            f"{_text(setting('inplane_sampling', round_))}° · refine "
+            f"{_text(setting('refine', round_))}×{_text(setting('refine_factor', round_))}")
+
+
+def _area_mode(value: Any) -> str:
+    modus = _as_float(value)
+    if modus is None:
+        return "modus ?"
+    return f"{AREA_SEARCH_MODES.get(int(modus), '?')} (modus {int(modus)})"
+
+
+def _threshold_mode(value: Any) -> str:
+    modus = _as_float(value)
+    return THRESHOLD_MODES.get(int(modus), "?") if modus is not None else "?"
+
+
+def _iteration_summary(card: Mapping[str, str], box: int, spacing: float | None) -> str | None:
+    """What an iteration searched with, from its own card, and how long it took."""
+
+    low = _as_float(card.get("low"))
+    if low is None:
+        return None
+    band = (f"low-pass {box * spacing / low:.0f} Å" if spacing and box
+            else f"low-pass px {_text(card.get('low'))}")
+    summary = (f"{band}, cone {_text(card.get('cone_range'))}° in "
+               f"{_text(card.get('cone_sampling'))}° steps")
+    try:
+        start = datetime.strptime(card.get("time_start_computation", ""), DYNAMO_TIME)
+        end = datetime.strptime(card.get("time_end_iteration", ""), DYNAMO_TIME)
+    except ValueError:
+        return summary
+    return summary + f" · {(end - start).total_seconds() / 60:.0f} min"
 
 
 def _duration(iteration: IterationResult) -> str:
