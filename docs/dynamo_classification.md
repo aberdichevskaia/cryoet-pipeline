@@ -20,7 +20,10 @@ project with `scripts/dynamo_mra_setup.m` if `EXPORT` does not hold it yet,
 computes it on the job's cores (32 by default; the project is made for exactly
 that many), and writes the report beside it. A project that exists is computed
 on from where Dynamo stopped, so a job that ran out of time is submitted again
-unchanged.
+unchanged. After every iteration the job log says how long it took by Dynamo's
+own clock (`>>> iteration 3 (round 3) took 25 min 03 s`), and at the end it
+lists them all with their sum; they are also kept in
+`<NAME>_iteration_times_<job>.txt` beside the project.
 
 `SEEDS` gives one starting reference per channel:
 

@@ -92,8 +92,44 @@ if [[ "$made_for" != "$CORES" ]]; then
 fi
 
 log=${NAME}_run_${SLURM_JOB_ID:-$$}.log
-dynamo_execute_project "$NAME" 2>&1 | tee "$log"
+times=${NAME}_iteration_times_${SLURM_JOB_ID:-$$}.txt
+: > "$times"
+
+# Dynamo's output passed on unchanged, plus a line for every iteration it
+# finishes saying how long that took by Dynamo's own clock, from "Starting
+# iteration" to "Iteration finished" (the MRA plugin's few seconds after it are
+# left out). Its stamps rather than when the lines arrive, so buffering in the
+# pipe cannot skew them. Clock times only: an iteration past midnight is counted
+# right, one longer than a day would not be.
+iteration_times() {
+    local line round="?" start="" end="" seconds
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        if [[ $line =~ ^Iteration\ [0-9]+\ corresponding\ to\ round\ ([0-9]+) ]]; then
+            round=${BASH_REMATCH[1]}
+        elif [[ $line =~ ^Starting\ iteration\ at\ .*\ ([0-9]{2}):([0-9]{2}):([0-9]{2}) ]]; then
+            start=$((10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60 \
+                     + 10#${BASH_REMATCH[3]}))
+        elif [[ $line =~ ^Iteration\ finished\ at\ .*\ ([0-9]{2}):([0-9]{2}):([0-9]{2}) ]]; then
+            end=$((10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60 + 10#${BASH_REMATCH[3]}))
+        elif [[ $line =~ ^iteration\ ([0-9]+)\ ok ]] && [[ -n $start && -n $end ]]; then
+            seconds=$(( (end - start + 86400) % 86400 ))
+            printf '>>> iteration %s (round %s) took %d min %02d s\n' "${BASH_REMATCH[1]}" \
+                "$round" $((seconds / 60)) $((seconds % 60)) | tee -a "$times"
+            start=""
+            end=""
+        fi
+    done
+}
+
+dynamo_execute_project "$NAME" 2>&1 | iteration_times | tee "$log"
 echo "finished    $(date -Is)"
+if [[ -s "$times" ]]; then
+    echo "iteration times, by Dynamo's clock:"
+    cat "$times"
+    awk '{ total += $(NF - 3) * 60 + $(NF - 1) }
+         END { printf "together %d h %02d min\n", total / 3600, total % 3600 / 60 }' "$times"
+fi
 if grep -q "Cannot parallelize the project" "$log"; then
     echo "Dynamo could not open its parallel pool and computed nothing; submit again later" >&2
     # Two pools started together can leave a pool job record that blocks every pool
