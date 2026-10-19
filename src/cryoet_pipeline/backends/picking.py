@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -172,21 +173,70 @@ class PytomMatchPickBackend:
 
             keep_volumes = _bool_parameter(context, "pytom_keep_score_volume", default=False)
             job_json = _find_output_file(destination_dir, suffix="_job.json")
+            runs: list[tuple[Sequence[str], subprocess.CompletedProcess[str]]] = [
+                (match_command, match_result)
+            ]
+            requested = _optional_positive_int_parameter(context, "pytom_number_of_particles")
+            recommended: int | None = None
+            if requested is None:
+                # No count given: take twice what pytom recommends, the peaks above
+                # its own false-positive cut-off, so that classification has the
+                # doubtful half to sort as well as the sure one.
+                recommend_command = _extract_candidates_command(
+                    extract_candidates_executable,
+                    context,
+                    job_json_path=job_json,
+                    tomogram_mask_path=temporary_mask,
+                    number_of_particles=_RECOMMENDATION_CAP,
+                    cut_off=None,
+                )
+                recommend_result = self._command_runner(
+                    recommend_command,
+                    cwd=temporary_root,
+                    env=os.environ.copy(),
+                )
+                runs.append((recommend_command, recommend_result))
+                if recommend_result.returncode != 0:
+                    write_command_log(paths.log, *runs)
+                    detail = (
+                        recommend_result.stderr or recommend_result.stdout or "no process output"
+                    ).strip()
+                    raise RuntimeError(
+                        f"pytom_extract_candidates.py failed with exit code "
+                        f"{recommend_result.returncode}: {detail}; see {paths.log}"
+                    )
+                recommended = _read_star_statistics(
+                    _find_output_file(temporary_root, suffix="_particles.star")
+                ).particle_count
+                if recommended == 0:
+                    write_command_log(paths.log, *runs)
+                    raise RuntimeError(
+                        "pytom found no peak above its false-positive cut-off, so there is "
+                        "no count to double; pass --pytom-number-of-particles to take a "
+                        "fixed number of the best peaks"
+                    )
+                number_of_particles = 2 * recommended
+                cut_off: float | None = (
+                    _optional_non_negative_float_parameter(context, "pytom_cut_off") or 0.0
+                )
+            else:
+                number_of_particles = requested
+                cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off")
             extract_command = _extract_candidates_command(
                 extract_candidates_executable,
                 context,
                 job_json_path=job_json,
                 tomogram_mask_path=temporary_mask,
+                number_of_particles=number_of_particles,
+                cut_off=cut_off,
             )
             extract_result = self._command_runner(
                 extract_command,
                 cwd=temporary_root,
                 env=os.environ.copy(),
             )
-            write_command_log(
-                paths.log,
-                *[(match_command, match_result), (extract_command, extract_result)],
-            )
+            runs.append((extract_command, extract_result))
+            write_command_log(paths.log, *runs)
             if extract_result.returncode != 0:
                 detail = (
                     extract_result.stderr or extract_result.stdout or "no process output"
@@ -230,6 +280,8 @@ class PytomMatchPickBackend:
                 one_false_positive_sigma=significance.one_false_positive_sigma,
                 picks_above_one_false_positive=significance.picks_above_floor,
                 excess_over_noise_at_cut_off=significance.excess_at_cut_off,
+                requested_particle_count=number_of_particles,
+                recommended_particle_count=recommended,
                 status=QcStatus.WARNING if warnings else QcStatus.PASS,
                 warnings=warnings,
             )
@@ -300,6 +352,10 @@ class PytomMatchPickBackend:
                 "input_tomogram_id": tomogram.id,
                 "segmentation_id": segmentation.id if segmentation is not None else None,
                 "picking_method": "template_matching",
+                # How many peaks extraction was asked for, and, when the count was
+                # left to the rule, what pytom recommended: twice that was asked.
+                "pytom_number_of_particles": number_of_particles,
+                "pytom_recommended_particles": recommended,
                 "pytom_template_path": str(template),
                 "tomogram_mask_coverage": mask_coverage,
                 # Recorded because its absence is otherwise invisible: a match
@@ -773,22 +829,30 @@ def _match_template_command(
     return command
 
 
+_RECOMMENDATION_CAP = 1_000_000
+"""The -n of the pass that asks pytom what it recommends. pytom stops at its own
+cut-off, so this only has to exceed any count a tomogram can hold above it."""
+
+
 def _extract_candidates_command(
     executable: Path,
     context: BackendContext,
     *,
     job_json_path: Path,
     tomogram_mask_path: Path | None,
+    number_of_particles: int,
+    cut_off: float | None,
 ) -> list[str]:
+    """pytom's extraction: `cut_off` as given, or its false-positive estimate when None."""
+
     _validate_extraction_options(context)
     command = [
         str(executable),
         "-j",
         str(job_json_path),
         "-n",
-        str(_required_positive_int_parameter(context, "pytom_number_of_particles")),
+        str(number_of_particles),
     ]
-    cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off")
     if cut_off is not None:
         command.extend(["-c", f"{cut_off:.6f}"])
     else:
@@ -1532,7 +1596,9 @@ def _extraction_particle_diameter(context: BackendContext) -> float | None:
 def _validate_extraction_options(context: BackendContext) -> None:
     """Fail before the GPU match on anything extraction will refuse afterwards."""
 
-    _required_positive_int_parameter(context, "pytom_number_of_particles")
+    # Optional: without it, twice what pytom recommends.
+    _optional_positive_int_parameter(context, "pytom_number_of_particles")
+    _optional_non_negative_float_parameter(context, "pytom_cut_off")
     if (
         _optional_positive_float_parameter(context, "pytom_number_of_false_positives")
         is not None

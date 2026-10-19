@@ -145,10 +145,12 @@ from cryoet_pipeline.pick_geometry import (
     summary_lines,
 )
 from cryoet_pipeline.pick_selection import (
+    RecommendedMultiple,
     ScoreThreshold,
     default_thresholds_path,
     false_positive_height_sigma,
     measure_score_selection,
+    recommended_multiple_threshold,
     score_hints,
     select_picks_by_score,
     selection_paths,
@@ -2583,13 +2585,16 @@ def pick_particles(
         typer.Option(min=0.0, help="Angular search in degrees (mutually exclusive with diameter)."),
     ] = None,
     pytom_number_of_particles: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=1,
-            help="Cap on how many candidates extraction returns. Required by "
-            "pytom. For a lattice this is a sampling density, not a particle count.",
+            help="Cap on how many candidates extraction returns. Not given: twice what "
+            "pytom recommends, the peaks above its own false-positive cut-off "
+            "(--pytom-number-of-false-positives, 1 if not given), taken without a floor "
+            "unless --pytom-cut-off sets one. For a lattice this is a sampling density, "
+            "not a particle count.",
         ),
-    ] = 1000,
+    ] = None,
     pytom_extract_particle_diameter: Annotated[
         float | None,
         typer.Option(
@@ -2812,7 +2817,8 @@ def pick_particles(
             parameters["pytom_ctf_defocus_z_values"] = weighting.z_values
     if segmentation_mask_dilation_px is not None:
         parameters["pytom_segmentation_dilation_px"] = segmentation_mask_dilation_px
-    parameters["pytom_number_of_particles"] = pytom_number_of_particles
+    if pytom_number_of_particles is not None:
+        parameters["pytom_number_of_particles"] = pytom_number_of_particles
     parameters["pytom_per_tilt_weighting"] = pytom_per_tilt_weighting
     parameters["pytom_spectral_whitening"] = pytom_spectral_whitening
     if pytom_extract_particle_diameter is not None:
@@ -3085,6 +3091,16 @@ def select_picks(
             "once. Each series' height comes from its own search.",
         ),
     ] = False,
+    recommended_multiple: Annotated[
+        float | None,
+        typer.Option(
+            min=1.0,
+            help="Keep each series' best picks, this many times as many as lie above its "
+            "own one-false-positive height (the count pytom recommends, the report's "
+            "blue): 2 keeps twice as many, below the height too. A pick list whose "
+            "extraction stopped before that many is refused.",
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -3111,12 +3127,14 @@ def select_picks(
         "thresholds-sigma": thresholds_sigma,
         "thresholds-score": thresholds_score,
         "above-false-positive-height": above_false_positive_height or None,
+        "recommended-multiple": recommended_multiple,
     }
     chosen = [name for name, value in given.items() if value is not None]
     if len(chosen) > 1:
         raise typer.BadParameter(
             "give at most one of --minimum-sigma, --minimum-score, --thresholds-sigma, "
-            "--thresholds-score and --above-false-positive-height; got "
+            "--thresholds-score, --above-false-positive-height and --recommended-multiple; "
+            "got "
             f"{', '.join('--' + name for name in chosen)}",
             param_hint="minimum-sigma",
         )
@@ -3163,11 +3181,21 @@ def select_picks(
             )
             raise typer.Exit(code=1)
         thresholds_sigma = template
+    counted: dict[str, RecommendedMultiple] = {}
     try:
         if thresholds_sigma is not None:
             thresholds = thresholds_from_json(thresholds_sigma, "sigma", names)
         elif thresholds_score is not None:
             thresholds = thresholds_from_json(thresholds_score, "score", names)
+        elif recommended_multiple is not None:
+            counted = {
+                one.tilt_series_id: recommended_multiple_threshold(
+                    _picks_artifact(artifact_registry, one, variant=variant),
+                    recommended_multiple,
+                )
+                for one in manifests
+            }
+            thresholds = {series: one.threshold for series, one in counted.items()}
         elif above_false_positive_height:
             thresholds = {
                 one.tilt_series_id: ScoreThreshold(
@@ -3246,6 +3274,13 @@ def select_picks(
                 else (f" ({sigma:.2f}σ)" if isinstance(sigma, float) else "")
             )
         )
+        series_count = counted.get(tilt_series_manifest.tilt_series_id)
+        if series_count is not None:
+            typer.echo(
+                f"  the best {series_count.wanted}: {recommended_multiple:g} x the "
+                f"{series_count.above_height} above the one-false-positive height "
+                f"({series_count.height_sigma:.2f}σ)"
+            )
         for warning in cast(list[str], summary["warnings"]):
             typer.echo(f"  warning: {warning}")
         results.append(result)

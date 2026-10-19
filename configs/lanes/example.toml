@@ -221,8 +221,14 @@ low_pass_angstrom = 20.0              # EDIT: about 2 x the tomogram pixel size
 [pick]
 particle_diameter_angstrom = 250.0    # EDIT: your particle at its widest; sets the angular
                                       # sampling and the template's mask and box
-number_of_particles = 2000            # candidates kept per tomogram, before your review
-number_of_false_positives = 100.0
+# How many candidates to keep per tomogram. Left out: twice what pytom
+# recommends, i.e. twice the peaks above its own false-positive cut-off, so the
+# doubtful ones are there for classification as well as the sure ones. The
+# cut-off expects 1 false positive in the whole search unless
+# number_of_false_positives says otherwise. Set a number to keep exactly that
+# many of the best instead.
+# number_of_particles = 2000
+# number_of_false_positives = 1.0
 low_pass_angstrom = 30.0              # EDIT: a little above the tomogram's Nyquist
                                       # (2 x pixel), ~1.3x: Nyquist 19.6 A -> 25 A
 random_phase_correction = true

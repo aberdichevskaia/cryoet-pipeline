@@ -169,6 +169,61 @@ def false_positive_height_sigma(picks: Artifact) -> float:
     return statistics.one_false_positive_z
 
 
+@dataclass(frozen=True)
+class RecommendedMultiple:
+    """A count-based selection: the best `wanted`, a multiple of those above the height."""
+
+    threshold: ScoreThreshold
+    """The score of the last pick kept, as a raw LCCmax."""
+    above_height: int
+    """Picks above the one-false-positive height: pytom's recommendation."""
+    wanted: int
+    height_sigma: float
+
+
+def recommended_multiple_threshold(picks: Artifact, multiple: float) -> RecommendedMultiple:
+    """The score that keeps `multiple` times as many picks as lie above the height.
+
+    The count above the one-false-positive height is what the report shows in
+    blue and what pytom recommends at its default of one false positive. The best
+    `multiple` times that many are kept, below the height too, so that the
+    doubtful ones are there for classification as well as the sure ones. A pick
+    list holds them only if its extraction went that far down: one cut off sooner
+    is refused, since its best picks past the cut-off were never extracted.
+    """
+
+    if not math.isfinite(multiple) or multiple < 1.0:
+        raise ValueError(f"the multiple must be at least 1, got {multiple:g}")
+    height = false_positive_height_sigma(picks)
+    job_json = picks.parameters.get("pytom_job_json_path")
+    statistics = _search_statistics(Path(str(job_json)))
+    assert statistics is not None  # false_positive_height_sigma has read it
+    columns, rows = read_star_loop(picks.path)
+    if "rlnLCCmax" not in columns:
+        raise ValueError(f"{picks.path} has no rlnLCCmax column to select on")
+    position = columns.index("rlnLCCmax")
+    scores = sorted((float(row[position]) for row in rows), reverse=True)
+    # Strictly above, as the report counts it.
+    above = sum(1 for score in scores if score / statistics.sigma > height)
+    if above == 0:
+        raise ValueError(
+            f"{picks.id}: no pick lies above its one-false-positive height ({height:.2f}σ), "
+            "so there is nothing to take a multiple of"
+        )
+    wanted = math.ceil(multiple * above - 1e-9)
+    if wanted > len(scores):
+        raise ValueError(
+            f"{picks.id}: {multiple:g} x the {above} picks above {height:.2f}σ is {wanted}, "
+            f"but the list holds {len(scores)}: its extraction stopped at its own cut-off. "
+            "Pick again with a larger --pytom-number-of-particles and no floor, or with "
+            "none, which takes twice pytom's recommendation"
+        )
+    threshold = ScoreThreshold(
+        scores[wanted - 1], "score", f"--recommended-multiple {multiple:g}"
+    )
+    return RecommendedMultiple(threshold, above, wanted, height)
+
+
 def write_thresholds_template(
     path: Path, hints: dict[str, dict[str, float | int | None]]
 ) -> list[str]:

@@ -195,7 +195,7 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     ctf = _require(cfg, "ctf", ("voltage_kv", "spherical_aberration_mm"), "every lane")
     tmpl = _require(cfg, "template", ("low_pass_angstrom",), "every lane")
     pick = _require(
-        cfg, "pick", ("particle_diameter_angstrom", "number_of_particles", "gpu_ids"),
+        cfg, "pick", ("particle_diameter_angstrom", "gpu_ids"),
         "every lane",
     )
     extract = _require(cfg, "extract", ("box_size_px",), "every lane")
@@ -443,7 +443,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-extract-particle-diameter",
                    pick.get("extract_particle_diameter_angstrom")),
              *flag("pytom-z-axis-symmetry", pick.get("z_axis_symmetry")),
-             *flag("pytom-number-of-particles", pick["number_of_particles"]),
+             # Left out: twice what pytom recommends (pick-particles' default).
+             *flag("pytom-number-of-particles", pick.get("number_of_particles")),
              *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
              # 0 keeps the best number_of_particles peaks with no score floor.
              *flag("pytom-cut-off", pick.get("cut_off")),

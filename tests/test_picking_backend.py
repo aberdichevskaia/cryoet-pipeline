@@ -12,6 +12,7 @@ import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.picking import (
+    _validate_extraction_options,
     PytomMatchPickBackend,
     _dilate,
     _extract_candidates_command,
@@ -711,9 +712,7 @@ def test_pytom_match_pick_checks_extraction_options_before_the_gpu_run(
             ),
         )
 
-    with pytest.raises(TypeError, match="pytom_number_of_particles"):
-        run({})
-
+    # No count is no longer an error: it asks for twice what pytom recommends.
     for cut_off in (0.5, 0.0):
         # Zero means "the best N, no floor", and it conflicts with a
         # false-positive budget just as any other cut-off does.
@@ -1103,6 +1102,8 @@ def test_a_zero_cut_off_means_no_threshold_rather_than_an_error() -> None:
         context,
         job_json_path=Path("/x/j.json"),
         tomogram_mask_path=None,
+        number_of_particles=800,
+        cut_off=0.0,
     )
 
     assert "-c" in command
@@ -1129,12 +1130,7 @@ def test_a_negative_cut_off_is_still_refused() -> None:
     )
 
     with pytest.raises(ValueError, match="must be finite and not negative"):
-        _extract_candidates_command(
-            Path("/x/extract.py"),
-            context,
-            job_json_path=Path("/x/j.json"),
-            tomogram_mask_path=None,
-        )
+        _validate_extraction_options(context)
 
 
 def test_a_pick_table_with_no_rows_is_zero_picks_not_its_header(tmp_path: Path) -> None:
@@ -1388,3 +1384,93 @@ def test_defocus_for_pytom_follows_the_views_the_tomogram_kept(tmp_path: Path) -
             expected_views=2,
             included_z_values=[0, 1],
         )
+
+
+def _pick_twice_recommended(root: Path, recommended: int) -> tuple[Artifact, list[list[str]]]:
+    """A run with no count given, on a pytom whose cut-off keeps `recommended` peaks."""
+
+    root.mkdir()
+    tomogram = _tomogram_artifact(root)
+    registry = ArtifactRegistry.empty()
+    registry.add(tomogram)
+    executable = root / "pytom.py"
+    executable.touch()
+    template = root / "template.mrc"
+    template.touch()
+    template_mask = root / "template_mask.mrc"
+    template_mask.touch()
+    commands: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        if "-j" in command:
+            # pytom stops at its own cut-off, or at -n under a cut-off given.
+            count = (
+                recommended
+                if "--number-of-false-positives" in command
+                else int(command[command.index("-n") + 1])
+            )
+            job_json = Path(command[command.index("-j") + 1])
+            (job_json.parent / "TS_TEST_particles.star").write_text(
+                "data_\n\nloop_\n_rlnCoordinateZ #1\n_rlnLCCmax #2\n"
+                + "".join(f"{1 + i}.000000 {0.5 - 0.01 * i:.6f}\n" for i in range(count))
+            )
+        else:
+            destination = Path(command[command.index("-d") + 1])
+            (destination / "TS_TEST_job.json").write_text("{}")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    _, picks, _ = pick_and_register(
+        PytomMatchPickBackend(fake_runner),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=root / "outputs",
+            device=DevicePreference.CUDA,
+            parameters={
+                "pytom_match_template_executable": executable,
+                "pytom_extract_candidates_executable": executable,
+                "pytom_template": template,
+                "pytom_template_mask": template_mask,
+                "pytom_gpu_ids": "0",
+                "pytom_particle_diameter": 100.0,
+            },
+        ),
+        registry,
+    )
+    return picks, commands
+
+
+def test_with_no_count_given_picking_takes_twice_what_pytom_recommends(tmp_path: Path) -> None:
+    """The rule from Anna's supervisor (2026-10-19): twice the peaks pytom calls real.
+
+    pytom's recommendation is what its own false-positive cut-off keeps; the
+    second pass takes twice that many of the best peaks with no floor, so the
+    doubtful half is there for classification to sort.
+    """
+
+    picks, commands = _pick_twice_recommended(tmp_path / "run", recommended=3)
+
+    _, recommend, extract = commands
+    assert recommend[recommend.index("--number-of-false-positives") + 1] == "1.000000"
+    assert recommend[recommend.index("-n") + 1] == "1000000"
+    assert extract[extract.index("-n") + 1] == "6"
+    assert extract[extract.index("-c") + 1] == "0.000000"
+    assert "--number-of-false-positives" not in extract
+
+    assert picks.shape == (6,)
+    assert picks.parameters["pytom_recommended_particles"] == 3
+    assert picks.parameters["pytom_number_of_particles"] == 6
+    report = json.loads(Path(picks.parameters["qc_path"]).read_text())
+    assert report["recommended_particle_count"] == 3
+    assert report["requested_particle_count"] == 6
+
+
+def test_twice_nothing_is_refused_rather_than_an_empty_pick_list(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="--pytom-number-of-particles"):
+        _pick_twice_recommended(tmp_path / "run", recommended=0)

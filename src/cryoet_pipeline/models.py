@@ -765,6 +765,11 @@ class PicksQc(BaseModel):
     """
     picks_above_one_false_positive: int | None = Field(default=None, ge=0)
     """How many picks clear that floor. One or two is what noise alone gives."""
+    requested_particle_count: int | None = Field(default=None, ge=1)
+    """How many peaks extraction was asked for."""
+    recommended_particle_count: int | None = Field(default=None, ge=0)
+    """What pytom recommended, the peaks above its own false-positive cut-off, when
+    no count was given and twice this was asked for; None when one was given."""
     excess_over_noise_at_cut_off: float | None = None
     """Observed picks minus what the noise alone predicts, at the cut-off.
 

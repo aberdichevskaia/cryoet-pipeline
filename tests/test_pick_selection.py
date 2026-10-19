@@ -356,3 +356,47 @@ def test_the_false_positive_height_needs_the_searchs_statistics(tmp_path):
     result = _invoke(tmp_path, registry_path, manifests, "--above-false-positive-height")
     assert result.exit_code != 0
     assert "one-false-positive height is unknown" in " ".join(result.output.split())
+
+
+def _rewrite_scores(tmp_path: Path, series: str, scores: list[float]) -> None:
+    star = tmp_path / "picks" / series / f"{series}_full_pytom-match-pick_bin8_particles.star"
+    rows = "".join(f"{10 + i} {20 + i} {30 + i} {score:.4f}\n" for i, score in enumerate(scores))
+    star.write_text(
+        "data_particles\n\nloop_\n_rlnCoordinateX #1\n_rlnCoordinateY #2\n"
+        "_rlnCoordinateZ #3\n_rlnLCCmax #4\n" + rows
+    )
+
+
+def test_twice_the_count_above_the_height_keeps_the_best_that_many(tmp_path):
+    """The report's blue doubled: the sure picks and as many doubtful ones.
+
+    The height is ~6.0σ, LCCmax ~0.12 at σ 0.02: TS_A has 3 above it and keeps
+    its best 6, TS_B has 2 and keeps 4, below the height too.
+    """
+
+    registry_path, manifests = _project(tmp_path)
+    _rewrite_scores(tmp_path, "TS_A", [0.20, 0.15, 0.14, 0.10, 0.09, 0.08, 0.07])
+    _rewrite_scores(tmp_path, "TS_B", [0.30, 0.13, 0.11, 0.10, 0.09])
+
+    result = _invoke(tmp_path, registry_path, manifests, "--recommended-multiple", "2")
+
+    assert result.exit_code == 0, result.output
+    assert "TS_A: keeps 6 of 7" in result.output
+    assert "the best 6: 2 x the 3 above the one-false-positive height" in result.output
+    assert "TS_B: keeps 4 of 5" in result.output
+    registry = ArtifactRegistry.load(registry_path)
+    a = registry.get("TS_A:picks:full:pytom-match-pick:bin8-sel")
+    b = registry.get("TS_B:picks:full:pytom-match-pick:bin8-sel")
+    assert _kept_scores(a.path) == [0.20, 0.15, 0.14, 0.10, 0.09, 0.08]
+    assert _kept_scores(b.path) == [0.30, 0.13, 0.11, 0.10]
+
+
+def test_a_list_cut_before_the_multiple_is_refused(tmp_path):
+    """TS_A holds 4 picks, 3 above the height: twice that was never extracted."""
+
+    registry_path, manifests = _project(tmp_path)
+    before = registry_path.read_text()
+    result = _invoke(tmp_path, registry_path, manifests, "--recommended-multiple", "2")
+    assert result.exit_code != 0
+    assert "the list holds 4" in " ".join(result.output.split())
+    assert registry_path.read_text() == before
