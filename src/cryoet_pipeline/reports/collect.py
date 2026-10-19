@@ -351,6 +351,12 @@ class CtfTable:
     fit_binning: int | None = None
     """The binning of the stack CTFFIND fitted, relative to the tilt stack, as in the lane's
     `[binning] ctf_fit`."""
+    interpolated: np.ndarray | None = None
+    """Per view, True where CTFFIND found no Thon rings and the model holds a defocus
+    interpolated from the fitted views; the defocus arrays then hold that value."""
+    left_out: np.ndarray | None = None
+    """Per view, True where such a view was also left out of the corrected stack, and so
+    of the tomogram."""
 
     @property
     def mean_defocus_um(self) -> np.ndarray:
@@ -410,6 +416,14 @@ def load_ctf(
         fit = None
 
     z_values = np.asarray([transform.z_value for transform in transforms], dtype=np.int64)
+    # Views CTFFIND found no Thon rings on: the model holds an interpolated defocus
+    # for them, and that is the one corrected with, so it is the one to show.
+    interpolated = np.isin(z_values, _int_list(ctf_model.parameters.get("interpolated_z_values")))
+    left_out = np.isin(z_values, _int_list(ctf_model.parameters.get("excluded_z_values")))
+    if interpolated.any() and ctf_model.path.is_file():
+        applied1, applied2 = _defocus_file_values(ctf_model.path, len(transforms))
+        defocus1 = np.where(interpolated, applied1, defocus1)
+        defocus2 = np.where(interpolated, applied2, defocus2)
     doses = _dose_by_z(manifest)
     dose = (
         np.asarray([doses[int(z)] for z in z_values])
@@ -441,6 +455,8 @@ def load_ctf(
         amplitude_contrast=_finite(ctf_model.parameters.get("amplitude_contrast")),
         pixel_spacing_angstrom=_positive(ctf_model.parameters.get("pixel_spacing_angstrom")),
         fit_binning=fitted_stack.binning if fitted_stack is not None else None,
+        interpolated=interpolated if interpolated.any() else None,
+        left_out=left_out if left_out.any() else None,
     )
 
 
@@ -966,6 +982,12 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, int) and not isinstance(item, bool)]
 
 
 def _finite(value: Any) -> float | None:

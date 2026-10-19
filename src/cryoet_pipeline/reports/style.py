@@ -98,6 +98,11 @@ STATUS_COLOURS = {
 }
 STATUS_LABELS = {"pass": "PASS", "warning": "WARN", "fail": "FAIL", "unknown": "?"}
 
+INTERPOLATED_COLOUR = STATUS_COLOURS["warning"]
+"""A tilt CTFFIND found no Thon rings on, kept with an interpolated defocus."""
+LEFT_OUT_COLOUR = STATUS_COLOURS["fail"]
+"""A tilt CTFFIND found no Thon rings on, left out of the tomogram."""
+
 RC: dict[str, Any] = {
     "font.family": "DejaVu Sans",
     "font.size": FONT_TEXT,

@@ -12,6 +12,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
 
 from cryoet_pipeline.reports import style
 from cryoet_pipeline.reports.collect import CtfTable, SeriesReport
@@ -104,12 +105,49 @@ def _dose_norm(ctf: CtfTable) -> Normalize:
 
 
 def _view_colours(ctf: CtfTable) -> np.ndarray:
-    """One RGBA row per tilt: by dose when the mdoc recorded it, else all the series blue."""
+    """One RGBA row per tilt: by dose when the mdoc recorded it, else all the series blue.
+
+    Tilts CTFFIND found no Thon rings on take the warning yellow when they were
+    kept with an interpolated defocus, and the failure red when they were left
+    out of the tomogram. Neither is in the blue ramp the dose is drawn in.
+    """
 
     if ctf.dose is None:
-        return np.tile(to_rgba(style.SERIES_BLUE), (len(ctf.z_value), 1))
-    norm = _dose_norm(ctf)
-    return np.asarray([style.MARKER_MAP(norm(float(value))) for value in ctf.dose])
+        colours = np.tile(to_rgba(style.SERIES_BLUE), (len(ctf.z_value), 1))
+    else:
+        norm = _dose_norm(ctf)
+        colours = np.asarray([style.MARKER_MAP(norm(float(value))) for value in ctf.dose])
+    if ctf.interpolated is not None:
+        colours[ctf.interpolated] = to_rgba(style.INTERPOLATED_COLOUR)
+    if ctf.left_out is not None:
+        colours[ctf.left_out] = to_rgba(style.LEFT_OUT_COLOUR)
+    return colours
+
+
+def _flag_legend(axes: Axes, ctf: CtfTable) -> None:
+    """What the colours mean, on a page that has tilts without Thon rings."""
+
+    left_out = ctf.left_out if ctf.left_out is not None else np.zeros(len(ctf.z_value), bool)
+    interpolated = (
+        ctf.interpolated & ~left_out
+        if ctf.interpolated is not None
+        else np.zeros(len(ctf.z_value), bool)
+    )
+    if not (left_out.any() or interpolated.any()):
+        return
+    fitted = style.SERIES_BLUE if ctf.dose is None else style.MARKER_MAP(0.6)
+    entries = [(fitted, "fitted" + (", shade by dose" if ctf.dose is not None else ""))]
+    if interpolated.any():
+        entries.append(
+            (style.INTERPOLATED_COLOUR, "no Thon rings: defocus interpolated, kept")
+        )
+    if left_out.any():
+        entries.append((style.LEFT_OUT_COLOUR, "no Thon rings: left out of the tomogram"))
+    handles = [
+        Line2D([], [], marker="o", linestyle="", markersize=5, color=colour, label=label)
+        for colour, label in entries
+    ]
+    axes.legend(handles=handles, loc="best", fontsize=style.FONT_TINY)
 
 
 def _reference_label(axes: Axes, text: str, y: float) -> None:
@@ -137,6 +175,7 @@ def _defocus_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
     axes.set_ylabel("Defocus (µm)")
     axes.set_title("Defocus per tilt", loc="left")
     axes.grid(True, axis="y")
+    _flag_legend(axes, ctf)
 
 
 def _fit_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
@@ -186,8 +225,12 @@ def _thumbnail_title(ctf: CtfTable, view: int) -> str:
 
 
 def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
-    mean = ctf.mean_defocus_um
-    astigmatism_nm = np.abs(ctf.defocus1_um - ctf.defocus2_um) * 1000.0
+    # Over the tilts the tomogram kept, with the defocus they were corrected with.
+    kept = ~ctf.left_out if ctf.left_out is not None else np.ones(len(ctf.z_value), bool)
+    mean = ctf.mean_defocus_um[kept]
+    # Astigmatism only where it was fitted: an interpolated tilt has none.
+    fitted = kept & ~ctf.interpolated if ctf.interpolated is not None else kept
+    astigmatism_nm = np.abs(ctf.defocus1_um - ctf.defocus2_um)[fitted] * 1000.0
     lines = []
     sampling = fit_sampling(ctf)
     if sampling is not None:
@@ -208,7 +251,45 @@ def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
     record = report.qc.get("ctf_estimation")
     if record is not None:
         lines.append("")
-        lines.append(f"QC: {style.STATUS_LABELS.get(record.status, record.status)}")
-        for warning in record.warnings:
-            lines.extend(textwrap.wrap(warning, 38))
+        status = f"QC: {style.STATUS_LABELS.get(record.status, record.status)}"
+        summary = _unfitted_summary(ctf)
+        if summary:
+            # The first line of the summary goes on the status line, to keep the
+            # corner short.
+            status += ", " + summary[0]
+        lines.append(status)
+        lines.extend(summary[1:])
+        # The no-rings warning is said above in short; its tilts are listed under
+        # Warnings and problems, as is every warning that does not fit here whole.
+        blocks = [
+            textwrap.wrap(warning, 38)
+            for warning in record.warnings
+            if not (ctf.interpolated is not None and "no Thon rings" in warning)
+        ]
+        for index, block in enumerate(blocks):
+            pointer = 1 if index < len(blocks) - 1 else 0
+            if len(lines) + len(block) + pointer > _PANEL_LINES:
+                lines.append("… more on the warnings page")
+                break
+            lines.extend(block)
     return "\n".join(lines)
+
+
+_PANEL_LINES = 13
+"""What the corner under the plots holds before it runs into the caption (measured on a
+rendered page, 2026-10-19)."""
+
+
+def _unfitted_summary(ctf: CtfTable) -> list[str]:
+    """The tilts without Thon rings, counted, in the colours' words."""
+
+    if ctf.interpolated is None:
+        return []
+    count = int(ctf.interpolated.sum())
+    left_out = int(ctf.left_out.sum()) if ctf.left_out is not None else 0
+    parts = []
+    if left_out:
+        parts.append(f"{left_out} left out (red)")
+    if count - left_out:
+        parts.append(f"{count - left_out} kept (yellow)")
+    return [f"{count} of {len(ctf.z_value)} tilts without rings:", "  " + ", ".join(parts)]

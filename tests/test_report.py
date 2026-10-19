@@ -33,6 +33,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.reports.collect import (
+    QcRecord,
     PickTable,
     SeriesArtifacts,
     SeriesReport,
@@ -800,3 +801,104 @@ def _qc(
 def _write_json(path: Path, document: dict[str, object]) -> Path:
     path.write_text(json.dumps(document))
     return path
+
+
+def test_aligned_tilts_page_shows_only_views_the_stack_holds() -> None:
+    """correct-ctf can leave out the highest tilts; the page must not reach for them.
+
+    On ryr1-bin8 (2026-10-19) every series lost z 0, its most negative tilt,
+    and the page failed for all five with "no slice for z value 0".
+    """
+
+    import numpy as np
+
+    from cryoet_pipeline.reports.collect import AlignmentInfo
+    from cryoet_pipeline.reports.sections.alignment import _left_out_for_ctf, _shown_views
+
+    alignment = AlignmentInfo(
+        method="gold beads",
+        z_value=np.arange(7, dtype=np.int64),
+        tilt_angle_deg=np.asarray([-60.0, -40.0, -20.0, 0.0, 20.0, 40.0, 60.0]),
+        # The largest residual is on the view that was left out.
+        residual_nm=np.asarray([0.9, 0.2, 0.3, 0.1, 0.4, 0.2, 0.5]),
+        points_per_view=None,
+        point_xy=None,
+        point_view=None,
+        tracking_stack=None,
+        tracking_pixel_angstrom=None,
+        aligned_stack=None,
+        aligned_pixel_angstrom=None,
+        aligned_z_values=(1, 2, 3, 4, 5, 6),
+        excluded_z_values=(),
+        fiducial_count=None,
+        tilt_axis_angle_deg=None,
+    )
+
+    views = _shown_views(alignment)
+
+    assert views and 0 not in views
+    assert views == sorted(views)
+    # The worst residual still shown is the worst among the views kept.
+    assert 6 in views
+    # And the page says which one is missing.
+    assert _left_out_for_ctf(alignment) == [-60.0]
+
+
+def test_ctf_page_colours_tilts_without_thon_rings(tmp_path: Path) -> None:
+    """Yellow for a tilt kept with an interpolated defocus, red for one left out.
+
+    The defocus drawn for both is the model's, the one corrected with, not the
+    value CTFFIND settled on without rings.
+    """
+
+    from matplotlib.colors import to_rgba
+
+    from cryoet_pipeline.reports import style
+
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    ctf_model = registry.get("TS_A:ctf_model:ctffind5")
+    # Rows follow the alignment, z 4..0; the model interpolated z 4 and z 0 and
+    # left z 0 out.
+    ctf_model.path.write_text(
+        "1 0 0.0 0.0 0.0 3\n"
+        + "".join(
+            f"{view} {view} 0.0 0.0 {nm:.1f} {nm:.1f} 0.0\n"
+            for view, nm in enumerate((2500.0, 3080.0, 3120.0, 3160.0, 3900.0), 1)
+        )
+    )
+    flagged = ctf_model.model_copy(
+        update={
+            "parameters": {
+                **ctf_model.parameters,
+                "interpolated_z_values": [4, 0],
+                "excluded_z_values": [0],
+            }
+        }
+    )
+
+    table = load_ctf(registry, flagged, _manifest("TS_A"), lineage_qc(registry, [flagged]))
+
+    assert table.interpolated is not None and table.left_out is not None
+    assert table.interpolated.tolist() == [True, False, False, False, True]
+    assert table.left_out.tolist() == [False, False, False, False, True]
+    # The model's defocus where it interpolated, CTFFIND's elsewhere.
+    assert table.mean_defocus_um[0] == pytest.approx(2.5)
+    assert table.mean_defocus_um[4] == pytest.approx(3.9)
+    assert table.mean_defocus_um[2] == pytest.approx((31200 + 30200) / 2 / 1e4)
+
+    colours = ctf._view_colours(table)
+    assert tuple(colours[0]) == to_rgba(style.INTERPOLATED_COLOUR)
+    assert tuple(colours[4]) == to_rgba(style.LEFT_OUT_COLOUR)
+
+    long_warning = "2 of 5 views stopped at the low end of the fit range ... no Thon rings"
+    report = SeriesReport(
+        artifacts=SeriesArtifacts(manifest=_manifest("TS_A")),
+        ctf=table,
+        qc={"ctf_estimation": QcRecord("ctf_estimation", "warning", (long_warning,), {}, "x")},
+    )
+    numbers = ctf._numbers(report, table)
+    assert "QC: WARN, 2 of 5 tilts without rings:" in numbers
+    assert "1 left out (red), 1 kept (yellow)" in numbers
+    # The full text stays on the warnings page, not in this corner.
+    assert "stopped at the low end" not in numbers

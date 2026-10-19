@@ -179,6 +179,10 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
     excluded = _excluded_angles(report, alignment)
     if excluded:
         lines.append("Left out: " + ", ".join(f"{angle:+.0f}°" for angle in excluded))
+    no_rings = _left_out_for_ctf(alignment)
+    if no_rings:
+        lines.append("Left out, no Thon rings: "
+                     + ", ".join(f"{angle:+.0f}°" for angle in no_rings))
     lines.append("")
     for qc_type in ALIGNMENT_STEPS:
         record = report.qc.get(qc_type)
@@ -196,8 +200,7 @@ def aligned_tilts_page(report: SeriesReport) -> Figure:
     alignment = report.alignment
     assert alignment is not None and alignment.aligned_stack is not None
     views = _shown_views(alignment)
-    worst = (int(np.argmax(alignment.residual_nm))
-             if alignment.residual_nm is not None else None)
+    worst = _worst_view(alignment, _stack_views(alignment))
     subtitle = "The aligned tilt series the tomogram was reconstructed from"
     if alignment.aligned_pixel_angstrom is not None:
         subtitle += f", {alignment.aligned_pixel_angstrom:.2f} Å per pixel"
@@ -233,13 +236,18 @@ def aligned_tilts_page(report: SeriesReport) -> Figure:
 
 
 def _shown_views(alignment: AlignmentInfo) -> list[int]:
-    """Six tilts: the nearest to each of the usual angles, and the worst residual."""
+    """Six tilts: the nearest to each of the usual angles, and the worst residual.
 
+    Only from the views the stack holds: correct-ctf leaves out views CTFFIND
+    found no Thon rings on, and those are often the highest tilts, the ones the
+    usual angles reach for first.
+    """
+
+    available = _stack_views(alignment)
     views: list[int] = []
-    worst = (int(np.argmax(alignment.residual_nm))
-             if alignment.residual_nm is not None else None)
+    worst = _worst_view(alignment, available)
     for angle in SHOWN_TILTS:
-        view = alignment.nearest_view(angle)
+        view = min(available, key=lambda one: abs(alignment.tilt_angle_deg[one] - angle))
         if view not in views:
             views.append(view)
         if len(views) == (5 if worst is not None else 6):
@@ -247,6 +255,43 @@ def _shown_views(alignment: AlignmentInfo) -> list[int]:
     if worst is not None and worst not in views:
         views.append(worst)
     return sorted(views[:6], key=lambda view: alignment.tilt_angle_deg[view])
+
+
+def _left_out_for_ctf(alignment: AlignmentInfo) -> list[float]:
+    """Solved angles of the aligned views the reconstructed stack does not hold.
+
+    correct-ctf leaves out the views CTFFIND found no Thon rings on; fine
+    alignment's own exclusions are not aligned views, so they are not counted here.
+    """
+
+    if alignment.aligned_z_values is None:
+        return []
+    return [
+        float(alignment.tilt_angle_deg[view])
+        for view in range(alignment.z_value.size)
+        if int(alignment.z_value[view]) not in alignment.aligned_z_values
+    ]
+
+
+def _stack_views(alignment: AlignmentInfo) -> list[int]:
+    """The views of the alignment that have a slice in the aligned stack."""
+
+    views = list(range(alignment.z_value.size))
+    if alignment.aligned_z_values is None:
+        return views
+    held = [view for view in views if int(alignment.z_value[view]) in alignment.aligned_z_values]
+    if not held:
+        raise ValueError("the aligned stack holds none of the alignment's views")
+    return held
+
+
+def _worst_view(alignment: AlignmentInfo, views: list[int]) -> int | None:
+    """The view with the largest residual among `views`, or None without residuals."""
+
+    residuals = alignment.residual_nm
+    if residuals is None:
+        return None
+    return max(views, key=lambda view: float(residuals[view]))
 
 
 def _slice_of(alignment: AlignmentInfo, view: int, slices: int) -> int:
