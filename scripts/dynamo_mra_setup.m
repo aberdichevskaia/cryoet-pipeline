@@ -19,19 +19,24 @@
 % subsets of a project are disjoint and channel k takes the same particles in
 % every project; the random orientations and the noise are the same in every
 % project too. Optional: cores (default 8, the job's cores on a cluster),
-% mask_radius (default 18 px) and mask_edge (default 2 px).
+% diameter (A, the particle's widest; default 290, the 80S), mask_radius (px;
+% default the particle's radius plus 3 px, round(diameter / 2 / pixel + 3): 18
+% for the 80S at bin8, 16 for RyR1 at bin8) and mask_edge (default 2 px).
 %
 % schedule picks the search:
 %   'fixed'           (default) one round of 5 iterations: band 2..16 Fourier px,
 %                     cone and in-plane 15 deg in 5 deg steps, as refine223 and the
 %                     CZII MRA arms searched
 %   'coarse_to_fine'  5 rounds of 1 iteration, the low-pass moving in equal steps
-%                     of Fourier px from first_lowpass (default 40 A) to
-%                     last_lowpass (default 22 A: short of Nyquist, where a search
-%                     without independent halves fits noise most easily), the
-%                     angular step following it as atan(resolution / diameter)
-%                     with diameter the particle's (default 290 A, the 80S), and
-%                     cone and in-plane 3 steps wide, as the fixed card is
+%                     from first_lowpass (default 40 A) to last_lowpass (default
+%                     22 A: short of Nyquist, where a search without independent
+%                     halves fits noise most easily), the angular step following
+%                     it as atan(resolution / diameter), and cone and in-plane 3
+%                     steps wide, as the fixed card is. lowpass_steps says equal
+%                     in what: 'angstrom' (default since 2026-10-19) in
+%                     resolution; 'fourier' in Fourier px, i.e. frequency, as the
+%                     ribo-mdc runs of 2026-10-17 were made. Both are rounded to
+%                     whole Fourier px, which is what Dynamo takes
 % Every round is given every search parameter, nref and mra included: a parameter
 % set without a round goes to round 1 only.
 %
@@ -48,12 +53,13 @@
 
 if ~exist('project', 'var') || ~exist('seeds', 'var'), error('dynamo_mra_setup: set project and seeds first, e.g. project = ''mra_nss''; seeds = {''subset'', ''subset'', ''noise''};'); end
 if ~exist('cores', 'var'), cores = 8; end
-if ~exist('mask_radius', 'var'), mask_radius = 18; end
+if ~exist('mask_radius', 'var'), mask_radius = []; end
 if ~exist('mask_edge', 'var'), mask_edge = 2; end
 if ~exist('schedule', 'var'), schedule = 'fixed'; end
 if ~exist('first_lowpass', 'var'), first_lowpass = 40; end
 if ~exist('last_lowpass', 'var'), last_lowpass = 22; end
 if ~exist('diameter', 'var'), diameter = 290; end
+if ~exist('lowpass_steps', 'var'), lowpass_steps = 'angstrom'; end
 % Particles averaged into each 'subset' or 'blob' seed, and the one seed for the
 % random order, orientations and noise of every project.
 subset = 300;
@@ -63,6 +69,7 @@ nref = numel(seeds);
 if ~ischar(project) || ~isvarname(project), error('dynamo_mra_setup: project must be a plain name such as mra_nss'); end
 if ~iscellstr(seeds) || nref < 2 || ~all(ismember(seeds, {'subset', 'blob', 'noise'})), error('dynamo_mra_setup: seeds must list at least two of ''subset'', ''blob'' and ''noise'''); end
 if ~ischar(schedule) || ~any(strcmp(schedule, {'fixed', 'coarse_to_fine'})), error('dynamo_mra_setup: schedule must be ''fixed'' or ''coarse_to_fine'''); end
+if ~ischar(lowpass_steps) || ~any(strcmp(lowpass_steps, {'fourier', 'angstrom'})), error('dynamo_mra_setup: lowpass_steps must be ''fourier'' or ''angstrom'''); end
 if exist([project '_seeds'], 'dir') || exist([project '_fmasks'], 'dir') || exist([project '_tables'], 'dir') || exist(project, 'dir') || exist([project '.vpr'], 'file'), error('dynamo_mra_setup: an earlier run left %s_seeds, %s_fmasks, %s_tables or %s here; move them away first', project, project, project, project); end
 
 t = dread('initial.tbl'); n = size(t, 1);
@@ -71,12 +78,16 @@ box = size(dread(fullfile('particles', files(1).name)), 1);
 apix = t(1, 36); if ~(apix > 0), error('dynamo_mra_setup: column 36 of initial.tbl holds no pixel size'); end
 if strcmp(schedule, 'coarse_to_fine') && ~(2 * apix <= last_lowpass && last_lowpass < first_lowpass), error('dynamo_mra_setup: last_lowpass must lie between Nyquist (%.1f A) and first_lowpass (%g A)', 2 * apix, first_lowpass); end
 if nref * subset > n, error('dynamo_mra_setup: %d particles cannot give %d disjoint subsets of %d', n, nref, subset); end
+% The rule for every mask (Anna, 2026-10-16): the particle's radius where it is
+% widest, plus 3 px, then a soft edge. 290 A at 9.784 A/px gives the 18 px the
+% ribo-mdc projects were made with; 340 A at 13.44 A/px gives 16 for RyR1.
+if isempty(mask_radius), mask_radius = round(diameter / 2 / apix + 3); end
+if mask_radius + mask_edge > box / 2, error('dynamo_mra_setup: a mask of %g px with a %g px edge does not fit the %d px box; give a smaller mask_radius or diameter', mask_radius, mask_edge, box); end
 
 % Soft sphere about the particles' centre, (N + 1) / 2 in Dynamo's one-based
 % voxels, where the export puts them: ones out to mask_radius, then a soft edge
-% of mask_edge voxels (18 and 2: 0.5 at 19.7 px, 385 A across at bin8, the radius
-% of the picking template's mask). The same mask aligns, classifies and smooths,
-% as in the CZII MRA arms.
+% of mask_edge voxels (18 and 2: 0.5 at 19.7 px, 385 A across at bin8 for the
+% 80S). The same mask aligns, classifies and smooths, as in the CZII MRA arms.
 mask_file = sprintf('mra_mask_r%g_e%g.em', mask_radius, mask_edge);
 if ~exist(mask_file, 'file'), dwrite(dynamo_sphere(mask_radius, box, (box + 1) / 2 * [1 1 1], mask_edge), mask_file); end
 
@@ -116,8 +127,9 @@ dynamo_vpr_put(project, '-smask', mask_file);
 % C1, no thresholding. The fixed card gives band 2..16 (235..29 A at 9.784 A/px)
 % and 5 deg steps; coarse_to_fine from 40 to 22 A at 9.784 A/px and 290 A gives
 % low-passes of 12, 14, 17, 19 and 21 px (39, 34, 28, 25 and 22 A) and steps of
-% 7.7, 6.6, 5.4, 4.9 and 4.4 deg.
-if strcmp(schedule, 'fixed'), iterations = 5; lows = 16; steps = 5; else, lows = round(linspace(box * apix / first_lowpass, box * apix / last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; end
+% 7.7, 6.6, 5.4, 4.9 and 4.4 deg. With lowpass_steps 'angstrom' the low-passes
+% are equal steps of resolution instead, rounded to the same whole Fourier px.
+if strcmp(schedule, 'fixed'), iterations = 5; lows = 16; steps = 5; elseif strcmp(lowpass_steps, 'angstrom'), lows = round(box * apix ./ linspace(first_lowpass, last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; else, lows = round(linspace(box * apix / first_lowpass, box * apix / last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; end
 rounds = numel(lows);
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], '1'); dynamo_vpr_put(project, ['-thrm' s], '0'); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-cr' s], num2str(3 * steps(r))); dynamo_vpr_put(project, ['-cs' s], num2str(steps(r))); dynamo_vpr_put(project, ['-ir' s], num2str(3 * steps(r))); dynamo_vpr_put(project, ['-is' s], num2str(steps(r))); end
@@ -130,5 +142,5 @@ dynamo_vpr_put(project, '-cores', num2str(cores));
 
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
-fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s, %d cores\n', project, strjoin(seeds, ' '), schedule, cores);
-clear project seeds cores mask_radius mask_edge schedule first_lowpass last_lowpass diameter
+fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), mask %g px with a %g px edge, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, mask_radius, mask_edge, cores);
+clear project seeds cores mask_radius mask_edge schedule first_lowpass last_lowpass diameter lowpass_steps

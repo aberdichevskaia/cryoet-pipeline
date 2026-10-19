@@ -17,7 +17,11 @@
 # setup script). SCHEDULE=coarse_to_fine searches in 5 rounds from a 40 A
 # low-pass to a 22 A one, the angular step following the resolution;
 # FIRST_LOWPASS and LAST_LOWPASS (A) change its ends, DIAMETER (A, the
-# particle's) its steps. Without SCHEDULE the search is the fixed one. A project
+# particle's widest, 290 unless given) its steps; the steps are equal in A, or in
+# frequency with LOWPASS_STEPS=fourier. The alignment and classification mask is
+# the particle's radius from DIAMETER plus 3 px with a 2 px soft edge, unless
+# MASK_RADIUS and MASK_EDGE (px) say otherwise. Without SCHEDULE the search is
+# the fixed one. A project
 # that already exists in EXPORT is not made again: the job goes on computing it
 # from the iteration Dynamo has recorded as next, so a job that ran out of time
 # is resubmitted as it was.
@@ -78,6 +82,9 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${FIRST_LOWPASS:-}" ]] && options+="first_lowpass = $FIRST_LOWPASS; "
     [[ -n "${LAST_LOWPASS:-}" ]] && options+="last_lowpass = $LAST_LOWPASS; "
     [[ -n "${DIAMETER:-}" ]] && options+="diameter = $DIAMETER; "
+    [[ -n "${LOWPASS_STEPS:-}" ]] && options+="lowpass_steps = '$LOWPASS_STEPS'; "
+    [[ -n "${MASK_RADIUS:-}" ]] && options+="mask_radius = $MASK_RADIUS; "
+    [[ -n "${MASK_EDGE:-}" ]] && options+="mask_edge = $MASK_EDGE; "
     dynamo "project = '$NAME'; seeds = {${cells%, }}; cores = $CORES; ${options}eval(fileread('$REPO/scripts/dynamo_mra_setup.m'))" 2>&1 | tee "${NAME}_setup.log"
     if [[ ! -f "$card" ]]; then
         echo "the setup did not make $NAME; see $EXPORT/${NAME}_setup.log" >&2
