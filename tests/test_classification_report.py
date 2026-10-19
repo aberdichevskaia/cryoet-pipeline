@@ -89,6 +89,12 @@ def refined(classes: dict[int, int], channel: int) -> list[list[float]]:
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
+    return make_project(tmp_path)
+
+
+def make_project(tmp_path: Path) -> Path:
+    """The synthetic Dynamo project, also built by the class comparison's tests."""
+
     base = tmp_path / "export"
     rng = np.random.default_rng(3)
     blob = sphere(4)

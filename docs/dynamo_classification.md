@@ -112,6 +112,28 @@ to leave the real set mostly as it was. The reading, written before the run: a
 class collects junk if it holds at least twice the share of decoys it holds of
 real particles and the 95% interval of its decoy share leaves out its real share.
 
+## Comparing two runs particle by particle
+
+A split such as 74/13/13 says nothing alone: classification of noise also makes
+classes. What a real split does is reproduce: the same particles land in the same
+classes when the run starts from other seeds or has other particles mixed in.
+
+```bash
+python scripts/compare_dynamo_classes.py outputs/ribo-mdc/dynamo/export/mra_sbb outputs/ribo-mdc/dynamo/export_decoy/mra_sbb_decoy --group-first 2,3 --group-second 2,3
+```
+
+prints how many particles each pair of classes shares, against what two
+independent runs with these class sizes would share; the adjusted Rand index (0
+at chance, 1 when identical) and the share of particles in the same class under
+the best pairing of classes, each against the same statistic over 2,000 shuffles
+of the second run's labels; and, given a group of channels in each run (the
+blob- or noise-seeded ones), how the two groups overlap against the
+hypergeometric chance. Particles are matched by tag after checking, in both
+export manifests, that each tag names the same series, stack and index; decoys
+are left out. `--out` also writes the numbers as JSON. The statistics are in
+`src/cryoet_pipeline/class_comparison.py`, shared with
+`scripts/compare_classifications.py`.
+
 ## The report
 
 ```bash

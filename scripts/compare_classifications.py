@@ -39,62 +39,10 @@ from pathlib import Path
 
 import numpy as np
 
+from cryoet_pipeline.class_comparison import adjusted_rand_index as _adjusted_rand_index
+from cryoet_pipeline.class_comparison import best_pairing as _best_pairing
+from cryoet_pipeline.class_comparison import contingency as _contingency
 from cryoet_pipeline.particles import read_particle_star
-
-
-def _contingency(first: np.ndarray, second: np.ndarray) -> tuple[np.ndarray, list[int], list[int]]:
-    """How many particles each pair of classes shares.
-
-    Counted with `bincount` rather than a loop of masks, because a trustworthy
-    null needs hundreds of shuffles and the nested version made twenty the
-    practical limit — which is far too few to read a maximum off.
-    """
-
-    left = sorted(set(first.tolist()))
-    right = sorted(set(second.tolist()))
-    rows = np.searchsorted(np.array(left), first)
-    columns = np.searchsorted(np.array(right), second)
-    flat = np.bincount(
-        rows * len(right) + columns, minlength=len(left) * len(right)
-    )
-    return flat.reshape(len(left), len(right)).astype(np.int64), left, right
-
-
-def _adjusted_rand_index(table: np.ndarray) -> float:
-    """Agreement between two partitions, corrected for chance.
-
-    Implemented here rather than imported so that the definition being used is
-    visible: pairs counted together or apart by both, minus what partitions of
-    these sizes would agree on at random, over the most they could agree on.
-    """
-
-    def pairs(counts: np.ndarray) -> float:
-        return float(np.sum(counts * (counts - 1) / 2.0))
-
-    total = float(table.sum())
-    if total < 2:
-        return float("nan")
-    index = pairs(table)
-    rows = pairs(table.sum(axis=1))
-    columns = pairs(table.sum(axis=0))
-    expected = rows * columns / (total * (total - 1) / 2.0)
-    largest = 0.5 * (rows + columns)
-    if largest == expected:
-        return float("nan")
-    return (index - expected) / (largest - expected)
-
-
-def _best_pairing(table: np.ndarray) -> list[tuple[int, int]]:
-    """Match each class in one run to the one it most overlaps in the other.
-
-    A proper assignment rather than a greedy pick per row, so that two classes
-    cannot both claim the same partner and overstate the agreement.
-    """
-
-    from scipy.optimize import linear_sum_assignment
-
-    rows, columns = linear_sum_assignment(-table)
-    return list(zip(rows.tolist(), columns.tolist(), strict=True))
 
 
 def _empirical_null(
