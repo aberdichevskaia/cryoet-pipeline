@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import math
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 from functools import partial
 
 import numpy as np
@@ -19,21 +17,16 @@ from matplotlib.ticker import FuncFormatter
 from cryoet_pipeline.reports import style
 from cryoet_pipeline.reports.collect import PickTable, SeriesReport, TomogramInfo
 from cryoet_pipeline.reports.imaging import (
-    GALLERY_SLAB_PX,
     Band,
     Depth,
     block_max,
-    central_views,
-    crop_centered,
     display_range,
-    random_positions,
     rank_bands,
     reduction_factor,
     slab_half_width_px,
-    smooth,
     sphere_sections,
-    stable_seed,
 )
+from cryoet_pipeline.reports.sections.gallery import TILES_PER_BAND
 from cryoet_pipeline.reports.sections.tomogram import (
     DEPTH_LETTERS,
     Z_NOTE,
@@ -46,11 +39,6 @@ from cryoet_pipeline.reports.sections.tomogram import (
     slab_caption,
     z_nm,
 )
-
-TILES_PER_BAND = 8
-"""Gallery tiles per band: two rows of four on a landscape page."""
-
-BAND_TITLES = {"high": "High scores", "middle": "Middle scores", "low": "Low scores"}
 
 
 def picks_page(report: SeriesReport, depths: list[Depth]) -> Figure:
@@ -559,118 +547,3 @@ def _circles(axes: Axes, x: np.ndarray, y: np.ndarray, radii: np.ndarray) -> Non
     axes.add_collection(
         PatchCollection(patches, facecolor="none", edgecolor=style.PICK_COLOUR, linewidth=0.8)
     )
-
-
-@dataclass(frozen=True)
-class Tile:
-    image: np.ndarray
-    """XY | XZ | YZ side by side, NaN in the gaps and outside the volume."""
-    title: str
-
-
-@dataclass(frozen=True)
-class GalleryBand:
-    key: str
-    header: str
-    tiles: list[Tile]
-
-
-@dataclass(frozen=True)
-class Gallery:
-    bands: dict[str, GalleryBand]
-    limits: tuple[float, float]
-
-
-def gallery_half_width(report: SeriesReport) -> int:
-    """Half the tile, in voxels: the particle and about one radius of its surroundings."""
-
-    radius = report.particle_radius_px
-    half = math.ceil(2.0 * radius)
-    if report.template is not None:
-        half = min(half, report.template.box_px // 2)
-    return max(4, half)
-
-
-def build_gallery(report: SeriesReport, bands: list[Band]) -> Gallery:
-    picks = report.picks
-    info = report.tomogram
-    assert picks is not None and info is not None
-    volume = open_volume(info.artifact.path)
-    half = gallery_half_width(report)
-    ranked = picks.ranked()
-    sigma = picks.sigma
-
-    def tile(center: tuple[int, int, int], title: str) -> Tile:
-        views = [smooth(view) for view in central_views(crop_centered(volume, center, half))]
-        gap = np.full((views[0].shape[0], max(1, (2 * half + 1) // 10)), np.nan, np.float32)
-        return Tile(np.concatenate([views[0], gap, views[1], gap, views[2]], axis=1), title)
-
-    def center_of(index: int) -> tuple[int, int, int]:
-        return (int(round(picks.z_px[index])), int(round(picks.y_px[index])),
-                int(round(picks.x_px[index])))
-
-    gallery: dict[str, GalleryBand] = {}
-    for band in bands:
-        tiles = []
-        for position in band.positions:
-            index = int(ranked[position])
-            label = (f"{sigma[index]:.1f}σ" if sigma is not None
-                     else f"{picks.score[index]:.3f}")
-            tiles.append(tile(center_of(index), f"rank {position + 1} · {label}"))
-        header = (
-            f"{BAND_TITLES[band.name]} · ranks {band.first_rank}–{band.last_rank} "
-            f"of {picks.count}"
-        )
-        if sigma is not None:
-            first = sigma[ranked[band.first_rank - 1]]
-            last = sigma[ranked[band.last_rank - 1]]
-            header += f" · {first:.1f} to {last:.1f}σ"
-        gallery[band.name] = GalleryBand(band.name, header, tiles)
-
-    positions = random_positions(info.shape, half, picks.z_px, TILES_PER_BAND,
-                                 stable_seed(report.series))
-    gallery["random"] = GalleryBand(
-        "random",
-        "Random positions · anywhere in x and y, at z values drawn from the picks'",
-        [tile((int(z), int(y), int(x)), f"random {number}")
-         for number, (z, y, x) in enumerate(positions, 1)],
-    )
-    limits = display_range([one.image for band in gallery.values() for one in band.tiles])
-    return Gallery(gallery, limits)
-
-
-def gallery_page(report: SeriesReport, gallery: Gallery, keys: tuple[str, str]) -> Figure:
-    shown = [gallery.bands[key] for key in keys if key in gallery.bands]
-    names = " and ".join(band.key for band in shown)
-    figure = style.new_page(f"{report.series} · Picks by score: {names}",
-                            "Each tile: XY | XZ | YZ through the pick's centre")
-    cmap = style.GRAY_WITH_GAPS
-    top, bottom = 0.875, style.PICTURE_BOTTOM - 0.01
-    block = (top - bottom) / 2.0
-    columns = 4
-    left, right, gap = 0.035, 0.965, 0.012
-    width = (right - left - gap * (columns - 1)) / columns
-    row_height = (block - 0.055) / 2.0
-    for block_index, band in enumerate(shown):
-        block_top = top - block_index * block
-        figure.text(left, block_top - 0.005, band.header, fontsize=style.FONT_TEXT,
-                    fontweight="bold", va="top")
-        for number, one in enumerate(band.tiles):
-            row, column = divmod(number, columns)
-            axes = figure.add_axes((
-                left + column * (width + gap),
-                block_top - 0.045 - (row + 1) * row_height,
-                width,
-                row_height - 0.03,
-            ))
-            axes.imshow(one.image, cmap=cmap, vmin=gallery.limits[0], vmax=gallery.limits[1],
-                        origin="lower")
-            style.image_axes(axes, one.title)
-    style.caption(
-        figure,
-        f"{GALLERY_SLAB_PX}-voxel central slabs through each pick, protein dark, all tiles of "
-        "this tilt-series on one grey scale. Ranks are spread evenly through each third of the "
-        "picks. Compare the low third with the random positions: if they look alike, the "
-        "low-scoring picks are probably not particles.",
-    )
-    return figure

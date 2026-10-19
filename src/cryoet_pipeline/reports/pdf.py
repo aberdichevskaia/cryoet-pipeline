@@ -24,7 +24,7 @@ from matplotlib.figure import Figure
 from cryoet_pipeline.reports import style
 from cryoet_pipeline.reports.collect import SeriesReport, summary_row
 from cryoet_pipeline.reports.imaging import choose_depths, rank_bands, slab_half_width_px
-from cryoet_pipeline.reports.sections import alignment, ctf, front, picking, tomogram
+from cryoet_pipeline.reports.sections import alignment, ctf, front, gallery, picking, tomogram
 
 
 @dataclass(frozen=True)
@@ -124,7 +124,7 @@ def series_pages(report: SeriesReport) -> list[PlannedPage]:
     label = report.series
     picks = report.picks
     info = report.tomogram
-    bands = rank_bands(picks.count, picking.TILES_PER_BAND) if picks and picks.has_scores else []
+    bands = rank_bands(picks.count, gallery.TILES_PER_BAND) if picks and picks.has_scores else []
     depths = (
         choose_depths(
             info.shape[0],
@@ -161,20 +161,20 @@ def series_pages(report: SeriesReport) -> list[PlannedPage]:
             pages.append(PlannedPage(f"{label} · correlation map",
                                      lambda: picking.correlation_page(report, depths)))
         if info is not None and bands:
-            cache: dict[str, picking.Gallery] = {}
+            cache: dict[str, gallery.Gallery] = {}
 
-            def gallery() -> picking.Gallery:
+            def built() -> gallery.Gallery:
                 if "gallery" not in cache:
-                    cache["gallery"] = picking.build_gallery(report, bands)
+                    cache["gallery"] = gallery.build_gallery(report, bands)
                 return cache["gallery"]
 
             pages.append(PlannedPage(
                 f"{label} · gallery",
-                lambda: picking.gallery_page(report, gallery(), ("high", "middle")),
+                lambda: gallery.gallery_page(report, built(), ("high", "middle")),
             ))
             pages.append(PlannedPage(
                 f"{label} · gallery",
-                lambda: picking.gallery_page(report, gallery(), ("low", "random")),
+                lambda: gallery.gallery_page(report, built(), ("low", "random")),
             ))
     if not pages:
         pages.append(PlannedPage(label, lambda: front.empty_series_page(report)))

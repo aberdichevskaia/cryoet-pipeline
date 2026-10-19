@@ -17,6 +17,7 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
+import torch
 import zarr
 from typer.testing import CliRunner
 
@@ -40,6 +41,7 @@ from cryoet_pipeline.reports.collect import (
     lineage_qc,
     load_alignment,
     load_ctf,
+    load_picks,
     load_series,
     map_agreement,
     per_view_table,
@@ -51,11 +53,13 @@ from cryoet_pipeline.reports.imaging import (
     rank_bands,
     sphere_sections,
 )
+from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
 from cryoet_pipeline.score_preview import score_preview_from_volume, write_score_preview
 
 pytest.importorskip("matplotlib")
 
-from cryoet_pipeline.reports.sections import ctf, front, picking  # noqa: E402
+from cryoet_pipeline.reports import imaging  # noqa: E402
+from cryoet_pipeline.reports.sections import ctf, front, gallery, picking  # noqa: E402
 
 _ANGLES = [-40.0, -20.0, 0.0, 20.0, 40.0]
 # Dose-symmetric: 0 deg first, then +20, -20, +40, -40. PriorRecordDose is the
@@ -176,6 +180,59 @@ def test_the_ctf_page_knows_the_binning_it_was_fitted_at(tmp_path: Path) -> None
 
     assert table.fit_binning == 2
     assert ctf.fit_sampling(table) == "fitted at bin 2 (2.70 Å per pixel, Nyquist 5.4 Å)"
+
+
+def test_a_gallery_tile_shows_its_particle_in_the_template_frame() -> None:
+    """The tile turns a particle back by pytom's angles, as averaging does.
+
+    `relion_euler_to_matrix` documents both directions: resampled with `A.T`, a
+    template shows how it appears in the tomogram at that orientation; resampled
+    with `A`, a particle cut from the tomogram comes back into the template's
+    frame, which is what averaging does with pytom's angles. So a template put
+    into a volume one way must come back out of the gallery looking like the
+    template, and not when the angles are ignored or applied the other way. The
+    object has no part that every turn leaves in place, so only the right turn
+    can match it.
+    """
+
+    box = 25
+    grid = np.mgrid[0:box, 0:box, 0:box] - (box - 1) / 2.0
+    template = np.zeros((box, box, box), np.float32)
+    for x, y, z, width in ((7, 0, 0, 1.5), (0, 4, 0, 1.5), (0, 0, -5, 1.5), (-3, -3, 2, 1.5)):
+        squared = (grid[2] - x) ** 2 + (grid[1] - y) ** 2 + (grid[0] - z) ** 2
+        template += np.exp(-squared / (2 * width**2)).astype(np.float32)
+    matrix = relion_euler_to_matrix(40.0, 65.0, 110.0)
+    in_tomogram = resample_volume_zyx(torch.from_numpy(template), matrix.T, np.zeros(3),
+                                      device=torch.device("cpu")).numpy()
+    volume = np.zeros((60, 60, 60), np.float32)
+    volume[18:43, 18:43, 18:43] = in_tomogram
+
+    def tile(rotation: np.ndarray | None) -> list[np.ndarray]:
+        return gallery.oriented_views(volume, (30.0, 30.0, 30.0), rotation, offset_px=0.0,
+                                      half=12, low_pass_angstrom=None,
+                                      voxel_spacing_angstrom=10.0, slab_px=1)
+
+    reference = imaging.central_views(template, 1)
+
+    def agreement(views: list[np.ndarray]) -> float:
+        return min(float(np.corrcoef(np.nan_to_num(view).ravel(), expected.ravel())[0, 1])
+                   for view, expected in zip(views, reference, strict=True))
+
+    assert agreement(tile(matrix)) > 0.95
+    # Ignoring the angles, or applying them the other way round, does not.
+    assert agreement(tile(None)) < 0.5
+    assert agreement(tile(matrix.T)) < 0.5
+
+
+def test_picks_carry_the_angles_and_low_pass_of_their_search(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+
+    table = load_picks(registry.get("TS_A:picks:full:pytom-match-pick:bin8"))
+
+    assert table.has_orientations
+    assert table.low_pass_angstrom == pytest.approx(25.0)
+    assert table.template_box_px == 16
 
 
 def test_the_score_overview_puts_every_tomogram_on_one_sigma_axis() -> None:
@@ -605,20 +662,25 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
         {"status": "pass", "warnings": [], "emdb_id": "EMD-0000", "low_pass_angstrom": 20.0,
          "mask_radius_px": 6.0, "inverted": True})
 
+    # pytom writes its whole job, the low-pass and template box among it.
+    job = _write_json(out / "job.json", {"low_pass": 25.0, "template_shape": [16, 16, 16]})
     match = _artifact(
         f"{series}:template_match:pytom-match-pick:bin8", ArtifactKind.TEMPLATE_MATCH,
-        out / "job.json", series,
+        job, series,
         parents=[tomogram.id, segmentation.id, template.id, template_mask.id], variant="bin8",
     )
     registry.add(match)
 
     scores = np.concatenate([rng.uniform(0.09, 0.16, 24), rng.uniform(0.05, 0.065, 12)])
+    angles = rng.uniform(0.0, 180.0, size=(len(scores), 3))
     star = out / "particles.star"
     star.write_text(
         "data_\n\nloop_\n_rlnCoordinateX #1\n_rlnCoordinateY #2\n_rlnCoordinateZ #3\n"
-        "_rlnLCCmax #4\n"
-        + "".join(f"{x} {y} {z} {s:.6f}\n" for (x, y, z), s in zip(picks_xyz, scores,
-                                                                  strict=True))
+        "_rlnAngleRot #4\n_rlnAngleTilt #5\n_rlnAnglePsi #6\n_rlnLCCmax #7\n"
+        + "".join(
+            f"{x} {y} {z} {rot:.2f} {tilt:.2f} {psi:.2f} {s:.6f}\n"
+            for (x, y, z), (rot, tilt, psi), s in zip(picks_xyz, angles, scores, strict=True)
+        )
     )
     score_volume = np.abs(rng.normal(0.0, 0.015, size=_SHAPE)).astype(np.float32)
     for (x, y, z), s in zip(picks_xyz, scores, strict=True):
@@ -646,6 +708,7 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
             "pytom_scores_preview_path": str(preview_path),
             "pytom_template_path": str(template_path),
             "pytom_template_mask_path": str(mask_path),
+            "pytom_job_json_path": str(job),
         },
     )
     registry.add(picks)

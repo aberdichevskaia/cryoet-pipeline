@@ -317,6 +317,11 @@ class PytomMatchPickBackend:
                 # covers nowhere, and the false-positive cut-off and the
                 # significance in the QC report are computed from those numbers.
                 "pytom_volume_split": list(volume_split),
+                # What the report filters its particle pictures with, so that they
+                # show the particles as the search saw them.
+                "pytom_low_pass_angstrom": _optional_positive_float_parameter(
+                    context, "pytom_low_pass"
+                ),
                 "pytom_template_mask_path": str(template_mask),
                 "pytom_job_json_path": str(paths.job_json),
                 "pytom_scores_volume_path": (

@@ -198,10 +198,25 @@ class PickTable:
     excess_at_cut_off: float | None = None
     z_sd_px: float | None = None
     uniform_z_sd_px: float | None = None
+    rot_deg: np.ndarray | None = None
+    """pytom's orientation for each pick, RELION's ZYZ angles; None when the list has none."""
+    tilt_deg: np.ndarray | None = None
+    psi_deg: np.ndarray | None = None
+    low_pass_angstrom: float | None = None
+    """The low-pass the search was run with, as pytom recorded it in its job."""
+    template_box_px: int | None = None
+    """The template box the search used, which sets where a pick's rotation centre is."""
 
     @property
     def count(self) -> int:
         return int(self.score.size)
+
+    @property
+    def has_orientations(self) -> bool:
+        angles = (self.rot_deg, self.tilt_deg, self.psi_deg)
+        return self.count > 0 and all(
+            one is not None and bool(np.isfinite(one).all()) for one in angles
+        )
 
     @property
     def has_scores(self) -> bool:
@@ -258,7 +273,24 @@ def load_picks(picks: Artifact) -> PickTable:
         loaded = _read_json(Path(qc_path))
         if isinstance(loaded, dict):
             document = loaded
+    job = _pytom_job(picks)
+    shape = job.get("template_shape")
+    box = (
+        max(shape)
+        if isinstance(shape, list) and shape and all(type(one) is int for one in shape)
+        else None
+    )
+    low_pass = _positive(job.get("low_pass"))
+    if low_pass is None:
+        low_pass = _positive(picks.parameters.get("pytom_low_pass_angstrom"))
+    angles = [column(name) for name in ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi")]
+    oriented = all(name in columns for name in ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"))
     return PickTable(
+        rot_deg=angles[0] if oriented else None,
+        tilt_deg=angles[1] if oriented else None,
+        psi_deg=angles[2] if oriented else None,
+        low_pass_angstrom=low_pass,
+        template_box_px=box,
         x_px=column("rlnCoordinateX"),
         y_px=column("rlnCoordinateY"),
         z_px=column("rlnCoordinateZ"),
@@ -271,6 +303,20 @@ def load_picks(picks: Artifact) -> PickTable:
         z_sd_px=_finite(document.get("coordinate_z_sd")),
         uniform_z_sd_px=_positive(document.get("uniform_z_sd")),
     )
+
+
+def _pytom_job(picks: Artifact) -> dict[str, Any]:
+    """The job JSON pytom wrote for the search these picks came from, or nothing.
+
+    pytom writes its whole job there, so it records the low-pass and template
+    box the search actually ran with, rather than the ones a lane asked for.
+    """
+
+    path = _path_parameter(picks, "pytom_job_json_path")
+    if path is None or not path.is_file():
+        return {}
+    loaded = _read_json(path)
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _star_table(path: Path) -> tuple[list[str], list[list[str]]]:

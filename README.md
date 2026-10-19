@@ -191,7 +191,8 @@ all tilt-series and each step's verdict, the score curves of all tomograms side
 by side, then, per tilt-series, the tilt alignment (residual and beads or
 patches per tilt, a few aligned tilts), the CTF fit, the tomogram, its
 membranes, the picks on the tomogram and their scores against noise, the
-correlation map and galleries of picks by score. It reads the project and runs nothing. It needs
+correlation map and galleries of picks by score, each particle low-passed as for
+picking and turned to the template's orientation by pytom's angles. It reads the project and runs nothing. It needs
 matplotlib: `python -m pip install -e ".[io,viz]"`.
 
 ```bash
