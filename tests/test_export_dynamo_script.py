@@ -188,3 +188,40 @@ def test_decoys_follow_every_real_particle_and_are_marked(tmp_path):
     assert json.loads((out / "export_complete.json").read_text())["decoys"] == 4
     assert {run: len(p) for run, p in qc_dynamo_picks.load_picks(out).items()} == {
         "TS_A": 5, "TS_B": 4}
+
+
+def test_dynamo_gets_the_solved_range_of_the_tomogram_negated(tmp_path):
+    """ryr1 039: nominal -42..+42, built from -29..+49 after the +7 deg offset and
+    correct-ctf; Dynamo's ytilt for that is -49..+29 (see dynamo_ytilt)."""
+
+    project = tmp_path / "project"
+    registry = ArtifactRegistry.empty()
+    artifact, _ = _series(project, "TS_A", 3, 1)
+    solved = project / "TS_A.tlt"
+    solved.write_text("".join(f"{angle:.2f}\n" for angle in (-29.0, 0.0, 49.0)))
+    tomogram = Artifact(
+        id="TS_A:tomogram:bin8",
+        variant="bin8",
+        kind=ArtifactKind.TOMOGRAM,
+        path=project / "TS_A.zarr",
+        parameters={"tilt_series_id": "TS_A", "tilt_angles_path": str(solved)},
+    )
+    registry.add(tomogram)
+    registry.add(
+        artifact.model_copy(
+            update={"parameters": artifact.parameters | {"input_tomogram_id": tomogram.id}}
+        )
+    )
+    registry.write(project / "artifacts.json")
+    out = tmp_path / "export"
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts/export_dynamo.py"), "--project", str(project),
+         "--variant", "bin8", "--series", "TS_A", "--out", str(out)],
+        check=True,
+    )
+    manifest = json.loads((out / "export_manifest.json").read_text())
+    assert manifest["wedge"]["ranges"] == {"TS_A": [-29.0, 49.0]}
+    assert manifest["wedge"]["range_source"] == {"TS_A": "reconstruction's solved angles"}
+    assert manifest["wedge"]["dynamo_ytilt"] == {"TS_A": [-49.0, 29.0]}
+    table = np.loadtxt(out / "initial.tbl", ndmin=2)
+    assert [tuple(row[13:15]) for row in table] == [(-49.0, 29.0)] * 3

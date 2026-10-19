@@ -42,7 +42,7 @@ import numpy as np
 import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
-from cryoet_pipeline.backends.dynamo_search import native_to_dynamo
+from cryoet_pipeline.backends.dynamo_search import dynamo_ytilt, native_to_dynamo
 from cryoet_pipeline.models import ArtifactKind, TiltSeriesManifest
 from cryoet_pipeline.particles import read_particle_star
 from cryoet_pipeline.rotations import relion_euler_to_matrix
@@ -73,17 +73,26 @@ def reconstructed_tilt_range(
     The manifest lists every view collected, and alignment drops some: on the MDC
     EMPIAR-11538 series min_std_ratio cut the dark extremes, so TS_0306's tomogram
     holds -40..+58 of the manifest's -52..+68. The manifest's extremes would give
-    Dynamo a wedge with data where the tomogram has none. The tomogram records its
-    views as `included_z_values`; a series whose tomogram does not falls back to
-    the manifest, and the export says which it used.
+    Dynamo a wedge with data where the tomogram has none. Best are the solved
+    angles reconstruction recorded (`tilt_angles_path`), which fine alignment has
+    also shifted to make the specimen flat (+7 deg on ryr1 039); then the nominal
+    angles of the views the tomogram kept (`included_z_values`); then the manifest.
+    The export says which it used. The range is in the tomogram's own angles;
+    the table gets it as Dynamo's ytilt, through `dynamo_ytilt`.
     """
     angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
     tomogram_id = stack.parameters.get("input_tomogram_id")
     if isinstance(tomogram_id, str):
         try:
-            included = registry.get(tomogram_id).parameters.get("included_z_values")
+            tomogram = registry.get(tomogram_id)
         except KeyError:
-            included = None
+            tomogram = None
+        solved = tomogram.parameters.get("tilt_angles_path") if tomogram is not None else None
+        if isinstance(solved, str) and Path(solved).is_file():
+            angles = [float(word) for word in Path(solved).read_text().split()]
+            if angles:
+                return (min(angles), max(angles)), "reconstruction's solved angles"
+        included = tomogram.parameters.get("included_z_values") if tomogram is not None else None
         if isinstance(included, list):
             angles = [angle_by_z[z] for z in included if z in angle_by_z]
             if angles:
@@ -104,7 +113,9 @@ def table_row(tag: int, tomogram: int, record, box: int, tilt_range, spacing: fl
     row[3:6] = shift.tolist()  # dx dy dz
     row[6:9] = angles.tolist()  # tdrot tilt narot
     row[12] = 1  # ftype: single-axis wedge about y
-    row[13], row[14] = tilt_range  # ymintilt ymaxtilt
+    # ymintilt ymaxtilt: the tomogram's range negated, which is where Dynamo's
+    # wedge has to put it for the volumes this pipeline stores (see dynamo_ytilt).
+    row[13], row[14] = dynamo_ytilt(tilt_range)
     row[19] = tomogram
     row[21] = 1  # class
     row[23:26] = [record.x_px + 0.5, record.y_px + 0.5, record.z_px + 0.5]
@@ -230,7 +241,14 @@ def main() -> None:
             "conversion": "cryoet_pipeline.backends.dynamo_search.native_to_dynamo",
         },
         "table_columns": TABLE_COLUMNS,
-        "wedge": {"ranges": wedges, "range_source": wedge_sources, "axis": "y", "ftype": 1},
+        "wedge": {
+            "ranges": wedges,
+            "range_source": wedge_sources,
+            # What the table's ymintilt/ymaxtilt hold: each range negated.
+            "dynamo_ytilt": {series: list(dynamo_ytilt(tuple(r))) for series, r in wedges.items()},
+            "axis": "y",
+            "ftype": 1,
+        },
         "particles": particles,
         "limitations": [
             "Voxels are copied from extraction unchanged: no normalisation, no contrast "

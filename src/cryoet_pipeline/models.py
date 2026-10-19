@@ -1220,6 +1220,9 @@ class DynamoSearchQc(BaseModel):
     grid_reach_deg: float = Field(ge=0.0)
     """The widest rotation one iteration's candidate levels can compose to."""
     wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    """The tomograms' tilt ranges, from the angles they were reconstructed with."""
+    dynamo_ytilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    """The same ranges as Dynamo's ytilt was given them: negated, see `dynamo_ytilt`."""
     wedge_boundary_policy: str
     averaging: str = "dynamo project assembly (average_particles)"
     """Dynamo's `fsc = true` assembly: particles normalised in the mask's support,
@@ -1273,6 +1276,9 @@ class DynamoAverageQc(BaseModel):
     alignment_mask_path: str | None = None
     normalization_mask_voxels: int = Field(ge=2)
     wedge_tilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    """The tomograms' tilt ranges, from the angles they were reconstructed with."""
+    dynamo_ytilt_ranges_deg: list[list[float]] = Field(default_factory=list)
+    """The same ranges as Dynamo's ytilt was given them: negated, see `dynamo_ytilt`."""
     wedge_boundary_policy: str
     averaging: str = "dynamo_average (fcompensate)"
     """Dynamo's console average of a table: each particle at its pose, normalised in

@@ -97,6 +97,7 @@ from cryoet_pipeline.backends.subtomogram import (
     _require_available_paths,
     _validate_particle_stack,
     _wedge_geometry_per_particle,
+    wedge_ranges_by_series,
     _write_average_mrc,
     _write_json,
     averaging_scope,
@@ -313,6 +314,25 @@ def bandpass(size, high, low, smoothing=2.0):
     weights = np.exp(-((distance / smoothing) ** 2))
     weights[weights <= 0.13] = 0
     return weights.astype(np.float32).astype(float)
+
+
+def dynamo_ytilt(tilt_range: tuple[float, float]) -> tuple[float, float]:
+    """A tomogram's tilt range as Dynamo's `ytilt`, for the volumes this pipeline stores.
+
+    The solved angles put the measured frequencies where `wedge.py`'s beam
+    direction d(t) = (sin t, 0, cos t) puts them in a stored tomogram, and `wedge`
+    below, Dynamo's own, puts the same range on the mirror side. Measured
+    2026-10-19: noise views over -20..+60 reconstructed by IMOD `tilt
+    -PERPENDICULAR` and written as reconstruct-tomogram writes them hold a mean
+    power of 6.5e6 where only `wedge(n, (-60, 20))` has support and 4.1e5 where
+    only `wedge(n, (-20, 60))` has it, against 3.0e5 outside both. So Dynamo is
+    given the range negated. A symmetric range is its own negation, which is why
+    the Gag and CZII runs could not have shown it; the stored volume being a
+    mirror image of the specimen (the z-reversing transpose) is the likely root.
+    """
+
+    low, high = tilt_range
+    return -high, -low
 
 
 def wedge(size, tilt_range):
@@ -1031,6 +1051,7 @@ def _dynamo_inputs(
         min_tilt_override=_optional_float_parameter(context, "wedge_min_tilt_deg"),
         max_tilt_override=_optional_float_parameter(context, "wedge_max_tilt_deg"),
         tilt_axis_deg=0.0,
+        ranges_by_series=wedge_ranges_by_series(context),
     )
     wedge_ranges = sorted({(g.min_tilt_deg, g.max_tilt_deg) for g in geometries})
     for low, high in wedge_ranges:
@@ -1054,7 +1075,7 @@ def _dynamo_inputs(
         matrices=[relion_euler_to_matrix(r.rot_deg, r.tilt_deg, r.psi_deg) for r in records],
         shifts=[np.array([r.shift_x_px, r.shift_y_px, r.shift_z_px]) for r in records],
         raw=[volume.detach().cpu().numpy().astype(np.float64) for volume in combined.volumes],
-        tilt_ranges=[(g.min_tilt_deg, g.max_tilt_deg) for g in geometries],
+        tilt_ranges=[dynamo_ytilt((g.min_tilt_deg, g.max_tilt_deg)) for g in geometries],
     )
 
 
@@ -1305,6 +1326,7 @@ class DynamoSearchRefinementBackend:
             normalization_mask_voxels=int(np.count_nonzero(normalization_mask)),
             grid_reach_deg=reach,
             wedge_tilt_ranges_deg=[list(one) for one in ranges],
+            dynamo_ytilt_ranges_deg=[list(dynamo_ytilt(one)) for one in ranges],
             wedge_boundary_policy=WEDGE_BOUNDARY_POLICY,
             fourier_weight_threshold=FOURIER_WEIGHT_THRESHOLD,
             fourier_weight=None if fweight is None else _fourier_weight_summary(fweight),
@@ -1530,6 +1552,7 @@ class DynamoAverageBackend:
             alignment_mask_path=None if inputs.mask_path is None else str(inputs.mask_path),
             normalization_mask_voxels=int(np.count_nonzero(inputs.normalization_mask)),
             wedge_tilt_ranges_deg=[list(one) for one in inputs.wedge_ranges],
+            dynamo_ytilt_ranges_deg=[list(dynamo_ytilt(one)) for one in inputs.wedge_ranges],
             wedge_boundary_policy=WEDGE_BOUNDARY_POLICY,
             fmin=DYNAMO_AVERAGE_FMIN,
             fourier_weight_threshold=result.threshold,

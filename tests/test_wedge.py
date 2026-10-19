@@ -783,3 +783,56 @@ def test_a_wedge_geometry_takes_its_range_from_the_views_it_is_given() -> None:
     assert geometry.missing_half_angle_deg == pytest.approx(33.0)
     with pytest.raises(ValueError, match="at least one tilt angle"):
         WedgeGeometry.from_tilt_angles([])
+
+
+def test_each_series_takes_the_wedge_its_tomogram_was_built_with(tmp_path: Path) -> None:
+    """The solved angles of the views the tomogram kept, not the manifest's nominal ones.
+
+    On ryr1 039 fine alignment shifted the angles by +7 deg and correct-ctf left
+    out the two most negative views: nominal -42..+42, built from -29..+49.
+    """
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.backends.subtomogram import _CombinedParticles, _wedge_geometry_per_particle
+    from cryoet_pipeline.cli import _tomogram_tilt_ranges
+
+    angles = tmp_path / "039.tlt"
+    angles.write_text("".join(f"{angle:.2f}\n" for angle in (-29.0, -26.0, 0.0, 46.0, 49.0)))
+    registry = ArtifactRegistry.empty()
+    registry.add(
+        Artifact(
+            id="TS_WEDGE:tomogram:fine:bin8",
+            kind=ArtifactKind.TOMOGRAM,
+            path=tmp_path / "tomogram.zarr",
+            parameters={"tilt_series_id": "TS_WEDGE", "tilt_angles_path": str(angles)},
+        )
+    )
+    stack = Artifact(
+        id="TS_WEDGE:particle_stack:bin8",
+        kind=ArtifactKind.PARTICLE_STACK,
+        path=tmp_path / "particles.zarr",
+        parameters={
+            "tilt_series_id": "TS_WEDGE",
+            "input_tomogram_id": "TS_WEDGE:tomogram:fine:bin8",
+        },
+    )
+
+    ranges = _tomogram_tilt_ranges(registry, [stack])
+    assert ranges == {"TS_WEDGE": [-29.0, 49.0]}
+
+    combined = _CombinedParticles(
+        volumes=[None, None], records=[], box_size=8, tilt_series_ids=["TS_WEDGE"],
+        stack_ids=[stack.id], counts=[2],
+    )
+    geometries = _wedge_geometry_per_particle(
+        [(stack, _manifest())], combined, min_tilt_override=None, max_tilt_override=None,
+        tilt_axis_deg=0.0, ranges_by_series={"TS_WEDGE": (-29.0, 49.0)},
+    )
+    assert [(g.min_tilt_deg, g.max_tilt_deg) for g in geometries] == [(-29.0, 49.0)] * 2
+
+    # Without the tomogram's record, the manifest's -60..60 as before.
+    fallback = _wedge_geometry_per_particle(
+        [(stack, _manifest())], combined, min_tilt_override=None, max_tilt_override=None,
+        tilt_axis_deg=0.0,
+    )
+    assert (fallback[0].min_tilt_deg, fallback[0].max_tilt_deg) == (-60.0, 60.0)

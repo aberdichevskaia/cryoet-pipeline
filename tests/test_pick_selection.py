@@ -327,3 +327,32 @@ def test_a_template_value_in_the_wrong_unit_is_refused(tmp_path):
     result = _invoke(tmp_path, registry_path, manifests)
     assert result.exit_code != 0
     assert "raw pytom score" in " ".join(result.output.split())
+
+
+def test_each_series_can_keep_what_lies_above_its_own_false_positive_height(tmp_path):
+    """The line the report draws, from each search's own statistics.
+
+    Noise of σ 0.02 over 1e9 positions and orientations reaches ~6.0σ once, so
+    TS_A keeps its three picks at or above LCCmax ~0.12.
+    """
+
+    from cryoet_pipeline.pick_selection import false_positive_height_sigma
+
+    registry_path, manifests = _project(tmp_path)
+    picks = ArtifactRegistry.load(registry_path).get("TS_A:picks:full:pytom-match-pick:bin8")
+    height = false_positive_height_sigma(picks)
+    assert 5.9 < height < 6.1
+
+    result = _invoke(tmp_path, registry_path, manifests, "--above-false-positive-height")
+    assert result.exit_code == 0, result.output
+    assert "TS_A: keeps 3 of 4" in result.output
+    registry = ArtifactRegistry.load(registry_path)
+    a = registry.get("TS_A:picks:full:pytom-match-pick:bin8-sel")
+    assert _kept_scores(a.path) == [0.20, 0.15, 0.14]
+
+
+def test_the_false_positive_height_needs_the_searchs_statistics(tmp_path):
+    registry_path, manifests = _project(tmp_path, with_stats=False)
+    result = _invoke(tmp_path, registry_path, manifests, "--above-false-positive-height")
+    assert result.exit_code != 0
+    assert "one-false-positive height is unknown" in " ".join(result.output.split())

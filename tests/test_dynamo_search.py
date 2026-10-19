@@ -1115,3 +1115,38 @@ def test_cli_says_nothing_about_resolution_for_an_average_nothing_refined(tmp_pa
     assert "particles averaged: 2" in result.output
     assert "resolution" not in result.output
     assert "_dynamo-average_average.mrc" in result.output
+
+
+def test_dynamo_is_given_the_tomograms_tilt_range_negated() -> None:
+    """Dynamo's ytilt and wedge.py's range sit on mirror sides of the stored volume.
+
+    wedge.py's range was checked against a stored IMOD reconstruction of noise over
+    -20..+60 (2026-10-19, see `dynamo_ytilt`); Dynamo's own wedge covers the same
+    frequencies only once the range is negated.
+    """
+
+    import torch
+
+    from cryoet_pipeline.backends.dynamo_search import dynamo_ytilt, wedge
+    from cryoet_pipeline.wedge import WedgeGeometry, wedge_present_mask_rfft
+
+    size = 32
+    ours = wedge_present_mask_rfft(
+        size, WedgeGeometry(-20.0, 60.0, 0.0), device=torch.device("cpu")
+    ).numpy() > 0.5
+
+    def as_rfft(centred: np.ndarray) -> np.ndarray:
+        return np.fft.ifftshift(centred)[..., : size // 2 + 1] > 0.5
+
+    z, y, x = np.indices((size, size, size // 2 + 1))
+    frequency = np.stack(
+        [np.fft.fftfreq(size)[z], np.fft.fftfreq(size)[y], np.fft.rfftfreq(size)[x]]
+    )
+    # Inside Dynamo's Fourier sphere, away from the bins exactly on a boundary.
+    inside = np.sqrt(np.sum(frequency**2, axis=0)) < 0.45
+    negated = as_rfft(wedge(size, dynamo_ytilt((-20.0, 60.0))))
+    as_given = as_rfft(wedge(size, (-20.0, 60.0)))
+
+    assert dynamo_ytilt((-20.0, 60.0)) == (-60.0, 20.0)
+    assert np.mean(negated[inside] == ours[inside]) > 0.98
+    assert np.mean(as_given[inside] == ours[inside]) < 0.8

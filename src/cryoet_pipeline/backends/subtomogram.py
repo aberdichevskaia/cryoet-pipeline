@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -1049,6 +1049,7 @@ class ConeSearchRefinementBackend:
                 min_tilt_override=wedge_min_tilt_deg,
                 max_tilt_override=wedge_max_tilt_deg,
                 tilt_axis_deg=wedge_tilt_axis_deg,
+                ranges_by_series=wedge_ranges_by_series(context),
             )
             hermitian_weights = hermitian_weights_rfft(box_size, device)
             if fourier_compensation:
@@ -1831,6 +1832,7 @@ def _wedge_geometry_per_particle(
     min_tilt_override: float | None,
     max_tilt_override: float | None,
     tilt_axis_deg: float,
+    ranges_by_series: Mapping[str, tuple[float, float]] | None = None,
 ) -> list[WedgeGeometry]:
     """One wedge per particle, taken from the series the particle came from.
 
@@ -1838,16 +1840,19 @@ def _wedge_geometry_per_particle(
     positional, as `ParticleRecord.index` states — so the series is recovered
     from `counts`, the same arithmetic `filter_combined_by_class` uses.
 
-    The range defaults to the extremes of the manifest's tilt angles, which is
-    the honest default and wrong in one knowable way: views excluded during
-    alignment are still in the manifest, so a series that lost its extreme views
-    gets a wedge slightly narrower than the truth. The overrides exist for that,
-    and for data that entered mid-pipeline without a manifest worth trusting.
+    The range is the tomogram's own when the command found it
+    (`ranges_by_series`, from the solved angles reconstruction recorded), and
+    otherwise the extremes of the manifest's tilt angles. Those are wrong in
+    knowable ways: they are the nominal angles, before fine alignment shifted
+    them to make the specimen flat (+7 deg on ryr1 039), and they still hold the
+    views alignment or correct-ctf left out. The overrides exist for data that
+    entered mid-pipeline without either worth trusting.
     """
 
     geometries: list[WedgeGeometry] = []
     for (_, manifest), count in zip(pairs, combined.counts, strict=True):
-        angles = manifest.tilt_angles_deg
+        recorded = (ranges_by_series or {}).get(manifest.tilt_series_id)
+        angles = list(recorded) if recorded is not None else manifest.tilt_angles_deg
         if not angles and (min_tilt_override is None or max_tilt_override is None):
             raise ValueError(
                 f"{manifest.tilt_series_id} records no tilt angles, so its missing wedge "
@@ -1869,6 +1874,29 @@ def _wedge_geometry_per_particle(
             "the per-series counts do not cover the combined stack"
         )
     return geometries
+
+
+def wedge_ranges_by_series(context: BackendContext) -> dict[str, tuple[float, float]]:
+    """Each series' tilt range as its tomogram was built, when the command found it."""
+
+    value = context.parameters.get("wedge_ranges_by_series")
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError("context parameter 'wedge_ranges_by_series' must map series to ranges")
+    ranges: dict[str, tuple[float, float]] = {}
+    for series, pair in value.items():
+        if (
+            not isinstance(pair, Sequence)
+            or len(pair) != 2
+            or not all(isinstance(one, (int, float)) and not isinstance(one, bool) for one in pair)
+        ):
+            raise ValueError(f"the tilt range of {series} must be two numbers, got {pair!r}")
+        low, high = float(pair[0]), float(pair[1])
+        if not (math.isfinite(low) and math.isfinite(high) and low < high):
+            raise ValueError(f"the tilt range of {series} must run from low to high: {pair!r}")
+        ranges[str(series)] = (low, high)
+    return ranges
 
 
 def _best_shift_and_correlation(

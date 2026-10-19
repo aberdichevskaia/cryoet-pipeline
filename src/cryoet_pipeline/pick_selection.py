@@ -151,6 +151,24 @@ def score_hints(picks: Artifact) -> dict[str, float | int | None]:
     return hints
 
 
+def false_positive_height_sigma(picks: Artifact) -> float:
+    """The one-false-positive height of the search a pick list came from, in σ.
+
+    The line the report draws through the score curves: the score the search's
+    noise alone reaches about once over the positions and orientations it tried.
+    Computed from pytom's own job statistics, as the report computes it.
+    """
+
+    job_json = picks.parameters.get("pytom_job_json_path")
+    statistics = _search_statistics(Path(job_json)) if isinstance(job_json, str) else None
+    if statistics is None:
+        raise ValueError(
+            f"{picks.id} records no pytom search statistics, so its one-false-positive "
+            "height is unknown; give a threshold instead"
+        )
+    return statistics.one_false_positive_z
+
+
 def write_thresholds_template(
     path: Path, hints: dict[str, dict[str, float | int | None]]
 ) -> list[str]:

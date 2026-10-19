@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
@@ -147,6 +147,7 @@ from cryoet_pipeline.pick_geometry import (
 from cryoet_pipeline.pick_selection import (
     ScoreThreshold,
     default_thresholds_path,
+    false_positive_height_sigma,
     measure_score_selection,
     score_hints,
     select_picks_by_score,
@@ -3076,6 +3077,14 @@ def select_picks(
             "scripts/qc_dynamo_picks.py writes as thresholds.json."
         ),
     ] = None,
+    above_false_positive_height: Annotated[
+        bool,
+        typer.Option(
+            help="Keep each series' picks above its own one-false-positive height, the "
+            "line the report draws: the score its search's noise alone reaches about "
+            "once. Each series' height comes from its own search.",
+        ),
+    ] = False,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -3101,12 +3110,14 @@ def select_picks(
         "minimum-score": minimum_score,
         "thresholds-sigma": thresholds_sigma,
         "thresholds-score": thresholds_score,
+        "above-false-positive-height": above_false_positive_height or None,
     }
     chosen = [name for name, value in given.items() if value is not None]
     if len(chosen) > 1:
         raise typer.BadParameter(
-            "give at most one of --minimum-sigma, --minimum-score, --thresholds-sigma and "
-            f"--thresholds-score; got {', '.join('--' + name for name in chosen)}",
+            "give at most one of --minimum-sigma, --minimum-score, --thresholds-sigma, "
+            "--thresholds-score and --above-false-positive-height; got "
+            f"{', '.join('--' + name for name in chosen)}",
             param_hint="minimum-sigma",
         )
     hint = "--" + (chosen[0] if chosen else "thresholds-sigma")
@@ -3157,6 +3168,17 @@ def select_picks(
             thresholds = thresholds_from_json(thresholds_sigma, "sigma", names)
         elif thresholds_score is not None:
             thresholds = thresholds_from_json(thresholds_score, "score", names)
+        elif above_false_positive_height:
+            thresholds = {
+                one.tilt_series_id: ScoreThreshold(
+                    false_positive_height_sigma(
+                        _picks_artifact(artifact_registry, one, variant=variant)
+                    ),
+                    "sigma",
+                    "--above-false-positive-height",
+                )
+                for one in manifests
+            }
         elif minimum_sigma is not None:
             one = ScoreThreshold(minimum_sigma, "sigma", "--minimum-sigma")
             thresholds = dict.fromkeys(names, one)
@@ -4191,6 +4213,7 @@ def average_particles(
         _particle_stack_artifact(artifact_registry, one, variant=variant)
         for one in tilt_series_manifests
     ]
+    tomogram_ranges = _tomogram_tilt_ranges(artifact_registry, particle_stacks)
     selected_backend = _subtomogram_averaging_backend(backend)
     parameters: dict[str, object] = {
         # Inputs were resolved by `variant` above; the backend only ever uses this
@@ -4230,6 +4253,8 @@ def average_particles(
     }.items():
         if value is not None:
             parameters[key] = value
+    if tomogram_ranges:
+        parameters["wedge_ranges_by_series"] = tomogram_ranges
     if wedge_min_tilt_deg is not None:
         parameters["wedge_min_tilt_deg"] = wedge_min_tilt_deg
     if wedge_max_tilt_deg is not None:
@@ -4811,6 +4836,37 @@ class _CtfWeighting:
     z_values: list[int] | None = None
     """The z value of each row of the defocus file, so that picking can take the
     rows of the views the tomogram kept."""
+
+
+def _tomogram_tilt_ranges(
+    registry: ArtifactRegistry, particle_stacks: Sequence[Artifact]
+) -> dict[str, list[float]]:
+    """Each series' tilt range as its tomogram was built: the solved angles it used.
+
+    The particles' missing wedge is the tomogram's, so its range is the lowest
+    and highest of the angles reconstruction recorded, not the manifest's nominal
+    ones: fine alignment shifts them (by +7 deg on ryr1 039) and alignment and
+    correct-ctf leave views out. A series whose tomogram recorded none is left to
+    the manifest.
+    """
+
+    ranges: dict[str, list[float]] = {}
+    for stack in particle_stacks:
+        tomogram_id = stack.parameters.get("input_tomogram_id")
+        if not isinstance(tomogram_id, str):
+            continue
+        try:
+            tomogram = registry.get(tomogram_id)
+        except KeyError:
+            continue
+        path = tomogram.parameters.get("tilt_angles_path")
+        if not isinstance(path, str) or not Path(path).is_file():
+            continue
+        angles = [float(word) for word in Path(path).read_text().split()]
+        series = stack.parameters.get("tilt_series_id")
+        if angles and isinstance(series, str):
+            ranges[series] = [min(angles), max(angles)]
+    return ranges
 
 
 def _tilt_angles_for_tomogram(
