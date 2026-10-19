@@ -196,6 +196,8 @@ def read_dynamo_classification(
 
     project = project.resolve()
     base = project.parent
+    if not project.is_dir():
+        raise ValueError(f"{project}: no such folder")
     if not (project / "results").is_dir():
         raise ValueError(f"{project} is not a Dynamo project with results: no results/ folder")
     problems: list[str] = []
