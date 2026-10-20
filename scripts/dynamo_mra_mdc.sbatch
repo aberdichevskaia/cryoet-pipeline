@@ -20,8 +20,11 @@
 # particle's widest, 290 unless given) its steps; the steps are equal in A, or in
 # frequency with LOWPASS_STEPS=fourier. The alignment and classification mask is
 # the particle's radius from DIAMETER plus 3 px with a 2 px soft edge, unless
-# MASK_RADIUS and MASK_EDGE (px) say otherwise. Without SCHEDULE the search is
-# the fixed one. A project
+# MASK_RADIUS and MASK_EDGE (px) say otherwise, or MASK_FILE gives a mask of any
+# shape in the particles' box (scripts/make_mra_mask.py makes one that leaves a
+# membrane out; a relative path is taken from the repo root). SYMMETRY (c4, ...)
+# is imposed about the box's z axis in every round, c1 unless given. Without
+# SCHEDULE the search is the fixed one. A project
 # that already exists in EXPORT is not made again: the job goes on computing it
 # from the iteration Dynamo has recorded as next, so a job that ran out of time
 # is resubmitted as it was.
@@ -50,6 +53,10 @@ DYNAMO_ROOT=${DYNAMO_ROOT:-/fast/AG_Kudryashev/artsemi/software/Dynamo}
 CORES=${SLURM_CPUS_PER_TASK:-8}
 JOB_DIR=${SCRATCH_ROOT:-/fast/AG_Kudryashev/anna.berdichevskaia/tmp}/dynamo_${NAME}_${SLURM_JOB_ID:-$$}
 [[ -f "$REPO/scripts/dynamo_mra_setup.m" ]] || { echo "submit from the repo root" >&2; exit 1; }
+if [[ -n "${MASK_FILE:-}" ]]; then
+    [[ "$MASK_FILE" = /* ]] || MASK_FILE=$REPO/$MASK_FILE
+    [[ -f "$MASK_FILE" ]] || { echo "no MASK_FILE $MASK_FILE" >&2; exit 1; }
+fi
 
 export MCR_CACHE_ROOT=$JOB_DIR/mcr_cache
 export TMPDIR=$JOB_DIR/tmp
@@ -85,6 +92,8 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${LOWPASS_STEPS:-}" ]] && options+="lowpass_steps = '$LOWPASS_STEPS'; "
     [[ -n "${MASK_RADIUS:-}" ]] && options+="mask_radius = $MASK_RADIUS; "
     [[ -n "${MASK_EDGE:-}" ]] && options+="mask_edge = $MASK_EDGE; "
+    [[ -n "${MASK_FILE:-}" ]] && options+="mask_file = '$MASK_FILE'; "
+    [[ -n "${SYMMETRY:-}" ]] && options+="symmetry = '$SYMMETRY'; "
     dynamo "project = '$NAME'; seeds = {${cells%, }}; cores = $CORES; ${options}eval(fileread('$REPO/scripts/dynamo_mra_setup.m'))" 2>&1 | tee "${NAME}_setup.log"
     if [[ ! -f "$card" ]]; then
         echo "the setup did not make $NAME; see $EXPORT/${NAME}_setup.log" >&2

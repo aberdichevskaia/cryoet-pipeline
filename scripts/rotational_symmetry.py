@@ -23,6 +23,16 @@ high at 60, 120 and 180 and low at 30, 90 and 150, which are the control: for a
 sixfold map they are the worst angles. A threefold or twofold map peaks at 120 or
 180 only. No peaks means the map is not symmetric about z.
 
+--order n (default 6) sets the symmetry looked for: the angles are the multiples
+of 180/n up to 180, the peaks the even ones (multiples of 360/n) and the control
+the odd ones, so for n = 4 peaks at 90 and 180 and controls at 45 and 135, and the
+axis is fitted to the peaks. Before imposing C4 on RyR1 (2026-10-20) the question
+is the same one: Dynamo rotates about the z axis through voxel N/2 (zero-based;
+dynamo_csym turns with dynamo_rot, whose 3D centre is the EM convention), the
+export centres particles on (N - 1) / 2, and this script's box centre is N // 2,
+Dynamo's, so the fitted offset is how far the map's axis is from the one Dynamo's
+c4 would use.
+
 On the gag averages (2026-10-13) the peaks fell with the angle, 0.84 at 60, 0.72 at
 120. A sixfold axis displaced from the box centre, or tilted from z, does that:
 rotating about the wrong axis adds a translation or tilt growing as sin(a/2). The
@@ -63,9 +73,13 @@ from scipy.optimize import minimize
 
 # EM data types (byte 3 of the header) this reads, as written by Dynamo's dwrite.
 _EM_TYPES = {2: "<i2", 4: "<i4", 5: "<f4", 9: "<f8"}
-_ANGLES = (30, 60, 90, 120, 150, 180)
-_SIXFOLD = (60, 120, 180)
-_BETWEEN = (30, 90, 150)
+
+
+def angle_sets(order: int) -> tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]:
+    """All angles k * 180 / order up to 180, the peaks (even k) and the control (odd k)."""
+
+    angles = tuple(180.0 * k / order for k in range(1, order + 1))
+    return angles, angles[1::2], angles[0::2]
 
 
 def read_em(path: Path) -> np.ndarray:
@@ -140,7 +154,7 @@ def correlation(first: np.ndarray, second: np.ndarray, where: np.ndarray) -> flo
     return float(np.sum(a * b) / np.sqrt(np.sum(a * a) * np.sum(b * b)))
 
 
-def profile(volume, inside, axis, angles=_ANGLES) -> dict[int, float]:
+def profile(volume, inside, axis, angles) -> dict[float, float]:
     base, base_valid = rotated(volume, 0.0, axis)
     result = {}
     for angle in angles:
@@ -149,9 +163,9 @@ def profile(volume, inside, axis, angles=_ANGLES) -> dict[int, float]:
     return result
 
 
-def fit_axis(volume, inside):
+def fit_axis(volume, inside, peaks):
     def cost(axis):
-        return -np.mean(list(profile(volume, inside, axis, _SIXFOLD).values()))
+        return -np.mean(list(profile(volume, inside, axis, peaks).values()))
 
     # Steps of half a voxel and about one degree to start; the box axis is the start.
     simplex = np.vstack([np.zeros(4), np.diag([0.5, 0.5, 0.02, 0.02])])
@@ -160,34 +174,40 @@ def fit_axis(volume, inside):
     return result.x, int(result.nfev)
 
 
-def row(name: str, cc: dict[int, float]) -> str:
-    peaks = [cc[a] for a in _SIXFOLD]
-    values = " ".join(f"{cc[a]:+.3f}" for a in _ANGLES)
-    return (f"  {name:8s} {values}   {np.mean(peaks):+.3f}  {np.mean([cc[a] for a in _BETWEEN]):+.3f}"
-            f"   {max(peaks) - min(peaks):.3f}")
+def row(name: str, cc: dict[float, float], order: int) -> str:
+    angles, peaks, between = angle_sets(order)
+    at_peaks = [cc[a] for a in peaks]
+    values = " ".join(f"{cc[a]:+6.3f}" for a in angles)
+    return (f"  {name:8s} {values}   {np.mean(at_peaks):+.3f}  {np.mean([cc[a] for a in between]):+.3f}"
+            f"   {max(at_peaks) - min(at_peaks):.3f}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--map", type=Path, action="append", required=True, help="repeat for several maps")
     parser.add_argument("--mask", type=Path, required=True, help="voxels above 0.5 are compared")
+    parser.add_argument("--order", type=int, default=6, help="the n of Cn looked for (default 6)")
     args = parser.parse_args()
+    if args.order < 2:
+        parser.error("--order must be 2 or more")
+    angles, peaks, between = angle_sets(args.order)
 
     mask = read_volume(args.mask)
     inside = mask > 0.5
-    header = " ".join(f"{a:>6d}" for a in _ANGLES)
+    header = " ".join(f"{a:>6g}" for a in angles)
+    span = lambda group: f"{group[0]:g}-{group[-1]:g}"
     for path in args.map:
         volume = read_volume(path)
         if volume.shape != mask.shape:
             raise SystemExit(f"{path} is {volume.shape}, the mask {mask.shape}")
-        box = profile(volume, inside, np.zeros(4))
-        axis, evaluations = fit_axis(volume, inside)
-        fitted = profile(volume, inside, axis)
+        box = profile(volume, inside, np.zeros(4), angles)
+        axis, evaluations = fit_axis(volume, inside, peaks)
+        fitted = profile(volume, inside, axis, angles)
         ox, oy, tx, ty = axis
         print(f"== {path}")
-        print(f"  axis     {header}   60-180  30-150  spread 60-180")
-        print(row("box z", box))
-        print(row("fitted", fitted))
+        print(f"  axis     {header}   {span(peaks):>6s}  {span(between):>6s}  spread {span(peaks)}")
+        print(row("box z", box, args.order))
+        print(row("fitted", fitted, args.order))
         print(f"  fitted axis: through centre + ({ox:+.2f}, {oy:+.2f}) voxels, tilted "
               f"{np.degrees(np.arctan(np.hypot(tx, ty))):.2f} deg towards azimuth "
               f"{np.degrees(np.arctan2(ty, tx)):+.0f} deg ({evaluations} evaluations)")

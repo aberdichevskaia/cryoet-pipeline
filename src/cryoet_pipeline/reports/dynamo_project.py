@@ -672,9 +672,10 @@ def _parameters(
         if label != "alignment" and alignment is not None and np.array_equal(mask, alignment):
             add("Masks", label, "the alignment mask")
             continue
+        # The volume only: a cylinder that leaves a membrane out is not a sphere.
         radius = _sphere_radius(mask)
-        add("Masks", label, f"{_text(file_name)}: its voxels above 0.5 hold a sphere of radius "
-            f"{radius:.1f} px{nm(radius)}")
+        add("Masks", label, f"{_text(file_name)}: its voxels above 0.5 fill as much as a "
+            f"sphere of radius {radius:.1f} px{nm(radius)}")
 
     rounds = [r for r in ROUNDS if _as_float(setting("ite", r))] if vpr else [1]
     for round_ in rounds:
