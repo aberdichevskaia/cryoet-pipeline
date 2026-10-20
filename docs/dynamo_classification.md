@@ -112,6 +112,78 @@ to leave the real set mostly as it was. The reading, written before the run: a
 class collects junk if it holds at least twice the share of decoys it holds of
 real particles and the 95% interval of its decoy share leaves out its real share.
 
+### Decoys chosen by template matching
+
+Random boxes are the easy case: on the ribo-mdc picks the noise-seeded channel
+took 86% of them and 0.5% of the real particles. pytom's false picks are not
+random boxes: each is noise that matched the template better than everything
+around it, and an average of such boxes looks like the template.
+`scripts/null_decoys.py` makes decoys the same way. Per series it writes a copy
+of the picks' tomogram with every Fourier phase replaced by white noise's (the
+same amplitudes, so the same spectrum, wedge, CTF zeros and variance, and
+nothing anywhere; `src/cryoet_pipeline/null_volumes.py`), registers it as a full
+tomogram labelled `bin8-null`, runs the lane's own pick on it with the template
+and mask the real picks were matched with, keeping the 120 best peaks with no
+score floor, and extracts them with the lane's box. It refuses a lane config that
+no longer matches how the real picks were matched (low-pass, per-tilt weighting,
+volume split). On MDC, one GPU job for the five series and the export, then the
+classification after it, with the search mra_nbb_ctf_decoy ran with the random
+decoys (its low-passes 39-22 A stepped in frequency, from before the default
+became steps in A):
+
+```bash
+PROJECT=outputs/ribo-mdc CONFIG=configs/lanes/ribo-mdc.toml SERIES="TS_0306 TS_0463 TS_0493 TS_0564 TS_0623" EXPORT=outputs/ribo-mdc/dynamo/export_null sbatch --export=ALL --job-name=null-decoys scripts/null_decoys.sbatch
+EXPORT=$PWD/outputs/ribo-mdc/dynamo/export_null NAME=mra_nbb_ctf_null SEEDS="blob blob noise" SCHEDULE=coarse_to_fine LOWPASS_STEPS=fourier sbatch --export=ALL --job-name=mra_nbb_ctf_null --dependency=afterok:<job> scripts/dynamo_mra_mdc.sbatch
+```
+
+The job log says, per series, how far the copy is from the tomogram (same
+spread, correlation near zero), how the real picks' scores stand against the
+null's best (what noise of this spectrum reaches against this template over a
+volume of the same size), and every setting the two pytom jobs differ in besides
+the tomogram, which should be none. The export marks the decoys as pytom picks in
+phase-randomised tomograms, and the report says so.
+
+The reading, written before the run, with the rule above: if a channel collects
+these decoys too, Dynamo can clean pytom's list; if every channel holds them in
+the share it holds of real particles, it cannot tell template-selected noise
+from the picks, and the cleaning belongs to picking. Two differences from the
+real false picks are known. The copy spreads the lamella's contrast and the
+vacuum's evenly over the volume, so its picks come from any depth and sample the
+tomogram's average texture; and boxes closer than half a box to an edge are
+dropped at extraction, which takes more of these than of the real picks. A
+separation could therefore come from the spectrum alone, and should be checked
+for that before it is read as structure.
+
+A second run on the same export changes one thing, the first low-pass: 80 A
+instead of 40, so rounds of 6, 10, 14, 17 and 21 px (78, 47, 34, 28 and 22 A) and
+steps from 15.1 to 4.4 deg, with the cone 3 steps wide as before and so about the
+same cost per iteration. Started a quarter of an hour after the first:
+
+```bash
+EXPORT=$PWD/outputs/ribo-mdc/dynamo/export_null NAME=mra_nbb_ctf80_null SEEDS="blob blob noise" SCHEDULE=coarse_to_fine LOWPASS_STEPS=fourier FIRST_LOWPASS=80 sbatch --export=ALL --job-name=mra_nbb_ctf80_null --dependency=afterok:<job>,after:<job of mra_nbb_ctf_null>+15 scripts/dynamo_mra_mdc.sbatch
+```
+
+Why the first low-pass: in both nbb decoy runs the noise channel took the random
+decoys in the first iteration (mra_nbb_ctf_decoy: 83% after it, 87% after five),
+so the first round is where the sorting is decided. And pytom matched after
+whitening up to 25 A, where the band coarser than 80 A holds a few per cent of
+the Fourier coefficients (shells up to 7 of 24 in its 60 px box): unless those
+weigh far more than the rest, the noise it selected looks like a ribosome at
+25-50 A and like nothing in particular at 80 A, where a ribosome has its mass.
+At 39 A the first round still sees much of the band the selection was made in.
+The reading, written before the run: if this run collects the null decoys by the
+rule above and the 40 A run does not, the low band is what tells a ribosome from
+selected noise. The wider first cone (45 deg against 23) comes with the step
+rule, so it is part of the change, not a second one.
+
+More iterations were not added. In both nbb decoy runs the noise channel's share
+of the decoys had stopped rising by the third iteration (83, 86, 87, 87, 87% and
+76, 84, 85, 85, 86%) and its size by the second (580, 583, 582, 584, 584); judging
+by the sizes, what still changed class later (73, then 51 particles) moved
+between the two blob channels, which hold random halves of one structure. If the
+null decoys are still moving into the noise channel at the fifth iteration, that
+changes.
+
 ## Comparing two runs particle by particle
 
 A split such as 74/13/13 says nothing alone: classification of noise also makes

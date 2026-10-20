@@ -16,10 +16,12 @@ Writes, for the series given (numbered 1..N in that order, Dynamo's column 20):
 distributions and writes a score-filtered `selected.tbl`.
 
 `--decoy-variant <label>` adds, after every real particle, the particle stacks of
-that label (random positions from `scripts/decoy_picks.py`, extracted like the real
-picks) for the same series, and marks them `"decoy": true` in the manifest. Dynamo
-sees them as particles like any other; the classification report counts where
-they went. The real particles keep the tags an export without decoys gives them.
+that label for the same series (random positions from `scripts/decoy_picks.py`, or
+pytom's picks in phase-randomised tomograms from `scripts/null_decoys.py`, extracted
+like the real picks), marks them `"decoy": true` in the manifest and says which
+kind they are in its `decoy_kind`. Dynamo sees them as particles like any other;
+the classification report counts where they went. The real particles keep the
+tags an export without decoys gives them.
 
 A format and pose adapter, nothing more: the voxels are copied, not processed. The
 poses go through `native_to_dynamo`, the conversion the dynamo-search backend uses
@@ -101,6 +103,24 @@ def reconstructed_tilt_range(
     return (float(min(angles)), float(max(angles))), "manifest"
 
 
+def decoy_kind(registry: ArtifactRegistry, stack) -> str:
+    """What a decoy stack's boxes are, in words for the report, from its picks and tomogram."""
+
+    def recorded(key: str):
+        value = stack.parameters.get(key)
+        try:
+            return registry.get(value) if isinstance(value, str) else None
+        except KeyError:
+            return None
+
+    tomogram, picks = recorded("input_tomogram_id"), recorded("picks_id")
+    if tomogram is not None and tomogram.parameters.get("phase_randomised_from"):
+        return "pytom picks in phase-randomised tomograms"
+    if picks is not None and picks.parameters.get("picking_method") == "random_positions":
+        return "boxes at random positions"
+    return "decoy boxes"
+
+
 def table_row(tag: int, tomogram: int, record, box: int, tilt_range, spacing: float) -> list:
     """One Dynamo table row: pose from the native one, wedge, tomogram, position."""
     angles, shift = native_to_dynamo(
@@ -159,7 +179,7 @@ def main() -> None:
     registry = ArtifactRegistry.load(args.project / "artifacts.json")
     (args.out / "particles").mkdir(parents=True, exist_ok=True)
 
-    rows, particles, wedges, wedge_sources = [], [], {}, {}
+    rows, particles, wedges, wedge_sources, decoy_kinds = [], [], {}, {}, set()
     box = spacing = None
     tag = 0
     # Every real particle first, so they keep the tags an export without decoys gives.
@@ -177,10 +197,12 @@ def main() -> None:
         if not tilt_range[0] < 0 < tilt_range[1]:
             raise SystemExit(f"{series}: tilt range {tilt_range} does not span zero")
         if decoy:
-            # Decoys are cut from the same tomogram, so they share its wedge.
+            # Decoys are cut from the same tomogram, or from a phase-randomised copy of
+            # it that keeps its tilt angles, so they share its wedge.
             if list(tilt_range) != wedges[series]:
                 raise SystemExit(f"{series}: the decoys' wedge {tilt_range} differs from the "
                                  f"real particles' {wedges[series]}; not the same tomogram?")
+            decoy_kinds.add(decoy_kind(registry, stack))
         else:
             wedges[series] = list(tilt_range)
             wedge_sources[series] = source
@@ -228,6 +250,7 @@ def main() -> None:
         "source_project": str(args.project.resolve()),
         "variant": args.variant,
         "decoy_variant": args.decoy_variant,
+        "decoy_kind": "; ".join(sorted(decoy_kinds)) if decoy_kinds else None,
         "selected_particles": len(rows),
         "decoy_particles": sum(1 for particle in particles if particle["decoy"]),
         "box_size_px": box,
@@ -269,7 +292,8 @@ def main() -> None:
     }, indent=1) + "\n")
     decoys = sum(1 for particle in particles if particle["decoy"])
     print(f"exported {len(rows)} particles of {len(args.series)} series to {args.out}"
-          + (f", {decoys} of them decoys" if args.decoy_variant is not None else ""))
+          + (f", {decoys} of them decoys ({'; '.join(sorted(decoy_kinds))})"
+             if args.decoy_variant is not None else ""))
 
 
 if __name__ == "__main__":

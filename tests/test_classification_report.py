@@ -16,12 +16,16 @@ import pytest
 
 pytest.importorskip("matplotlib")
 
+from matplotlib import pyplot as plt  # noqa: E402
+from matplotlib.text import Text  # noqa: E402
+
 from cryoet_pipeline.backends.dynamo_search import average_class  # noqa: E402
 from cryoet_pipeline.reports.classification import (  # noqa: E402
     Volume,
     central_views,
     class_changes,
     decoy_shares,
+    decoys_page,
     gallery_tile,
     plan_pages,
     sample_tags,
@@ -156,7 +160,8 @@ def make_project(tmp_path: Path) -> Path:
     return folder
 
 
-def write_manifest(project: Path, decoys: tuple[int, ...] = ()) -> None:
+def write_manifest(project: Path, decoys: tuple[int, ...] = (),
+                   decoy_kind: str | None = None) -> None:
     particles = [{"tag": tag, "run": "TS_A" if tag <= 6 else "TS_B",
                   "native_record": {"score": 0.1 + 0.01 * tag}, "decoy": tag in decoys}
                  for tag in TAGS]
@@ -165,6 +170,7 @@ def write_manifest(project: Path, decoys: tuple[int, ...] = ()) -> None:
         "wedge": {"ranges": {"TS_A": [-50.0, 60.0], "TS_B": [-40.0, 55.0]}},
         "particles": particles,
         "decoy_variant": "bin8-decoy" if decoys else None,
+        **({"decoy_kind": decoy_kind} if decoy_kind is not None else {}),
     }))
 
 
@@ -329,6 +335,21 @@ def test_decoys_are_counted_per_class(project: Path, tmp_path: Path) -> None:
     outcome = write_classification_report(tmp_path / "report.pdf", run, written="now",
                                           software="test")
     assert outcome.problems == []
+
+
+def test_the_decoys_are_named_as_the_export_names_them(project: Path) -> None:
+    """Exports before `decoy_kind` held random positions only, and are read so."""
+
+    write_manifest(project, decoys=(11, 12),
+                   decoy_kind="pytom picks in phase-randomised tomograms")
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    values = {(p.group, p.name): p.value for p in run.parameters}
+    assert values[("Data", "decoys")].startswith(
+        "2 pytom picks in phase-randomised tomograms (bin8-decoy)")
+    figure = decoys_page(run)
+    assert any("2 pytom picks in phase-randomised tomograms among 12 particles"
+               in text.get_text() for text in figure.findobj(Text))
+    plt.close(figure)
 
 
 def test_a_schedule_shows_one_line_per_round_and_each_iteration_its_own(project: Path) -> None:

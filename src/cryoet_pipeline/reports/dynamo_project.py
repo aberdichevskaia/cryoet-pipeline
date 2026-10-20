@@ -45,6 +45,7 @@ import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import average_class, resample
 from cryoet_pipeline.reports.classification import (
+    DEFAULT_DECOY_KIND,
     ClassificationRun,
     ClassResult,
     IterationResult,
@@ -227,11 +228,12 @@ def read_dynamo_classification(
     scores: dict[int, float] = {}
     decoys: frozenset[int] = frozenset()
     decoy_variant = None
+    decoy_kind = DEFAULT_DECOY_KIND
     manifest_spacing = None
     manifest_wedges: dict[str, Any] = {}
     if manifest_path.exists():
         (series, scores, manifest_spacing, manifest_wedges, decoys,
-         decoy_variant) = _read_manifest(manifest_path)
+         decoy_variant, decoy_kind) = _read_manifest(manifest_path)
     elif manifest is not None:
         problems.append(f"manifest {manifest} is missing")
     apix_setting = _as_float(vpr.get("apix") or card.get("apix"))
@@ -303,7 +305,7 @@ def read_dynamo_classification(
         starting=starting, box=box, spacing=spacing, spacing_source=spacing_source,
         series=series, wedges=manifest_wedges, nref=nref, mra=mra, notes=notes,
         references=references, particles=particles, iterations=iterations,
-        decoys=decoys, decoy_variant=decoy_variant,
+        decoys=decoys, decoy_variant=decoy_variant, decoy_kind=decoy_kind,
     )
     planned = sum(int(_as_float(vpr.get(f"ite_r{r}")) or 0) for r in ROUNDS) if vpr else None
     return ClassificationRun(
@@ -324,6 +326,7 @@ def read_dynamo_classification(
         scores=scores,
         score_label="picking score (LCCmax, from the export manifest)",
         decoys=decoys & frozenset(int(tag) for tag in tags),
+        decoy_kind=decoy_kind,
         problems=problems,
     )
 
@@ -535,7 +538,7 @@ def _cached(build: Callable[[], np.ndarray]) -> Callable[[], np.ndarray]:
 def _read_manifest(
     path: Path,
 ) -> tuple[dict[int, str], dict[int, float], float | None, dict[str, Any], frozenset[int],
-           str | None]:
+           str | None, str]:
     data = json.loads(path.read_text())
     series: dict[int, str] = {}
     scores: dict[int, float] = {}
@@ -552,8 +555,10 @@ def _read_manifest(
     spacing = data.get("pixel_spacing_angstrom")
     wedges = (data.get("wedge") or {}).get("ranges") or {}
     variant = data.get("decoy_variant")
+    # Exports written before the manifest said which kind held random positions only.
+    kind = data.get("decoy_kind") or DEFAULT_DECOY_KIND
     return (series, scores, float(spacing) if spacing else None, wedges, frozenset(decoys),
-            str(variant) if variant else None)
+            str(variant) if variant else None, str(kind))
 
 
 def _seed_notes(path: Path) -> dict[int, str]:
@@ -613,6 +618,7 @@ def _parameters(
     wedges: Mapping[str, Any], nref: int, mra: bool, notes: Mapping[int, str],
     references: Mapping[int, Volume], particles: Path, iterations: list[IterationResult],
     decoys: frozenset[int] = frozenset(), decoy_variant: str | None = None,
+    decoy_kind: str = DEFAULT_DECOY_KIND,
 ) -> list[Parameter]:
     rows: list[Parameter] = []
 
@@ -628,7 +634,7 @@ def _parameters(
         f"{spacing:.3f} Å, from {spacing_source}" if spacing else "not recorded")
     add("Data", "particle folder", _relative(particles, base))
     if decoys:
-        add("Data", "decoys", f"{len(decoys):,} boxes at random positions"
+        add("Data", "decoys", f"{len(decoys):,} {decoy_kind}"
             + (f" ({decoy_variant})" if decoy_variant else "") + ", counted with the series")
     # One row per tomogram: its particles and the tilt range of its wedge, by tilt-series name
     # when the manifest gives them, by the table's tomogram number otherwise.

@@ -52,6 +52,8 @@ PARAMETER_ROWS_PER_PAGE = 33
 PROBLEM_LINES_PER_PAGE = 30
 GALLERY_SEED = 20261016
 """Which particles a gallery shows: fixed, so two reports of one run show the same ones."""
+DEFAULT_DECOY_KIND = "boxes at random positions"
+"""What decoys are when nothing says: the first control drew boxes at random positions."""
 
 CHANNEL_COLOURS = (
     style.SERIES_BLUE,
@@ -147,7 +149,9 @@ class ClassificationRun:
     """Each tag's picking score, when known."""
     score_label: str = "picking score"
     decoys: frozenset[int] = frozenset()
-    """Tags of boxes at random positions mixed in as a control, when there are any."""
+    """Tags of control boxes mixed in with the particles, when there are any."""
+    decoy_kind: str = DEFAULT_DECOY_KIND
+    """What the decoys are, in words: boxes at random positions, pytom's picks in noise."""
     problems: list[str] = field(default_factory=list)
     """Everything that could not be read, one line each."""
 
@@ -189,6 +193,7 @@ def write_classification_report(
                                 f"{error}")
                 figure = _error_page(page.label, error)
             style.footer(figure, footer, number, len(planned))
+            style.tidy_figure_text(figure)
             pdf.savefig(figure)
     partial.replace(path)
     return ClassificationReportOutcome(path, len(planned), problems)
@@ -481,7 +486,7 @@ def decoys_page(run: ClassificationRun) -> Figure:
     total = len(run.tags)
     figure = style.new_page(
         "Where the decoys went",
-        f"{decoys:,} boxes at random positions among {total:,} particles "
+        f"{decoys:,} {run.decoy_kind} among {total:,} particles "
         f"({100 * decoys / total:.0f}%), classified blind with the rest",
     )
     channels = sorted(run.references)
