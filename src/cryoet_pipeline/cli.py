@@ -2565,6 +2565,16 @@ def pick_particles(
             help="Constrain picking to the registered membrane segmentation, if present."
         ),
     ] = True,
+    segmentation_id: Annotated[
+        str | None,
+        typer.Option(
+            help="Constrain picking to this registered segmentation, named by its "
+            "artifact id, instead of the one carrying --variant's label. For a "
+            "search that must cover the region another one did: the null-decoy pick "
+            "in a phase-randomised copy of a tomogram, which has no membranes to "
+            "segment. It must cover the series and have the tomogram's shape.",
+        ),
+    ] = None,
     pytom_match_template_executable: Annotated[
         Path | None,
         typer.Option(
@@ -2754,9 +2764,20 @@ def pick_particles(
     tomogram = _tomogram_artifact(artifact_registry, tilt_series_manifest, variant=variant)
     selected_backend = _picking_backend(backend)
     supporting_artifacts: list[Artifact] = []
+    if segmentation_id is not None and not use_segmentation_mask:
+        raise typer.BadParameter(
+            "names a search mask, and --no-use-segmentation-mask searches without one",
+            param_hint="segmentation-id",
+        )
     if use_segmentation_mask:
-        segmentation = _optional_segmentation_artifact(
-            artifact_registry, tilt_series_manifest, variant=variant
+        segmentation = (
+            _named_segmentation_artifact(
+                artifact_registry, tilt_series_manifest, segmentation_id
+            )
+            if segmentation_id is not None
+            else _optional_segmentation_artifact(
+                artifact_registry, tilt_series_manifest, variant=variant
+            )
         )
         if segmentation is not None:
             supporting_artifacts.append(segmentation)
@@ -5230,6 +5251,30 @@ def _optional_segmentation_artifact(
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
     )
+
+
+def _named_segmentation_artifact(
+    registry: ArtifactRegistry,
+    manifest: TiltSeriesManifest,
+    artifact_id: str,
+) -> Artifact:
+    try:
+        artifact = registry.get(artifact_id)
+    except KeyError:
+        raise typer.BadParameter(
+            f"no artifact {artifact_id!r} in the registry", param_hint="segmentation-id"
+        ) from None
+    if artifact.kind is not ArtifactKind.SEGMENTATION:
+        raise typer.BadParameter(
+            f"{artifact_id} is a {artifact.kind.value}, not a segmentation",
+            param_hint="segmentation-id",
+        )
+    if not artifact.covers(manifest.tilt_series_id):
+        raise typer.BadParameter(
+            f"{artifact_id} does not cover {manifest.tilt_series_id}",
+            param_hint="segmentation-id",
+        )
+    return artifact
 
 
 def _tilt_stack_artifact(

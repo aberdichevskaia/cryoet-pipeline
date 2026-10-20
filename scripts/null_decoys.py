@@ -15,7 +15,13 @@ prints, per series, what it would make and the two commands it would run;
    config, on that copy, with three changes: the label; the template and mask
    the real picks were matched with, named rather than looked up, since no
    template carries the new label; and the best `--count` peaks with no score
-   floor, 120 unless told otherwise, as many as the random decoys per tomogram;
+   floor, 120 unless told otherwise, as many as the random decoys per tomogram.
+   It searches where the real picks were searched: the whole volume when they
+   were (the ribosome lanes), and inside the same membrane segmentation when they
+   were matched inside one (RyR1), named by its id, since the copy has no
+   membranes to segment. That mask is built before anything is made, and must
+   admit the fraction of the volume the real picks record admitting, or the
+   lane's dilation has changed since they were made;
 3. the lane's extract-particles on those picks, under the same label.
 
 `scripts/export_dynamo.py --variant <lane> --decoy-variant <lane>-null` then puts
@@ -33,14 +39,21 @@ cleaning belongs to picking.
 
 After each pick it prints two comparisons with the real picks. Their scores:
 the null's best is what noise of this spectrum reaches against this template
-over a volume of the same size. And the two pytom job files: every setting the
-searches differ in besides the tomogram, which should be none.
+over a volume of the same size. The two pytom job files: every setting the
+searches differ in besides the tomogram, which should be none. And the two
+search masks, by segmentation and the fraction they admitted.
 
 What the copy does not reproduce is where the variance was. The lamella's
 contrast and the vacuum's are spread evenly over the whole volume, so the null
 picks come from any depth, and sample the tomogram's average texture rather
 than the lamella's. Should Dynamo separate them from the real picks, check that
 a difference in spectrum alone could not, before reading it as structure.
+
+Inside a membrane mask the copy is searched where the real tomogram has
+membranes, but has none there itself: every real box holds a bilayer and no
+decoy box does. A classification mask that takes the membrane in, as a sphere
+about a membrane protein does, tells them apart by that alone; read these decoys
+with one that leaves the membrane out (scripts/make_mra_mask.py).
 
 A null tomogram registered before from the same tomogram with the same seed is
 used again, so a job resubmitted after a failed pick does not make it twice;
@@ -53,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -68,6 +82,7 @@ import scipy  # type: ignore[import-untyped]
 import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.picking import tomogram_search_mask
 from cryoet_pipeline.backends.subtomogram import _read_pytom_star
 from cryoet_pipeline.cli import _template_from_picks
 from cryoet_pipeline.models import Artifact, ArtifactKind, RetentionPolicy, StorageRole
@@ -78,8 +93,14 @@ Command = list[str]
 # What the copy must not inherit: it was not made by IMOD, and these name the real volume.
 _REAL_VOLUME_PARAMETERS = ("imod_rec_path", "imod_rec_axis_order", "log_path")
 
-# pytom job settings that differ between the two searches by construction.
-_EXPECTED_JOB_DIFFERENCES = frozenset({"tomogram", "tomo_id", "output_dir", "job_key", "job_stats"})
+# pytom job settings that differ between the two searches by construction, and
+# the whitening filter, which pytom names after the tomogram inside output_dir.
+_EXPECTED_JOB_DIFFERENCES = frozenset({"tomogram", "tomo_id", "output_dir", "job_key", "job_stats",
+                                       "whitening_filter"})
+# The tomogram mask pytom read: pick-particles writes it into a folder of its own
+# for every search, so only whether there was one can be compared. That it was the
+# same mask is what the two pick lists' segmentation_id and coverage say.
+_COMPARED_BY_PRESENCE = frozenset({"tomogram_mask"})
 
 
 def real_picks(registry: ArtifactRegistry, series: str, lane: str) -> Artifact:
@@ -252,12 +273,6 @@ def lane_commands(
 
     steps = dict(run_series.build_steps(cfg, project, series))
     pick, extract = list(steps["pick-particles"]), list(steps["extract-particles"])
-    # What the real picks record, not what the lane renders: pick-particles masks by
-    # a membrane segmentation by default whenever the series has one.
-    if real.parameters.get("segmentation_id") is not None:
-        raise SystemExit(f"{real.id} was matched inside the membrane mask "
-                         f"{real.parameters['segmentation_id']}; the null tomogram has no "
-                         "membranes, and picking it without one would not be the lane's search")
     recorded = real.parameters.get("pytom_low_pass_angstrom")
     lane_low_pass = (float(pick[pick.index("--pytom-low-pass") + 1])
                      if "--pytom-low-pass" in pick else None)
@@ -292,16 +307,60 @@ def lane_commands(
     _set(pick, "--pytom-template-mask", str(mask))
     pick.append("--no-pytom-non-spherical-mask" if spherical_mask
                 else "--pytom-non-spherical-mask")
-    # Unmasked, as the real search was. Said outright: left to its default,
-    # pick-particles would look for a segmentation under the new label, and refuse
-    # when the series has one under another.
+    # Where the real search was, by what the real picks record rather than what the
+    # lane renders: unmasked, or inside the segmentation they name. Said outright
+    # either way: left to its default, pick-particles would look for a segmentation
+    # under the new label, which none carries, and refuse when the series has one
+    # under another. The dilation stays the lane's; search_mask checks it.
+    segmentation_id = real.parameters.get("segmentation_id")
     for flag in ("--use-segmentation-mask", "--no-use-segmentation-mask"):
         while flag in pick:
             pick.remove(flag)
-    _drop(pick, "--segmentation-mask-dilation-px")
-    pick.append("--no-use-segmentation-mask")
+    _drop(pick, "--segmentation-id")
+    if segmentation_id is None:
+        _drop(pick, "--segmentation-mask-dilation-px")
+        pick.append("--no-use-segmentation-mask")
+    else:
+        pick.extend(["--use-segmentation-mask", "--segmentation-id", str(segmentation_id)])
     _set(extract, "--variant", variant)
     return pick, extract
+
+
+def search_mask(registry: ArtifactRegistry, real: Artifact, tomogram: Artifact,
+                pick: Command) -> str:
+    """Where the null search will look, refused unless it is where the real one did.
+
+    The real picks record the segmentation they were searched inside and the
+    fraction of the tomogram its mask admitted, but not the margin it was grown
+    by, which comes from the config. So the mask `pick` will make is made here,
+    from the real tomogram, whose shape the copy has, and its fraction compared:
+    the same segmentation grown by the same margin admits the same fraction,
+    another margin practically never does.
+    """
+
+    segmentation_id = real.parameters.get("segmentation_id")
+    if segmentation_id is None:
+        return "the whole volume, as the real picks were"
+    try:
+        segmentation = registry.get(str(segmentation_id))
+    except KeyError:
+        raise SystemExit(f"{real.id} was matched inside {segmentation_id}, which is no "
+                         "longer registered") from None
+    recorded = real.parameters.get("tomogram_mask_coverage")
+    if not isinstance(recorded, int | float):
+        raise SystemExit(f"{real.id} does not record how much of the tomogram its mask "
+                         "admitted, so the null search's mask cannot be shown to be the same")
+    dilation = (int(pick[pick.index("--segmentation-mask-dilation-px") + 1])
+                if "--segmentation-mask-dilation-px" in pick else None)
+    coverage = float(tomogram_search_mask(segmentation, tomogram=tomogram,
+                                          dilation_px=dilation).mean())
+    grown = f"grown by {dilation} px" if dilation else "not grown"
+    if not math.isclose(coverage, float(recorded), rel_tol=1e-6):
+        raise SystemExit(f"{real.id} was matched inside a mask admitting {float(recorded):.4%} "
+                         f"of the tomogram, and {segmentation_id} {grown}, as the lane says "
+                         f"now, admits {coverage:.4%}; the config has changed since those picks")
+    return (f"inside {segmentation_id} {grown}, {coverage:.2%} of the volume, as the real "
+            "picks were")
 
 
 def template_of(registry: ArtifactRegistry, real: Artifact) -> tuple[Path, Path, bool]:
@@ -330,6 +389,8 @@ def job_differences(real_job: Path, null_job: Path) -> list[str]:
     differing = []
     for key in sorted(set(first) | set(second)):
         if key in _EXPECTED_JOB_DIFFERENCES or first.get(key) == second.get(key):
+            continue
+        if key in _COMPARED_BY_PRESENCE and (first.get(key) is None) == (second.get(key) is None):
             continue
         shown = [json.dumps(job.get(key)) for job in (first, second)]
         shown = [text if len(text) <= 60 else text[:57] + "..." for text in shown]
@@ -361,6 +422,19 @@ def compare_with_real(real: Artifact, null: Artifact) -> None:
             print("# pytom jobs: the same search as the real picks', on the null tomogram")
     else:
         print(f"# pytom jobs not compared: {jobs[0]} or {jobs[1]} is missing")
+    masks = [(artifact.parameters.get("segmentation_id"),
+              artifact.parameters.get("tomogram_mask_coverage")) for artifact in (real, null)]
+    (real_mask, real_coverage), (null_mask, null_coverage) = masks
+    same_coverage = real_coverage == null_coverage or (
+        isinstance(real_coverage, int | float) and isinstance(null_coverage, int | float)
+        and math.isclose(real_coverage, null_coverage, rel_tol=1e-6))
+    if real_mask == null_mask and same_coverage:
+        print("# search mask: " + ("none, as the real picks'" if real_mask is None else
+                                   f"{real_mask}, {float(real_coverage):.2%} of the volume, as "
+                                   "the real picks'"))
+    else:
+        print(f"# WARNING: the null search's mask, {null_mask} admitting {null_coverage}, is "
+              f"not the real picks', {real_mask} admitting {real_coverage}")
 
 
 def run(command: Command) -> int:
@@ -404,12 +478,15 @@ def main() -> int:
         pick, extract = lane_commands(cfg, args.project, series, real=real, variant=variant,
                                       count=args.count, template=template, mask=mask,
                                       spherical_mask=spherical)
+        # Before the copy is made: a mask that is not the real search's stops it here.
+        where = search_mask(registry, real, tomogram, pick)
         if args.overwrite:
             pick, extract = [*pick, "--overwrite"], [*extract, "--overwrite"]
         print(f"\n# ---- {series}: null decoys beside {real.id} ----")
         print(f"# phase-randomised copy of {tomogram.id} (seed {series_seed(args.seed, series)})"
               f"\n#   {null_tomogram_path(tomogram, series, variant)}"
-              f"\n#   registered as {null_tomogram_id(series, variant)}")
+              f"\n#   registered as {null_tomogram_id(series, variant)}"
+              f"\n# searched {where}")
         if not args.execute:
             print(f"\n{run_series.render(pick)}\n\n{run_series.render(extract)}")
             continue

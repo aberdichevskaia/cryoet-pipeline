@@ -1201,7 +1201,25 @@ def _write_tomogram_mask(
     voxel_spacing_angstrom: float,
     dilation_px: int | None,
 ) -> float:
-    """Write the search mask, grown if asked, and return the fraction it admits.
+    """Write the search mask, grown if asked, and return the fraction it admits."""
+
+    mask = tomogram_search_mask(segmentation, tomogram=tomogram, dilation_px=dilation_px)
+    coverage = float(mask.mean())
+    if coverage <= 0.0:
+        raise ValueError(
+            f"segmentation {segmentation.id} admits no voxels, so every candidate "
+            "would be discarded"
+        )
+    with mrcfile.new(output_path, overwrite=True) as mrc:
+        mrc.set_data(mask)
+        mrc.voxel_size = voxel_spacing_angstrom
+    return coverage
+
+
+def tomogram_search_mask(
+    segmentation: Artifact, *, tomogram: Artifact, dilation_px: int | None
+) -> np.ndarray:
+    """The mask pytom searches `tomogram` inside: the segmentation, grown if asked.
 
     pytom zeroes the score at every voxel the mask does not cover, with no
     tolerance and no warning, so a mask drawn on a surface admits only
@@ -1210,6 +1228,9 @@ def _write_tomogram_mask(
     is grown to reach it. That is what the margin is for, and it is also what
     makes an approximate segmentation useful: it need only be roughly right
     about where to look, not about what it found.
+
+    Public for scripts/null_decoys.py, which builds the mask a search will use
+    to show it is the one the real picks were found in.
     """
 
     source = cast(Any, zarr.open(segmentation.path, mode="r"))
@@ -1226,16 +1247,7 @@ def _write_tomogram_mask(
     mask = (data > 0.0).astype(np.float32)
     if dilation_px:
         mask = _dilate(mask, dilation_px)
-    coverage = float(mask.mean())
-    if coverage <= 0.0:
-        raise ValueError(
-            f"segmentation {segmentation.id} admits no voxels, so every candidate "
-            "would be discarded"
-        )
-    with mrcfile.new(output_path, overwrite=True) as mrc:
-        mrc.set_data(mask)
-        mrc.voxel_size = voxel_spacing_angstrom
-    return coverage
+    return mask
 
 
 def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:

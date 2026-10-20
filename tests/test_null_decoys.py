@@ -21,6 +21,7 @@ from typer.testing import CliRunner
 
 from cryoet_pipeline import cli
 from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.picking import tomogram_search_mask
 from cryoet_pipeline.backends.protocols import variant_label, variant_suffix
 from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder, TiltSeriesManifest
 from cryoet_pipeline.null_volumes import phase_randomised
@@ -124,6 +125,42 @@ def _small_box_lane() -> dict:
     lane = copy.deepcopy(LANE)
     lane["extract"]["box_size_px"] = 8
     return lane
+
+
+def _membrane_lane(dilation: int) -> dict:
+    """The small-box lane searching inside membranes grown by `dilation` px, as ryr1-bin8 does."""
+
+    lane = _small_box_lane()
+    lane["segment"] = {"model": "membrain.ckpt"}
+    lane["pick"]["use_segmentation_mask"] = True
+    lane["pick"]["segmentation_mask_dilation_px"] = dilation
+    return lane
+
+
+def _membranes(project: Path) -> Artifact:
+    """The fixture's segmentation, written: a slab two voxels thick across the volume."""
+
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    segmentation = registry.get(f"{SERIES}:segmentation:membrain-seg:bin8")
+    store = zarr.open(segmentation.path, mode="w", shape=SHAPE, chunks=(8, 20, 40),
+                      dtype=np.float32)
+    data = np.zeros(SHAPE, dtype=np.float32)
+    data[10:12] = 1.0
+    store[:] = data
+    return segmentation
+
+
+def _matched_inside(project: Path, segmentation: Artifact, dilation: int) -> Artifact:
+    """The real picks as a search inside `segmentation` grown by `dilation` px records them."""
+
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    real = null_decoys.real_picks(registry, SERIES, "bin8")
+    tomogram = registry.get(str(real.parameters["input_tomogram_id"]))
+    coverage = float(tomogram_search_mask(segmentation, tomogram=tomogram,
+                                          dilation_px=dilation).mean())
+    return real.model_copy(update={"parameters": {
+        **real.parameters, "segmentation_id": segmentation.id,
+        "tomogram_mask_coverage": coverage}})
 
 
 def _options(command: list[str]) -> dict[str, str | bool]:
@@ -234,11 +271,6 @@ def test_a_lane_that_no_longer_matches_the_real_picks_is_refused(project: Path) 
     with pytest.raises(SystemExit, match="config has changed"):
         null_decoys.lane_commands(LANE, project, SERIES, real=older, variant="bin8-null",
                                   count=120, template=template, mask=mask, spherical_mask=True)
-    masked = real.model_copy(update={"parameters": {
-        **real.parameters, "segmentation_id": f"{SERIES}:segmentation:membrain-seg:bin8"}})
-    with pytest.raises(SystemExit, match="inside the membrane mask"):
-        null_decoys.lane_commands(LANE, project, SERIES, real=masked, variant="bin8-null",
-                                  count=120, template=template, mask=mask, spherical_mask=True)
     # No low-pass in the lane: the one the real picks were matched at, named.
     lane = copy.deepcopy(LANE)
     del lane["pick"]["low_pass_angstrom"]
@@ -256,6 +288,17 @@ def test_job_differences_name_every_setting_but_the_tomogram(tmp_path: Path) -> 
     second.write_text(json.dumps({**JOB, "tomogram": "/b/t.mrc", "low_pass": 35.0}))
     assert null_decoys.job_differences(first, second) == ["low_pass: 25.0 (real) vs 35.0 (null)"]
 
+    # Each search writes its tomogram mask into a folder of its own, and pytom names the
+    # whitening filter after its output folder: only having a mask or not is a difference.
+    first.write_text(json.dumps({**JOB, "tomogram": "/a/t.mrc", "tomogram_mask": "/tmp/a/m.mrc",
+                                 "whitening_filter": "/a/out/t_whitening_filter.npy"}))
+    second.write_text(json.dumps({**JOB, "tomogram": "/b/t.mrc", "tomogram_mask": "/tmp/b/m.mrc",
+                                  "whitening_filter": "/b/out/t_whitening_filter.npy"}))
+    assert null_decoys.job_differences(first, second) == []
+    second.write_text(json.dumps({**JOB, "tomogram": "/b/t.mrc", "tomogram_mask": None}))
+    assert null_decoys.job_differences(first, second) == [
+        'tomogram_mask: "/tmp/a/m.mrc" (real) vs null (null)']
+
 
 class _PicksInTheNull:
     """pytom's place: three picks where pick-particles says, recorded as the backend does."""
@@ -272,9 +315,16 @@ class _PicksInTheNull:
         folder = context.output_dir / "picks" / manifest.tilt_series_id
         star = folder / "null.star"
         _star(star, [(12, 12, 8, 0.20), (28, 14, 12, 0.15), (16, 30, 16, 0.10)])
+        segmentation = next((artifact for artifact in supporting_artifacts
+                             if artifact.kind is ArtifactKind.SEGMENTATION), None)
+        coverage = None if segmentation is None else float(tomogram_search_mask(
+            segmentation, tomogram=tomogram,
+            dilation_px=context.parameters.get("pytom_segmentation_dilation_px")).mean())
         job = folder / "null_job.json"
         job.write_text(json.dumps({**JOB, "tomogram": "/scratch/2/tomogram.mrc",
                                    "template": str(context.parameters["pytom_template"]),
+                                   "tomogram_mask": None if segmentation is None
+                                   else "/scratch/2/mask.mrc",
                                    "job_stats": {"std": 0.02}}))
         qc = folder / "null_qc.json"
         qc.write_text("{}\n")
@@ -284,6 +334,8 @@ class _PicksInTheNull:
             parent_ids=[tomogram.id],
             parameters={"backend": self.name, "tilt_series_id": manifest.tilt_series_id,
                         "tomogram_branch": "full", "input_tomogram_id": tomogram.id,
+                        "segmentation_id": None if segmentation is None else segmentation.id,
+                        "tomogram_mask_coverage": coverage,
                         "pytom_job_json_path": str(job), "qc_path": str(qc)},
         )
 
@@ -366,3 +418,134 @@ def test_the_dry_run_prints_both_commands_and_makes_nothing(project: Path) -> No
     registry = ArtifactRegistry.load(project / "artifacts.json")
     assert [artifact.id for artifact in registry.by_kind(ArtifactKind.TOMOGRAM)] == [
         f"{SERIES}:tomogram:fine:bin8"]
+
+
+def test_picks_matched_inside_membranes_are_mirrored_inside_the_same_mask(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    lane = _membrane_lane(dilation=2)
+    segmentation = _membranes(project)
+    real = _matched_inside(project, segmentation, dilation=2)
+    registry_path = project / "artifacts.json"
+    registry = ArtifactRegistry.load(registry_path)
+    tomogram = registry.get(str(real.parameters["input_tomogram_id"]))
+    template, mask, spherical = null_decoys.template_of(registry, real)
+    pick, extract = null_decoys.lane_commands(
+        lane, project, SERIES, real=real, variant="bin8-null", count=3, template=template,
+        mask=mask, spherical_mask=spherical)
+
+    # The lane's own search inside membranes, named by the real picks' segmentation:
+    # the copy has none under its label, and the lane's dilation stays.
+    before = _options(dict(run_series.build_steps(lane, project, SERIES))["pick-particles"])
+    after = _options(pick)
+    changed = {flag for flag in set(before) | set(after) if before.get(flag) != after.get(flag)}
+    assert changed == {"--variant", "--pytom-number-of-particles", "--pytom-template",
+                       "--pytom-template-mask", "--no-pytom-non-spherical-mask",
+                       "--segmentation-id"}
+    assert after["--segmentation-id"] == segmentation.id
+    assert after["--use-segmentation-mask"] is True and "--no-use-segmentation-mask" not in after
+    assert after["--segmentation-mask-dilation-px"] == "2"
+    where = null_decoys.search_mask(registry, real, tomogram, pick)
+    assert where == (f"inside {segmentation.id} grown by 2 px, 25.00% of the volume, as the "
+                     "real picks were")
+
+    null, _ = null_decoys.make_null_tomogram(registry, tomogram, variant="bin8-null", seed=1)
+    registry.commit(registry_path)
+    backend = _PicksInTheNull()
+    monkeypatch.setattr(cli, "_picking_backend", lambda name: backend)
+    result = CliRunner().invoke(cli.app, pick)
+    assert result.exit_code == 0, result.output
+    (searched, parameters, supporting), = backend.seen
+    assert searched == null.id and supporting == [segmentation.id]
+    assert parameters["pytom_segmentation_dilation_px"] == 2
+
+    # Both searches had a mask, so their jobs agree; the masks are one by what the
+    # pick lists record.
+    job = Path(str(real.parameters["pytom_job_json_path"]))
+    job.write_text(json.dumps({**json.loads(job.read_text()),
+                               "tomogram_mask": "/scratch/1/mask.mrc"}))
+    found, = [artifact for artifact in ArtifactRegistry.load(registry_path).by_kind(
+        ArtifactKind.PICKS) if artifact.variant == "bin8-null"]
+    null_decoys.compare_with_real(real, found)
+    printed = capsys.readouterr().out
+    assert "the same search as the real picks'" in printed
+    assert f"search mask: {segmentation.id}, 25.00% of the volume, as the real picks'" in printed
+    assert "WARNING" not in printed
+    unmasked = found.model_copy(update={"parameters": {
+        **found.parameters, "segmentation_id": None, "tomogram_mask_coverage": None}})
+    null_decoys.compare_with_real(real, unmasked)
+    assert "WARNING: the null search's mask, None" in capsys.readouterr().out
+
+
+def test_a_mask_other_than_the_real_searchs_is_refused_before_anything_is_made(
+    project: Path,
+) -> None:
+    segmentation = _membranes(project)
+    real = _matched_inside(project, segmentation, dilation=2)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    tomogram = registry.get(str(real.parameters["input_tomogram_id"]))
+    template, mask, _ = null_decoys.template_of(registry, real)
+
+    def pick_for(lane: dict, picks: Artifact) -> list[str]:
+        return null_decoys.lane_commands(lane, project, SERIES, real=picks, variant="bin8-null",
+                                         count=3, template=template, mask=mask,
+                                         spherical_mask=True)[0]
+
+    # The lane grows the membranes by another margin now: another mask.
+    with pytest.raises(SystemExit, match="config has changed since those picks"):
+        null_decoys.search_mask(registry, real, tomogram, pick_for(_membrane_lane(3), real))
+    unrecorded = real.model_copy(update={"parameters": {
+        key: value for key, value in real.parameters.items()
+        if key != "tomogram_mask_coverage"}})
+    with pytest.raises(SystemExit, match="does not record how much"):
+        null_decoys.search_mask(registry, unrecorded, tomogram,
+                                pick_for(_membrane_lane(2), unrecorded))
+    gone = real.model_copy(update={"parameters": {
+        **real.parameters, "segmentation_id": f"{SERIES}:segmentation:membrain-seg:gone"}})
+    with pytest.raises(SystemExit, match="no longer registered"):
+        null_decoys.search_mask(registry, gone, tomogram, pick_for(_membrane_lane(2), gone))
+
+    # Picks matched in the whole volume stay unmasked whatever the lane says, and no
+    # segmentation is read for them.
+    plain = null_decoys.real_picks(registry, SERIES, "bin8")
+    pick = pick_for(_membrane_lane(2), plain)
+    assert "--no-use-segmentation-mask" in pick and "--segmentation-id" not in pick
+    assert "--use-segmentation-mask" not in pick
+    assert "--segmentation-mask-dilation-px" not in pick
+    segmentation.path.rename(segmentation.path.with_name("elsewhere.zarr"))
+    assert (null_decoys.search_mask(registry, plain, tomogram, pick)
+            == "the whole volume, as the real picks were")
+
+
+def test_pick_particles_takes_a_segmentation_by_id_and_nothing_else(
+    project: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    segmentation = _membranes(project)
+    real = _matched_inside(project, segmentation, dilation=2)
+    registry_path = project / "artifacts.json"
+    registry = ArtifactRegistry.load(registry_path)
+    null_decoys.make_null_tomogram(registry, registry.get(str(real.parameters[
+        "input_tomogram_id"])), variant="bin8-null", seed=1)
+    registry.commit(registry_path)
+    template, mask, _ = null_decoys.template_of(registry, real)
+    pick, _ = null_decoys.lane_commands(_membrane_lane(2), project, SERIES, real=real,
+                                        variant="bin8-null", count=3, template=template,
+                                        mask=mask, spherical_mask=True)
+    backend = _PicksInTheNull()
+    monkeypatch.setattr(cli, "_picking_backend", lambda name: backend)
+    runner = CliRunner()
+
+    def named(value: str) -> list[str]:
+        command = list(pick)
+        command[command.index("--segmentation-id") + 1] = value
+        return command
+
+    unmasked = [part for part in pick if part != "--use-segmentation-mask"]
+    for command, refusal in (
+            ([*unmasked, "--no-use-segmentation-mask"], "searches without one"),
+            (named(f"{SERIES}:segmentation:membrain-seg:gone"), "no artifact"),
+            (named(f"{SERIES}:template:pytom:bin8"), "not a segmentation")):
+        result = runner.invoke(cli.app, command)
+        assert result.exit_code == 2, result.output
+        assert refusal in result.output
+    assert backend.seen == []
