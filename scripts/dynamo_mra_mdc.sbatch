@@ -23,7 +23,9 @@
 # MASK_RADIUS and MASK_EDGE (px) say otherwise, or MASK_FILE gives a mask of any
 # shape in the particles' box (scripts/make_mra_mask.py makes one that leaves a
 # membrane out; a relative path is taken from the repo root). SYMMETRY (c4, ...)
-# is imposed about the box's z axis in every round, c1 unless given. Without
+# is imposed about the box's z axis in every round, c1 unless given;
+# AXIS_OFFSET="dx dy" (px, as scripts/rotational_symmetry.py prints the axis)
+# first moves the particles so that axis lands where Dynamo symmetrises. Without
 # SCHEDULE the search is the fixed one. A project
 # that already exists in EXPORT is not made again: the job goes on computing it
 # from the iteration Dynamo has recorded as next, so a job that ran out of time
@@ -94,6 +96,7 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${MASK_EDGE:-}" ]] && options+="mask_edge = $MASK_EDGE; "
     [[ -n "${MASK_FILE:-}" ]] && options+="mask_file = '$MASK_FILE'; "
     [[ -n "${SYMMETRY:-}" ]] && options+="symmetry = '$SYMMETRY'; "
+    [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
     dynamo "project = '$NAME'; seeds = {${cells%, }}; cores = $CORES; ${options}eval(fileread('$REPO/scripts/dynamo_mra_setup.m'))" 2>&1 | tee "${NAME}_setup.log"
     if [[ ! -f "$card" ]]; then
         echo "the setup did not make $NAME; see $EXPORT/${NAME}_setup.log" >&2

@@ -26,6 +26,14 @@
 % (scripts/make_mra_mask.py makes one that leaves a membrane out), and symmetry
 % (default 'c1'), imposed about the box's z axis in every round.
 %
+% Dynamo imposes symmetry about the z axis through voxel N/2 (zero-based), and
+% the export centres particles on (N - 1) / 2: the RyR1 template's and the
+% starting-pose average's C4 axes sat at centre + (-0.45, -0.45) px (2026-10-20,
+% scripts/rotational_symmetry.py --order 4). axis_offset ([dx dy] or [dx dy dz]
+% px, as that script prints it; default none) moves every particle so that an
+% axis found there lands on Dynamo's: each particle's shift grows by the offset
+% turned into its own frame, before the seeds and tables are made.
+%
 % schedule picks the search:
 %   'fixed'           (default) one round of 5 iterations: band 2..16 Fourier px,
 %                     cone and in-plane 15 deg in 5 deg steps, as refine223 and the
@@ -66,6 +74,7 @@ if ~exist('diameter', 'var'), diameter = 290; end
 if ~exist('lowpass_steps', 'var'), lowpass_steps = 'angstrom'; end
 if ~exist('mask_file', 'var'), mask_file = ''; end
 if ~exist('symmetry', 'var'), symmetry = 'c1'; end
+if ~exist('axis_offset', 'var'), axis_offset = [0 0 0]; end
 % Particles averaged into each 'subset' or 'blob' seed, and the one seed for the
 % random order, orientations and noise of every project.
 subset = 300;
@@ -78,9 +87,18 @@ if ~ischar(schedule) || ~any(strcmp(schedule, {'fixed', 'coarse_to_fine'})), err
 if ~ischar(lowpass_steps) || ~any(strcmp(lowpass_steps, {'fourier', 'angstrom'})), error('dynamo_mra_setup: lowpass_steps must be ''fourier'' or ''angstrom'''); end
 if ~ischar(symmetry) || isempty(regexp(symmetry, '^[cd][0-9]+$', 'once')), error('dynamo_mra_setup: symmetry must be like ''c1'' or ''c4'''); end
 if ~ischar(mask_file), error('dynamo_mra_setup: mask_file must be a file name'); end
+if ~isnumeric(axis_offset) || ~any(numel(axis_offset) == [2 3]) || ~all(isfinite(axis_offset)), error('dynamo_mra_setup: axis_offset must be [dx dy] or [dx dy dz] in px, as scripts/rotational_symmetry.py prints it'); end
+axis_offset = [axis_offset(:)' zeros(1, 3 - numel(axis_offset))];
 if exist([project '_seeds'], 'dir') || exist([project '_fmasks'], 'dir') || exist([project '_tables'], 'dir') || exist(project, 'dir') || exist([project '.vpr'], 'file'), error('dynamo_mra_setup: an earlier run left %s_seeds, %s_fmasks, %s_tables or %s here; move them away first', project, project, project, project); end
 
 t = dread('initial.tbl'); n = size(t, 1);
+% A particle is its reference turned by its angles and shifted by its shift, so
+% a point at centre + axis_offset of the reference sits at its shift plus the
+% offset turned by those angles: that sum becomes the shift. dynamo_rot turns
+% content by the transpose of dynamo_euler2matrix: on synthetic particles made
+% with dynamo_rot (2026-10-20) d + R'o gave the reference moved by -o at
+% correlation 0.9994, d + Ro a blur of it at 0.978.
+if any(axis_offset), for i = 1:n, t(i, 4:6) = t(i, 4:6) + (dynamo_euler2matrix(t(i, 7:9))' * axis_offset(:))'; end; end
 files = dir('particles/particle_*'); if isempty(files), error('dynamo_mra_setup: no particles/particle_* here; run it from the export folder'); end
 box = size(dread(fullfile('particles', files(1).name)), 1);
 apix = t(1, 36); if ~(apix > 0), error('dynamo_mra_setup: column 36 of initial.tbl holds no pixel size'); end
@@ -154,5 +172,5 @@ dynamo_vpr_put(project, '-cores', num2str(cores));
 
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
-fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), mask %s, symmetry %s, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, mask_note, symmetry, cores);
-clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry schedule first_lowpass last_lowpass diameter lowpass_steps
+fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, mask_note, symmetry, axis_offset, cores);
+clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset schedule first_lowpass last_lowpass diameter lowpass_steps
