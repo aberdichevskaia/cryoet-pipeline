@@ -6,7 +6,8 @@ dark. Status colours mean only pass, warning and fail, and always sit beside
 the word, so that no verdict is carried by colour alone.
 
 Overlays keep one colour per thing across every page: picks are orange,
-membranes aqua, the template mask and tracked fiducials blue.
+membranes aqua, the template mask blue, and the beads or patches tracked for the tilt
+alignment fuchsia, which stands out on a grey tilt where blue does not.
 
 Type sizes are roles rather than numbers, so that making the report larger or
 smaller is one change here and every page follows.
@@ -69,7 +70,8 @@ SERIES_AQUA = "#1baf7a"
 PICK_COLOUR = SERIES_ORANGE
 MEMBRANE_COLOUR = SERIES_AQUA
 MASK_COLOUR = SERIES_BLUE
-FIDUCIAL_COLOUR = SERIES_BLUE
+FIDUCIAL_COLOUR = "#ff00ff"
+"""Fuchsia: rings on a grey tilt, where blue was hard to see. The plots keep the series blue."""
 
 _BLUE_RAMP = (
     "#cde2fb",
