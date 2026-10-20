@@ -1063,11 +1063,18 @@ def _validate_ctf_model(
         "defocus transfers between binnings but the fit was not made on this stack"
     ]
     if spacings_differ:
+        assert stack_spacing is not None  # spacings_differ needs both
         warnings.append(
-            f"fitted at {float(recorded_spacing)} angstrom/pixel and applied at "  # type: ignore[arg-type]
-            f"{stack_spacing} angstrom/pixel"
+            f"fitted at {_angstrom(float(recorded_spacing))} angstrom/pixel and applied at "  # type: ignore[arg-type]
+            f"{_angstrom(stack_spacing)} angstrom/pixel"
         )
     return warnings
+
+
+def _angstrom(value: float) -> str:
+    """A pixel size to three decimals without trailing zeros: 13.44, not 13.440000344064009."""
+
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def _validate_model_tilt_angles(

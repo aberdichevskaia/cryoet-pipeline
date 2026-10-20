@@ -10,10 +10,15 @@ membranes aqua, the template mask and tracked fiducials blue.
 
 Type sizes are roles rather than numbers, so that making the report larger or
 smaller is one change here and every page follows.
+
+Numbers in text show at most three decimals, whoever wrote the text: much of it
+arrives already written, in a QC warning or a project file, with a float printed
+to all seventeen of its digits.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from matplotlib import colormaps, patheffects
@@ -21,6 +26,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import LinearSegmentedColormap, to_rgb
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.text import Text
 
 PAGE_SIZE = (11.69, 8.27)
 """A4 landscape, in inches: wide enough for three tomogram panels and a summary table."""
@@ -130,6 +136,53 @@ RC: dict[str, Any] = {
     "pdf.compression": 9,
     "pdf.fonttype": 42,
 }
+
+
+DECIMALS = 3
+"""The most digits after the decimal point a number in a report's text shows."""
+
+VERBATIM = "verbatim"
+"""The gid of text a page reproduces as given, such as a lane file, whose numbers stay."""
+
+_LONG_DECIMAL = re.compile(rf"(?<![\d.])(\d+\.\d{{{DECIMALS + 1},}})(?![\d.])")
+
+
+def tidy_numbers(text: str) -> str:
+    """Every number with more than three decimals, rounded to three, trailing zeros dropped.
+
+    `3.360000086016002` becomes `3.36`. Numbers with three decimals or fewer are
+    left alone, and so are dotted names such as a version `1.1.591`. A number
+    too small for three decimals to show, which would round to a misleading
+    `0`, keeps three significant digits instead: `0.0000123` becomes `1.23e-05`.
+    """
+
+    def rounded(match: re.Match[str]) -> str:
+        value = float(match.group(1))
+        if value != 0.0 and value < 0.5 * 10.0**-DECIMALS:
+            return f"{value:.3g}"
+        return f"{value:.{DECIMALS}f}".rstrip("0").rstrip(".")
+
+    return _LONG_DECIMAL.sub(rounded, text)
+
+
+def tidy_figure_text(figure: Figure) -> None:
+    """`tidy_numbers` on every text of a page, table cells too, except verbatim ones.
+
+    Done once, on the finished page, so that no page and no future report has to
+    remember it, and text written by other programs is covered as well.
+    """
+
+    texts = list(figure.findobj(Text))
+    for axes in figure.axes:
+        for table in axes.tables:
+            texts.extend(cell.get_text() for cell in table.get_celld().values())
+    for text in texts:
+        if text.get_gid() == VERBATIM:
+            continue
+        content = text.get_text()
+        tidied = tidy_numbers(content)
+        if tidied != content:
+            text.set_text(tidied)
 
 
 def tint(colour: str, strength: float = 0.35) -> tuple[float, float, float]:

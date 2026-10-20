@@ -360,7 +360,8 @@ def _config_page(name: str, lines: list[str]) -> Figure:
     figure = style.new_page(f"Appendix · Lane configuration · {name}",
                             "As given to the report, verbatim")
     figure.text(0.035, style.CONTENT_TOP, "\n".join(line[:150] for line in lines),
-                family="DejaVu Sans Mono", fontsize=style.FONT_TINY, va="top", linespacing=1.3)
+                family="DejaVu Sans Mono", fontsize=style.FONT_TINY, va="top", linespacing=1.3,
+                gid=style.VERBATIM)
     return figure
 
 

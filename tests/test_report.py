@@ -33,8 +33,8 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.reports.collect import (
-    QcRecord,
     PickTable,
+    QcRecord,
     SeriesArtifacts,
     SeriesReport,
     SummaryRow,
@@ -59,7 +59,9 @@ from cryoet_pipeline.score_preview import score_preview_from_volume, write_score
 
 pytest.importorskip("matplotlib")
 
-from cryoet_pipeline.reports import imaging  # noqa: E402
+from matplotlib.figure import Figure  # noqa: E402
+
+from cryoet_pipeline.reports import imaging, style  # noqa: E402
 from cryoet_pipeline.reports.sections import ctf, front, gallery, picking  # noqa: E402
 
 _ANGLES = [-40.0, -20.0, 0.0, 20.0, 40.0]
@@ -267,6 +269,34 @@ def test_the_score_overview_gives_each_its_own_axis_without_sigma() -> None:
 
     panels = [axes for axes in figure.axes if axes.get_title(loc="left")]
     assert panels[1].get_ylabel() == "Score (pytom LCCmax)"
+
+
+def test_report_text_shows_at_most_three_decimals() -> None:
+    """Floats printed to all their digits, as a QC warning on the cluster wrote them."""
+
+    assert style.tidy_numbers(
+        "fitted at 3.360000086016002 angstrom/pixel and applied at 13.440000344064009"
+    ) == "fitted at 3.36 angstrom/pixel and applied at 13.44"
+    # Three decimals or fewer stay as written, and so do dotted names.
+    assert style.tidy_numbers("0.2679 nm, sd 0.209, 5.000 px, Dynamo 1.1.591") == (
+        "0.268 nm, sd 0.209, 5.000 px, Dynamo 1.1.591"
+    )
+    assert style.tidy_numbers("0.30000000000000004, 2.0000, -53.50001°") == "0.3, 2, -53.5°"
+    # A small number keeps its digits rather than becoming a misleading zero.
+    assert style.tidy_numbers("chance 0.0000123") == "chance 1.23e-05"
+
+
+def test_a_page_is_tidied_but_not_its_verbatim_text() -> None:
+    figure = Figure()
+    figure.text(0.0, 1.0, "residual 5.420793299877795 px")
+    figure.text(0.0, 0.5, "pixel_size_angstrom = 1.1883", gid=style.VERBATIM)
+    table = figure.add_subplot().table(cellText=[["0.30000000000000004"]])
+
+    style.tidy_figure_text(figure)
+
+    texts = {text.get_text() for text in figure.texts}
+    assert texts == {"residual 5.421 px", "pixel_size_angstrom = 1.1883"}
+    assert [cell.get_text().get_text() for cell in table.get_celld().values()] == ["0.3"]
 
 
 def test_an_existing_report_is_kept_unless_asked(tmp_path: Path) -> None:

@@ -113,6 +113,7 @@ def write_report(
                                 f"{error}")
                 figure = front.error_page(page.label, error)
             style.footer(figure, footer, page_number, len(planned))
+            style.tidy_figure_text(figure)
             pdf.savefig(figure)
     partial.replace(path)
     return ReportOutcome(path, len(planned), problems)
