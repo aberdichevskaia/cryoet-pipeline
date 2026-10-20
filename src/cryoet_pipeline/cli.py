@@ -2287,6 +2287,11 @@ def _echo_extraction_summary(report: dict[str, Any]) -> None:
     typer.echo(f"particles extracted: {extracted} of {requested}")
     dropped_edge = report.get("dropped_edge_count") or 0
     dropped_score = report.get("dropped_score_count") or 0
+    padded = report.get("padded_particle_count") or 0
+    if padded:
+        typer.echo(
+            f"  padded: {padded} whose box left the tomogram, filled with noise there"
+        )
     if dropped_edge or dropped_score:
         typer.echo(
             f"  dropped: {dropped_edge} too close to the tomogram edge for the box, "
@@ -2755,10 +2760,14 @@ def pick_particles(
         )
         if segmentation is not None:
             supporting_artifacts.append(segmentation)
-    registered_template = _template_artifacts(
-        artifact_registry, tilt_series_manifest, variant=variant
-    )
     if pytom_template is None or pytom_template_mask is None:
+        # Looked up only when a file is missing: with both given, a template
+        # registered for this series under another label is not an error. It
+        # was one, and refused the null-decoy pick on a tomogram whose label no
+        # template carries.
+        registered_template = _template_artifacts(
+            artifact_registry, tilt_series_manifest, variant=variant
+        )
         if registered_template is None:
             raise typer.BadParameter(
                 "no template registered for this tilt series; run prepare-template first, "
@@ -3662,6 +3671,14 @@ def extract_particles(
         float | None,
         typer.Option(help="Drop picks with rlnLCCmax below this value."),
     ] = None,
+    pad_edges: Annotated[
+        bool,
+        typer.Option(
+            help="Keep picks whose box leaves the tomogram, filling the part outside "
+            "with Gaussian noise of the mean and standard deviation of the part inside. "
+            "Without it such picks are dropped.",
+        ),
+    ] = False,
     pick_template_box_px: Annotated[
         int | None,
         typer.Option(
@@ -3753,6 +3770,8 @@ def extract_particles(
     }
     if minimum_score is not None:
         parameters["minimum_score"] = minimum_score
+    if pad_edges:
+        parameters["pad_edges"] = True
     if pick_template_box_px is not None:
         parameters["pick_template_box_px"] = pick_template_box_px
     context = BackendContext(

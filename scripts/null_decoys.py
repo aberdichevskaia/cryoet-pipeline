@@ -252,8 +252,11 @@ def lane_commands(
 
     steps = dict(run_series.build_steps(cfg, project, series))
     pick, extract = list(steps["pick-particles"]), list(steps["extract-particles"])
-    if "--use-segmentation-mask" in pick:
-        raise SystemExit("this lane picks inside a membrane mask; the null tomogram has no "
+    # What the real picks record, not what the lane renders: pick-particles masks by
+    # a membrane segmentation by default whenever the series has one.
+    if real.parameters.get("segmentation_id") is not None:
+        raise SystemExit(f"{real.id} was matched inside the membrane mask "
+                         f"{real.parameters['segmentation_id']}; the null tomogram has no "
                          "membranes, and picking it without one would not be the lane's search")
     recorded = real.parameters.get("pytom_low_pass_angstrom")
     lane_low_pass = (float(pick[pick.index("--pytom-low-pass") + 1])
@@ -289,6 +292,14 @@ def lane_commands(
     _set(pick, "--pytom-template-mask", str(mask))
     pick.append("--no-pytom-non-spherical-mask" if spherical_mask
                 else "--pytom-non-spherical-mask")
+    # Unmasked, as the real search was. Said outright: left to its default,
+    # pick-particles would look for a segmentation under the new label, and refuse
+    # when the series has one under another.
+    for flag in ("--use-segmentation-mask", "--no-use-segmentation-mask"):
+        while flag in pick:
+            pick.remove(flag)
+    _drop(pick, "--segmentation-mask-dilation-px")
+    pick.append("--no-use-segmentation-mask")
     _set(extract, "--variant", variant)
     return pick, extract
 

@@ -76,13 +76,23 @@ def project(tmp_path: Path) -> Path:
     )
     templates = project / "templates"
     templates.mkdir()
-    template = Artifact(id="template:pytom:bin8", variant="bin8", kind=ArtifactKind.TEMPLATE,
-                        path=templates / "template.mrc")
-    mask = Artifact(id="template_mask:pytom:bin8", variant="bin8",
+    # Per series and labelled, as prepare-template registers them: a lookup by any
+    # other label finds this series' template and refuses it.
+    template = Artifact(id=f"{SERIES}:template:pytom:bin8", variant="bin8",
+                        kind=ArtifactKind.TEMPLATE, path=templates / "template.mrc",
+                        parent_ids=[tomogram.id], parameters={"tilt_series_id": SERIES})
+    mask = Artifact(id=f"{SERIES}:template_mask:pytom:bin8", variant="bin8",
                     kind=ArtifactKind.TEMPLATE_MASK, path=templates / "mask.mrc",
-                    parameters={"template_id": template.id, "mask_is_spherical": True})
+                    parent_ids=[template.id],
+                    parameters={"tilt_series_id": SERIES, "template_id": template.id,
+                                "mask_is_spherical": True})
     for artifact in (template, mask):
         artifact.path.touch()
+    # Membranes segmented under the lane's label, which the real search did not use:
+    # pick-particles looks for them by label unless told not to.
+    segmentation = Artifact(id=f"{SERIES}:segmentation:membrain-seg:bin8", variant="bin8",
+                            kind=ArtifactKind.SEGMENTATION, path=folder / "membranes.zarr",
+                            parent_ids=[tomogram.id], parameters={"tilt_series_id": SERIES})
 
     picks = project / "picks" / SERIES
     _star(picks / "real.star", [(12, 15, 10, 0.30), (25, 20, 12, 0.25), (30, 30, 15, 0.12),
@@ -96,13 +106,14 @@ def project(tmp_path: Path) -> Path:
         parent_ids=[tomogram.id, template.id, mask.id],
         parameters={"backend": "pytom-match-pick", "tilt_series_id": SERIES,
                     "tomogram_branch": "full", "input_tomogram_id": tomogram.id,
+                    "segmentation_id": None,
                     "pytom_template_path": str(template.path),
                     "pytom_template_mask_path": str(mask.path),
                     "pytom_low_pass_angstrom": 25.0, "per_tilt_weighting": True,
                     "pytom_volume_split": [1, 1, 1], "pytom_job_json_path": str(job)},
     )
     registry = ArtifactRegistry.empty()
-    registry.extend([tomogram, template, mask, real_picks])
+    registry.extend([tomogram, template, mask, segmentation, real_picks])
     registry.write(project / "artifacts.json")
     return project
 
@@ -198,7 +209,8 @@ def test_the_commands_are_the_lanes_but_for_label_count_and_template(project: Pa
     before, after = _options(lane["pick-particles"]), _options(pick)
     changed = {flag for flag in set(before) | set(after) if before.get(flag) != after.get(flag)}
     assert changed == {"--variant", "--pytom-number-of-particles", "--pytom-template",
-                       "--pytom-template-mask", "--no-pytom-non-spherical-mask"}
+                       "--pytom-template-mask", "--no-pytom-non-spherical-mask",
+                       "--no-use-segmentation-mask"}
     assert after["--variant"] == "bin8-null" and after["--pytom-number-of-particles"] == "120"
     assert after["--pytom-template"] == str(template)
     assert float(str(after["--pytom-cut-off"])) == 0
@@ -221,6 +233,11 @@ def test_a_lane_that_no_longer_matches_the_real_picks_is_refused(project: Path) 
                                                    "pytom_low_pass_angstrom": 35.0}})
     with pytest.raises(SystemExit, match="config has changed"):
         null_decoys.lane_commands(LANE, project, SERIES, real=older, variant="bin8-null",
+                                  count=120, template=template, mask=mask, spherical_mask=True)
+    masked = real.model_copy(update={"parameters": {
+        **real.parameters, "segmentation_id": f"{SERIES}:segmentation:membrain-seg:bin8"}})
+    with pytest.raises(SystemExit, match="inside the membrane mask"):
+        null_decoys.lane_commands(LANE, project, SERIES, real=masked, variant="bin8-null",
                                   count=120, template=template, mask=mask, spherical_mask=True)
     # No low-pass in the lane: the one the real picks were matched at, named.
     lane = copy.deepcopy(LANE)
@@ -246,11 +263,12 @@ class _PicksInTheNull:
     name = "pytom-match-pick"
 
     def __init__(self) -> None:
-        self.seen: list[tuple[str, dict]] = []
+        self.seen: list[tuple[str, dict, list[str]]] = []
 
     def pick(self, tomogram: Artifact, manifest: TiltSeriesManifest, context,
              supporting_artifacts: Sequence[Artifact] = ()) -> Artifact:
-        self.seen.append((tomogram.id, dict(context.parameters)))
+        self.seen.append((tomogram.id, dict(context.parameters),
+                          [artifact.id for artifact in supporting_artifacts]))
         folder = context.output_dir / "picks" / manifest.tilt_series_id
         star = folder / "null.star"
         _star(star, [(12, 12, 8, 0.20), (28, 14, 12, 0.15), (16, 30, 16, 0.10)])
@@ -292,8 +310,8 @@ def test_the_null_picks_reach_the_export_as_decoys_cut_from_the_copy(
     runner = CliRunner()
     result = runner.invoke(cli.app, pick)
     assert result.exit_code == 0, result.output
-    (searched, parameters), = backend.seen
-    assert searched == null.id
+    (searched, parameters, supporting), = backend.seen
+    assert searched == null.id and supporting == []
     assert Path(parameters["pytom_template"]) == template
     assert Path(parameters["pytom_template_mask"]) == mask
     assert parameters["pytom_number_of_particles"] == 3
