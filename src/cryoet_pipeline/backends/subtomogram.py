@@ -99,6 +99,7 @@ class CubicCropExtractionBackend:
         box_size = _positive_int_parameter(context, "box_size_px")
         minimum_score = _optional_float_parameter(context, "minimum_score")
         overwrite = _bool_parameter(context, "overwrite", default=False)
+        pad_edges = _bool_parameter(context, "pad_edges", default=False)
 
         paths = _extraction_paths(
             context.output_dir,
@@ -117,7 +118,7 @@ class CubicCropExtractionBackend:
         half = box_size // 2
 
         tomogram_array = cast(Any, zarr.open(tomogram.path, mode="r"))
-        kept: list[tuple[_PytomStarRow, tuple[int, int, int]]] = []
+        kept: list[tuple[_PytomStarRow, tuple[int, int, int], bool]] = []
         dropped_edge = 0
         dropped_score = 0
         for row in rows:
@@ -125,10 +126,12 @@ class CubicCropExtractionBackend:
                 dropped_score += 1
                 continue
             bounds = _crop_start(row, box_size=box_size, half=half, shape=tomogram_shape)
-            if bounds is None:
+            if bounds is not None:
+                kept.append((row, bounds, False))
+            elif pad_edges and _centre_inside(row, tomogram_shape):
+                kept.append((row, _unclipped_start(row, half=half), True))
+            else:
                 dropped_edge += 1
-                continue
-            kept.append((row, bounds))
 
         particle_count = len(kept)
         particle_stack = cast(
@@ -146,19 +149,31 @@ class CubicCropExtractionBackend:
             "extraction_pose_convention": CROP_POSE_CONVENTION,
             "pick_template_box_px": template_box,
             "pick_center_offset_px": center_offset,
+            "edge_policy": "pad-with-noise" if pad_edges else "drop",
         })
 
         records: list[ParticleRecord] = []
+        padded: list[int] = []
         geometric_center = (box_size - 1) / 2.0
-        for output_index, (row, (z_start, y_start, x_start)) in enumerate(kept):
-            crop = np.asarray(
-                tomogram_array[
-                    z_start : z_start + box_size,
-                    y_start : y_start + box_size,
-                    x_start : x_start + box_size,
-                ],
-                dtype=np.float32,
-            )
+        for output_index, (row, (z_start, y_start, x_start), needs_padding) in enumerate(kept):
+            if needs_padding:
+                crop = _crop_padded_with_noise(
+                    tomogram_array,
+                    (z_start, y_start, x_start),
+                    box_size=box_size,
+                    shape=tomogram_shape,
+                    rng=np.random.default_rng([PADDING_NOISE_SEED, output_index]),
+                )
+                padded.append(output_index)
+            else:
+                crop = np.asarray(
+                    tomogram_array[
+                        z_start : z_start + box_size,
+                        y_start : y_start + box_size,
+                        x_start : x_start + box_size,
+                    ],
+                    dtype=np.float32,
+                )
             particle_stack[output_index] = crop
             records.append(
                 ParticleRecord(
@@ -213,6 +228,8 @@ class CubicCropExtractionBackend:
             dropped_edge_count=dropped_edge,
             dropped_score_count=dropped_score,
             minimum_score_threshold=minimum_score,
+            edge_policy="pad-with-noise" if pad_edges else "drop",
+            padded_particle_count=len(padded),
             status=status,
             warnings=warnings,
         )
@@ -238,6 +255,10 @@ class CubicCropExtractionBackend:
                 "pick_template_box_px": template_box,
                 "pick_center_offset_px": center_offset,
                 "particle_count": particle_count,
+                # Particles whose box left the tomogram, filled with noise there:
+                # stack indices, as the STAR's rows count them.
+                "edge_policy": "pad-with-noise" if pad_edges else "drop",
+                "padded_indices": padded,
                 "metadata_path": str(paths.particle_metadata),
                 "qc_path": str(paths.report),
             },
@@ -2403,6 +2424,67 @@ def torch_device_for_preference(preference: DevicePreference) -> torch.device:
     if preference is DevicePreference.CPU:
         return torch.device("cpu")
     raise ValueError(f"unresolved device preference: {preference.value!r}")
+
+
+PADDING_NOISE_SEED = 20261020
+"""Seeds the noise a padded box is filled with, together with the particle's index,
+so that extracting the same picks again gives the same stack."""
+
+
+def _centre_inside(row: _PytomStarRow, shape: tuple[int, ...]) -> bool:
+    """Whether the pick's own voxel lies in the tomogram, the least a padded box needs."""
+
+    return all(
+        0 <= int(round(position)) < size
+        for position, size in zip((row.z_px, row.y_px, row.x_px), shape, strict=True)
+    )
+
+
+def _unclipped_start(row: _PytomStarRow, *, half: int) -> tuple[int, int, int]:
+    """The box's corner as `_crop_start` places it, before any test against the edges."""
+
+    return (
+        int(round(row.z_px)) - half,
+        int(round(row.y_px)) - half,
+        int(round(row.x_px)) - half,
+    )
+
+
+def _crop_padded_with_noise(
+    tomogram: Any,
+    start: tuple[int, int, int],
+    *,
+    box_size: int,
+    shape: tuple[int, ...],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """A box that leaves the tomogram, its outside part filled with matching noise.
+
+    The part inside is cropped as usual. The rest has no data, and a flat fill
+    would meet the data along a plane: noisy on one side, perfectly smooth on the
+    other, a hard edge in texture that rings through the box in Fourier space.
+    So it gets Gaussian noise with the mean and standard deviation of the part of
+    this same box that lies inside: the tomogram's own statistics at that place,
+    background and particle together. It carries no signal, and differs from
+    particle to particle, so it averages away. pytom keeps every pick at least a
+    particle radius from the faces, so the particle itself is inside the data.
+    """
+
+    low = [max(corner, 0) for corner in start]
+    high = [min(corner + box_size, size) for corner, size in zip(start, shape, strict=True)]
+    inside = np.asarray(
+        tomogram[low[0] : high[0], low[1] : high[1], low[2] : high[2]], dtype=np.float32
+    )
+    crop = rng.normal(
+        float(inside.mean()), float(inside.std()), size=(box_size, box_size, box_size)
+    ).astype(np.float32)
+    offset = [lo - corner for lo, corner in zip(low, start, strict=True)]
+    crop[
+        offset[0] : offset[0] + inside.shape[0],
+        offset[1] : offset[1] + inside.shape[1],
+        offset[2] : offset[2] + inside.shape[2],
+    ] = inside
+    return crop
 
 
 def _crop_start(

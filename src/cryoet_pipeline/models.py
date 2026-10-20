@@ -864,6 +864,11 @@ class ParticleExtractionQc(BaseModel):
     dropped_edge_count: int = Field(ge=0)
     dropped_score_count: int = Field(ge=0)
     minimum_score_threshold: float | None = None
+    edge_policy: str = "drop"
+    """What became of a pick whose box left the tomogram: dropped, or kept with
+    the part outside filled with noise ("pad-with-noise")."""
+    padded_particle_count: int = Field(default=0, ge=0)
+    """Extracted particles whose box was padded; counted in extracted_particle_count."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

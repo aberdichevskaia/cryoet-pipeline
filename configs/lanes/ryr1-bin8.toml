@@ -274,6 +274,14 @@ segmentation_mask_dilation_px = 13
 
 [extract]
 box_size_px = 52          # 699 A at 13.44 A/px, 2 x the 340 A particle; even
+# Keep the picks whose box leaves the tomogram, the part outside filled with noise
+# of the box's own statistics. At bin8 the tomograms are 100-163 px thick and
+# pytom keeps picks 12 px (a particle radius) from the faces, so a 52 px box lost
+# 695 of 2384 picks (bin8-2x, 2026-10-20), ~540 of them through the top or
+# bottom. Those near the faces scored a little lower (45% above the
+# one-false-positive height against 52%) and classified like the rest in mra_bbn:
+# weaker, not junk (scripts/extraction_losses.py).
+pad_edges = true
 
 [executables]
 motioncor3 = "$MOTIONCOR3"

@@ -481,6 +481,7 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             "extract-particles",
             ["extract-particles", *common,
              *flag("box-size-px", extract["box_size_px"]),
+             *flag("pad-edges", extract.get("pad_edges")),
              *flag("variant", lane)],
         ),
     ]

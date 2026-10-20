@@ -1926,3 +1926,57 @@ def test_a_supplied_star_that_does_not_match_the_stacks_is_refused(tmp_path: Pat
     write_particle_star(gapped, [replace(one, index=one.index + 5) for one in extracted])
     with pytest.raises(ValueError, match="does not index the stacks contiguously"):
         replace_records_from_star(combined, gapped)
+
+
+def test_a_box_that_leaves_the_tomogram_can_be_kept_padded_with_noise(tmp_path: Path) -> None:
+    """The pick at x = 2 is a whole particle near a face; its box is not.
+
+    Dropped by default, as before. With pad_edges it is kept: the part inside is
+    the tomogram's, the part outside is noise with that part's own mean and
+    standard deviation, the same noise on every run, and the pose is the one an
+    unpadded crop at that corner would have had.
+    """
+
+    tomogram = _tomogram_artifact(tmp_path)
+    picks = _picks_artifact(tmp_path, tomogram)
+
+    def extract(out: str) -> tuple[Artifact, dict[str, object]]:
+        particle_stack, qc_artifact = CubicCropExtractionBackend().extract(
+            tomogram,
+            picks,
+            _manifest(),
+            BackendContext(
+                output_dir=tmp_path / out,
+                device=DevicePreference.CPU,
+                parameters={"box_size_px": _BOX_SIZE, "minimum_score": 0.1, "pad_edges": True},
+            ),
+        )
+        return particle_stack, json.loads(qc_artifact.path.read_text())
+
+    particle_stack, report = extract("padded")
+
+    assert report["extracted_particle_count"] == 2
+    assert report["dropped_edge_count"] == 0
+    assert report["padded_particle_count"] == 1
+    assert report["edge_policy"] == "pad-with-noise"
+    assert particle_stack.parameters["padded_indices"] == [1]
+
+    stack = zarr.open(particle_stack.path, mode="r")
+    data = zarr.open(tomogram.path, mode="r")[:]
+    half = _BOX_SIZE // 2
+    x_start = 2 - half  # negative: the box leaves the tomogram through x = 0
+    padded = np.asarray(stack[1])
+    inside = data[10 - half : 10 - half + _BOX_SIZE, 10 - half : 10 - half + _BOX_SIZE,
+                  0 : x_start + _BOX_SIZE]
+    np.testing.assert_allclose(padded[:, :, -x_start:], inside)
+    outside = padded[:, :, : -x_start]
+    assert outside.std() > 0  # noise, not a flat fill
+    assert abs(float(outside.mean()) - float(inside.mean())) < 3 * float(inside.std())
+
+    records = read_particle_star(Path(particle_stack.parameters["metadata_path"]))
+    assert records[1].x_px == pytest.approx(2.0)
+    # The same corner an unpadded crop would use, so the pose is consistent.
+    assert records[1].shift_x_px == pytest.approx(2.0 - 0.5 - x_start - (_BOX_SIZE - 1) / 2.0)
+
+    again, _ = extract("again")
+    np.testing.assert_array_equal(np.asarray(zarr.open(again.path, mode="r")[1]), padded)
