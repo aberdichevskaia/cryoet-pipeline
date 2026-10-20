@@ -12,10 +12,12 @@ prints, per series, what it would make and the two commands it would run;
    beside it and registered as a full tomogram labelled `<lane>-null`: a child
    of the real one that keeps its tilt angles and views;
 2. the lane's pick-particles, as scripts/run_series.py renders it from the
-   config, on that copy, with three changes: the label; the template and mask
+   config, on that copy, with four changes: the label; the template and mask
    the real picks were matched with, named rather than looked up, since no
-   template carries the new label; and the best `--count` peaks with no score
-   floor, 120 unless told otherwise, as many as the random decoys per tomogram.
+   template carries the new label; the best `--count` peaks with no score
+   floor, 120 unless told otherwise, as many as the random decoys per tomogram;
+   and the seed of pytom's random-phase noise map, read from the real search's
+   job file: no lane fixes one, and pytom draws its own for every search.
    It searches where the real picks were searched: the whole volume when they
    were (the ribosome lanes), and inside the same membrane segmentation when they
    were matched inside one (RyR1), named by its id, since the copy has no
@@ -298,6 +300,13 @@ def lane_commands(
         raise SystemExit(f"{real.id} was matched in pieces {split} and the lane now says "
                          f"{lane_split}; the config has changed since those picks")
 
+    # pytom draws the seed of its random-phase noise map anew for every search
+    # (int.from_bytes(urandom(8)) when --rng-seed is not given), and with
+    # random_phase_correction that map is subtracted from the scores: the real
+    # search's seed keeps the two searches apart by the tomogram alone.
+    seed = _job_setting(real, "rng_seed")
+    if seed is not None:
+        _set(pick, "--pytom-rng-seed", str(seed))
     _set(pick, "--variant", variant)
     _set(pick, "--pytom-number-of-particles", str(count))
     _drop(pick, "--pytom-number-of-false-positives")
@@ -324,6 +333,15 @@ def lane_commands(
         pick.extend(["--use-segmentation-mask", "--segmentation-id", str(segmentation_id)])
     _set(extract, "--variant", variant)
     return pick, extract
+
+
+def _job_setting(picks: Artifact, key: str) -> Any:
+    """One setting of the pytom job that made `picks`; None without its job file."""
+
+    job = picks.parameters.get("pytom_job_json_path")
+    if not isinstance(job, str) or not Path(job).is_file():
+        return None
+    return json.loads(Path(job).read_text()).get(key)
 
 
 def search_mask(registry: ArtifactRegistry, real: Artifact, tomogram: Artifact,

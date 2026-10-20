@@ -325,6 +325,7 @@ class _PicksInTheNull:
                                    "template": str(context.parameters["pytom_template"]),
                                    "tomogram_mask": None if segmentation is None
                                    else "/scratch/2/mask.mrc",
+                                   "rng_seed": context.parameters.get("pytom_rng_seed"),
                                    "job_stats": {"std": 0.02}}))
         qc = folder / "null_qc.json"
         qc.write_text("{}\n")
@@ -549,3 +550,43 @@ def test_pick_particles_takes_a_segmentation_by_id_and_nothing_else(
         assert result.exit_code == 2, result.output
         assert refusal in result.output
     assert backend.seen == []
+
+
+def test_the_null_search_takes_the_real_searchs_noise_seed(
+    project: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # As pytom writes it when it drew the seed itself: eight random bytes.
+    seed = 16624184499262119753
+    registry_path = project / "artifacts.json"
+    registry = ArtifactRegistry.load(registry_path)
+    real = null_decoys.real_picks(registry, SERIES, "bin8")
+    job = Path(str(real.parameters["pytom_job_json_path"]))
+    job.write_text(json.dumps({**json.loads(job.read_text()), "rng_seed": seed}))
+    template, mask, spherical = null_decoys.template_of(registry, real)
+    pick, _ = null_decoys.lane_commands(
+        _small_box_lane(), project, SERIES, real=real, variant="bin8-null", count=3,
+        template=template, mask=mask, spherical_mask=spherical)
+    assert _options(pick)["--pytom-rng-seed"] == str(seed)
+
+    null, _ = null_decoys.make_null_tomogram(
+        registry, registry.get(str(real.parameters["input_tomogram_id"])),
+        variant="bin8-null", seed=1)
+    registry.commit(registry_path)
+    backend = _PicksInTheNull()
+    monkeypatch.setattr(cli, "_picking_backend", lambda name: backend)
+    result = CliRunner().invoke(cli.app, pick)
+    assert result.exit_code == 0, result.output
+    (_, parameters, _), = backend.seen
+    assert parameters["pytom_rng_seed"] == seed
+    found, = [artifact for artifact in ArtifactRegistry.load(registry_path).by_kind(
+        ArtifactKind.PICKS) if artifact.variant == "bin8-null"]
+    null_decoys.compare_with_real(real, found)
+    printed = capsys.readouterr().out
+    assert "the same search as the real picks'" in printed and "WARNING" not in printed
+
+    # A real search whose job file is gone leaves the seed to pytom, as before.
+    job.unlink()
+    pick, _ = null_decoys.lane_commands(
+        _small_box_lane(), project, SERIES, real=real, variant="bin8-null", count=3,
+        template=template, mask=mask, spherical_mask=spherical)
+    assert "--pytom-rng-seed" not in pick
