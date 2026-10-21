@@ -25,6 +25,7 @@ from cryoet_pipeline.backends.picking import tomogram_search_mask
 from cryoet_pipeline.backends.protocols import variant_label, variant_suffix
 from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder, TiltSeriesManifest
 from cryoet_pipeline.null_volumes import phase_randomised
+from cryoet_pipeline.reports.classification import SEARCHED_DECOY_KIND
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -299,6 +300,19 @@ def test_job_differences_name_every_setting_but_the_tomogram(tmp_path: Path) -> 
     assert null_decoys.job_differences(first, second) == [
         'tomogram_mask: "/tmp/a/m.mrc" (real) vs null (null)']
 
+    # As the first MDC null run had it: the real picks matched with the tracking stack's
+    # nominal angles, the copy with the reconstruction's solved ones. Each entry of a
+    # nested record is named, and a list by its length and ends.
+    nominal = [-40.0093, -38.0096, -36.0048, -34.0106, 57.9832]
+    solved = [-49.77, -48.35, -46.92, -45.5, 48.11]
+    first.write_text(json.dumps({**JOB, "ts_metadata": {"tilt_angles": nominal,
+                                                        "dose_accumulation": [0, 3, 6, 9]}}))
+    second.write_text(json.dumps({**JOB, "ts_metadata": {"tilt_angles": solved,
+                                                         "dose_accumulation": [0, 3, 6, 9]}}))
+    assert null_decoys.job_differences(first, second) == [
+        "ts_metadata.tilt_angles: 5 values -40.0093 .. 57.9832 (real) vs "
+        "5 values -49.77 .. 48.11 (null)"]
+
 
 class _PicksInTheNull:
     """pytom's place: three picks where pick-particles says, recorded as the backend does."""
@@ -392,7 +406,8 @@ def test_the_null_picks_reach_the_export_as_decoys_cut_from_the_copy(
         check=True,
     )
     manifest = json.loads((out / "export_manifest.json").read_text())
-    assert manifest["decoy_kind"] == "pytom picks in phase-randomised tomograms"
+    # The report shows these decoys by their own scores only under this exact name.
+    assert manifest["decoy_kind"] == SEARCHED_DECOY_KIND
     assert [particle["decoy"] for particle in manifest["particles"]] == [False] * 4 + [True] * 3
     assert manifest["wedge"]["ranges"] == {SERIES: [-40.0, 50.0]}
     # Every decoy voxel is one of the copy's; of the real tomogram's, only the odd value

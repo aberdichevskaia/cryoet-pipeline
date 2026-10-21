@@ -21,9 +21,11 @@ from matplotlib.text import Text  # noqa: E402
 
 from cryoet_pipeline.backends.dynamo_search import average_class  # noqa: E402
 from cryoet_pipeline.reports.classification import (  # noqa: E402
+    SEARCHED_DECOY_KIND,
     Volume,
     central_views,
     class_changes,
+    composition_page,
     decoy_shares,
     decoys_page,
     gallery_tile,
@@ -340,8 +342,7 @@ def test_decoys_are_counted_per_class(project: Path, tmp_path: Path) -> None:
 def test_the_decoys_are_named_as_the_export_names_them(project: Path) -> None:
     """Exports before `decoy_kind` held random positions only, and are read so."""
 
-    write_manifest(project, decoys=(11, 12),
-                   decoy_kind="pytom picks in phase-randomised tomograms")
+    write_manifest(project, decoys=(11, 12), decoy_kind=SEARCHED_DECOY_KIND)
     run = read_dynamo_classification(project, compute_initial_average=False)
     values = {(p.group, p.name): p.value for p in run.parameters}
     assert values[("Data", "decoys")].startswith(
@@ -349,6 +350,21 @@ def test_the_decoys_are_named_as_the_export_names_them(project: Path) -> None:
     figure = decoys_page(run)
     assert any("2 pytom picks in phase-randomised tomograms among 12 particles"
                in text.get_text() for text in figure.findobj(Text))
+    plt.close(figure)
+
+    # Picked by a search of their own, they have scores of their own, shown beside the
+    # classes; boxes at random positions carry real picks' scores and stay out.
+    figure = composition_page(run)
+    scores = figure.axes[-1]
+    assert [label.get_text() for label in scores.get_xticklabels()][-2:] == ["all", "decoys"]
+    assert any("by their own scores" in text.get_text() for text in figure.findobj(Text))
+    plt.close(figure)
+    write_manifest(project, decoys=(11, 12))
+    figure = composition_page(read_dynamo_classification(project,
+                                                         compute_initial_average=False))
+    assert [label.get_text() for label in figure.axes[-1].get_xticklabels()][-1] == "all"
+    assert any("copies of real picks' scores" in text.get_text()
+               for text in figure.findobj(Text))
     plt.close(figure)
 
 

@@ -54,6 +54,11 @@ GALLERY_SEED = 20261016
 """Which particles a gallery shows: fixed, so two reports of one run show the same ones."""
 DEFAULT_DECOY_KIND = "boxes at random positions"
 """What decoys are when nothing says: the first control drew boxes at random positions."""
+SEARCHED_DECOY_KIND = "pytom picks in phase-randomised tomograms"
+"""Decoys picked by a search of their own (scripts/null_decoys.py), so with scores of their own.
+
+Boxes at random positions carry copies of real picks' scores instead.
+"""
 
 CHANNEL_COLOURS = (
     style.SERIES_BLUE,
@@ -600,8 +605,10 @@ def composition_page(run: ClassificationRun) -> Figure:
     last = run.iterations[-1]
     channels = sorted(last.classes)
     subtitle = "Where their particles come from, and how they scored in picking"
+    searched_decoys = bool(run.decoys) and run.decoy_kind == SEARCHED_DECOY_KIND
     if run.decoys:
-        subtitle += " · real particles only"
+        subtitle += (" · real particles only, the decoys' scores beside them" if searched_decoys
+                     else " · real particles only")
     figure = style.new_page(f"The classes after iteration {last.number}", subtitle)
     real = [int(tag) for tag in run.tags if int(tag) not in run.decoys]
     members_of = {k: [int(tag) for tag in last.classes[k].members if int(tag) not in run.decoys]
@@ -641,12 +648,19 @@ def composition_page(run: ClassificationRun) -> Figure:
         everyone = np.array([run.scores[tag] for tag in real if tag in run.scores])
         data = [*groups, everyone]
         labels = [f"class {k}" for k in channels] + ["all"]
+        box_colours = [CHANNEL_COLOURS[(k - 1) % len(CHANNEL_COLOURS)] for k in channels]
+        box_colours.append(style.INK_MUTED)
+        if searched_decoys:
+            # Where the noise the search chose scored, beside the picks it chose.
+            data.append(np.array([run.scores[tag] for tag in sorted(run.decoys)
+                                  if tag in run.scores]))
+            labels.append("decoys")
+            box_colours.append(style.NEUTRAL_FILL)
         shown = [values if values.size else np.array([np.nan]) for values in data]
         # Labels set by hand: boxplot's own keyword was renamed between matplotlib versions.
         parts = axes.boxplot(shown, showfliers=False, patch_artist=True, widths=0.6)
         axes.set_xticks(range(1, len(labels) + 1), labels)
-        colours = [CHANNEL_COLOURS[(k - 1) % len(CHANNEL_COLOURS)] for k in channels]
-        for patch, colour in zip(parts["boxes"], [*colours, style.INK_MUTED], strict=True):
+        for patch, colour in zip(parts["boxes"], box_colours, strict=True):
             patch.set_facecolor(style.tint(colour, 0.45))
             patch.set_edgecolor(style.INK_SECONDARY)
         for median in parts["medians"]:
@@ -660,8 +674,12 @@ def composition_page(run: ClassificationRun) -> Figure:
         "(box: middle half, line: median, whiskers: 1.5 box lengths). A class of picks "
         "with lower scores than the rest is a candidate for false picks; similar scores "
         "say nothing either way."
-        + (" Decoys are left out: their scores are copies of real picks' scores."
-           if run.decoys else ""),
+        + (" Decoys, by their own scores: the best peaks pytom found in the phase-randomised "
+           "copies, what noise of each tomogram's spectrum reaches against the template."
+           if searched_decoys else
+           " Decoys are left out: their scores are copies of real picks' scores."
+           if run.decoys and run.decoy_kind == DEFAULT_DECOY_KIND else
+           " Decoys are left out." if run.decoys else ""),
         y=0.2,
     )
     return figure

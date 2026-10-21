@@ -410,10 +410,29 @@ def job_differences(real_job: Path, null_job: Path) -> list[str]:
             continue
         if key in _COMPARED_BY_PRESENCE and (first.get(key) is None) == (second.get(key) is None):
             continue
-        shown = [json.dumps(job.get(key)) for job in (first, second)]
-        shown = [text if len(text) <= 60 else text[:57] + "..." for text in shown]
-        differing.append(f"{key}: {shown[0]} (real) vs {shown[1]} (null)")
+        real_value, null_value = first.get(key), second.get(key)
+        # A record of records, such as ts_metadata, entry by entry: the first null
+        # run's line cut its tilt angles off after five values of each.
+        if isinstance(real_value, dict) and isinstance(null_value, dict):
+            differing.extend(
+                f"{key}.{entry}: {_shown(real_value.get(entry))} (real) vs "
+                f"{_shown(null_value.get(entry))} (null)"
+                for entry in sorted(set(real_value) | set(null_value))
+                if real_value.get(entry) != null_value.get(entry))
+            continue
+        differing.append(f"{key}: {_shown(real_value)} (real) vs {_shown(null_value)} (null)")
     return differing
+
+
+def _shown(value: Any) -> str:
+    """A job setting in a few words: a list of numbers by its length and its two ends."""
+
+    if (isinstance(value, list) and len(value) > 3
+            and all(isinstance(item, int | float) and not isinstance(item, bool)
+                    for item in value)):
+        return f"{len(value)} values {value[0]:g} .. {value[-1]:g}"
+    text = json.dumps(value)
+    return text if len(text) <= 60 else text[:57] + "..."
 
 
 def compare_with_real(real: Artifact, null: Artifact) -> None:
