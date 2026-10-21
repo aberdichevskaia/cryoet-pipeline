@@ -400,10 +400,15 @@ def template_of(registry: ArtifactRegistry, real: Artifact) -> tuple[Path, Path,
     return template.path, mask.path, spherical
 
 
-def job_differences(real_job: Path, null_job: Path) -> list[str]:
-    """Every pytom setting the two searches differ in, besides those that must."""
+def job_differences(real_job: Path, null_job: Path,
+                    names: tuple[str, str] = ("real", "null")) -> list[str]:
+    """Every pytom setting the two searches differ in, besides those that must.
+
+    `names` label the two values on each line (scripts/repick.py compares others).
+    """
 
     first, second = (json.loads(path.read_text()) for path in (real_job, null_job))
+    one, other = names
     differing = []
     for key in sorted(set(first) | set(second)):
         if key in _EXPECTED_JOB_DIFFERENCES or first.get(key) == second.get(key):
@@ -415,12 +420,12 @@ def job_differences(real_job: Path, null_job: Path) -> list[str]:
         # run's line cut its tilt angles off after five values of each.
         if isinstance(real_value, dict) and isinstance(null_value, dict):
             differing.extend(
-                f"{key}.{entry}: {_shown(real_value.get(entry))} (real) vs "
-                f"{_shown(null_value.get(entry))} (null)"
+                f"{key}.{entry}: {_shown(real_value.get(entry))} ({one}) vs "
+                f"{_shown(null_value.get(entry))} ({other})"
                 for entry in sorted(set(real_value) | set(null_value))
                 if real_value.get(entry) != null_value.get(entry))
             continue
-        differing.append(f"{key}: {_shown(real_value)} (real) vs {_shown(null_value)} (null)")
+        differing.append(f"{key}: {_shown(real_value)} ({one}) vs {_shown(null_value)} ({other})")
     return differing
 
 

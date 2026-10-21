@@ -184,6 +184,28 @@ between the two blob channels, which hold random halves of one structure. If the
 null decoys are still moving into the noise channel at the fifth iteration, that
 changes.
 
+### Picks made with the solved tilt angles
+
+The first null run's job comparison found the real and the null searches
+differing in their tilt angles: until 6b8e3be (2026-10-18) pick-particles gave
+pytom the tracking stack's stage angles, while the tomograms are reconstructed
+from the solved ones, 9-11 deg away on ribo-mdc. `scripts/repick.py` repeats the
+lane's search, as its picks record it, under a new label, so the angles are the
+one thing that changes, extracts the new picks, and compares them with the old
+picks and with the null search. On MDC, with an export of the new picks followed
+by the null decoys, which were picked the same way:
+
+```bash
+PROJECT=outputs/ribo-mdc CONFIG=configs/lanes/ribo-mdc.toml SERIES="TS_0306 TS_0463 TS_0493 TS_0564 TS_0623" LABEL=bin8-solved EXPORT=outputs/ribo-mdc/dynamo/export_solved_null sbatch --export=ALL --job-name=repick scripts/repick.sbatch
+```
+
+The reading, written before the run: the new search's job should differ from
+the old one's in the tilt angles alone and from the null search's in nothing.
+Summed over the series, picks above the null's best more than a tenth up: the
+stage angles cost real picks, and averaging and classification move to the new
+lists; within a tenth: they did not matter at bin8; more than a tenth down: the
+solved angles search worse, which points at the angles fine alignment solved.
+
 ## Comparing two runs particle by particle
 
 A split such as 74/13/13 says nothing alone: classification of noise also makes
