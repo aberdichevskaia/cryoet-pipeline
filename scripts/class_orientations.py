@@ -31,8 +31,10 @@ noise itself, lower if its particles carry a structure the decoys lack.
 
 The axis taken is the reference's z axis, the C4 axis of a run with c4 imposed. In a
 C1 run a class average can turn a few degrees (4.7 in mra_bbn), which moves a few
-axes across the boundary and changes no verdict. Disposable, like the rest of
-scripts/.
+axes across the boundary and changes no verdict. With --starting the axes are the
+picks' own, from the project's starting table: if the classes show the same split
+there, they sorted the particles by an orientation the picks already had, rather
+than turning them into one. Disposable, like the rest of scripts/.
 """
 
 from __future__ import annotations
@@ -44,7 +46,11 @@ from pathlib import Path
 import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import dynamo_to_native
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification, read_table
+from cryoet_pipeline.reports.dynamo_project import (
+    _starting_table,
+    read_dynamo_classification,
+    read_table,
+)
 
 _BEAM_BANDS = ((0, 30), (30, 60), (60, 90))
 
@@ -74,6 +80,10 @@ def main() -> int:
                         help="which finished iteration's classes (default the last)")
     parser.add_argument("--manifest", type=Path, default=None,
                         help="export_manifest.json; default the one beside the project")
+    parser.add_argument("--starting", action="store_true",
+                        help="take each member's axis at its starting pose (the project's "
+                        "starting table: the picks' poses) instead of its refined one, to see "
+                        "whether the classes found an orientation the picks had or made one")
     args = parser.parse_args()
 
     project = args.project.resolve()
@@ -91,8 +101,11 @@ def main() -> int:
         raise SystemExit(f"{project}: iteration {number} is not finished; finished: "
                          f"{sorted(finished)}")
 
-    print(f"{run.name}, iteration {number}: each member's axis against its series' tilt "
-          f"range ({manifest_path.name})")
+    # The CC stays the refined table's either way: it is the class's own measure.
+    poses = {int(row[0]): row for row in _starting_table(project, [])} if args.starting else None
+    print(f"{run.name}, iteration {number}'s classes, each member's axis at its "
+          f"{'starting' if args.starting else 'refined'} pose against its series' tilt range "
+          f"({manifest_path.name})")
     print(f"  {'class':15s} {'particles':>9s}   {'membrane measured':>17s}   {'median CC':>9s}   "
           "axis from the beam: " + "  ".join(f"{low}-{high}" for low, high in _BEAM_BANDS) + " deg")
     rows: dict[str, list[tuple[bool, float, float]]] = {}
@@ -111,7 +124,7 @@ def main() -> int:
                 series = run.series.get(tag)
                 if series not in ranges:
                     raise SystemExit(f"tag {tag}: no tilt range for series {series!r}")
-                axis = axis_of(by_tag[tag][6:9], run.box_px)
+                axis = axis_of((poses or by_tag)[tag][6:9], run.box_px)
                 found.append((measured(axis, ranges[series]),
                               float(np.degrees(np.arccos(min(1.0, abs(axis[2]))))),
                               float(by_tag[tag][9])))
