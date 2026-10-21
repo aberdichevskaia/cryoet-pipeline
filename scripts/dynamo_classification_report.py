@@ -14,6 +14,12 @@ of them (computed here in about a minute for 2,700 particles of 48^3, unless
 iteration; every iteration's classes as z sections, as Dynamo's dslices shows
 a map; the last classes by tilt-series and picking score; particles of each
 last class at its own poses. See src/cryoet_pipeline/reports/classification.py.
+
+--template names the map the picks were matched with (MRC or EM), for instance
+outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_template.mrc: every page of
+particles or maps then shows it in its top right corner, drawn as that page draws
+its own and brought to the particles' box and pixel size. Without it the corner
+stays empty.
 """
 
 from __future__ import annotations
@@ -56,6 +62,9 @@ def main() -> None:
                         "starting poses, instead of computing it")
     parser.add_argument("--no-initial-average", action="store_true",
                         help="leave the average of all particles out")
+    parser.add_argument("--template", type=Path,
+                        help="the template the picks were matched with (MRC or EM), drawn in "
+                        "the corner of every page of particles or maps")
     args = parser.parse_args()
 
     project = args.project.resolve()
@@ -68,6 +77,7 @@ def main() -> None:
         pixel_size_angstrom=args.pixel_size,
         initial_average=args.initial_average,
         compute_initial_average=not args.no_initial_average,
+        template=args.template,
     )
     finished = len(run.iterations)
     planned = f" of {run.planned_iterations}" if run.planned_iterations else ""

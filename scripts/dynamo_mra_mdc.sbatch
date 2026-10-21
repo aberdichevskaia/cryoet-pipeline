@@ -26,7 +26,9 @@
 # is imposed about the box's z axis in every round, c1 unless given;
 # AXIS_OFFSET="dx dy" (px, as scripts/rotational_symmetry.py prints the axis)
 # first moves the particles so that axis lands where Dynamo symmetrises. Without
-# SCHEDULE the search is the fixed one. A project
+# SCHEDULE the search is the fixed one. TEMPLATE, the map the picks were matched
+# with (a relative path from the repo root), goes into the report: drawn in the
+# corner of its pages of particles and maps. A project
 # that already exists in EXPORT is not made again: the job goes on computing it
 # from the iteration Dynamo has recorded as next, so a job that ran out of time
 # is resubmitted as it was.
@@ -167,8 +169,12 @@ grep -E "contains [0-9]+ tags|No tags assigned|iteration [0-9]+ ok" "$log" | tai
 # The report needs the pipeline's env; the classes are on disk whether or not it works.
 # A subshell, because activate_env.sh exits when it finds no env manager.
 cd "$REPO"
-if (source scripts/activate_env.sh && python scripts/dynamo_classification_report.py "$EXPORT/$NAME"); then
+report_options=()
+[[ -n "${TEMPLATE:-}" ]] && report_options+=(--template "$TEMPLATE")
+if (source scripts/activate_env.sh && python scripts/dynamo_classification_report.py "$EXPORT/$NAME" \
+        ${report_options[@]+"${report_options[@]}"}); then
     echo "report      $EXPORT/${NAME}_classification_report.pdf"
 else
-    echo "no report; write it with: python scripts/dynamo_classification_report.py $EXPORT/$NAME" >&2
+    echo "no report; write it with: python scripts/dynamo_classification_report.py $EXPORT/$NAME" \
+         "${TEMPLATE:+--template $TEMPLATE}" >&2
 fi

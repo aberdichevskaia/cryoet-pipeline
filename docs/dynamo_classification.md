@@ -231,6 +231,19 @@ The pages:
 7. the last classes by tilt-series and by picking score;
 8. particles of each last class at its own poses.
 
+With `--template <map>` (MRC or EM; on max
+`outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_template.mrc`, and
+`TEMPLATE=` for scripts/dynamo_mra_mdc.sbatch) every page of particles or maps
+shows the template in its top right corner, drawn as that page draws its own: as
+a gallery tile on the particle pages, as its central XY, XZ and YZ sections on
+the map pages, on its own grey scale. It is cut or padded to the particles' box
+and resampled to their pixel size when its header gives another. No turning is
+needed: for picks from pytom the references' frame is the template's (the average
+of 400 ribo-mdc particles at their starting poses correlates +0.90 with the lane's
+EMD-16721 template as drawn, +0.72 under the best of the other 47 axis orders and
+flips). A
+template that cannot be read is listed on the last page, and the corners stay empty.
+
 What the reader relies on, read from real projects: a particle's class is
 column 34 of the refined table of a channel that the next iteration still lists
 (a dropped channel's table is never rewritten and still claims every particle),

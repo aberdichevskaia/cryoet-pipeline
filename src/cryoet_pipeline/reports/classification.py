@@ -157,6 +157,11 @@ class ClassificationRun:
     """Tags of control boxes mixed in with the particles, when there are any."""
     decoy_kind: str = DEFAULT_DECOY_KIND
     """What the decoys are, in words: boxes at random positions, pytom's picks in noise."""
+    template: Volume | None = None
+    """The template the picks were matched with, when the report is given one, already in
+    the particles' box and pixel size (`template_in_box`). Drawn in the top right corner of
+    every page of particles or maps, the way that page draws its own; for picks from pytom
+    the references' frame is the template's, so it needs no turning."""
     problems: list[str] = field(default_factory=list)
     """Everything that could not be read, one line each."""
 
@@ -318,12 +323,13 @@ def starting_gallery_page(run: ClassificationRun) -> Figure:
     tiles = [(int(tag), gallery_tile(run.aligned_particle(int(tag), None))) for tag in tags]
     _draw_tiles(figure, run, tiles, top=style.CONTENT_TOP - 0.035, bottom=style.PICTURE_BOTTOM,
                 columns=GALLERY_COLUMNS)
+    _template_corner(figure, run, as_tile=True)
     style.caption(
         figure,
         "Each particle rotated and shifted by its starting pose into the frame its "
         f"references and averages use, then the mean of its {GALLERY_SLAB_PX} central z "
         "sections, smoothed by one voxel. One grey scale for the page. Labels: tag, "
-        "tilt-series and picking score where known.",
+        "tilt-series and picking score where known." + _template_note(run),
     )
     return figure
 
@@ -348,13 +354,14 @@ def initial_average_page(run: ClassificationRun) -> Figure:
         axes.set_aspect("equal")
         if index == 0:
             _scale_bar(axes, run.pixel_size_angstrom, view.shape)
+    _template_corner(figure, run, as_tile=False)
     style.caption(
         figure,
         "Top: successive z sections through the box centre, as Dynamo's dslices shows a map. "
         "Bottom: the central section along each axis. Before any classification: the "
         "reference every class has to improve on. When computed for this report, it is "
         "Dynamo's dynamo_average with fcompensate, fmin 1 and normalisation under the "
-        "alignment mask, through the pipeline's port of it.",
+        "alignment mask, through the pipeline's port of it." + _template_note(run),
     )
     return figure
 
@@ -368,9 +375,11 @@ def references_page(run: ClassificationRun, channels: Sequence[int]) -> Figure:
         label = f"channel {channel}" + (f" · {note}" if note else "") + f" · {volume.source}"
         _map_row(figure, run, row, label, np.asarray(volume.load(), dtype=float),
                  CHANNEL_COLOURS[(channel - 1) % len(CHANNEL_COLOURS)])
+    _template_corner(figure, run, as_tile=False)
     style.caption(
         figure,
-        "What each channel searched against in the first iteration. " + MAP_ROW_GUIDE,
+        "What each channel searched against in the first iteration. " + MAP_ROW_GUIDE
+        + _template_note(run),
     )
     return figure
 
@@ -592,11 +601,12 @@ def iteration_page(run: ClassificationRun, iteration: IterationResult,
     if not channels:
         figure.text(0.035, style.CONTENT_TOP, "No class kept any particle.",
                     fontsize=style.FONT_TEXT, va="top", color=style.INK_SECONDARY)
+    _template_corner(figure, run, as_tile=False)
     style.caption(
         figure,
         "Each class's average after this iteration, the reference it searches with in the "
         f"next. {MAP_ROW_GUIDE} Median CC: the class members' correlation with their own "
-        "class's reference.",
+        "class's reference." + _template_note(run),
     )
     return figure
 
@@ -708,11 +718,12 @@ def class_gallery_page(run: ClassificationRun, channels: Sequence[int]) -> Figur
                     f"({100 * count / total:.0f}%)", fontsize=style.FONT_TEXT,
                     color=CHANNEL_COLOURS[(channel - 1) % len(CHANNEL_COLOURS)], va="top")
         _draw_tile_row(figure, run, tiles, limits, top=top - 0.055, height=0.105)
+    _template_corner(figure, run, as_tile=True)
     style.caption(
         figure,
         f"Each particle at its pose in its class's channel, then the mean of its "
         f"{GALLERY_SLAB_PX} central z sections, smoothed by one voxel. One grey scale for "
-        "the page.",
+        "the page." + _template_note(run),
     )
     return figure
 
@@ -803,6 +814,69 @@ def central_views(volume: np.ndarray) -> list[np.ndarray]:
         middle = sorted({(size - 1) // 2, size // 2})
         views.append(np.mean(np.take(volume, middle, axis=axis), axis=axis))
     return views
+
+
+def template_in_box(template: np.ndarray, *, box: int, scale: float = 1.0) -> np.ndarray:
+    """A template on the particles' grid: zoomed by `scale`, then cut or padded about its
+    centre to `box` voxels a side, NaN where it does not reach.
+
+    `scale` is the template's voxel size over the particles'; within one per cent of 1
+    it is left alone, so a template made at the particles' binning keeps its voxels.
+    """
+
+    volume = np.asarray(template, dtype=np.float32)
+    if volume.ndim != 3:
+        raise ValueError(f"a template must be 3D, not {volume.shape}")
+    if abs(scale - 1.0) > 0.01:
+        from scipy.ndimage import zoom  # type: ignore[import-untyped]
+
+        volume = np.asarray(zoom(volume, scale, order=1), dtype=np.float32)
+    out = np.full((box, box, box), np.nan, dtype=np.float32)
+    source, target = [], []
+    for size in volume.shape:
+        start = (size - box) // 2
+        lo, hi = max(0, start), min(size, start + box)
+        source.append(slice(lo, hi))
+        target.append(slice(lo - start, hi - start))
+    out[tuple(target)] = volume[tuple(source)]
+    return out
+
+
+TEMPLATE_CORNER = (0.765, 0.868, 0.2, 0.075)
+"""Where the template goes on a page: the top right corner, as in the picking report."""
+
+
+def _template_corner(figure: Figure, run: ClassificationRun, *, as_tile: bool) -> None:
+    """The template in the page's top right corner, drawn as the page draws its own.
+
+    `as_tile`: the mean of its central z sections, smoothed, as a gallery tile; otherwise
+    its central XY, XZ and YZ sections, as a map. On its own grey scale: a template's
+    values have nothing to do with the particles'.
+    """
+
+    if run.template is None:
+        return
+    volume = np.asarray(run.template.load(), dtype=float)
+    views = [gallery_tile(volume)] if as_tile else central_views(volume)
+    gap = np.full((views[0].shape[0], max(1, views[0].shape[1] // 10)), np.nan)
+    pieces: list[np.ndarray] = []
+    for view in views:
+        pieces.extend([gap, view] if pieces else [view])
+    image = np.concatenate(pieces, axis=1)
+    limits = display_range([image])
+    axes = figure.add_axes(TEMPLATE_CORNER)
+    axes.imshow(image, cmap=style.GRAY_WITH_GAPS, vmin=limits[0], vmax=limits[1],
+                origin="lower")
+    style.image_axes(axes)
+    axes.set_anchor("NE")
+    axes.set_title("Template, shown the same way" if as_tile
+                   else "Template · XY | XZ | YZ, shown the same way",
+                   loc="right", fontsize=style.FONT_SMALL)
+
+
+def _template_note(run: ClassificationRun) -> str:
+    return (" Top right: the template, drawn the same way, on its own grey scale."
+            if run.template is not None else "")
 
 
 ROW_STEP = 0.215

@@ -52,6 +52,7 @@ from cryoet_pipeline.reports.classification import (
     Parameter,
     Pose,
     Volume,
+    template_in_box,
 )
 
 TAG = 0
@@ -184,6 +185,7 @@ def read_dynamo_classification(
     pixel_size_angstrom: float | None = None,
     initial_average: Path | None = None,
     compute_initial_average: bool = True,
+    template: Path | None = None,
 ) -> ClassificationRun:
     """Everything the classification report shows about one Dynamo project folder.
 
@@ -193,6 +195,9 @@ def read_dynamo_classification(
     particles at their starting poses; without one it is computed when its page
     is drawn, as Dynamo's console `dynamo_average` would (fcompensate, fmin 1,
     normalised under the alignment mask), through the pipeline's port of it.
+    `template` is the map the picks were matched with (MRC or EM), drawn in the
+    corner of the pages of particles and maps; one that cannot be read is listed
+    with the other problems, and the pages go without it.
     """
 
     project = project.resolve()
@@ -289,6 +294,9 @@ def read_dynamo_classification(
         result[~np.asarray(valid, dtype=bool)] = np.nan
         return result
 
+    template_volume, template_note = (_template(template, box, spacing, problems)
+                                      if template is not None else (None, None))
+
     mask_path = project / "settings" / "mask.em"
     if initial_average is not None:
         average: Volume | None = Volume(str(initial_average), partial(read_map, initial_average))
@@ -306,6 +314,7 @@ def read_dynamo_classification(
         series=series, wedges=manifest_wedges, nref=nref, mra=mra, notes=notes,
         references=references, particles=particles, iterations=iterations,
         decoys=decoys, decoy_variant=decoy_variant, decoy_kind=decoy_kind,
+        template=template_note,
     )
     planned = sum(int(_as_float(vpr.get(f"ite_r{r}")) or 0) for r in ROUNDS) if vpr else None
     return ClassificationRun(
@@ -327,6 +336,7 @@ def read_dynamo_classification(
         score_label="picking score (LCCmax, from the export manifest)",
         decoys=decoys & frozenset(int(tag) for tag in tags),
         decoy_kind=decoy_kind,
+        template=template_volume,
         problems=problems,
     )
 
@@ -524,6 +534,37 @@ def _initial_average(starting: np.ndarray, particles: Path, extension: str,
     return np.asarray(result.average, dtype=np.float32)
 
 
+def _template(path: Path, box: int, spacing: float | None,
+              problems: list[str]) -> tuple[Volume | None, str | None]:
+    """The template on the particles' grid, and a line for the parameters saying how."""
+
+    try:
+        if path.suffix.lower() == ".em":
+            data, voxel = read_em(path), 0.0
+        else:
+            with mrcfile.open(path, permissive=True) as handle:
+                data = np.asarray(handle.data, dtype=np.float32)
+                voxel = float(handle.voxel_size.x)
+        if data.ndim != 3:
+            raise ValueError(f"not a volume: shape {data.shape}")
+        if not box:
+            raise ValueError("the particles' box is not known")
+        scale = voxel / spacing if voxel > 0 and spacing else 1.0
+        fitted = template_in_box(data, box=box, scale=scale)
+    except (OSError, ValueError) as error:
+        problems.append(f"template {path}: {error}")
+        return None, None
+    note = f"{path} · {'x'.join(str(size) for size in data.shape)} px"
+    if voxel > 0:
+        note += f" at {voxel:.3f} Å"
+    if abs(scale - 1.0) > 0.01:
+        note += f", resampled to the particles' {spacing:.3f} Å"
+    elif voxel <= 0 or not spacing:
+        note += ", pixel size not compared with the particles'"
+    note += f" · drawn in their {box} px box"
+    return Volume(str(path), lambda: fitted), note
+
+
 def _cached(build: Callable[[], np.ndarray]) -> Callable[[], np.ndarray]:
     cache: dict[str, np.ndarray] = {}
 
@@ -618,7 +659,7 @@ def _parameters(
     wedges: Mapping[str, Any], nref: int, mra: bool, notes: Mapping[int, str],
     references: Mapping[int, Volume], particles: Path, iterations: list[IterationResult],
     decoys: frozenset[int] = frozenset(), decoy_variant: str | None = None,
-    decoy_kind: str = DEFAULT_DECOY_KIND,
+    decoy_kind: str = DEFAULT_DECOY_KIND, template: str | None = None,
 ) -> list[Parameter]:
     rows: list[Parameter] = []
 
@@ -633,6 +674,8 @@ def _parameters(
     add("Data", "pixel size",
         f"{spacing:.3f} Å, from {spacing_source}" if spacing else "not recorded")
     add("Data", "particle folder", _relative(particles, base))
+    if template:
+        add("Data", "template", template)
     if decoys:
         add("Data", "decoys", f"{len(decoys):,} {decoy_kind}"
             + (f" ({decoy_variant})" if decoy_variant else "") + ", counted with the series")

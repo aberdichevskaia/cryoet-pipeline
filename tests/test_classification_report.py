@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import mrcfile
 import numpy as np
 import pytest
 
@@ -25,12 +26,18 @@ from cryoet_pipeline.reports.classification import (  # noqa: E402
     Volume,
     central_views,
     class_changes,
+    class_gallery_page,
     composition_page,
     decoy_shares,
     decoys_page,
     gallery_tile,
+    initial_average_page,
+    iteration_page,
     plan_pages,
+    references_page,
     sample_tags,
+    starting_gallery_page,
+    template_in_box,
     write_classification_report,
     z_sections,
 )
@@ -315,6 +322,88 @@ def test_sample_tags_is_stable_and_sorted() -> None:
     assert np.array_equal(first, sample_tags(tags, 8))
     assert np.array_equal(first, np.sort(first)) and len(first) == 8
     assert np.array_equal(sample_tags(tags[:5], 8), tags[:5])
+
+
+def test_a_template_is_cut_padded_and_zoomed_onto_the_particles_grid() -> None:
+    small = np.arange(6**3, dtype=np.float32).reshape(6, 6, 6)
+    padded = template_in_box(small, box=10)
+    assert padded.shape == (10, 10, 10)
+    assert np.array_equal(padded[2:8, 2:8, 2:8], small) and np.isnan(padded[0, 0, 0])
+    large = np.arange(14**3, dtype=np.float32).reshape(14, 14, 14)
+    assert np.array_equal(template_in_box(large, box=10), large[2:12, 2:12, 2:12])
+    # Twice the particles' voxel: zoomed to twice the voxels before it is cut.
+    blob = np.zeros((8, 8, 8), dtype=np.float32)
+    blob[3:5, 3:5, 3:5] = 1.0
+    zoomed = template_in_box(blob, box=16, scale=2.0)
+    assert zoomed.shape == (16, 16, 16) and np.isfinite(zoomed).all()
+    # Twice as wide on each axis: about eight times the voxels.
+    assert 6 <= np.count_nonzero(zoomed > 0.5) / np.count_nonzero(blob) <= 10
+
+
+def _template_axes(figure) -> list:
+    return [axes for axes in figure.axes if axes.get_title(loc="right").startswith("Template")]
+
+
+def test_a_template_given_is_drawn_on_every_page_of_particles_or_maps(
+    project: Path, tmp_path: Path
+) -> None:
+    write_manifest(project)
+    template = tmp_path / "template.mrc"
+    volume = np.zeros((12, 12, 12), dtype=np.float32)
+    volume[4:8, 5:7, 3:9] = -1.0
+    with mrcfile.new(template) as handle:
+        handle.set_data(volume)
+        handle.voxel_size = 10.0
+    run = read_dynamo_classification(project, compute_initial_average=False,
+                                     initial_average=None, template=template)
+    assert run.problems == [] and run.template is not None
+    assert run.template.load().shape == (BOX, BOX, BOX)
+    values = {(p.group, p.name): p.value for p in run.parameters}
+    assert values[("Data", "template")].endswith(f"drawn in their {BOX} px box")
+
+    last = run.iterations[-1]
+    pages = [starting_gallery_page(run), references_page(run, [1, 2]),
+             iteration_page(run, last, sorted(last.classes)),
+             class_gallery_page(run, sorted(last.classes))]
+    for figure in pages:
+        corner, = _template_axes(figure)
+        assert any("Top right: the template" in text.get_text()
+                   for text in figure.findobj(Text))
+        plt.close(figure)
+    # The gallery's way is one tile; a map's, its three central sections side by side.
+    gallery, maps = (_template_axes(page)[0].images[0].get_array().shape
+                     for page in (starting_gallery_page(run), references_page(run, [1, 2])))
+    assert gallery == (BOX, BOX) and maps[1] > 3 * BOX
+    plt.close("all")
+
+    without = read_dynamo_classification(project, compute_initial_average=False)
+    assert without.template is None
+    figure = iteration_page(without, without.iterations[-1], sorted(last.classes))
+    assert _template_axes(figure) == []
+    plt.close(figure)
+
+
+def test_a_template_of_another_pixel_size_is_resampled_and_a_bad_one_reported(
+    project: Path, tmp_path: Path
+) -> None:
+    write_manifest(project)
+    coarse = tmp_path / "coarse.mrc"
+    with mrcfile.new(coarse) as handle:
+        handle.set_data(np.ones((8, 8, 8), dtype=np.float32))
+        handle.voxel_size = 20.0
+    run = read_dynamo_classification(project, compute_initial_average=False, template=coarse)
+    values = {(p.group, p.name): p.value for p in run.parameters}
+    assert "resampled to the particles' 10.000 Å" in values[("Data", "template")]
+    assert np.isfinite(run.template.load()).all()  # 8 px at 20 Å fill 16 px at 10 Å
+
+    broken = tmp_path / "broken.mrc"
+    broken.write_text("not a map")
+    run = read_dynamo_classification(project, compute_initial_average=False, template=broken)
+    assert run.template is None
+    assert any(problem.startswith(f"template {broken}") for problem in run.problems)
+    figure = initial_average_page(run) if run.initial_average is not None else None
+    if figure is not None:
+        plt.close(figure)
 
 
 def test_decoys_are_counted_per_class(project: Path, tmp_path: Path) -> None:
