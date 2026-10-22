@@ -206,6 +206,42 @@ stage angles cost real picks, and averaging and classification move to the new
 lists; within a tenth: they did not matter at bin8; more than a tenth down: the
 solved angles search worse, which points at the angles fine alignment solved.
 
+### Seeds and search: the PI's scheme on the null-decoy export
+
+The PI's scheme (2026-10-22): with the picks' angles, starting references that
+carry them (`subset`) and the cone; without, `blob` and noise and every
+orientation (`GLOBAL_ROUNDS`, 360 deg in 45 deg steps refined by 2 to the round's
+step); or the subsets with every orientation for the first two rounds and then
+the cone; always coarse to fine, no symmetry. Five runs on `export_null`, the same
+schedule as mra_nbb_ctf_null (39 to 22 A in Fourier steps):
+
+| run | seeds | search | time, 32 cores |
+|---|---|---|---|
+| mra_ssn_cone_null | subset subset noise | cone | ~2.6 h |
+| mra_ssb_cone_null | subset subset blob | cone | ~2.6 h |
+| mra_bbn_360_null | blob blob noise | every orientation, all 5 rounds | ~6.6 h |
+| mra_ssn_360x2_null | subset subset noise | every orientation in rounds 1-2, then cone | ~3.9 h |
+| mra_ssb_360x2_null | subset subset blob | every orientation in rounds 1-2, then cone | ~3.9 h |
+
+Times from mra_nbb_ctf_null's ~31 min a round and the orientations each search
+tries per particle and channel (`dynamo_search.angle_list` with Dynamo's
+refinement): 221 for the cone of every round here, 502 for every orientation
+refined 3 times (rounds 1-2), 602 refined 4 times (rounds 3-5). The cards of
+the 360x2 and 360 setups were read back from local Dynamo 1.1.511 setups on a
+copy of the ribo-mdc export: rounds 1-2 `cone_range=360; cone_sampling=45;
+inplane_range=360; inplane_sampling=45; refine=3`; in the all-rounds setup rounds
+3-5 the same with `refine=4` (to 2.8 deg); in the 360x2 one rounds 3-5 the cone
+as before.
+
+The reading, written before the runs, is the decoys page's rule for each run:
+a scheme separates noise the template chose from the picks if one class holds at
+least twice the share of the null decoys it holds of real particles, with the 95%
+interval of the decoy share leaving out the real share. mra_nbb_ctf_null came to
+x1.27 at best. Whether searching every orientation helps is open both ways: a
+box loses the pose pytom gave it, which is what made template-selected noise
+look like the template, but gets some 500 orientations to fit the reference in
+instead of 221.
+
 ## Comparing two runs particle by particle
 
 A split such as 74/13/13 says nothing alone: classification of noise also makes
