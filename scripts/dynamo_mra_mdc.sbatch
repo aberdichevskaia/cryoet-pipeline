@@ -33,7 +33,11 @@
 # corner of its pages of particles and maps. A project
 # that already exists in EXPORT is not made again: the job goes on computing it
 # from the iteration Dynamo has recorded as next, so a job that ran out of time
-# is resubmitted as it was.
+# is resubmitted as it was. A job that can neither make nor resume its project
+# says why on its log's last lines, after REFUSED: what an earlier setup stopped
+# part-way left in EXPORT (a job cancelled while it averaged the seeds), with the
+# command that moves it aside, found before Dynamo starts; or the setup's own
+# reason and the path to its log.
 #
 # Dynamo is the group's shared installation, activated with its shipped MATLAB
 # Runtime 9.9. dynamo_activate_linux.sh alone tries to compile OpenMP wrappers
@@ -87,6 +91,26 @@ echo "project     $EXPORT/$NAME, $CORES cores"
 echo "dynamo      $(command -v dynamo_execute_project)"
 
 card=$NAME/cards/ite_0001/card_ite_ite_0001.card
+# A setup stopped part-way leaves ${NAME}_seeds, _fmasks and _tables, or the
+# project without its first card, and a new setup refuses to start over them
+# (2026-10-20 and 10-22: jobs cancelled a minute in, then resubmitted under the
+# same name, failed in 18 s). Found here, before Dynamo starts.
+if [[ ! -f "$card" ]]; then
+    leftovers=()
+    for item in "$NAME" "${NAME}_seeds" "${NAME}_fmasks" "${NAME}_tables" "${NAME}.vpr" "${NAME}.exe"; do
+        if [[ -e "$item" ]]; then leftovers+=("$item"); fi
+    done
+    if (( ${#leftovers[@]} )); then
+        # Dated, so a second stop of the same name does not collide with the first.
+        aside=cancelled_${NAME}_$(date +%Y%m%d-%H%M)
+        {
+            echo "REFUSED: an earlier setup of $NAME stopped part-way and left ${leftovers[*]} in $EXPORT."
+            echo "Move them aside and submit again:"
+            echo "  cd $EXPORT && mkdir $aside && mv ${leftovers[*]} $aside/"
+        } >&2
+        exit 1
+    fi
+fi
 if [[ ! -d "$NAME" ]]; then
     : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to make the project}"
     cells=$(printf "'%s', " $SEEDS)
@@ -103,9 +127,23 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
     [[ -n "${GLOBAL_ROUNDS:-}" ]] && options+="global_rounds = $GLOBAL_ROUNDS; "
     [[ -n "${GLOBAL_STEP:-}" ]] && options+="global_step = $GLOBAL_STEP; "
+    # Not under set -e: a setup that Dynamo ends with an error would end the job
+    # with it, before the lines below say why (exit 249, 2026-10-22).
+    set +e
     dynamo "project = '$NAME'; seeds = {${cells%, }}; cores = $CORES; ${options}eval(fileread('$REPO/scripts/dynamo_mra_setup.m'))" 2>&1 | tee "${NAME}_setup.log"
+    set -e
     if [[ ! -f "$card" ]]; then
-        echo "the setup did not make $NAME; see $EXPORT/${NAME}_setup.log" >&2
+        # The setup's own refusal when it gave one; else the last lines Dynamo
+        # printed before the Runtime's shutdown.
+        reason=$(grep -h "dynamo_mra_setup:" "${NAME}_setup.log" | grep -v " is ready," | tail -n 1 || true)
+        if [[ -z "$reason" ]]; then
+            reason=$(grep -v -e '^[[:space:]]*$' -e 'pmodelpool' "${NAME}_setup.log" | tail -n 3 || true)
+        fi
+        {
+            echo "REFUSED: the setup did not make $NAME:"
+            printf '%s\n' "$reason" | sed 's/^/  /'
+            echo "Its log: $EXPORT/${NAME}_setup.log"
+        } >&2
         exit 1
     fi
 fi
