@@ -48,6 +48,15 @@
 %                     resolution; 'fourier' in Fourier px, i.e. frequency, as the
 %                     ribo-mdc runs of 2026-10-17 were made. Both are rounded to
 %                     whole Fourier px, which is what Dynamo takes
+% global_rounds (default 0) makes the first rounds search every orientation
+% instead of a cone: cone and in-plane 360 deg in global_step (default 45) deg
+% steps, refined by factor 2 until the step is no coarser than that round's
+% atan(resolution / diameter), the way dynamo_align's own global search refines
+% its 60 deg grid. For blob seeds, which carry no orientation to search near
+% (the PI, 2026-10-22: bbn with a 360 deg search, ssn with the cone, or ssn with
+% 360 deg for two rounds and then the cone). The grid sets the cost: 45 deg
+% refined three times is 4.3 times round 1's cone search per particle and
+% channel, a 9 deg grid would be 340 times (counted with dynamo_search.angle_list).
 % Every round is given every search parameter, nref and mra included: a parameter
 % set without a round goes to round 1 only.
 %
@@ -75,6 +84,8 @@ if ~exist('lowpass_steps', 'var'), lowpass_steps = 'angstrom'; end
 if ~exist('mask_file', 'var'), mask_file = ''; end
 if ~exist('symmetry', 'var'), symmetry = 'c1'; end
 if ~exist('axis_offset', 'var'), axis_offset = [0 0 0]; end
+if ~exist('global_rounds', 'var'), global_rounds = 0; end
+if ~exist('global_step', 'var'), global_step = 45; end
 % Particles averaged into each 'subset' or 'blob' seed, and the one seed for the
 % random order, orientations and noise of every project.
 subset = 300;
@@ -89,6 +100,8 @@ if ~ischar(symmetry) || isempty(regexp(symmetry, '^[cd][0-9]+$', 'once')), error
 if ~ischar(mask_file), error('dynamo_mra_setup: mask_file must be a file name'); end
 if ~isnumeric(axis_offset) || ~any(numel(axis_offset) == [2 3]) || ~all(isfinite(axis_offset)), error('dynamo_mra_setup: axis_offset must be [dx dy] or [dx dy dz] in px, as scripts/rotational_symmetry.py prints it'); end
 axis_offset = [axis_offset(:)' zeros(1, 3 - numel(axis_offset))];
+if ~isscalar(global_rounds) || ~any(global_rounds == 0:(1 + 4 * strcmp(schedule, 'coarse_to_fine'))), error('dynamo_mra_setup: global_rounds must be a whole number from 0 to the schedule''s rounds (5 for coarse_to_fine, 1 for fixed)'); end
+if ~isscalar(global_step) || ~(global_step > 0 && global_step <= 180), error('dynamo_mra_setup: global_step must be an angle in degrees, above 0 and at most 180'); end
 if exist([project '_seeds'], 'dir') || exist([project '_fmasks'], 'dir') || exist([project '_tables'], 'dir') || exist(project, 'dir') || exist([project '.vpr'], 'file'), error('dynamo_mra_setup: an earlier run left %s_seeds, %s_fmasks, %s_tables or %s here; move them away first', project, project, project, project); end
 
 t = dread('initial.tbl'); n = size(t, 1);
@@ -149,9 +162,11 @@ dynamo_vpr_put(project, '-mask', mask_file);
 dynamo_vpr_put(project, '-cmask', mask_file);
 dynamo_vpr_put(project, '-smask', mask_file);
 
-% One Dynamo round per stage of the search. In every round: cone and in-plane 3
-% steps wide (Dynamo's cone_range is the cone's full opening), two refinement
-% levels with factor 2, high-pass at Fourier px 2, shifts within 3 px of the box
+% One Dynamo round per stage of the search. In every round but the global ones:
+% cone and in-plane 3 steps wide (Dynamo's cone_range is the cone's full
+% opening), two refinement levels with factor 2; in a global round 360 deg in
+% global_step steps and as many levels as reach the round's step. In every round:
+% high-pass at Fourier px 2, shifts within 3 px of the box
 % centre (limm 1, not 2: under limm 2 Dynamo's spline shift crashed the CZII run),
 % the symmetry (C1 unless given), no thresholding. The fixed card gives band
 % 2..16 (235..29 A at 9.784 A/px) and 5 deg steps; coarse_to_fine from 40 to
@@ -161,16 +176,18 @@ dynamo_vpr_put(project, '-smask', mask_file);
 % are equal steps of resolution instead, rounded to the same whole Fourier px.
 if strcmp(schedule, 'fixed'), iterations = 5; lows = 16; steps = 5; elseif strcmp(lowpass_steps, 'angstrom'), lows = round(box * apix ./ linspace(first_lowpass, last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; else, lows = round(linspace(box * apix / first_lowpass, box * apix / last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; end
 rounds = numel(lows);
+cone_ranges = 3 * steps; samplings = steps; refines = 2 * ones(size(steps));
+if global_rounds > 0, g = 1:global_rounds; cone_ranges(g) = 360; samplings(g) = global_step; refines(g) = max(2, ceil(log2(global_step ./ steps(g)))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], '1'); dynamo_vpr_put(project, ['-thrm' s], '0'); end
-for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-cr' s], num2str(3 * steps(r))); dynamo_vpr_put(project, ['-cs' s], num2str(steps(r))); dynamo_vpr_put(project, ['-ir' s], num2str(3 * steps(r))); dynamo_vpr_put(project, ['-is' s], num2str(steps(r))); end
-for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-rf' s], '2'); dynamo_vpr_put(project, ['-rff' s], '2'); dynamo_vpr_put(project, ['-high' s], '2'); dynamo_vpr_put(project, ['-low' s], num2str(lows(r))); dynamo_vpr_put(project, ['-dim' s], num2str(box)); end
+for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-cr' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-cs' s], num2str(samplings(r))); dynamo_vpr_put(project, ['-ir' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-is' s], num2str(samplings(r))); end
+for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-rf' s], num2str(refines(r))); dynamo_vpr_put(project, ['-rff' s], '2'); dynamo_vpr_put(project, ['-high' s], '2'); dynamo_vpr_put(project, ['-low' s], num2str(lows(r))); dynamo_vpr_put(project, ['-dim' s], num2str(box)); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-lim' s], '[3,3,3]'); dynamo_vpr_put(project, ['-limm' s], '1'); dynamo_vpr_put(project, ['-sym' s], symmetry); end
 for r = rounds + 1:8, dynamo_vpr_put(project, sprintf('-ite_r%d', r), '0'); end
-for r = 1:rounds, fprintf('round %d: %d iteration(s), low-pass %d px (%.1f A), cone and in-plane %.1f deg in %.1f deg steps\n', r, iterations(r), lows(r), box * apix / lows(r), 3 * steps(r), steps(r)); end
+for r = 1:rounds, if r <= global_rounds, search = sprintf('every orientation, 360 deg in %g deg steps refined %d times by 2 to %.1f deg', samplings(r), refines(r), samplings(r) / 2^refines(r)); else, search = sprintf('cone and in-plane %.1f deg in %.1f deg steps', cone_ranges(r), samplings(r)); end; fprintf('round %d: %d iteration(s), low-pass %d px (%.1f A), %s\n', r, iterations(r), lows(r), box * apix / lows(r), search); end
 dynamo_vpr_put(project, '-destination', 'standalone');
 dynamo_vpr_put(project, '-cores', num2str(cores));
 
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
-fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, mask_note, symmetry, axis_offset, cores);
-clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset schedule first_lowpass last_lowpass diameter lowpass_steps
+fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) in %g deg steps, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, global_rounds, global_step, mask_note, symmetry, axis_offset, cores);
+clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step schedule first_lowpass last_lowpass diameter lowpass_steps

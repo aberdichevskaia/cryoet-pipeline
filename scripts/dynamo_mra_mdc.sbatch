@@ -25,7 +25,9 @@
 # membrane out; a relative path is taken from the repo root). SYMMETRY (c4, ...)
 # is imposed about the box's z axis in every round, c1 unless given;
 # AXIS_OFFSET="dx dy" (px, as scripts/rotational_symmetry.py prints the axis)
-# first moves the particles so that axis lands where Dynamo symmetrises. Without
+# first moves the particles so that axis lands where Dynamo symmetrises.
+# GLOBAL_ROUNDS=n makes the first n rounds search every orientation, 360 deg in
+# GLOBAL_STEP-degree steps (45 unless given), refined to the round's step. Without
 # SCHEDULE the search is the fixed one. TEMPLATE, the map the picks were matched
 # with (a relative path from the repo root), goes into the report: drawn in the
 # corner of its pages of particles and maps. A project
@@ -99,6 +101,8 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${MASK_FILE:-}" ]] && options+="mask_file = '$MASK_FILE'; "
     [[ -n "${SYMMETRY:-}" ]] && options+="symmetry = '$SYMMETRY'; "
     [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
+    [[ -n "${GLOBAL_ROUNDS:-}" ]] && options+="global_rounds = $GLOBAL_ROUNDS; "
+    [[ -n "${GLOBAL_STEP:-}" ]] && options+="global_step = $GLOBAL_STEP; "
     dynamo "project = '$NAME'; seeds = {${cells%, }}; cores = $CORES; ${options}eval(fileread('$REPO/scripts/dynamo_mra_setup.m'))" 2>&1 | tee "${NAME}_setup.log"
     if [[ ! -f "$card" ]]; then
         echo "the setup did not make $NAME; see $EXPORT/${NAME}_setup.log" >&2
