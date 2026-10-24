@@ -27,7 +27,9 @@
 # AXIS_OFFSET="dx dy" (px, as scripts/rotational_symmetry.py prints the axis)
 # first moves the particles so that axis lands where Dynamo symmetrises.
 # GLOBAL_ROUNDS=n makes the first n rounds search every orientation, 360 deg in
-# GLOBAL_STEP-degree steps (45 unless given), refined to the round's step. Without
+# the round's own atan(resolution / diameter) step, on particles downsampled to
+# twice the round's low-pass: hours per round, not minutes (see the setup);
+# GLOBAL_STEP (deg) asks for a coarser grid instead, refined to that step. Without
 # SCHEDULE the search is the fixed one. TEMPLATE, the map the picks were matched
 # with (a relative path from the repo root), goes into the report: drawn in the
 # corner of its pages of particles and maps. A project
