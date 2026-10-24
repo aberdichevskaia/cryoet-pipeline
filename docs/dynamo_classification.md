@@ -206,6 +206,16 @@ stage angles cost real picks, and averaging and classification move to the new
 lists; within a tenth: they did not matter at bin8; more than a tenth down: the
 solved angles search worse, which points at the angles fine alignment solved.
 
+Result (`repick.py --compare-only`, 2026-10-24): every new search differs from the
+old one in the tilt angles alone, the same views, and from the null search in
+nothing but the tomogram, so the null decoys control the `bin8-solved` picks
+exactly. Above the null's best: 1321 old picks, 1324 new (+0%), so by the rule the
+angles did not matter at bin8. By series the changes go both ways and cancel:
+115 to 87 (TS_0306), 494 to 499 (TS_0463), 312 to 337 (TS_0493), 281 to 255
+(TS_0564), 119 to 146 (TS_0623). 2323 of the 3000 old picks are found again within
+5 px: 1183 of the 1321 above the null's best (90%), 1140 of the 1679 below it
+(68%); the picks found again score as they did (series medians within 0.002).
+
 ### Seeds and search: the PI's scheme on the null-decoy export
 
 The PI's scheme (2026-10-22): with the picks' angles, starting references that
@@ -241,6 +251,31 @@ x1.27 at best. Whether searching every orientation helps is open both ways: a
 box loses the pose pytom gave it, which is what made template-selected noise
 look like the template, but gets some 500 orientations to fit the reference in
 instead of 221.
+
+Result (runs of 2026-10-22, reports read 2026-10-24): no scheme passes. The class
+holding the most decoys after iteration 5, decoy share against real share:
+
+| run | class sizes | that class | decoys | real | ratio |
+|---|---|---|---|---|---|
+| mra_nbb_ctf_null | 1224 / 1240 / 751 | 3 | 28.5% (24.8-32.6) | 22.4% | x1.27 |
+| mra_nbb_ctf80_null | 1235 / 1153 / 827 | 3 | 27.5% (23.8-31.6) | 25.4% | x1.09 |
+| mra_ssn_cone_null | 1580 / 1624 / 11 | 3 | 0.4% (0.1-1.4) | 0.3% | x1.17 |
+| mra_ssb_cone_null | 1443 / 1480 / 292 | 3 | 10.5% (8.2-13.5) | 8.8% | x1.20 |
+| mra_ssn_360x2_null | 1538 / 1560 / 117 | 2 | 50.0% (45.7-54.3) | 48.2% | x1.04 |
+| mra_ssb_360x2_null | 1362 / 1397 / 456 | 3 | 18.4% (15.2-21.9) | 13.4% | x1.37 |
+| mra_bbn_360_null | 1125 / 1067 / 1023 | 3 | 40.6% (36.5-44.9) | 30.2% | x1.35 |
+
+With two subset seeds the noise channel keeps almost nothing (11 and 117
+particles) and the two subsets split everything, decoys included, in halves; a
+blob third channel takes 9-14% with decoys a fifth to a third over their share;
+blob, blob and noise searched over every orientation give three classes of a
+third each, the noise-started one with x1.35. Where a class holds more decoys
+than its share, its real particles also score lower in picking and come most
+from TS_0306 and least from TS_0463, the series with the fewest and the most
+picks above the null's best: the weaker part of every list, not the noise
+apart. In mra_bbn_360_null, started from blobs and searched over every
+orientation, no class average took the template's outline in five iterations;
+every run started from subsets at the picks' poses keeps it.
 
 ## Comparing two runs particle by particle
 
