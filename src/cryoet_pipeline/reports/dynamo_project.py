@@ -119,6 +119,20 @@ def read_em(path: Path) -> np.ndarray:
     return data.reshape(nz, ny, nx).astype(np.float32)
 
 
+def write_em(path: Path, volume: np.ndarray) -> None:
+    """A (z, y, x) map as Dynamo writes EM: PC byte order, float32, x fastest."""
+
+    data = np.ascontiguousarray(volume, dtype="<f4")
+    if data.ndim != 3:
+        raise ValueError(f"{path}: an EM map is a volume, got shape {data.shape}")
+    nz, ny, nx = data.shape
+    header = bytearray(512)
+    header[0], header[3] = 6, 5
+    header[4:16] = np.array([nx, ny, nz], dtype="<i4").tobytes()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(header) + data.tobytes())
+
+
 def read_map(path: Path) -> np.ndarray:
     """An EM or MRC map as (z, y, x) float32."""
 

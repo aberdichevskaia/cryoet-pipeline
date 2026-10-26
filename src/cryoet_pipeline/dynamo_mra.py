@@ -63,7 +63,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  2111-1307 USA
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -132,12 +132,15 @@ def mra_iteration(
     *,
     fmin: int = 1,
     workers: int = 1,
+    search: Callable[..., list] = search_particles,
 ) -> MraIteration:
     """One iteration: every live channel searches every particle, then they swap.
 
     `mask` is the project's soft mask, used as Dynamo uses it: thresholded at
     0.5 for the search and the reference normalization, its nonzero voxels for
-    the class averages' normalization.
+    the class averages' normalization. `search` is the kernel, called as
+    `search_particles` is: the numpy one, or the torch one bound to a device
+    (`dynamo_search_torch.search_particles_torch`).
     """
     if set(references) != set(starts):
         raise ValueError("every live channel needs a reference and starting poses")
@@ -147,7 +150,7 @@ def mra_iteration(
     for k in computed:
         prepared = prepare_reference(references[k], mask, settings)
         angles, shifts = (np.asarray(v, dtype=float) for v in starts[k])
-        results = search_particles(
+        results = search(
             particles,
             prepared,
             binary,
@@ -184,26 +187,34 @@ def run_mra(
     shifts: np.ndarray,
     tilt_ranges: Sequence[tuple[float, float]],
     mask,
-    settings: SearchSettings = DEFAULT_SETTINGS,
+    settings: SearchSettings | Sequence[SearchSettings] = DEFAULT_SETTINGS,
     *,
     iterations: int,
     fmin: int = 1,
     workers: int = 1,
+    search: Callable[..., list] = search_particles,
 ) -> list[MraIteration]:
     """`iterations` MRA iterations from one starting table shared by every channel.
 
     Each channel carries its own poses for every particle into the next
     iteration, members or not, as each channel's refined table becomes its next
     starting table in Dynamo; its class average becomes its next reference.
+    `settings` is one for every iteration, or one per iteration: a schedule of
+    rounds of one iteration each, as the coarse-to-fine setup makes.
     """
     if iterations < 1:
         raise ValueError("at least one iteration")
+    schedule = ([settings] * iterations if isinstance(settings, SearchSettings)
+                else list(settings))
+    if len(schedule) != iterations:
+        raise ValueError(f"{len(schedule)} settings for {iterations} iterations")
     starts = {k: (np.asarray(angles, float), np.asarray(shifts, float)) for k in references}
     references = dict(references)
     history = []
-    for _ in range(iterations):
+    for current in schedule:
         step = mra_iteration(
-            particles, references, starts, tilt_ranges, mask, settings, fmin=fmin, workers=workers
+            particles, references, starts, tilt_ranges, mask, current, fmin=fmin,
+            workers=workers, search=search,
         )
         history.append(step)
         references = {k: step.averages[k].average for k in step.surviving}
