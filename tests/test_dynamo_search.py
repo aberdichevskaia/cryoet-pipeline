@@ -96,6 +96,14 @@ def test_grid_order_counts_and_legacy_pole_tolerance():
     assert core.matrix_euler(core.euler_matrix([10, 0.001, 20]))[1] == 0
 
 
+@pytest.mark.parametrize("step, count", [(45, 207), (22.5, 1428), (11.25, 10956)])
+def test_a_full_opening_searches_every_direction_as_dynamo_counts_it(step, count):
+    # The counts of Dynamo 1.1.511's dynamo_angleincrement2list for cone and in-plane
+    # 360 (read on the Mac, 2026-10-22): a 360 deg cone is every direction.
+    assert core.SearchSettings(cone_aperture=360, inplane_range=360).cone_aperture == 360
+    assert core.angle_list(np.array([30.0, 60.0, -45.0]), 360, step, 360, step).shape == (count, 3)
+
+
 def test_spline_reflection_jump_guard_and_unrestricted_neighbors():
     peak, offset = core._spline_peak(0.4, 0.8, 0.7)
     mirror_peak, mirror_offset = core._spline_peak(0.7, 0.8, 0.4)
@@ -212,6 +220,7 @@ def test_invalid_volumes_are_refused(bad):
         {"area_search_modus": 0},
         {"area_search_modus": 3},
         {"area_search_modus": 2.0},
+        {"cone_aperture": 361},
     ],
 )
 def test_unsupported_settings_are_refused(kwargs):

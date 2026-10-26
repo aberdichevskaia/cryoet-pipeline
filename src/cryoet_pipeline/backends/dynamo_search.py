@@ -144,7 +144,9 @@ class SearchSettings:
             raise ValueError("require 0 < high < low and shift_limit > 0")
         if type(self.area_search_modus) is not int or self.area_search_modus not in (1, 2):
             raise ValueError("area_search_modus must be 1 (box centre) or 2 (preceding winner)")
-        if not (0 <= self.cone_aperture <= 180 and 0 <= self.inplane_range <= 360):
+        # Dynamo's cone_range is the cone's full opening, so 360 is every direction (the
+        # MRA setup's global rounds); `angle_list` walks half of it from the pole.
+        if not (0 <= self.cone_aperture <= 360 and 0 <= self.inplane_range <= 360):
             raise ValueError("invalid angular range")
         if min(self.cone_sampling, self.inplane_sampling) <= 0:
             raise ValueError("sampling must be positive")
