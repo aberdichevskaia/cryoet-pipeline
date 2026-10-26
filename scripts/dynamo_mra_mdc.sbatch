@@ -14,11 +14,13 @@
 #       sbatch --export=ALL --job-name=mra_nss scripts/dynamo_mra_mdc.sbatch
 #
 # SEEDS lists one starting reference per channel: subset, blob or noise (see the
-# setup script). SCHEDULE=coarse_to_fine searches in 5 rounds from a 40 A
-# low-pass to a 22 A one, the angular step following the resolution;
-# FIRST_LOWPASS and LAST_LOWPASS (A) change its ends, DIAMETER (A, the
-# particle's widest, 290 unless given) its steps; the steps are equal in A, or in
-# frequency with LOWPASS_STEPS=fourier. The alignment and classification mask is
+# setup script); SEEDS=map with REFERENCE=<map> (a relative path from the repo
+# root) refines from that one map instead, one channel and no MRA, as each half
+# of scripts/consensus_halves.py is. SCHEDULE=coarse_to_fine searches in 5
+# rounds from a 40 A low-pass to a 22 A one, the angular step following the
+# resolution; FIRST_LOWPASS and LAST_LOWPASS (A) change its ends, DIAMETER (A,
+# the particle's widest, 290 unless given) its steps; the steps are equal in A,
+# or in frequency with LOWPASS_STEPS=fourier. The alignment and classification mask is
 # the particle's radius from DIAMETER plus 3 px with a 2 px soft edge, unless
 # MASK_RADIUS and MASK_EDGE (px) say otherwise, or MASK_FILE gives a mask of any
 # shape in the particles' box (scripts/make_mra_mask.py makes one that leaves a
@@ -68,6 +70,10 @@ JOB_DIR=${SCRATCH_ROOT:-/fast/AG_Kudryashev/anna.berdichevskaia/tmp}/dynamo_${NA
 if [[ -n "${MASK_FILE:-}" ]]; then
     [[ "$MASK_FILE" = /* ]] || MASK_FILE=$REPO/$MASK_FILE
     [[ -f "$MASK_FILE" ]] || { echo "no MASK_FILE $MASK_FILE" >&2; exit 1; }
+fi
+if [[ -n "${REFERENCE:-}" ]]; then
+    [[ "$REFERENCE" = /* ]] || REFERENCE=$REPO/$REFERENCE
+    [[ -f "$REFERENCE" ]] || { echo "no REFERENCE $REFERENCE" >&2; exit 1; }
 fi
 
 export MCR_CACHE_ROOT=$JOB_DIR/mcr_cache
@@ -125,6 +131,7 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${MASK_RADIUS:-}" ]] && options+="mask_radius = $MASK_RADIUS; "
     [[ -n "${MASK_EDGE:-}" ]] && options+="mask_edge = $MASK_EDGE; "
     [[ -n "${MASK_FILE:-}" ]] && options+="mask_file = '$MASK_FILE'; "
+    [[ -n "${REFERENCE:-}" ]] && options+="reference_file = '$REFERENCE'; "
     [[ -n "${SYMMETRY:-}" ]] && options+="symmetry = '$SYMMETRY'; "
     [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
     [[ -n "${GLOBAL_ROUNDS:-}" ]] && options+="global_rounds = $GLOBAL_ROUNDS; "

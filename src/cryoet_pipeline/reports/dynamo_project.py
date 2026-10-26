@@ -83,9 +83,10 @@ THRESHOLD_MODES = {
     5: "the best fraction",
 }
 SEED_KINDS = {
-    "subset": "average of {count} random particles at their starting poses",
-    "blob": "average of {count} random particles at random orientations",
+    "subset": "average of {} random particles at their starting poses",
+    "blob": "average of {} random particles at random orientations",
     "noise": "white noise",
+    "map": "the map {}",
 }
 DYNAMO_TIME = "%d-%b-%Y %H:%M:%S"
 
@@ -263,6 +264,9 @@ def read_dynamo_classification(
             problems.append(f"channel {channel}: no starting reference found")
     seeds_folder = base / str(vpr.get("file_template_initial") or card.get("file_template_initial")
                               or "")
+    if seeds_folder.is_file():
+        # A project of one channel names its seed file rather than the seeds' folder.
+        seeds_folder = seeds_folder.parent
     notes = _seed_notes(seeds_folder / "seed_kinds.txt")
 
     iterations, refined = _iterations(project, tags, mra, problems)
@@ -610,8 +614,9 @@ def _seed_notes(path: Path) -> dict[int, str]:
         parts = line.split()
         if len(parts) >= 2 and parts[0].isdigit():
             kind = parts[1]
-            count = parts[2] if len(parts) > 2 else "?"
-            notes[int(parts[0])] = SEED_KINDS.get(kind, kind).format(count=count)
+            # The particles a subset or blob seed averaged, or a map seed's file.
+            detail = " ".join(parts[2:]) or "?"
+            notes[int(parts[0])] = SEED_KINDS.get(kind, kind).format(detail)
     return notes
 
 

@@ -14,6 +14,10 @@
 %   'blob'    the average of a random subset at random orientations: a
 %             featureless blob with the particles' radial profile
 %   'noise'   white noise
+%   'map'     the map in reference_file (EM or MRC, the particles' box), alone:
+%             seeds = {'map'} makes a project of one channel and no MRA, to
+%             refine one set of particles from a given start, as each half of
+%             scripts/consensus_halves.py is refined from their common one
 % Every channel starts with the whole table; mra 1 lets particles swap. Channel k
 % averages the k-th block of `subset` particles of one seeded random order, so the
 % subsets of a project are disjoint and channel k takes the same particles in
@@ -96,6 +100,7 @@ if ~exist('symmetry', 'var'), symmetry = 'c1'; end
 if ~exist('axis_offset', 'var'), axis_offset = [0 0 0]; end
 if ~exist('global_rounds', 'var'), global_rounds = 0; end
 if ~exist('global_step', 'var'), global_step = []; end
+if ~exist('reference_file', 'var'), reference_file = ''; end
 % Particles averaged into each 'subset' or 'blob' seed, and the one seed for the
 % random order, orientations and noise of every project.
 subset = 300;
@@ -103,7 +108,9 @@ rng_seed = 20261016;
 nref = numel(seeds);
 
 if ~ischar(project) || ~isvarname(project), error('dynamo_mra_setup: project must be a plain name such as mra_nss'); end
-if ~iscellstr(seeds) || nref < 2 || ~all(ismember(seeds, {'subset', 'blob', 'noise'})), error('dynamo_mra_setup: seeds must list at least two of ''subset'', ''blob'' and ''noise'''); end
+one_map = iscellstr(seeds) && isequal(seeds(:)', {'map'});
+if ~iscellstr(seeds) || ~(one_map || (nref >= 2 && all(ismember(seeds, {'subset', 'blob', 'noise'})))), error('dynamo_mra_setup: seeds must be {''map''} alone or list at least two of ''subset'', ''blob'' and ''noise'''); end
+if ~ischar(reference_file) || one_map == isempty(reference_file), error('dynamo_mra_setup: give reference_file, a file name, with seeds = {''map''}, and only then'); end
 if ~ischar(schedule) || ~any(strcmp(schedule, {'fixed', 'coarse_to_fine'})), error('dynamo_mra_setup: schedule must be ''fixed'' or ''coarse_to_fine'''); end
 if ~ischar(lowpass_steps) || ~any(strcmp(lowpass_steps, {'fourier', 'angstrom'})), error('dynamo_mra_setup: lowpass_steps must be ''fourier'' or ''angstrom'''); end
 if ~ischar(symmetry) || isempty(regexp(symmetry, '^[cd][0-9]+$', 'once')), error('dynamo_mra_setup: symmetry must be like ''c1'' or ''c4'''); end
@@ -126,7 +133,9 @@ files = dir('particles/particle_*'); if isempty(files), error('dynamo_mra_setup:
 box = size(dread(fullfile('particles', files(1).name)), 1);
 apix = t(1, 36); if ~(apix > 0), error('dynamo_mra_setup: column 36 of initial.tbl holds no pixel size'); end
 if strcmp(schedule, 'coarse_to_fine') && ~(2 * apix <= last_lowpass && last_lowpass < first_lowpass), error('dynamo_mra_setup: last_lowpass must lie between Nyquist (%.1f A) and first_lowpass (%g A)', 2 * apix, first_lowpass); end
-if nref * subset > n, error('dynamo_mra_setup: %d particles cannot give %d disjoint subsets of %d', n, nref, subset); end
+if ~one_map && nref * subset > n, error('dynamo_mra_setup: %d particles cannot give %d disjoint subsets of %d', n, nref, subset); end
+if one_map && ~exist(reference_file, 'file'), error('dynamo_mra_setup: no reference_file %s', reference_file); end
+if one_map && ~isequal(size(dread(reference_file)), [box box box]), error('dynamo_mra_setup: reference_file %s is not a %d px box like the particles', reference_file, box); end
 % The rule for every mask (Anna, 2026-10-16): the particle's radius where it is
 % widest, plus 3 px, then a soft edge. 290 A at 9.784 A/px gives the 18 px the
 % ribo-mdc projects were made with; 340 A at 13.44 A/px gives 16 for RyR1.
@@ -144,7 +153,7 @@ if isempty(mask_file), mask_file = sprintf('mra_mask_r%g_e%g.em', mask_radius, m
 if ~exist(mask_file, 'file'), dwrite(dynamo_sphere(mask_radius, box, (box + 1) / 2 * [1 1 1], mask_edge), mask_file); end
 
 rng(rng_seed); p = randperm(n); random_angles = [360 * rand(n, 1), acosd(2 * rand(n, 1) - 1), 360 * rand(n, 1)]; noise = randn(box, box, box, max(nref, 3));
-group = zeros(n, 1); for k = 1:nref, if ~strcmp(seeds{k}, 'noise'), group(p((k - 1) * subset + 1:k * subset)) = k; end; end
+group = zeros(n, 1); for k = 1:nref, if ~any(strcmp(seeds{k}, {'noise', 'map'})), group(p((k - 1) * subset + 1:k * subset)) = k; end; end
 mkdir([project '_seeds']); mkdir([project '_fmasks']); mkdir([project '_tables']);
 
 % 'subset' and 'blob' seeds are averaged as the MRA averages a class: the
@@ -153,21 +162,27 @@ mkdir([project '_seeds']); mkdir([project '_fmasks']); mkdir([project '_tables']
 % the table's shifts, so each particle sits within 1.7 px of its centre. A noise
 % seed has a full Fourier mask. In a test on 49 ribo-mdc particles a white-noise
 % seed got no particle, and Dynamo drops a channel left without particles for good.
-for k = 1:nref, seed_file = sprintf('%s_seeds/template_initial_ref_%03d.em', project, k); fmask_file = sprintf('%s_fmasks/fmask_initial_ref_%03d.em', project, k); if strcmp(seeds{k}, 'noise'), dwrite(noise(:, :, :, k), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: noise\n', k); else, tk = t; if strcmp(seeds{k}, 'blob'), tk(:, 7:9) = random_angles; end; a = dynamo_average('particles', 'fmask', 'table', 'table', tk, 'tags', t(group == k, 1)', 'fmin', 1, 'fcompensate', true, 'verbosity', 0, 'nmask', mask_file); dwrite(a.average, seed_file); dwrite(a.fmask, fmask_file); fprintf('seed %d: %s of %d particles\n', k, seeds{k}, sum(group == k)); end; end
+% A map is copied as it is, with a full Fourier mask too: a class average over
+% particles in every orientation, as the consensus halves start from, misses no
+% direction, and a low-pass already bounds it.
+for k = 1:nref, seed_file = sprintf('%s_seeds/template_initial_ref_%03d.em', project, k); fmask_file = sprintf('%s_fmasks/fmask_initial_ref_%03d.em', project, k); if strcmp(seeds{k}, 'map'), dwrite(dread(reference_file), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: the map %s\n', k, reference_file); elseif strcmp(seeds{k}, 'noise'), dwrite(noise(:, :, :, k), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: noise\n', k); else, tk = t; if strcmp(seeds{k}, 'blob'), tk(:, 7:9) = random_angles; end; a = dynamo_average('particles', 'fmask', 'table', 'table', tk, 'tags', t(group == k, 1)', 'fmin', 1, 'fcompensate', true, 'verbosity', 0, 'nmask', mask_file); dwrite(a.average, seed_file); dwrite(a.fmask, fmask_file); fprintf('seed %d: %s of %d particles\n', k, seeds{k}, sum(group == k)); end; end
 dlmwrite(sprintf('%s_seeds/seed_manifest.txt', project), [t(:, 1) group], ' ');
-fid = fopen(sprintf('%s_seeds/seed_kinds.txt', project), 'w'); for k = 1:nref, fprintf(fid, '%d %s %d\n', k, seeds{k}, sum(group == k)); end; fclose(fid);
+fid = fopen(sprintf('%s_seeds/seed_kinds.txt', project), 'w'); for k = 1:nref, if one_map, fprintf(fid, '%d %s %s\n', k, seeds{k}, reference_file); else, fprintf(fid, '%d %s %d\n', k, seeds{k}, sum(group == k)); end; end; fclose(fid);
 
 % Every channel starts from the whole table. With nref > 1 the project accepts
-% only folders for tables, templates and fmasks.
+% only folders for tables, templates and fmasks; with one channel only the files
+% themselves (2026-10-26: given the folders, dynamo_vpr_unfold aborted with
+% "analysis of dimensions of templates and data failed").
 for k = 1:nref, dwrite(t, sprintf('%s_tables/table_initial_ref_%03d.tbl', project, k)); end
+if nref > 1, inputs = {[project '_seeds'], [project '_tables'], [project '_fmasks']}; else, inputs = {sprintf('%s_seeds/template_initial_ref_001.em', project), sprintf('%s_tables/table_initial_ref_001.tbl', project), sprintf('%s_fmasks/fmask_initial_ref_001.em', project)}; end
 
 dynamo_vpr(project);
 dynamo_vpr_put(project, '-data', 'particles');
 dynamo_vpr_put(project, '-nref', num2str(nref));
-dynamo_vpr_put(project, '-mra', '1');
-dynamo_vpr_put(project, '-template', [project '_seeds']);
-dynamo_vpr_put(project, '-table', [project '_tables']);
-dynamo_vpr_put(project, '-fmask', [project '_fmasks']);
+dynamo_vpr_put(project, '-mra', num2str(nref > 1));
+dynamo_vpr_put(project, '-template', inputs{1});
+dynamo_vpr_put(project, '-table', inputs{2});
+dynamo_vpr_put(project, '-fmask', inputs{3});
 dynamo_vpr_put(project, '-mask', mask_file);
 dynamo_vpr_put(project, '-cmask', mask_file);
 dynamo_vpr_put(project, '-smask', mask_file);
@@ -189,7 +204,7 @@ rounds = numel(lows);
 cone_ranges = 3 * steps; samplings = steps; refines = 2 * ones(size(steps)); dims = box * ones(size(steps));
 if global_rounds > 0, g = 1:global_rounds; cone_ranges(g) = 360; dims(g) = min(box, 2 * (lows(g) + 2)); end
 if global_rounds > 0 && ~isempty(global_step), samplings(g) = global_step; refines(g) = max(2, ceil(log2(global_step ./ steps(g)))); end
-for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], '1'); dynamo_vpr_put(project, ['-thrm' s], '0'); end
+for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], num2str(nref > 1)); dynamo_vpr_put(project, ['-thrm' s], '0'); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-cr' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-cs' s], num2str(samplings(r))); dynamo_vpr_put(project, ['-ir' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-is' s], num2str(samplings(r))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-rf' s], num2str(refines(r))); dynamo_vpr_put(project, ['-rff' s], '2'); dynamo_vpr_put(project, ['-high' s], '2'); dynamo_vpr_put(project, ['-low' s], num2str(lows(r))); dynamo_vpr_put(project, ['-dim' s], num2str(dims(r))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-lim' s], '[3,3,3]'); dynamo_vpr_put(project, ['-limm' s], '1'); dynamo_vpr_put(project, ['-sym' s], symmetry); end
@@ -201,5 +216,6 @@ dynamo_vpr_put(project, '-cores', num2str(cores));
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
 if isempty(global_step), step_note = 'in each round''s own step'; else, step_note = sprintf('on a %g deg grid', global_step); end
-fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) %s, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, strjoin(seeds, ' '), schedule, lowpass_steps, global_rounds, step_note, mask_note, symmetry, axis_offset, cores);
-clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step step_note schedule first_lowpass last_lowpass diameter lowpass_steps
+if one_map, seed_note = ['the map ' reference_file ' alone']; else, seed_note = strjoin(seeds, ' '); end
+fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) %s, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, seed_note, schedule, lowpass_steps, global_rounds, step_note, mask_note, symmetry, axis_offset, cores);
+clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step step_note schedule first_lowpass last_lowpass diameter lowpass_steps reference_file one_map seed_note
