@@ -37,7 +37,9 @@
 # --gres=gpu:1) from EM copies of the particles, DATA_FOLDER=particles_em
 # (scripts/particles_to_em.py makes them): Dynamo's GPU motor reads every particle
 # as EM, and resizes only by binning, so its global rounds run at the full box
-# where the CPU's were downsampled (see the setup). Without
+# where the CPU's were downsampled; and it is made for one core whatever the
+# job's CPUs, as Dynamo's GPU path computes only the first core's share of the
+# particles (see the setup). Without
 # SCHEDULE the search is the fixed one. TEMPLATE, the map the picks were matched
 # with (a relative path from the repo root), goes into the report: drawn in the
 # corner of its pages of particles and maps. A project
@@ -71,6 +73,9 @@ set -euo pipefail
 REPO=${SLURM_SUBMIT_DIR:-$PWD}
 DYNAMO_ROOT=${DYNAMO_ROOT:-/fast/AG_Kudryashev/artsemi/software/Dynamo}
 CORES=${SLURM_CPUS_PER_TASK:-8}
+# A GPU project is made for one core, whatever the job has: Dynamo's GPU path
+# computes only the first core's share of each channel's particles (see the setup).
+[[ -n "${GPUS:-}" ]] && CORES=1
 JOB_DIR=${SCRATCH_ROOT:-/fast/AG_Kudryashev/anna.berdichevskaia/tmp}/dynamo_${NAME}_${SLURM_JOB_ID:-$$}
 [[ -f "$REPO/scripts/dynamo_mra_setup.m" ]] || { echo "submit from the repo root" >&2; exit 1; }
 if [[ -n "${MASK_FILE:-}" ]]; then

@@ -89,7 +89,11 @@
 % dynamo_compute_iteration_spp.cu), so on GPUs a global round's dim is the
 % smallest such divisor that still holds 2 * (low-pass + 2), the full box when
 % none does: for RyR1's 52 px box, 52 in both global rounds, where the CPU used
-% 30 and 34.
+% 30 and 34. A GPU project is made for one core whatever cores says: Dynamo's GPU
+% path splits each channel's particles into cores x GPUs shares and computes only
+% the first core's ("vpr.how_many_processors can only be one", the same file).
+% With 8 cores, cone5_gpu (2026-10-26) kept 298 of 2,384 particles after
+% iteration 1, then 38, 5 and 1: an eighth of the rest each time.
 %
 % It writes <project>_seeds/ (the seeds, seed_manifest.txt with tag and channel,
 % seed_kinds.txt for the classification report), <project>_fmasks/,
@@ -142,6 +146,7 @@ if ~isempty(global_step) && (~isscalar(global_step) || ~(global_step > 0 && glob
 if ~isnumeric(cone_steps) || isempty(cone_steps) || ~all(cone_steps(:) > 0), error('dynamo_mra_setup: cone_steps must be a positive number of steps, or one per round, e.g. [5 5 3 3 3]'); end
 if ~ischar(data_folder) || isempty(data_folder), error('dynamo_mra_setup: data_folder must be a folder name such as particles_em'); end
 if ~isnumeric(gpus) || any(gpus(:) < 0 | gpus(:) ~= round(gpus(:))), error('dynamo_mra_setup: gpus must list GPU numbers as the job sees them, e.g. 0'); end
+if ~isempty(gpus) && cores ~= 1, fprintf('dynamo_mra_setup: a GPU project runs on one core, not %d: Dynamo''s GPU path computes only the first core''s share of the particles\n', cores); cores = 1; end
 if exist([project '_seeds'], 'dir') || exist([project '_fmasks'], 'dir') || exist([project '_tables'], 'dir') || exist(project, 'dir') || exist([project '.vpr'], 'file'), error('dynamo_mra_setup: an earlier run left %s_seeds, %s_fmasks, %s_tables or %s here; move them away first', project, project, project, project); end
 
 t = dread('initial.tbl'); n = size(t, 1);
