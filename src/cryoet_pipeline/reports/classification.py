@@ -4,8 +4,9 @@ what each of its iterations made of it.
 The pages, in order: the title; the parameters; a gallery of particles at their
 starting poses; the average of all particles at those poses; the starting
 references; the class sizes over the iterations; every iteration's classes; the
-last classes by tomogram and by picking score; a gallery of each last class at
-its own poses; anything that could not be read.
+last classes by tomogram and by picking score; where each last class's particles
+were picked, a page per class and tomogram, when the tomograms are at hand; a
+gallery of each last class at its own poses; anything that could not be read.
 
 A map is drawn as Dynamo's `dslices` shows one: a run of successive z sections
 through the box centre, on one grey scale per map, values as they are (not
@@ -36,7 +37,15 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
 from cryoet_pipeline.reports import style
-from cryoet_pipeline.reports.imaging import display_range, nice_length, smooth
+from cryoet_pipeline.reports.collect import TomogramInfo
+from cryoet_pipeline.reports.imaging import (
+    choose_depths,
+    display_range,
+    nice_length,
+    slab_half_width_px,
+    smooth,
+)
+from cryoet_pipeline.reports.sections.picking import locations_page
 
 T = TypeVar("T")
 
@@ -129,6 +138,21 @@ Pose = tuple[int, int] | None
 pose after that iteration."""
 
 
+@dataclass(frozen=True)
+class ParticleLocations:
+    """Where the particles were picked: each tomogram, and each particle's place in it."""
+
+    tomograms: dict[str, Callable[[], TomogramInfo]]
+    """Each tilt-series' tomogram, read when its first page is drawn."""
+    positions: dict[int, tuple[float, float, float]]
+    """Each real particle's pick, (x, y, z) in its tilt-series' tomogram voxels."""
+    radius_angstrom: float
+    radius_note: str
+    """What the circles' size is, in words, to follow "a sphere with"."""
+    box_angstrom: float | None = None
+    """The box the particles were cut in, for the z histogram's even level."""
+
+
 @dataclass
 class ClassificationRun:
     name: str
@@ -164,6 +188,8 @@ class ClassificationRun:
     the references' frame is the template's, so it needs no turning."""
     problems: list[str] = field(default_factory=list)
     """Everything that could not be read, one line each."""
+    locations: ParticleLocations | None = None
+    """Where the particles were picked, when the tomograms are at hand."""
 
 
 @dataclass(frozen=True)
@@ -231,6 +257,11 @@ def plan_pages(run: ClassificationRun, *, written: str, software: str) -> list[P
                                      partial(iteration_page, run, iteration, channels)))
     if run.iterations and (run.series or run.scores):
         pages.append(PlannedPage("last classes", partial(composition_page, run)))
+    if run.iterations and run.locations is not None:
+        for channel in sorted(run.iterations[-1].classes):
+            for series in _located_series(run, channel):
+                pages.append(PlannedPage(f"class {channel} · {series} · where picked",
+                                         partial(class_locations_page, run, channel, series)))
     if run.iterations:
         for channels in _chunks(sorted(run.iterations[-1].classes), MAPS_PER_PAGE):
             pages.append(PlannedPage("class galleries", partial(class_gallery_page, run, channels)))
@@ -693,6 +724,58 @@ def composition_page(run: ClassificationRun) -> Figure:
         y=0.2,
     )
     return figure
+
+
+def _located(run: ClassificationRun, series: str) -> list[int]:
+    """The real particles of a tilt-series whose pick is known, in tag order."""
+
+    assert run.locations is not None
+    return [int(tag) for tag in run.tags
+            if run.series.get(int(tag)) == series and int(tag) in run.locations.positions
+            and int(tag) not in run.decoys]
+
+
+def _located_series(run: ClassificationRun, channel: int) -> list[str]:
+    """The tilt-series with a tomogram at hand that hold any of the class's real particles."""
+
+    assert run.locations is not None
+    members = {int(tag) for tag in run.iterations[-1].classes[channel].members}
+    return [series for series in sorted(run.locations.tomograms)
+            if members.intersection(_located(run, series))]
+
+
+def class_locations_page(run: ClassificationRun, channel: int, series: str) -> Figure:
+    """Where one class's particles were picked in one tomogram, as the picks page draws picks.
+
+    Every class of a tomogram is drawn at the same three depths, chosen from all its
+    particles, so its pages can be laid side by side. Decoys are left out: they were
+    picked in other volumes.
+    """
+
+    locations = run.locations
+    assert locations is not None
+    last = run.iterations[-1]
+    info = locations.tomograms[series]()
+    located = _located(run, series)
+    in_class = {int(member) for member in last.classes[channel].members}
+    members = [tag for tag in located if tag in in_class]
+    every = np.array([locations.positions[tag] for tag in located], dtype=float).reshape(-1, 3)
+    chosen = np.array([locations.positions[tag] for tag in members], dtype=float).reshape(-1, 3)
+    depths = choose_depths(info.shape[0], every[:, 2] if len(every) else None, None,
+                           slab_half_width_px(info.voxel_spacing_angstrom))
+    share = 100 * len(members) / len(located) if located else 0.0
+    subtitle = (f"After iteration {last.number}: {len(members):,} of the tomogram's "
+                f"{len(located):,} particles ({share:.0f}%)"
+                + (" · decoys left out" if run.decoys else ""))
+    voxel = info.voxel_spacing_angstrom
+    return locations_page(
+        f"Class {channel} · {series} · where its particles were picked", subtitle, info,
+        chosen[:, 0], chosen[:, 1], chosen[:, 2],
+        radius=locations.radius_angstrom / voxel, radius_source=locations.radius_note,
+        depths=depths,
+        box_px=None if locations.box_angstrom is None else locations.box_angstrom / voxel,
+        item="particle",
+    )
 
 
 def class_gallery_page(run: ClassificationRun, channels: Sequence[int]) -> Figure:

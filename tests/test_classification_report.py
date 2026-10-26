@@ -500,3 +500,92 @@ def test_an_iteration_counts_when_the_log_says_it_is_done(project: Path) -> None
     run = read_dynamo_classification(project, compute_initial_average=False)
     assert [iteration.number for iteration in run.iterations] == [1, 2]
     assert run.problems == []
+
+
+def _pipeline_with_tomograms(root: Path) -> tuple[Path, dict[int, tuple[float, float, float]]]:
+    """A pipeline project as the export names it: per series a tomogram and the particle
+    stack cut from it, and a pick for every tag inside that tomogram. The registry records
+    paths as the pipeline does, relative to the folder it ran in (here root's parent)."""
+
+    import zarr
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder
+
+    registry = ArtifactRegistry.empty()
+    shape = (40, 64, 80)
+    rng = np.random.default_rng(11)
+    picks: dict[int, tuple[float, float, float]] = {}
+    for series in ("TS_A", "TS_B"):
+        path = root / series / "tomogram.zarr"
+        path.parent.mkdir(parents=True)
+        zarr.save(path, rng.normal(size=shape).astype(np.float32))
+        tomogram = Artifact(id=f"{series}:tomogram", kind=ArtifactKind.TOMOGRAM,
+                            path=path.relative_to(root.parent),
+                            shape=shape, axis_order=AxisOrder.ZYX, pixel_spacing_angstrom=10.0,
+                            parameters={"tilt_series_id": series})
+        registry.add(tomogram)
+        registry.add(Artifact(id=f"{series}:particles", kind=ArtifactKind.PARTICLE_STACK,
+                              path=root / series / "particles.zarr", parent_ids=[tomogram.id],
+                              parameters={"tilt_series_id": series,
+                                          "input_tomogram_id": tomogram.id}))
+    for tag in TAGS:
+        picks[tag] = (float(10 + 5 * tag), float(20 + 2 * tag), float(15 + tag))
+    registry.write(root / "artifacts.json")
+    return root, picks
+
+
+def _manifest_naming(project: Path, pipeline: Path,
+                     picks: dict[int, tuple[float, float, float]]) -> None:
+    particles = [{"tag": tag, "run": "TS_A" if tag <= 6 else "TS_B", "decoy": False,
+                  "source_stack_id": f"{'TS_A' if tag <= 6 else 'TS_B'}:particles",
+                  "native_record": {"x_px": x, "y_px": y, "z_px": z, "score": 0.1}}
+                 for tag, (x, y, z) in picks.items()]
+    (project.parent / "export_manifest.json").write_text(json.dumps({
+        "source_project": str(pipeline), "pixel_spacing_angstrom": 10.0,
+        "wedge": {"ranges": {"TS_A": [-50.0, 60.0], "TS_B": [-40.0, 55.0]}},
+        "particles": particles,
+    }))
+
+
+def test_each_last_class_shows_where_its_particles_were_picked(project: Path,
+                                                               tmp_path: Path) -> None:
+    from cryoet_pipeline.reports.classification import class_locations_page
+
+    pipeline, picks = _pipeline_with_tomograms(tmp_path / "pipeline")
+    _manifest_naming(project, pipeline, picks)
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    assert run.locations is not None and run.problems == []
+    assert run.locations.positions == picks
+    # The sphere mask of radius 6 and the 16 px box at 10 A per voxel.
+    assert run.locations.radius_angstrom == pytest.approx(60.0, abs=4.0)
+    assert run.locations.box_angstrom == 160.0
+
+    # After iteration 2 class 1 holds tags 1-6, all of TS_A, and class 2 tags 7-12, all of
+    # TS_B: a page each, and none for a tomogram a class has no particle in.
+    labels = [page.label for page in plan_pages(run, written="now", software="test")]
+    where = [label for label in labels if label.endswith("where picked")]
+    assert where == ["class 1 · TS_A · where picked", "class 2 · TS_B · where picked"]
+    assert labels.index(where[0]) == labels.index("last classes") + 1
+
+    figure = class_locations_page(run, 1, "TS_A")
+    texts = [text.get_text() for text in figure.findobj(Text)]
+    assert "Class 1 · TS_A · where its particles were picked" in texts
+    assert any("6 of the tomogram's 6 particles (100%)" in text for text in texts)
+    assert any(text.startswith("Where the particles sit in z") for text in texts)
+    plt.close(figure)
+
+    outcome = write_classification_report(tmp_path / "report.pdf", run, written="now",
+                                          software="test")
+    assert outcome.problems == []
+
+
+def test_without_the_pipeline_project_the_pages_are_left_out_and_said_why(
+        project: Path, tmp_path: Path) -> None:
+    _, picks = _pipeline_with_tomograms(tmp_path / "pipeline")
+    _manifest_naming(project, tmp_path / "elsewhere", picks)
+    run = read_dynamo_classification(project, compute_initial_average=False)
+    assert run.locations is None
+    assert any("which is not here" in problem for problem in run.problems)
+    labels = [page.label for page in plan_pages(run, written="now", software="test")]
+    assert not any(label.endswith("where picked") for label in labels)

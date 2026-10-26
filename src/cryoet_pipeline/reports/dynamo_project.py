@@ -36,13 +36,14 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import datetime
-from functools import partial
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
 import mrcfile  # type: ignore[import-untyped]
 import numpy as np
 
+from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.dynamo_search import average_class, resample
 from cryoet_pipeline.reports.classification import (
     DEFAULT_DECOY_KIND,
@@ -50,10 +51,12 @@ from cryoet_pipeline.reports.classification import (
     ClassResult,
     IterationResult,
     Parameter,
+    ParticleLocations,
     Pose,
     Volume,
     template_in_box,
 )
+from cryoet_pipeline.reports.collect import load_tomogram_info
 
 TAG = 0
 AVERAGED = 2
@@ -302,6 +305,8 @@ def read_dynamo_classification(
                                       if template is not None else (None, None))
 
     mask_path = project / "settings" / "mask.em"
+    locations = (_particle_locations(manifest_path, mask_path, spacing, box, problems)
+                 if manifest_path.exists() else None)
     if initial_average is not None:
         average: Volume | None = Volume(str(initial_average), partial(read_map, initial_average))
     elif compute_initial_average and particles.is_dir() and mask_path.exists():
@@ -342,6 +347,7 @@ def read_dynamo_classification(
         decoy_kind=decoy_kind,
         template=template_volume,
         problems=problems,
+        locations=locations,
     )
 
 
@@ -604,6 +610,85 @@ def _read_manifest(
     kind = data.get("decoy_kind") or DEFAULT_DECOY_KIND
     return (series, scores, float(spacing) if spacing else None, wedges, frozenset(decoys),
             str(variant) if variant else None, str(kind))
+
+
+def _particle_locations(manifest: Path, mask: Path, spacing: float | None, box: int,
+                        problems: list[str]) -> ParticleLocations | None:
+    """Where each real particle was picked, read through the pipeline project the export
+    names: the manifest gives each particle's pick and particle stack, the stack the
+    tomogram it was cut from. None when the export names no project; when it names one
+    that is not at hand (a report written away from the cluster), None and a problem.
+    """
+
+    data = json.loads(manifest.read_text())
+    source = data.get("source_project")
+    if not isinstance(source, str) or not source:
+        return None
+    registry_path = Path(source) / "artifacts.json"
+    if not registry_path.is_file():
+        problems.append("no pages of where each class's particles were picked: they need the "
+                        f"pipeline project the export came from, {source}, which is not here")
+        return None
+    if not spacing or not box:
+        problems.append("no pages of where each class's particles were picked: the particles' "
+                        "pixel size or box is not known")
+        return None
+    registry = ArtifactRegistry.load(registry_path)
+    positions: dict[int, tuple[float, float, float]] = {}
+    stacks: dict[str, set[str]] = {}
+    for entry in data.get("particles", []):
+        record = entry.get("native_record")
+        if entry.get("decoy") or not isinstance(record, dict):
+            continue
+        try:
+            x, y, z = (float(record[name]) for name in ("x_px", "y_px", "z_px"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        positions[int(entry["tag"])] = (x, y, z)
+        stacks.setdefault(str(entry.get("run")), set()).add(str(entry.get("source_stack_id")))
+    tomograms: dict[str, Callable[[], Any]] = {}
+    for series, stack_ids in sorted(stacks.items()):
+        found = set()
+        for stack_id in stack_ids:
+            try:
+                tomogram_id = registry.get(stack_id).parameters.get("input_tomogram_id")
+            except KeyError:
+                continue
+            if isinstance(tomogram_id, str):
+                found.add(tomogram_id)
+        if len(found) != 1:
+            problems.append(f"{series}: no page of where its particles were picked: its "
+                            f"particle stacks name {len(found)} tomograms in {source}")
+            continue
+        try:
+            tomogram = registry.get(found.pop())
+        except KeyError as error:
+            problems.append(f"{series}: no page of where its particles were picked: {error}")
+            continue
+        tomogram = tomogram.model_copy(update={"path": _anchored(tomogram.path, Path(source))})
+        tomograms[series] = cache(partial(load_tomogram_info, tomogram))
+    if mask.exists():
+        radius_px = _sphere_radius(read_em(mask))
+        note = "the volume of the classification's alignment mask"
+    else:
+        radius_px = box / 4.0
+        note = "a quarter of the particle box (no alignment mask found)"
+    return ParticleLocations(tomograms=tomograms, positions=positions,
+                             radius_angstrom=radius_px * spacing, radius_note=note,
+                             box_angstrom=box * spacing)
+
+
+def _anchored(path: Path, project: Path) -> Path:
+    """A registry path, which the pipeline records relative to where it ran (the repo
+    root): as it is when it exists from here, else from the nearest folder above the
+    project that holds it, so a report written from elsewhere still finds it."""
+
+    if path.is_absolute() or path.exists():
+        return path
+    for folder in (project, *project.parents):
+        if (folder / path).exists():
+            return folder / path
+    return path
 
 
 def _seed_notes(path: Path) -> dict[int, str]:

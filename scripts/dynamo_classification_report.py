@@ -12,8 +12,13 @@ The pages: parameters; particles at their starting poses; the average of all
 of them (computed here in about a minute for 2,700 particles of 48^3, unless
 --initial-average names a map); the starting references; class sizes per
 iteration; every iteration's classes as z sections, as Dynamo's dslices shows
-a map; the last classes by tilt-series and picking score; particles of each
-last class at its own poses. See src/cryoet_pipeline/reports/classification.py.
+a map; the last classes by tilt-series and picking score; where each last
+class's particles were picked, a page per class and tomogram drawn as the
+lane report's picks page (the PI, 2026-10-26); particles of each last class at
+its own poses. See src/cryoet_pipeline/reports/classification.py. The
+where-picked pages need the pipeline project the export names (its manifest's
+source_project) and its tomograms: on the cluster they are there; elsewhere the
+pages are left out and the report says why.
 
 --template names the map the picks were matched with (MRC or EM), for instance
 outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_template.mrc: every page of

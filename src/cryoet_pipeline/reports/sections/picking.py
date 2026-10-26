@@ -47,16 +47,46 @@ def picks_page(report: SeriesReport, depths: list[Depth]) -> Figure:
     picks = report.picks
     info = report.tomogram
     assert picks is not None and info is not None
+    radius, radius_source = report.particle_radius()
+    return locations_page(
+        f"{report.series} · Picks", _subtitle(report), info, picks.x_px, picks.y_px, picks.z_px,
+        radius=radius, radius_source=radius_source, depths=depths,
+        box_px=report.template.box_px if report.template is not None else None,
+    )
+
+
+def locations_page(
+    title: str,
+    subtitle: str,
+    info: TomogramInfo,
+    x_px: np.ndarray,
+    y_px: np.ndarray,
+    z_px: np.ndarray,
+    *,
+    radius: float,
+    radius_source: str,
+    depths: list[Depth],
+    box_px: float | None,
+    item: str = "pick",
+) -> Figure:
+    """Points on their tomogram: three XY slices, one XZ slice and where they sit in z.
+
+    The picks page draws a series' picks with it; the classification report draws
+    each class's particles, so the two read alike. `box_px` (tomogram voxels) is the
+    box the points were cut in, when known: the z histogram's even level leaves out
+    the half box at either face.
+    """
+
     volume = open_volume(info.artifact.path)
     half = slab_half_width_px(info.voxel_spacing_angstrom)
     depth_px, height_px, width_px = info.shape
-    radius, radius_source = report.particle_radius()
+    items = f"{item}s"
 
     tops = [picture(volume, 0, depth.center, half) for depth in depths]
     side = picture(volume, 1, height_px // 2, half)
     limits = display_range([image for image, _ in (*tops, side)])
 
-    figure = style.new_page(f"{report.series} · Picks", _subtitle(report))
+    figure = style.new_page(title, subtitle)
     grid = GridSpec(
         2, 3, figure=figure, left=0.035, right=0.975, top=style.CONTENT_TOP,
         bottom=style.CONTENT_BOTTOM - 0.02, height_ratios=[1.25, 1.0], hspace=0.22,
@@ -70,31 +100,31 @@ def picks_page(report: SeriesReport, depths: list[Depth]) -> Figure:
     ):
         axes = figure.add_subplot(grid[0, column])
         show(axes, image, factor, limits)
-        sections = sphere_sections(picks.z_px, depth.center, half, radius)
-        _circles(axes, picks.x_px, picks.y_px, sections)
+        sections = sphere_sections(z_px, depth.center, half, radius)
+        _circles(axes, x_px, y_px, sections)
         cut = int(np.count_nonzero(np.isfinite(sections)))
-        style.image_axes(axes, f"{depth_title(letter, depth, info)} · {cut} picks")
+        style.image_axes(axes, f"{depth_title(letter, depth, info)} · {cut} {items}")
         if column == 0:
             add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, height_px)
 
     axes = figure.add_subplot(lower[0, 0:2])
     image, factor = side
     show(axes, image, factor, limits, aspect="equal")
-    sections = sphere_sections(picks.y_px, height_px // 2, half, radius)
-    _circles(axes, picks.x_px, picks.z_px, sections)
+    sections = sphere_sections(y_px, height_px // 2, half, radius)
+    _circles(axes, x_px, z_px, sections)
     mark_depths(axes, depths, width_px)
     cut = int(np.count_nonzero(np.isfinite(sections)))
-    style.image_axes(axes, f"XZ slice through the middle in y: x across, z up · {cut} picks")
+    style.image_axes(axes, f"XZ slice through the middle in y: x across, z up · {cut} {items}")
     add_scale_bar(axes, info.voxel_spacing_angstrom, width_px, depth_px)
 
-    _height_panel(figure.add_subplot(lower[0, 2]), report, info)
+    _height_panel(figure.add_subplot(lower[0, 2]), z_px, info, box_px, items)
 
     style.caption(
         figure,
         f"Circles: a sphere with {radius_source} ({radius:.1f} voxels, "
-        f"{radius * info.voxel_spacing_angstrom / 10:.1f} nm) around every pick, cut by the "
-        "slab as 3dmod draws spheres: full size where the slab passes through a pick's centre, "
-        "smaller for picks just above or below it. " + slab_caption(info),
+        f"{radius * info.voxel_spacing_angstrom / 10:.1f} nm) around every {item}, cut by the "
+        "slab as 3dmod draws spheres: full size where the slab passes through "
+        f"a {item}'s centre, smaller for {items} just above or below it. " + slab_caption(info),
     )
     return figure
 
@@ -143,24 +173,24 @@ def _subtitle(report: SeriesReport) -> str:
     return " · ".join(parts)
 
 
-def _height_panel(axes: Axes, report: SeriesReport, info: TomogramInfo) -> None:
-    picks = report.picks
-    assert picks is not None
-    axes.set_title("Where the picks sit in z", loc="left")
-    if picks.count == 0:
-        axes.text(0.5, 0.5, "no picks", transform=axes.transAxes, ha="center")
+def _height_panel(axes: Axes, z_px: np.ndarray, info: TomogramInfo, box_px: float | None,
+                  items: str) -> None:
+    axes.set_title(f"Where the {items} sit in z", loc="left")
+    count = int(z_px.size)
+    if count == 0:
+        axes.text(0.5, 0.5, f"no {items}", transform=axes.transAxes, ha="center")
         return
     voxel_nm = info.voxel_spacing_angstrom / 10.0
-    heights = picks.z_px * voxel_nm
+    heights = z_px * voxel_nm
     top = info.depth_nm
     edges = np.linspace(0.0, top, 31)
     axes.hist(heights, bins=edges.tolist(), color=style.SERIES_BLUE, rwidth=0.85)
-    if report.template is not None:
-        margin = report.template.box_px / 2.0 * voxel_nm
+    if box_px is not None:
+        margin = box_px / 2.0 * voxel_nm
         if 2 * margin < top:
             for edge in (margin, top - margin):
                 axes.axvline(edge, color=style.INK_MUTED, linewidth=0.7)
-            even = picks.count * (edges[1] - edges[0]) / (top - 2 * margin)
+            even = count * (edges[1] - edges[0]) / (top - 2 * margin)
             axes.hlines(even, margin, top - margin, color=style.INK_SECONDARY, linewidth=0.9)
             axes.annotate(
                 "if spread evenly", (margin, even), xytext=(2, 3),
@@ -169,7 +199,7 @@ def _height_panel(axes: Axes, report: SeriesReport, info: TomogramInfo) -> None:
             )
     axes.set_xlim(0.0, top)
     axes.set_xlabel("z (nm above the bottom of the tomogram)")
-    axes.set_ylabel("Picks")
+    axes.set_ylabel(items.capitalize())
     axes.grid(True, axis="y")
 
 
