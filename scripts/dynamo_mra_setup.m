@@ -71,8 +71,25 @@
 % to 4.9 deg, would take about two weeks. global_step (deg) sets a coarser grid
 % for the global rounds instead, refined by 2 down to the round's step: cheaper,
 % at the risk above, and only when asked for.
+% cone_steps (default 3) is how wide the cone and the in-plane range are, in the
+% round's own steps: one number for every round, or one per round, e.g. [5 5 3 3 3]
+% for the PI's alternative to global rounds (2026-10-26): 5 steps for the first
+% two rounds, then 3. At RyR1's 9 deg first step, 5 steps is a 45 deg cone of
+% 100 orientations against 3 steps' 21, and a 360 deg search's 21,361.
 % Every round is given every search parameter, nref and mra included: a parameter
 % set without a round goes to round 1 only.
+%
+% gpus (default none) runs the alignment on those GPUs, numbered as the job sees
+% them (0 for a job's one GPU): destination standalone_gpu with that
+% gpu_identifier_set. Dynamo's GPU motor reads every particle as EM whatever its
+% extension (an MRC gives it garbage and sentinel poses without a word, Gag
+% 2026-10-12), so data_folder (default 'particles') must then name EM copies,
+% scripts/particles_to_em.py's. The motor resizes only by binning, a power-of-2
+% divisor of the box (Dynamo 1.1.591 source: dynamo__iteration_setup_gpu.m,
+% dynamo_compute_iteration_spp.cu), so on GPUs a global round's dim is the
+% smallest such divisor that still holds 2 * (low-pass + 2), the full box when
+% none does: for RyR1's 52 px box, 52 in both global rounds, where the CPU used
+% 30 and 34.
 %
 % It writes <project>_seeds/ (the seeds, seed_manifest.txt with tag and channel,
 % seed_kinds.txt for the classification report), <project>_fmasks/,
@@ -101,6 +118,9 @@ if ~exist('axis_offset', 'var'), axis_offset = [0 0 0]; end
 if ~exist('global_rounds', 'var'), global_rounds = 0; end
 if ~exist('global_step', 'var'), global_step = []; end
 if ~exist('reference_file', 'var'), reference_file = ''; end
+if ~exist('cone_steps', 'var'), cone_steps = 3; end
+if ~exist('data_folder', 'var'), data_folder = 'particles'; end
+if ~exist('gpus', 'var'), gpus = []; end
 % Particles averaged into each 'subset' or 'blob' seed, and the one seed for the
 % random order, orientations and noise of every project.
 subset = 300;
@@ -119,6 +139,9 @@ if ~isnumeric(axis_offset) || ~any(numel(axis_offset) == [2 3]) || ~all(isfinite
 axis_offset = [axis_offset(:)' zeros(1, 3 - numel(axis_offset))];
 if ~isscalar(global_rounds) || ~any(global_rounds == 0:(1 + 4 * strcmp(schedule, 'coarse_to_fine'))), error('dynamo_mra_setup: global_rounds must be a whole number from 0 to the schedule''s rounds (5 for coarse_to_fine, 1 for fixed)'); end
 if ~isempty(global_step) && (~isscalar(global_step) || ~(global_step > 0 && global_step <= 180)), error('dynamo_mra_setup: global_step must be an angle in degrees, above 0 and at most 180, or left out for each round''s own step'); end
+if ~isnumeric(cone_steps) || isempty(cone_steps) || ~all(cone_steps(:) > 0), error('dynamo_mra_setup: cone_steps must be a positive number of steps, or one per round, e.g. [5 5 3 3 3]'); end
+if ~ischar(data_folder) || isempty(data_folder), error('dynamo_mra_setup: data_folder must be a folder name such as particles_em'); end
+if ~isnumeric(gpus) || any(gpus(:) < 0 | gpus(:) ~= round(gpus(:))), error('dynamo_mra_setup: gpus must list GPU numbers as the job sees them, e.g. 0'); end
 if exist([project '_seeds'], 'dir') || exist([project '_fmasks'], 'dir') || exist([project '_tables'], 'dir') || exist(project, 'dir') || exist([project '.vpr'], 'file'), error('dynamo_mra_setup: an earlier run left %s_seeds, %s_fmasks, %s_tables or %s here; move them away first', project, project, project, project); end
 
 t = dread('initial.tbl'); n = size(t, 1);
@@ -129,8 +152,9 @@ t = dread('initial.tbl'); n = size(t, 1);
 % with dynamo_rot (2026-10-20) d + R'o gave the reference moved by -o at
 % correlation 0.9994, d + Ro a blur of it at 0.978.
 if any(axis_offset), for i = 1:n, t(i, 4:6) = t(i, 4:6) + (dynamo_euler2matrix(t(i, 7:9))' * axis_offset(:))'; end; end
-files = dir('particles/particle_*'); if isempty(files), error('dynamo_mra_setup: no particles/particle_* here; run it from the export folder'); end
-box = size(dread(fullfile('particles', files(1).name)), 1);
+files = dir(fullfile(data_folder, 'particle_*')); if isempty(files), error('dynamo_mra_setup: no %s/particle_* here; run it from the export folder', data_folder); end
+box = size(dread(fullfile(data_folder, files(1).name)), 1);
+[~, ~, extension] = fileparts(files(1).name); if ~isempty(gpus) && ~strcmpi(extension, '.em'), error('dynamo_mra_setup: Dynamo''s GPU motor reads particles only as EM; make EM copies with scripts/particles_to_em.py and give their folder as data_folder'); end
 apix = t(1, 36); if ~(apix > 0), error('dynamo_mra_setup: column 36 of initial.tbl holds no pixel size'); end
 if strcmp(schedule, 'coarse_to_fine') && ~(2 * apix <= last_lowpass && last_lowpass < first_lowpass), error('dynamo_mra_setup: last_lowpass must lie between Nyquist (%.1f A) and first_lowpass (%g A)', 2 * apix, first_lowpass); end
 if ~one_map && nref * subset > n, error('dynamo_mra_setup: %d particles cannot give %d disjoint subsets of %d', n, nref, subset); end
@@ -165,7 +189,7 @@ mkdir([project '_seeds']); mkdir([project '_fmasks']); mkdir([project '_tables']
 % A map is copied as it is, with a full Fourier mask too: a class average over
 % particles in every orientation, as the consensus halves start from, misses no
 % direction, and a low-pass already bounds it.
-for k = 1:nref, seed_file = sprintf('%s_seeds/template_initial_ref_%03d.em', project, k); fmask_file = sprintf('%s_fmasks/fmask_initial_ref_%03d.em', project, k); if strcmp(seeds{k}, 'map'), dwrite(dread(reference_file), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: the map %s\n', k, reference_file); elseif strcmp(seeds{k}, 'noise'), dwrite(noise(:, :, :, k), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: noise\n', k); else, tk = t; if strcmp(seeds{k}, 'blob'), tk(:, 7:9) = random_angles; end; a = dynamo_average('particles', 'fmask', 'table', 'table', tk, 'tags', t(group == k, 1)', 'fmin', 1, 'fcompensate', true, 'verbosity', 0, 'nmask', mask_file); dwrite(a.average, seed_file); dwrite(a.fmask, fmask_file); fprintf('seed %d: %s of %d particles\n', k, seeds{k}, sum(group == k)); end; end
+for k = 1:nref, seed_file = sprintf('%s_seeds/template_initial_ref_%03d.em', project, k); fmask_file = sprintf('%s_fmasks/fmask_initial_ref_%03d.em', project, k); if strcmp(seeds{k}, 'map'), dwrite(dread(reference_file), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: the map %s\n', k, reference_file); elseif strcmp(seeds{k}, 'noise'), dwrite(noise(:, :, :, k), seed_file); dwrite(ones(box, box, box), fmask_file); fprintf('seed %d: noise\n', k); else, tk = t; if strcmp(seeds{k}, 'blob'), tk(:, 7:9) = random_angles; end; a = dynamo_average(data_folder, 'fmask', 'table', 'table', tk, 'tags', t(group == k, 1)', 'fmin', 1, 'fcompensate', true, 'verbosity', 0, 'nmask', mask_file); dwrite(a.average, seed_file); dwrite(a.fmask, fmask_file); fprintf('seed %d: %s of %d particles\n', k, seeds{k}, sum(group == k)); end; end
 dlmwrite(sprintf('%s_seeds/seed_manifest.txt', project), [t(:, 1) group], ' ');
 fid = fopen(sprintf('%s_seeds/seed_kinds.txt', project), 'w'); for k = 1:nref, if one_map, fprintf(fid, '%d %s %s\n', k, seeds{k}, reference_file); else, fprintf(fid, '%d %s %d\n', k, seeds{k}, sum(group == k)); end; end; fclose(fid);
 
@@ -177,7 +201,7 @@ for k = 1:nref, dwrite(t, sprintf('%s_tables/table_initial_ref_%03d.tbl', projec
 if nref > 1, inputs = {[project '_seeds'], [project '_tables'], [project '_fmasks']}; else, inputs = {sprintf('%s_seeds/template_initial_ref_001.em', project), sprintf('%s_tables/table_initial_ref_001.tbl', project), sprintf('%s_fmasks/fmask_initial_ref_001.em', project)}; end
 
 dynamo_vpr(project);
-dynamo_vpr_put(project, '-data', 'particles');
+dynamo_vpr_put(project, '-data', data_folder);
 dynamo_vpr_put(project, '-nref', num2str(nref));
 dynamo_vpr_put(project, '-mra', num2str(nref > 1));
 dynamo_vpr_put(project, '-template', inputs{1});
@@ -201,21 +225,23 @@ dynamo_vpr_put(project, '-smask', mask_file);
 % are equal steps of resolution instead, rounded to the same whole Fourier px.
 if strcmp(schedule, 'fixed'), iterations = 5; lows = 16; steps = 5; elseif strcmp(lowpass_steps, 'angstrom'), lows = round(box * apix ./ linspace(first_lowpass, last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; else, lows = round(linspace(box * apix / first_lowpass, box * apix / last_lowpass, 5)); iterations = ones(size(lows)); steps = round(10 * atand(box * apix ./ lows / diameter)) / 10; end
 rounds = numel(lows);
-cone_ranges = 3 * steps; samplings = steps; refines = 2 * ones(size(steps)); dims = box * ones(size(steps));
+if ~any(numel(cone_steps) == [1 rounds]), error('dynamo_mra_setup: cone_steps must be one number or one per round (%d rounds)', rounds); end
+cone_ranges = cone_steps(:)' .* steps; samplings = steps; refines = 2 * ones(size(steps)); dims = box * ones(size(steps));
 if global_rounds > 0, g = 1:global_rounds; cone_ranges(g) = 360; dims(g) = min(box, 2 * (lows(g) + 2)); end
+if global_rounds > 0 && ~isempty(gpus), for r = g, d = box; while mod(d, 2) == 0 && d / 2 >= dims(r), d = d / 2; end; dims(r) = d; end; end
 if global_rounds > 0 && ~isempty(global_step), samplings(g) = global_step; refines(g) = max(2, ceil(log2(global_step ./ steps(g)))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], num2str(nref > 1)); dynamo_vpr_put(project, ['-thrm' s], '0'); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-cr' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-cs' s], num2str(samplings(r))); dynamo_vpr_put(project, ['-ir' s], num2str(cone_ranges(r))); dynamo_vpr_put(project, ['-is' s], num2str(samplings(r))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-rf' s], num2str(refines(r))); dynamo_vpr_put(project, ['-rff' s], '2'); dynamo_vpr_put(project, ['-high' s], '2'); dynamo_vpr_put(project, ['-low' s], num2str(lows(r))); dynamo_vpr_put(project, ['-dim' s], num2str(dims(r))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-lim' s], '[3,3,3]'); dynamo_vpr_put(project, ['-limm' s], '1'); dynamo_vpr_put(project, ['-sym' s], symmetry); end
 for r = rounds + 1:8, dynamo_vpr_put(project, sprintf('-ite_r%d', r), '0'); end
-for r = 1:rounds, if r <= global_rounds, search = sprintf('every orientation, 360 deg in %.1f deg steps refined %d times by 2 to %.1f deg, particles downsampled to %d px', samplings(r), refines(r), samplings(r) / 2^refines(r), dims(r)); else, search = sprintf('cone and in-plane %.1f deg in %.1f deg steps', cone_ranges(r), steps(r)); end; fprintf('round %d: %d iteration(s), low-pass %d px (%.1f A), %s\n', r, iterations(r), lows(r), box * apix / lows(r), search); end
-dynamo_vpr_put(project, '-destination', 'standalone');
+for r = 1:rounds, if r <= global_rounds, search = sprintf('every orientation, 360 deg in %.1f deg steps refined %d times by 2 to %.1f deg, particles at %d px of %d', samplings(r), refines(r), samplings(r) / 2^refines(r), dims(r), box); else, search = sprintf('cone and in-plane %.1f deg in %.1f deg steps', cone_ranges(r), steps(r)); end; fprintf('round %d: %d iteration(s), low-pass %d px (%.1f A), %s\n', r, iterations(r), lows(r), box * apix / lows(r), search); end
+if isempty(gpus), dynamo_vpr_put(project, '-destination', 'standalone'); device_note = 'on the CPU'; else, dynamo_vpr_put(project, '-destination', 'standalone_gpu'); dynamo_vpr_put(project, '-gpu_identifier_set', mat2str(gpus(:)')); device_note = ['on GPU(s) ' mat2str(gpus(:)')]; end
 dynamo_vpr_put(project, '-cores', num2str(cores));
 
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
 if isempty(global_step), step_note = 'in each round''s own step'; else, step_note = sprintf('on a %g deg grid', global_step); end
 if one_map, seed_note = ['the map ' reference_file ' alone']; else, seed_note = strjoin(seeds, ' '); end
-fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) %s, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores\n', project, seed_note, schedule, lowpass_steps, global_rounds, step_note, mask_note, symmetry, axis_offset, cores);
-clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step step_note schedule first_lowpass last_lowpass diameter lowpass_steps reference_file one_map seed_note
+fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) %s, cones %s step(s) wide, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores, %s, particles from %s\n', project, seed_note, schedule, lowpass_steps, global_rounds, step_note, mat2str(cone_steps(:)'), mask_note, symmetry, axis_offset, cores, device_note, data_folder);
+clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step step_note schedule first_lowpass last_lowpass diameter lowpass_steps reference_file one_map seed_note cone_steps data_folder gpus device_note

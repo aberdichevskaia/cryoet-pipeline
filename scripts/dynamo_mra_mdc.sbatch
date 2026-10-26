@@ -31,7 +31,13 @@
 # GLOBAL_ROUNDS=n makes the first n rounds search every orientation, 360 deg in
 # the round's own atan(resolution / diameter) step, on particles downsampled to
 # twice the round's low-pass: hours per round, not minutes (see the setup);
-# GLOBAL_STEP (deg) asks for a coarser grid instead, refined to that step. Without
+# GLOBAL_STEP (deg) asks for a coarser grid instead, refined to that step.
+# CONE_STEPS="5 5 3 3 3" sets how wide each round's cone is, in its own steps (3
+# unless given). GPUS=0 aligns on the job's GPU (submit with --partition=gpu
+# --gres=gpu:1) from EM copies of the particles, DATA_FOLDER=particles_em
+# (scripts/particles_to_em.py makes them): Dynamo's GPU motor reads every particle
+# as EM, and resizes only by binning, so its global rounds run at the full box
+# where the CPU's were downsampled (see the setup). Without
 # SCHEDULE the search is the fixed one. TEMPLATE, the map the picks were matched
 # with (a relative path from the repo root), goes into the report: drawn in the
 # corner of its pages of particles and maps. A project
@@ -91,6 +97,19 @@ for binary in dynamo dynamo_execute_project; do
         exit 1
     fi
 done
+if [[ -n "${GPUS:-}" ]]; then
+    # Dynamo finds its GPU motor with `which` (gag_gpu_eo died there, 2026-10-12), and
+    # the shipped motor holds sm_52 code only, so a newer card compiles its PTX when
+    # the job starts, into CUDA_CACHE_PATH (default ~/.nv): kept in the job's folder.
+    export PATH=$DYNAMO_ROOT/bin:$PATH
+    export CUDA_CACHE_PATH=$JOB_DIR/cuda_cache
+    mkdir -p "$CUDA_CACHE_PATH"
+    if ! command -v dynamo_compute_iteration_spp > /dev/null; then
+        echo "no dynamo_compute_iteration_spp, Dynamo's GPU motor, in $DYNAMO_ROOT/bin" >&2
+        exit 1
+    fi
+    echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
+fi
 
 cd "$EXPORT"
 echo "node        $(hostname)"
@@ -136,6 +155,9 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
     [[ -n "${GLOBAL_ROUNDS:-}" ]] && options+="global_rounds = $GLOBAL_ROUNDS; "
     [[ -n "${GLOBAL_STEP:-}" ]] && options+="global_step = $GLOBAL_STEP; "
+    [[ -n "${CONE_STEPS:-}" ]] && options+="cone_steps = [$CONE_STEPS]; "
+    [[ -n "${DATA_FOLDER:-}" ]] && options+="data_folder = '$DATA_FOLDER'; "
+    [[ -n "${GPUS:-}" ]] && options+="gpus = [$GPUS]; "
     # Not under set -e: a setup that Dynamo ends with an error would end the job
     # with it, before the lines below say why (exit 249, 2026-10-22).
     set +e
