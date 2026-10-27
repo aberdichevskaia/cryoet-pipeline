@@ -7,7 +7,9 @@
 The port's cone rounds took as long with 221 candidates per search as with 300 (cone5
 on two A40s, 2026-10-27: 26-27 min an iteration, about 0.45 s a search), so the time
 was not in the candidates: the first profile found one process on one A40 searching
-in 0.097 s, and two processes in 0.43 s each, on one A40 or two. For each iteration
+in 0.097 s, and two processes in 0.43 s each, on one A40 or two. With the GPU
+processes at one CPU thread the second found 0.082 s, the GPU computing 87% of it,
+and two or four processes per A40 as fast as one. For each iteration
 (a finished one searched at the full box, as scripts/torch_search_check.py takes
 them) a seeded sample of particles is searched in every channel from the iteration's
 own inputs, four ways:

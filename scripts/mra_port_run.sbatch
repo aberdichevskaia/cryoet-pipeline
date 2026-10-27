@@ -25,10 +25,11 @@
 # more with --gres=gpu:a40:4 and the particles are dealt among all the job's GPUs.
 # Measured on one A40 (2026-10-27, scripts/torch_search_profile.sbatch, RyR1 bin8,
 # box 52): one process searches a particle of cone5's first round (300 candidates)
-# in 0.097 s, so a round of 2,384 particles x 3 channels is about 12 minutes on one
-# card. The cone5 run on two A40s took 27 minutes an iteration: its two processes
-# waited on each other's CPU thread teams, and GPU processes now keep one thread
-# (dynamo_search_torch._start_worker).
+# in 0.082 s, so a round of 2,384 particles x 3 channels is about 10 minutes of
+# searching on one card. The GPU computes 87% of that time, so PER_GPU 2 or 4 gives
+# nothing there. The cone5 run on two A40s took 27 minutes an iteration because its
+# two processes waited on each other's CPU thread teams; GPU processes now keep one
+# thread (dynamo_search_torch._start_worker).
 
 set -euo pipefail
 

@@ -478,9 +478,11 @@ def _start_worker(particles: torch.Tensor, devices: Any, dtype_name: str, chunk:
     thread of it (ATen/ParallelOpenMP.h opens `omp parallel` without a thread count),
     so processes that each keep a team as large as the job's CPUs wait on one another:
     on max (2026-10-27, 8 cores, 16 threads a team) two processes searched 0.43 s a
-    particle each, on one A40 or on two, against one process's 0.097 s. A GPU process
-    leaves the host only elementwise work, the same on one thread; on the CPU the
-    search's own reductions would change with the team, so it keeps it.
+    particle each, on one A40 or on two, against one process's 0.097 s. With one
+    thread each, two or four processes on one A40 search as fast as one does (0.96-1.02
+    times, the same numbers). A GPU process leaves the host only elementwise work,
+    the same on one thread; on the CPU the search's own reductions would change with
+    the team, so it keeps it.
     """
 
     global _WORKER
