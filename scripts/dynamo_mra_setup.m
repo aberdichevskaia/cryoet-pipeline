@@ -70,7 +70,12 @@
 % dim 34) about 21 h on a node of its own; a global search in every round, down
 % to 4.9 deg, would take about two weeks. global_step (deg) sets a coarser grid
 % for the global rounds instead, refined by 2 down to the round's step: cheaper,
-% at the risk above, and only when asked for.
+% at the risk above, and only when asked for. global_full_box (default false)
+% searches the global rounds at the full box instead of downsampled: as the
+% pipeline's port does, which does not model dim, and as Dynamo's CPU search
+% must be made for the port to be checked against it
+% (scripts/torch_search_check.py). Too slow on the CPU for a whole export: for a
+% small one, scripts/sample_export.py's. It takes global_rounds too.
 % cone_steps (default 3) is how wide the cone and the in-plane range are, in the
 % round's own steps: one number for every round, or one per round, e.g. [5 5 3 3 3]
 % for the PI's alternative to global rounds (2026-10-26): 5 steps for the first
@@ -97,10 +102,12 @@
 %
 % It writes <project>_seeds/ (the seeds, seed_manifest.txt with tag and channel,
 % seed_kinds.txt for the classification report), <project>_fmasks/,
-% <project>_tables/ and the project <project>, then checks and unfolds it. It
-% refuses to start if any of them exists. The sphere mask,
-% mra_mask_r<radius>_e<edge>.em, is shared by every project that asks for the
-% same one; a mask_file is only read.
+% <project>_tables/ and the project <project>, then checks and unfolds it.
+% Unfolding writes every iteration's card (cards/ite_N/card_ite_ite_N.card), so
+% the pipeline's port can compute a project Dynamo has not run
+% (scripts/mra_port_run.py). It refuses to start if any of them exists. The
+% sphere mask, mra_mask_r<radius>_e<edge>.em, is shared by every project that
+% asks for the same one; a mask_file is only read.
 %
 % Both searches were set for ribosomes at bin8 (9.784 A/px, 48 px box); check
 % them before any other data.
@@ -121,6 +128,7 @@ if ~exist('symmetry', 'var'), symmetry = 'c1'; end
 if ~exist('axis_offset', 'var'), axis_offset = [0 0 0]; end
 if ~exist('global_rounds', 'var'), global_rounds = 0; end
 if ~exist('global_step', 'var'), global_step = []; end
+if ~exist('global_full_box', 'var'), global_full_box = false; end
 if ~exist('reference_file', 'var'), reference_file = ''; end
 if ~exist('cone_steps', 'var'), cone_steps = 3; end
 if ~exist('data_folder', 'var'), data_folder = 'particles'; end
@@ -143,6 +151,8 @@ if ~isnumeric(axis_offset) || ~any(numel(axis_offset) == [2 3]) || ~all(isfinite
 axis_offset = [axis_offset(:)' zeros(1, 3 - numel(axis_offset))];
 if ~isscalar(global_rounds) || ~any(global_rounds == 0:(1 + 4 * strcmp(schedule, 'coarse_to_fine'))), error('dynamo_mra_setup: global_rounds must be a whole number from 0 to the schedule''s rounds (5 for coarse_to_fine, 1 for fixed)'); end
 if ~isempty(global_step) && (~isscalar(global_step) || ~(global_step > 0 && global_step <= 180)), error('dynamo_mra_setup: global_step must be an angle in degrees, above 0 and at most 180, or left out for each round''s own step'); end
+if ~isscalar(global_full_box) || ~(islogical(global_full_box) || isnumeric(global_full_box)) || ~any(global_full_box == [0 1]), error('dynamo_mra_setup: global_full_box must be true or false'); end
+if global_full_box && global_rounds == 0, error('dynamo_mra_setup: global_full_box changes only global rounds; give global_rounds too'); end
 if ~isnumeric(cone_steps) || isempty(cone_steps) || ~all(cone_steps(:) > 0), error('dynamo_mra_setup: cone_steps must be a positive number of steps, or one per round, e.g. [5 5 3 3 3]'); end
 if ~ischar(data_folder) || isempty(data_folder), error('dynamo_mra_setup: data_folder must be a folder name such as particles_em'); end
 if ~isnumeric(gpus) || any(gpus(:) < 0 | gpus(:) ~= round(gpus(:))), error('dynamo_mra_setup: gpus must list GPU numbers as the job sees them, e.g. 0'); end
@@ -232,7 +242,7 @@ if strcmp(schedule, 'fixed'), iterations = 5; lows = 16; steps = 5; elseif strcm
 rounds = numel(lows);
 if ~any(numel(cone_steps) == [1 rounds]), error('dynamo_mra_setup: cone_steps must be one number or one per round (%d rounds)', rounds); end
 cone_ranges = cone_steps(:)' .* steps; samplings = steps; refines = 2 * ones(size(steps)); dims = box * ones(size(steps));
-if global_rounds > 0, g = 1:global_rounds; cone_ranges(g) = 360; dims(g) = min(box, 2 * (lows(g) + 2)); end
+if global_rounds > 0, g = 1:global_rounds; cone_ranges(g) = 360; if global_full_box, dims(g) = box; else, dims(g) = min(box, 2 * (lows(g) + 2)); end; end
 if global_rounds > 0 && ~isempty(gpus), for r = g, d = box; while mod(d, 2) == 0 && d / 2 >= dims(r), d = d / 2; end; dims(r) = d; end; end
 if global_rounds > 0 && ~isempty(global_step), samplings(g) = global_step; refines(g) = max(2, ceil(log2(global_step ./ steps(g)))); end
 for r = 1:rounds, s = sprintf('_r%d', r); dynamo_vpr_put(project, ['-ite' s], num2str(iterations(r))); dynamo_vpr_put(project, ['-nref' s], num2str(nref)); dynamo_vpr_put(project, ['-mra' s], num2str(nref > 1)); dynamo_vpr_put(project, ['-thrm' s], '0'); end
@@ -247,6 +257,7 @@ dynamo_vpr_put(project, '-cores', num2str(cores));
 dynamo_vpr_check(project);
 dynamo_vpr_unfold(project);
 if isempty(global_step), step_note = 'in each round''s own step'; else, step_note = sprintf('on a %g deg grid', global_step); end
+if global_full_box, step_note = [step_note ' at the full box']; end
 if one_map, seed_note = ['the map ' reference_file ' alone']; else, seed_note = strjoin(seeds, ' '); end
 fprintf('dynamo_mra_setup: project %s is ready, seeds %s, schedule %s (%s steps), %d global round(s) %s, cones %s step(s) wide, mask %s, symmetry %s, axis moved from centre + [%g %g %g] px, %d cores, %s, particles from %s\n', project, seed_note, schedule, lowpass_steps, global_rounds, step_note, mat2str(cone_steps(:)'), mask_note, symmetry, axis_offset, cores, device_note, data_folder);
-clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step step_note schedule first_lowpass last_lowpass diameter lowpass_steps reference_file one_map seed_note cone_steps data_folder gpus device_note
+clear project seeds cores mask_radius mask_edge mask_file mask_note symmetry axis_offset global_rounds global_step global_full_box step_note schedule first_lowpass last_lowpass diameter lowpass_steps reference_file one_map seed_note cone_steps data_folder gpus device_note

@@ -22,6 +22,13 @@ within rounding, and from them, through the class averages, more and more. The
 same comparison between Dynamo's own GPU and CPU runs of one project is the
 yardstick (cone5 against cone5_gpu).
 
+A project the setup made and Dynamo never computed (scripts/dynamo_mra_mdc.sbatch
+with SETUP_ONLY=1) is run the same way: Dynamo writes every iteration's card when
+the setup unfolds a project, so the port follows the plan Dynamo would have
+followed, and there is nothing to compare. That is how the pipeline's own runs are
+made. A global round must then be set up at the full box (GLOBAL_FULL_BOX=1): the
+port searches only there, and refuses Dynamo's CPU downsampling (dim).
+
 The comparison of classes alone, with chance levels, is
 scripts/compare_dynamo_classes.py; the report, scripts/dynamo_classification_report.py.
 Disposable, like the rest of scripts/.
@@ -53,6 +60,12 @@ def _classes(project: Path) -> dict[int, dict[int, int]]:
     return {iteration.number: {int(tag): channel for channel, result in iteration.classes.items()
                                for tag in result.members}
             for iteration in run.iterations}
+
+
+def computed_by_dynamo(project: Path) -> bool:
+    """Has Dynamo finished an iteration of the project, or was it only set up?"""
+
+    return any(project.glob("results/ite_*/averages/refined_table_ref_*_ite_*.tbl"))
 
 
 def compare(ours: Path, theirs: Path) -> None:
@@ -112,6 +125,9 @@ def main() -> int:
 
     project = args.project.resolve()
     out = project.parent / (args.name or f"{project.name}_port")
+    computed = computed_by_dynamo(project)
+    if args.compare_only and not computed:
+        raise SystemExit(f"{project}: Dynamo has not computed it, so there is nothing to compare")
     if not args.compare_only:
         plan = plan_from_dynamo(project, iterations=args.iterations)
         manifest = project.parent / "export_manifest.json"
@@ -129,6 +145,9 @@ def main() -> int:
             destination = f"cryoet-pipeline torch {args.device} {args.dtype} x{devices}"
         run_mra_project(plan, out, search=search, destination=destination,
                         workers=args.workers, spacing=spacing)
+    if not computed:
+        print(f"{project.name} was set up and not computed by Dynamo: nothing to compare")
+        return 0
     compare(out, project)
     print(f"classes with chance levels: python scripts/compare_dynamo_classes.py {project} {out}")
     return 0

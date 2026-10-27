@@ -5,8 +5,9 @@
         --iteration 5 --particles 16 --device cuda --global-step 9.0 --global-low 13
 
 For one finished iteration of a Dynamo project searched at the full box (dim equal
-to the box: a cone round, not a CPU global round), and a seeded sample of its
-particles, every channel's search is run three ways from the iteration's own
+to the box: a cone round, or a global round set up at the full box, not one that
+Dynamo's CPU downsampled), and a seeded sample of its particles, every channel's
+search is run three ways from the iteration's own
 inputs: its starting table, Dynamo's prepared reference
 (starting_reference_transformed) and search mask (mask_transformed), under the
 iteration's card. Dynamo's answer is the refined table; the numpy kernel
@@ -15,6 +16,12 @@ checked; the torch kernel (dynamo_search_torch, float32 on --device) is the one
 to check. It prints, for each, the angle (deg) and shift (px) from Dynamo's pose
 and the CC difference, per channel the median and the largest, and each kernel's
 time per candidate orientation.
+
+A global round set up at the full box (dynamo_mra_setup.m's global_full_box, on a
+small export of scripts/sample_export.py) is checked the same way, every particle
+with --particles 0. There the numpy kernel takes minutes per search, so
+--skip-numpy compares the torch kernel with Dynamo directly: on cone rounds the two
+kernels gave the same poses (2026-10-26, A40).
 
 With --global-step it also times the torch kernel alone on a 360 deg search at
 that step (cone and in-plane), refined twice by 2 as the setup's global rounds
@@ -87,7 +94,10 @@ def main() -> int:
     parser.add_argument("project", type=Path, help="a finished Dynamo project folder")
     parser.add_argument("--iteration", type=int, required=True,
                         help="a finished iteration searched at the full box")
-    parser.add_argument("--particles", type=int, default=16, help="sample size")
+    parser.add_argument("--particles", type=int, default=16,
+                        help="sample size; 0 for every particle")
+    parser.add_argument("--skip-numpy", action="store_true",
+                        help="compare the torch kernel with Dynamo directly, without numpy")
     parser.add_argument("--seed", type=int, default=20261026)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--chunk", type=int, default=256, help="candidates per batch")
@@ -126,8 +136,8 @@ def main() -> int:
         if sample is None:
             tags = np.sort(start[:, 0].astype(int))
             rng = np.random.default_rng(args.seed)
-            sample = np.sort(rng.choice(tags, size=min(args.particles, len(tags)),
-                                        replace=False))
+            size = len(tags) if args.particles == 0 else min(args.particles, len(tags))
+            sample = np.sort(rng.choice(tags, size=size, replace=False))
             volumes = {int(tag): _particle(data, int(tag)) for tag in sample}
         starts = {int(row[0]): row for row in start}
         dynamo = {int(row[0]): row for row in refined}
@@ -137,10 +147,12 @@ def main() -> int:
             row = starts[int(tag)]
             inputs = (volumes[int(tag)], reference, mask, row[6:9], row[3:6],
                       (float(row[13]), float(row[14])), settings)
-            began = time.perf_counter()
-            ours = core.refine_particle(*inputs)
-            times["numpy"][0] += time.perf_counter() - began
-            times["numpy"][1] += _candidates(ours)
+            ours = None
+            if not args.skip_numpy:
+                began = time.perf_counter()
+                ours = core.refine_particle(*inputs)
+                times["numpy"][0] += time.perf_counter() - began
+                times["numpy"][1] += _candidates(ours)
             began = time.perf_counter()
             fast = kernel.refine_particle_torch(*inputs, device=device, chunk=args.chunk)
             if device.type == "cuda":
@@ -148,25 +160,30 @@ def main() -> int:
             times["torch"][0] += time.perf_counter() - began
             times["torch"][1] += _candidates(fast)
             truth = dynamo[int(tag)]
-            rows.append((
-                _angle(ours.angles, truth[6:9]), float(np.linalg.norm(ours.shift - truth[3:6])),
-                ours.correlation - truth[9],
+            first = fast if ours is None else ours
+            between = (np.nan,) * 3 if ours is None else (
                 _angle(fast.angles, ours.angles), float(np.linalg.norm(fast.shift - ours.shift)),
-                fast.correlation - ours.correlation,
+                fast.correlation - ours.correlation)
+            rows.append((
+                _angle(first.angles, truth[6:9]), float(np.linalg.norm(first.shift - truth[3:6])),
+                first.correlation - truth[9], *between,
             ))
         rows_by_channel[channel] = rows
         table = np.array(rows)
         print(f"channel {channel}: {settings.cone_aperture:g} deg cone in "
               f"{settings.cone_sampling:g} deg steps, refine {settings.refine}, low "
               f"{settings.low:g} px, {len(sample)} particles")
-        for name, columns in (("numpy vs Dynamo", (0, 1, 2)), ("torch vs numpy", (3, 4, 5))):
+        comparisons = ((("torch vs Dynamo", (0, 1, 2)),) if args.skip_numpy
+                       else (("numpy vs Dynamo", (0, 1, 2)), ("torch vs numpy", (3, 4, 5))))
+        for name, columns in comparisons:
             angle, shift, cc = (table[:, column] for column in columns)
             print(f"  {name:16s} angle median {np.median(angle):.3f}, max {angle.max():.3f} "
-                  f"deg; shift median {np.median(shift):.3f}, max {shift.max():.3f} px; "
-                  f"CC difference max {np.abs(cc).max():.2e}")
+                  f"deg, {int(np.sum(angle > 0.1))} over 0.1; shift median {np.median(shift):.3f}, "
+                  f"max {shift.max():.3f} px; CC difference max {np.abs(cc).max():.2e}")
         for name, (seconds, count) in times.items():
-            print(f"  {name:5s} {1000 * seconds / max(count, 1):8.2f} ms per candidate "
-                  f"({count:,} candidates)")
+            if count:
+                print(f"  {name:5s} {1000 * seconds / count:8.2f} ms per candidate "
+                      f"({count:,} candidates)")
 
     if args.global_step is not None:
         step = args.global_step

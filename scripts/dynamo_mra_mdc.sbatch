@@ -32,6 +32,12 @@
 # the round's own atan(resolution / diameter) step, on particles downsampled to
 # twice the round's low-pass: hours per round, not minutes (see the setup);
 # GLOBAL_STEP (deg) asks for a coarser grid instead, refined to that step.
+# GLOBAL_FULL_BOX=1 searches those rounds at the full box instead, as the
+# pipeline's port does: too slow on the CPU for a whole export, so made on a small
+# one (scripts/sample_export.py) to check the port's global search against
+# (scripts/torch_search_check.py). SETUP_ONLY=1 makes the project and stops, for
+# the port to compute it (scripts/mra_port_run.sbatch) by the cards Dynamo wrote
+# for every iteration when the setup unfolded it; a few cores and an hour do.
 # CONE_STEPS="5 5 3 3 3" sets how wide each round's cone is, in its own steps (3
 # unless given). GPUS=0 aligns on the job's GPU (submit with --partition=gpu
 # --gres=gpu:1) from EM copies of the particles, DATA_FOLDER=particles_em
@@ -160,6 +166,7 @@ if [[ ! -d "$NAME" ]]; then
     [[ -n "${AXIS_OFFSET:-}" ]] && options+="axis_offset = [$AXIS_OFFSET]; "
     [[ -n "${GLOBAL_ROUNDS:-}" ]] && options+="global_rounds = $GLOBAL_ROUNDS; "
     [[ -n "${GLOBAL_STEP:-}" ]] && options+="global_step = $GLOBAL_STEP; "
+    [[ -n "${GLOBAL_FULL_BOX:-}" ]] && options+="global_full_box = $GLOBAL_FULL_BOX; "
     [[ -n "${CONE_STEPS:-}" ]] && options+="cone_steps = [$CONE_STEPS]; "
     [[ -n "${DATA_FOLDER:-}" ]] && options+="data_folder = '$DATA_FOLDER'; "
     [[ -n "${GPUS:-}" ]] && options+="gpus = [$GPUS]; "
@@ -182,6 +189,16 @@ if [[ ! -d "$NAME" ]]; then
         } >&2
         exit 1
     fi
+fi
+if [[ -n "${SETUP_ONLY:-}" ]]; then
+    if [[ -f "$NAME/log.txt" ]]; then
+        echo "$EXPORT/$NAME was set up before and Dynamo has computed part of it; SETUP_ONLY" \
+             "leaves it as it is" >&2
+        exit 1
+    fi
+    echo "set up      $EXPORT/$NAME, not computed (SETUP_ONLY); the port computes it with"
+    echo "            PROJECT=$EXPORT/$NAME sbatch --export=ALL --job-name=${NAME}_port scripts/mra_port_run.sbatch"
+    exit 0
 fi
 made_for=$(sed -n 's/^how_many_processors=\([0-9]*\);$/\1/p' "$card")
 if [[ "$made_for" != "$CORES" ]]; then

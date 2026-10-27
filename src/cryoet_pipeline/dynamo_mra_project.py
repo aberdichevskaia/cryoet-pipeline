@@ -4,8 +4,11 @@
 the starting table, the references its channels start from (its seeds, as
 `settings/template_initial_ref_*.em`), the soft mask (`settings/mask.em`), the
 particles (its `folder_data`), and each iteration's search from that iteration's
-own card. `run_mra_project` then runs those iterations with `dynamo_mra`
-(reference preparation, every channel's search, assignment by the highest CC,
+own card, which Dynamo writes for every iteration when a project is unfolded: a
+project the setup made and Dynamo never computed has its whole plan too, and that
+is how the pipeline makes runs of its own. `run_mra_project` then runs those
+iterations with `dynamo_mra` (reference preparation, every channel's search,
+assignment by the highest CC,
 class averages as the MRA plugin makes them, dead channels dropped) and writes a
 project folder laid out as Dynamo 1.1.511 lays out its own:
 
@@ -117,8 +120,9 @@ def _card_settings(card: dict[str, str], box: int, number: int) -> SearchSetting
 def plan_from_dynamo(project: Path, *, iterations: int | None = None) -> MraPlan:
     """The plan of a Dynamo MRA project, from the iterations it has cards for.
 
-    A finished project has a card for every iteration; a running one, for those
-    it has begun. `iterations` takes only the first so many.
+    Dynamo writes every iteration's card when the setup unfolds the project, so a
+    project only set up, never computed, has them all and runs as Dynamo would
+    have run it. `iterations` takes only the first so many.
     """
 
     project = project.resolve()

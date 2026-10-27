@@ -15,6 +15,11 @@
 #       sbatch --export=ALL --job-name=mra_pad_ssn_cone5_port scripts/mra_port_run.sbatch
 #
 # NAME (default <project>_port), DEVICE (cuda) and DTYPE (float32) pass through.
+# A project only set up, never computed by Dynamo (scripts/dynamo_mra_mdc.sbatch
+# with SETUP_ONLY=1), is computed by the port alone, with nothing to compare: the
+# pipeline's own runs. Its report is written all the same. Global rounds at the
+# full box take hours each on one card: give them several (--gres=gpu:a40:4) or
+# more time (--time=3-00:00:00).
 # An A40, the card Dynamo's own GPU runs were asked for (the timings compare);
 # more with --gres=gpu:a40:4 and the particles are dealt among all the job's GPUs,
 # a process each. Measured on one A40 (2026-10-26, RyR1 bin8, box 52, before the
@@ -35,8 +40,10 @@ name=${NAME:-$(basename "$PROJECT")_port}
 python scripts/mra_port_run.py "$PROJECT" --name "$name" --device "${DEVICE:-cuda}" \
     --dtype "${DTYPE:-float32}"
 echo "finished    $(date -Is)"
-python scripts/compare_dynamo_classes.py "$PROJECT" "$(dirname "$PROJECT")/$name" \
-    || echo "no class comparison" >&2
+if compgen -G "$PROJECT/results/ite_*/averages/refined_table_ref_*_ite_*.tbl" > /dev/null; then
+    python scripts/compare_dynamo_classes.py "$PROJECT" "$(dirname "$PROJECT")/$name" \
+        || echo "no class comparison" >&2
+fi
 python scripts/dynamo_classification_report.py "$(dirname "$PROJECT")/$name" \
     || echo "no report; write it with: python scripts/dynamo_classification_report.py" \
         "$(dirname "$PROJECT")/$name" >&2
