@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,10 @@ def test_a_project_only_set_up_is_computed_with_nothing_to_compare(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     assert "mra_t was set up and not computed by Dynamo: nothing to compare" in result.stdout
     assert (tmp_path / "mra_t_port" / "log.txt").read_text() == "iteration 1 ok\niteration 2 ok\n"
+    # Each iteration's time, and how much of it was the search.
+    for number in (1, 2):
+        assert re.search(rf"^iteration {number}: class 1 \d+, class 2 \d+; \d+\.\d min, "
+                         r"\d+\.\d of it searching$", result.stdout, re.MULTILINE), result.stdout
     again = _run(str(project), "--compare-only")
     assert again.returncode != 0 and "nothing to compare" in again.stderr
 

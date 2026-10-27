@@ -287,17 +287,30 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
     box = plan.soft_mask.shape[0]
     references = dict(plan.references)
     tables = {channel: plan.table.copy() for channel in references}
+    searching = 0.0
+
+    def timed_search(*args: Any, **kwargs: Any) -> list:
+        # Each iteration's line splits its time: the search, and the rest on this
+        # process's one CPU, the class averages mostly.
+        nonlocal searching
+        clock = time.perf_counter()
+        try:
+            return search(*args, **kwargs)
+        finally:
+            searching += time.perf_counter() - clock
+
     for number, settings in enumerate(plan.settings, 1):
         here = out / "results" / f"ite_{number:04d}"
         here.mkdir(parents=True, exist_ok=True)
         (here / f"currently_surviving_references_ite_{number:04d}.txt").write_text(
             " ".join(str(channel) for channel in sorted(references)) + "\n")
         started = datetime.now()
+        searching = 0.0
         clock = time.perf_counter()
         starts = {channel: (tables[channel][:, 6:9], tables[channel][:, 3:6])
                   for channel in references}
         step = mra_iteration(particles, references, starts, tilt_ranges, plan.soft_mask,
-                             settings, fmin=1, workers=workers, search=search)
+                             settings, fmin=1, workers=workers, search=timed_search)
         seconds = time.perf_counter() - clock
         finished = datetime.now()
         averages = here / "averages"
@@ -334,7 +347,8 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
             handle.write(f"iteration {number} ok\n")
         sizes = ", ".join(f"class {channel} {int(np.sum(step.assignment == channel)):,}"
                           for channel in step.surviving)
-        log(f"iteration {number}: {sizes}; {seconds / 60:.1f} min")
+        log(f"iteration {number}: {sizes}; {seconds / 60:.1f} min, "
+            f"{searching / 60:.1f} of it searching")
         references = {channel: step.averages[channel].average for channel in step.surviving}
         tables = {channel: tables[channel] for channel in step.surviving}
 
