@@ -19,8 +19,10 @@
 # A project only set up, never computed by Dynamo (scripts/dynamo_mra_mdc.sbatch
 # with SETUP_ONLY=1), is computed by the port alone, with nothing to compare: the
 # pipeline's own runs. Its report is written all the same. Global rounds at the
-# full box take hours each on one card: give them several (--gres=gpu:a40:4) or
-# more time (--time=3-00:00:00).
+# full box take hours each on one card: 0.26 ms a candidate on an A40 (full_g1,
+# 2026-10-27), so a 360 deg round in 9 deg steps (21,561 candidates a search) over
+# 2,384 particles x 3 channels is about 11 h on one card, in 7.8 deg steps (32,583)
+# about 17 h; give them several (--gres=gpu:a40:4) or more time (--time=3-00:00:00).
 # An A40, the card Dynamo's own GPU runs were asked for (the timings compare);
 # more with --gres=gpu:a40:4 and the particles are dealt among all the job's GPUs.
 # Measured on one A40 (2026-10-27, scripts/torch_search_profile.sbatch, RyR1 bin8,
