@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import shutil
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,7 @@ def split(args: argparse.Namespace) -> int:
                                    pixel_spacing_angstrom=spacing).numpy()
     start_note = (f"{project.name}'s class {channel} average of iteration {number}, low-passed "
                   f"to {args.start_lowpass:g} A")
+    written: Path | None = None
     for half, folder in folders.items():
         tags = sorted(halves[half])
         write_subexport(export, folder, [(tag, posed(tag)) for tag in tags], manifest, {
@@ -193,7 +195,14 @@ def split(args: argparse.Namespace) -> int:
                 "start_lowpass_angstrom": args.start_lowpass,
             },
         })
-        _write_mrc(folder / "start_reference.mrc", start, spacing)
+        # One file, copied: mrcfile stamps every file it writes with the time to the
+        # second, so two writes of one map could differ in that byte.
+        target = folder / "start_reference.mrc"
+        if written is None:
+            _write_mrc(target, start, spacing)
+            written = target
+        else:
+            shutil.copyfile(written, target)
         counts = defaultdict(int)
         for tag in tags:
             counts[series[tag]] += 1
