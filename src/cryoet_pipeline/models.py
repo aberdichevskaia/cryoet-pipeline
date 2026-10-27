@@ -388,7 +388,7 @@ class PatchGridQc(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: int = 1
+    schema_version: int = 2
     tilt_series_id: str
     backend: str
     stage: str = "seed"
@@ -405,17 +405,16 @@ class PatchGridQc(BaseModel):
     patch_size_y_px: int = Field(ge=1)
     patch_size_x_angstrom: float = Field(gt=0.0)
     patch_size_y_angstrom: float = Field(gt=0.0)
-    # The margin is in binned pixels and does not scale with pre_binning, which
-    # is the trap; recording what it left makes that visible.
-    patch_margin_px: int = Field(ge=0)
+    # Margins in binned pixels, per axis. Unconfigured, each is 5% of the binned
+    # image along its axis, as etomo trims, and follows pre_binning; a configured
+    # margin is the same on both axes and does not, which is the trap.
+    patch_margin_x_px: int = Field(ge=0)
+    patch_margin_y_px: int = Field(ge=0)
+    patch_margin_source: str
     binned_width_px: int = Field(ge=1)
     binned_height_px: int = Field(ge=1)
     usable_width_fraction: float = Field(gt=0.0, le=1.0)
     usable_height_fraction: float = Field(gt=0.0, le=1.0)
-    # cos of the largest tilt: the share of one image that every view still
-    # covers once foreshortening is accounted for. A margin cutting more than
-    # this is cutting more than the geometry asks for.
-    foreshortening_fraction: float = Field(gt=0.0, le=1.0)
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 
@@ -435,7 +434,6 @@ class PatchGridQc(BaseModel):
             self.patch_size_y_angstrom,
             self.usable_width_fraction,
             self.usable_height_fraction,
-            self.foreshortening_fraction,
         ):
             if not isfinite(value):
                 raise ValueError("patch grid QC values must be finite")

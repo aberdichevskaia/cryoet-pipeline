@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import shlex
 import subprocess
 import tempfile
@@ -151,9 +150,6 @@ class ImodAutofidseedBackend:
             dir=paths.output_dir.resolve(),
         ) as temporary_directory:
             temporary_root = Path(temporary_directory)
-            input_stack = temporary_root / "input_bin.mrc"
-            scaled_xf = temporary_root / "scaled.prexg"
-            aligned_stack = temporary_root / "tracking_preali.mrc"
             full_resolution_xf = temporary_root / "tracking.prexg"
             tilt_file = temporary_root / "tracking.rawtlt"
             seed_model = temporary_root / "tracking.seed"
@@ -162,23 +158,22 @@ class ImodAutofidseedBackend:
             info_file = temporary_root / "autofidseed.info"
             autofidseed_temp = temporary_root / "autofidseed.dir"
 
-            write_binned_mrc_stack(
-                tilt_stack.path,
-                input_stack,
-                binning=tracking_binning,
-                pixel_spacing_angstrom=raw_pixel_spacing,
-                section_indices=included_indices,
-            )
             transforms_by_z = {
                 transform.z_value: transform
                 for transform in alignment_result.transforms
             }
-            _write_imod_transforms(
-                scaled_xf,
-                included_indices,
-                manifest,
-                transforms_by_z,
-                shift_scale=1.0 / tracking_binning,
+            aligned_stack = _write_prealigned_tracking_stack(
+                tilt_stack,
+                temporary_root=temporary_root,
+                binning=tracking_binning,
+                raw_pixel_spacing=raw_pixel_spacing,
+                included_indices=included_indices,
+                manifest=manifest,
+                transforms_by_z=transforms_by_z,
+                newstack=newstack,
+                context=context,
+                command_runner=self._command_runner,
+                log_path=paths.newstack_log,
             )
             _write_imod_transforms(
                 full_resolution_xf,
@@ -194,34 +189,6 @@ class ImodAutofidseedBackend:
                     for index in included_indices
                 ],
             )
-
-            newstack_command = [
-                str(newstack),
-                "-input",
-                str(input_stack),
-                "-output",
-                str(aligned_stack),
-                "-xform",
-                str(scaled_xf),
-                "-mode",
-                "2",
-            ]
-            newstack_result = self._command_runner(
-                newstack_command,
-                cwd=temporary_root,
-                env=imod_environment(newstack, context),
-            )
-            write_command_log(paths.newstack_log, (newstack_command, newstack_result))
-            _require_success(
-                newstack_result,
-                program="IMOD newstack",
-                log_path=paths.newstack_log,
-            )
-            if not aligned_stack.is_file():
-                raise RuntimeError(
-                    f"IMOD newstack did not write fiducial tracking stack: "
-                    f"{aligned_stack}"
-                )
 
             track_command.write_text(
                 _track_command_text(
@@ -644,10 +611,24 @@ def _compute_patch_size_px(
     return patch_size_px
 
 
+def _etomo_patch_border_px(binned_size_px: int) -> int:
+    """The border etomo trims from each edge of a patch-tracking stack.
+
+    IMOD's makecomfile, which writes etomo's xcorr_pt.com, sets tiltxcorr's
+    BordersInXandY to 5% of the binned image along each axis, rounded. Being a
+    fraction, it follows pre_binning, which a margin given in pixels does not.
+    """
+
+    return int(0.05 * binned_size_px + 0.5)
+
+
 class ImodPatchSeedBackend:
-    """Bin a tracking stack and size a patch grid for IMOD Tiltxcorr."""
+    """Prealign a binned tracking stack and size a patch grid for IMOD Tiltxcorr."""
 
     name = "imod-patch-seed"
+
+    def __init__(self, command_runner: CommandRunner | None = None) -> None:
+        self._command_runner = command_runner or run_command
 
     def generate(
         self,
@@ -656,7 +637,7 @@ class ImodPatchSeedBackend:
         manifest: TiltSeriesManifest,
         context: BackendContext,
     ) -> list[Artifact]:
-        """Create a plain binned tracking stack plus a patch-grid descriptor."""
+        """Create a prealigned tracking stack plus a patch-grid descriptor."""
 
         stack_shape, alignment_result = _validate_seed_inputs(
             tilt_stack,
@@ -675,27 +656,33 @@ class ImodPatchSeedBackend:
             "patch_overlap",
             default=0.33,
         )
-        patch_margin_px = _nonnegative_int_parameter(
-            context,
-            "patch_margin_px",
-            default=100,
-        )
         overwrite = _bool_parameter(context, "overwrite", default=False)
         raw_pixel_spacing = _raw_pixel_spacing(manifest, tilt_stack, context)
 
         included_indices = _included_indices(alignment_result, manifest)
         binned_height = stack_shape[1] // pre_binning
         binned_width = stack_shape[2] // pre_binning
+        if context.parameters.get("patch_margin_px") is None:
+            patch_margin_x_px = _etomo_patch_border_px(binned_width)
+            patch_margin_y_px = _etomo_patch_border_px(binned_height)
+            patch_margin_source = "five_percent_of_binned_size"
+        else:
+            patch_margin_x_px = patch_margin_y_px = _nonnegative_int_parameter(
+                context,
+                "patch_margin_px",
+                default=0,
+            )
+            patch_margin_source = "user_override"
         patch_size_x_px = _compute_patch_size_px(
             binned_width,
             num_patches_x,
-            margin_px=patch_margin_px,
+            margin_px=patch_margin_x_px,
             overlap_fraction=patch_overlap,
         )
         patch_size_y_px = _compute_patch_size_px(
             binned_height,
             num_patches_y,
-            margin_px=patch_margin_px,
+            margin_px=patch_margin_y_px,
             overlap_fraction=patch_overlap,
         )
 
@@ -708,26 +695,33 @@ class ImodPatchSeedBackend:
         _require_available_paths(paths.outputs, overwrite=overwrite)
         paths.output_dir.mkdir(parents=True, exist_ok=True)
 
+        newstack = resolve_imod_executable("newstack", context)
+
         with tempfile.TemporaryDirectory(
             prefix=f".{manifest.tilt_series_id}-patch-seed-",
             dir=paths.output_dir.resolve(),
         ) as temporary_directory:
             temporary_root = Path(temporary_directory)
-            binned_stack = temporary_root / "tracking_bin.mrc"
             prealign_transform = temporary_root / "tracking.prexg"
             tilt_file = temporary_root / "tracking.rawtlt"
 
-            write_binned_mrc_stack(
-                tilt_stack.path,
-                binned_stack,
-                binning=pre_binning,
-                pixel_spacing_angstrom=raw_pixel_spacing,
-                section_indices=included_indices,
-            )
             transforms_by_z = {
                 transform.z_value: transform
                 for transform in alignment_result.transforms
             }
+            aligned_stack = _write_prealigned_tracking_stack(
+                tilt_stack,
+                temporary_root=temporary_root,
+                binning=pre_binning,
+                raw_pixel_spacing=raw_pixel_spacing,
+                included_indices=included_indices,
+                manifest=manifest,
+                transforms_by_z=transforms_by_z,
+                newstack=newstack,
+                context=context,
+                command_runner=self._command_runner,
+                log_path=paths.newstack_log,
+            )
             _write_imod_transforms(
                 prealign_transform,
                 included_indices,
@@ -743,7 +737,7 @@ class ImodPatchSeedBackend:
                 ],
             )
 
-            _replace_file(binned_stack, paths.tracking_stack)
+            _replace_file(aligned_stack, paths.tracking_stack)
             _replace_file(prealign_transform, paths.prealign_transform)
             _replace_file(tilt_file, paths.tilt_file)
 
@@ -752,36 +746,23 @@ class ImodPatchSeedBackend:
             "num_patches_y": num_patches_y,
             "patch_size_x_px": patch_size_x_px,
             "patch_size_y_px": patch_size_y_px,
-            "patch_margin_px": patch_margin_px,
+            "patch_margin_x_px": patch_margin_x_px,
+            "patch_margin_y_px": patch_margin_y_px,
+            "patch_margin_source": patch_margin_source,
             "patch_overlap": patch_overlap,
             "binned_width_px": binned_width,
             "binned_height_px": binned_height,
         }
         _write_json(paths.grid, grid)
 
-        usable_width_fraction = (binned_width - 2 * patch_margin_px) / binned_width
-        usable_height_fraction = (binned_height - 2 * patch_margin_px) / binned_height
-        # The share of one image that every view still covers: at the largest
-        # tilt the specimen foreshortens by cos(tilt) along the axis
-        # perpendicular to the tilt axis, so that is how much of the field is
-        # common to the whole series.
-        max_abs_tilt_deg = max(
-            abs(manifest.images[index].tilt_angle_deg) for index in included_indices
-        )
-        foreshortening_fraction = math.cos(math.radians(max_abs_tilt_deg))
-
-        seed_warnings: list[str] = []
-        seed_status = QcStatus.PASS
-        tightest = min(usable_width_fraction, usable_height_fraction)
-        if tightest < foreshortening_fraction:
-            seed_status = QcStatus.WARNING
-            seed_warnings.append(
-                f"a margin of {patch_margin_px} binned px leaves "
-                f"{tightest:.3f} of the field, less than the {foreshortening_fraction:.3f} "
-                f"every view still covers at {max_abs_tilt_deg:.1f} degrees of tilt; "
-                "the margin is cutting more than foreshortening requires"
-            )
-
+        usable_width_fraction = (binned_width - 2 * patch_margin_x_px) / binned_width
+        usable_height_fraction = (binned_height - 2 * patch_margin_y_px) / binned_height
+        # Foreshortening sets no margin, so nothing is judged against it.
+        # Tiltxcorr places the patches on the view nearest zero tilt, and on the
+        # other views they move toward the tilt axis by cos(tilt): a patch inside
+        # that view stays inside every view. The margin only keeps patches off the
+        # blank edges newstack leaves when it prealigns, and tiltxcorr also tapers
+        # or drops a patch by its blank share, read from -prexf.
         report = PatchGridQc(
             tilt_series_id=manifest.tilt_series_id,
             backend=self.name,
@@ -799,14 +780,14 @@ class ImodPatchSeedBackend:
             patch_size_y_px=patch_size_y_px,
             patch_size_x_angstrom=patch_size_x_px * pre_binning * raw_pixel_spacing,
             patch_size_y_angstrom=patch_size_y_px * pre_binning * raw_pixel_spacing,
-            patch_margin_px=patch_margin_px,
+            patch_margin_x_px=patch_margin_x_px,
+            patch_margin_y_px=patch_margin_y_px,
+            patch_margin_source=patch_margin_source,
             binned_width_px=binned_width,
             binned_height_px=binned_height,
             usable_width_fraction=usable_width_fraction,
             usable_height_fraction=usable_height_fraction,
-            foreshortening_fraction=foreshortening_fraction,
-            status=seed_status,
-            warnings=seed_warnings,
+            status=QcStatus.PASS,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
         tracking_info = validate_complete_mrc(paths.tracking_stack)
@@ -836,6 +817,7 @@ class ImodPatchSeedBackend:
                 "order": "tilt_angle_ascending",
                 "prealign_transform_path": str(paths.prealign_transform),
                 "tilt_file_path": str(paths.tilt_file),
+                "newstack_log_path": str(paths.newstack_log),
                 "tilt_axis_angle_deg": alignment_result.tilt_axis_angle_deg,
                 "raw_pixel_spacing_angstrom": raw_pixel_spacing,
             },
@@ -1061,7 +1043,8 @@ class ImodPatchTrackBackend:
                 "num_patches_y": grid.num_patches_y,
                 "patch_size_x_px": grid.patch_size_x_px,
                 "patch_size_y_px": grid.patch_size_y_px,
-                "patch_margin_px": grid.patch_margin_px,
+                "patch_margin_x_px": grid.patch_margin_x_px,
+                "patch_margin_y_px": grid.patch_margin_y_px,
                 "track_command_path": str(paths.track_command),
                 "tiltxcorr_log_path": str(paths.beadtrack_log),
                 "imodinfo_log_path": str(paths.imodinfo_log),
@@ -1109,6 +1092,7 @@ class _PatchSeedPaths:
     tilt_file: Path
     grid: Path
     report: Path
+    newstack_log: Path
 
     @property
     def outputs(self) -> tuple[Path, ...]:
@@ -1118,6 +1102,7 @@ class _PatchSeedPaths:
             self.tilt_file,
             self.grid,
             self.report,
+            self.newstack_log,
         )
 
 
@@ -1137,6 +1122,7 @@ def _patch_seed_paths(
         tilt_file=output_dir / f"{prefix}_patch.rawtlt",
         grid=output_dir / f"{prefix}_patch_grid.json",
         report=output_dir / f"{prefix}_patch_seed_qc.json",
+        newstack_log=output_dir / f"{prefix}_patch_newstack.log",
     )
 
 
@@ -1146,7 +1132,8 @@ class _PatchTrackingGrid:
     num_patches_y: int
     patch_size_x_px: int
     patch_size_y_px: int
-    patch_margin_px: int
+    patch_margin_x_px: int
+    patch_margin_y_px: int
 
 
 def _validate_patch_tracking_inputs(
@@ -1174,6 +1161,13 @@ def _validate_patch_tracking_inputs(
         raise ValueError("fiducial seed model does not belong to tracking stack")
     if not seed_model.covers(manifest.tilt_series_id):
         raise ValueError("fiducial seed model is for a different tilt series")
+    # Seeds written before 2026-10-27 recorded one margin, and their tracking
+    # stack was binned without the coarse transforms applied.
+    if "patch_margin_x_px" not in seed_model.parameters:
+        raise ValueError(
+            "this patch seed predates prealigned tracking stacks, so tracking it "
+            "would apply the coarse shifts twice; rerun generate-fiducial-seed"
+        )
 
     included_z_values = tracking_stack.parameters.get("included_z_values")
     if not isinstance(included_z_values, list) or not all(
@@ -1221,9 +1215,14 @@ def _validate_patch_tracking_inputs(
             "patch_size_y_px",
             minimum=32,
         ),
-        patch_margin_px=_artifact_int_parameter(
+        patch_margin_x_px=_artifact_int_parameter(
             seed_model,
-            "patch_margin_px",
+            "patch_margin_x_px",
+            minimum=0,
+        ),
+        patch_margin_y_px=_artifact_int_parameter(
+            seed_model,
+            "patch_margin_y_px",
             minimum=0,
         ),
     )
@@ -1269,7 +1268,7 @@ def _tiltxcorr_patch_command(
         "-number",
         f"{grid.num_patches_x},{grid.num_patches_y}",
         "-border",
-        f"{grid.patch_margin_px},{grid.patch_margin_px}",
+        f"{grid.patch_margin_x_px},{grid.patch_margin_y_px}",
         "-verbose",
         "1",
     ]
@@ -1666,6 +1665,75 @@ def _write_imod_transforms(
             f"{transform.shift_y_px * shift_scale:.3f}\n"
         )
     path.write_text("".join(lines))
+
+
+def _write_prealigned_tracking_stack(
+    tilt_stack: Artifact,
+    *,
+    temporary_root: Path,
+    binning: int,
+    raw_pixel_spacing: float,
+    included_indices: Sequence[int],
+    manifest: TiltSeriesManifest,
+    transforms_by_z: Mapping[int, AlignmentTransform],
+    newstack: Path,
+    context: BackendContext,
+    command_runner: CommandRunner,
+    log_path: Path,
+) -> Path:
+    """Bin the included views and apply the coarse alignment to them: etomo's `.preali`.
+
+    Both trackers report positions in the frame of the stack they are given, and
+    fine alignment composes its solution with the coarse transforms afterwards,
+    so the stack has to carry those transforms already. Handing tiltxcorr a plain
+    binned stack applied the coarse shifts twice: its -prexf does not move the
+    images or the tracked positions, it only reads the shifts to find blank area.
+    """
+
+    input_stack = temporary_root / "input_bin.mrc"
+    scaled_xf = temporary_root / "scaled.prexg"
+    aligned_stack = temporary_root / "tracking_preali.mrc"
+    write_binned_mrc_stack(
+        tilt_stack.path,
+        input_stack,
+        binning=binning,
+        pixel_spacing_angstrom=raw_pixel_spacing,
+        section_indices=included_indices,
+    )
+    _write_imod_transforms(
+        scaled_xf,
+        included_indices,
+        manifest,
+        transforms_by_z,
+        shift_scale=1.0 / binning,
+    )
+    newstack_command = [
+        str(newstack),
+        "-input",
+        str(input_stack),
+        "-output",
+        str(aligned_stack),
+        "-xform",
+        str(scaled_xf),
+        "-mode",
+        "2",
+    ]
+    newstack_result = command_runner(
+        newstack_command,
+        cwd=temporary_root,
+        env=imod_environment(newstack, context),
+    )
+    write_command_log(log_path, (newstack_command, newstack_result))
+    _require_success(
+        newstack_result,
+        program="IMOD newstack",
+        log_path=log_path,
+    )
+    if not aligned_stack.is_file():
+        raise RuntimeError(
+            f"IMOD newstack did not write fiducial tracking stack: {aligned_stack}"
+        )
+    return aligned_stack
 
 
 def _track_command_text(

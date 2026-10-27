@@ -170,7 +170,9 @@ surfaces_to_analyze = 2               # beads sit on both faces of the sample
 # num_patches_x = 5
 # num_patches_y = 5
 # patch_overlap = 0.33
-# patch_margin_px = 100               # binned pixels; see ribo-bin8.toml for sizing the grid
+# # patch_margin_px is best left unset: the default is etomo's, 5% of the binned
+# # image per axis (26 px of 512 at bin 8). Set it, in binned pixels, to override;
+# # ribo-bin8.toml explains how the grid is sized.
 #
 # [fine_align]
 # robust_fitting = true

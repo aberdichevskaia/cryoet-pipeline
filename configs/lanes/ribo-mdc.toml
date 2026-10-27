@@ -108,34 +108,39 @@ track_backend = "imod-patch-track"
 #   patch_px  = usable / (1 + (count - 1) * (1 - overlap))
 #
 # At 4096 px and pre_binning 8 the tracking stack is 512 px, so these values give
-#   usable   = 512 - 200 = 312 px
-#   patch    = 312 / (1 + 4 * 0.67) = 84 binned px = 672 raw px = 822 A = 82 nm
+#   usable   = 512 - 52 = 460 px
+#   patch    = 460 / (1 + 4 * 0.67) = 125 binned px = 1000 raw px = 1223 A = 122 nm
 #
-# The whole field is only 5009 A = 0.5 um across, so a 100 px binned margin cuts
-# about 98 nm from each side and leaves ~305 nm of the 501 nm field. That is
-# aggressive but defensible: at +64 deg the field foreshortens by cos(64) = 0.44,
-# so the specimen area common to every tilt is much narrower than one image.
+# The margin is etomo's: IMOD's makecomfile trims 5% of the binned size from each
+# edge, int(0.05 * 512 + 0.5) = 26 px, which leaves the patches 81% of the image's
+# area. The 100 px used until 2026-10-27 left them 37%. Foreshortening asks for no
+# margin: tiltxcorr places the patches on the view nearest zero tilt, and on the
+# other views they move toward the tilt axis by cos(tilt), so they stay in frame.
+# The margin keeps patches off the blank edges newstack leaves when it prealigns;
+# the coarse shifts of TS_0306 reach 7 binned px. At 26 px all 25 patches were
+# tracked through all 61 views of TS_0306, as at 100 (local IMOD run).
 #
 # Tuning, from the QC readout after track-fiducials:
 #   coverage below the 0.8 warning     -> fewer patches (3x3, 4x4): bigger patches,
 #                                         stronger signal per patch
 #   coverage fine, fine-align residual -> more patches (6x6, 7x7): finer sampling,
-#     high                                weaker signal per patch
-#   patches failing at the X edges     -> raise margin. Foreshortening is along X
-#                                         because the tilt axis is near vertical
-#                                         (83.6 deg), and the margin is applied
-#                                         to both axes equally.
+#     high                                weaker signal per patch. 7x7 gives 91 px
+#                                         here, close to the old 84.
+#   patches failing at the edges       -> raise margin. The tilt axis is 83.6 deg
+#                                         from the image Y axis (IMOD's convention),
+#                                         so nearly horizontal in the raw frames.
 # Below 32 px the sizing refuses rather than producing a useless grid.
 #
-# Trap: margin is in BINNED pixels, so it does not scale with pre_binning. Going
-# to pre_binning 16 leaves 256 px, of which margin 100 eats 200 — the sizing then
-# refuses. Raising pre_binning for contrast means scaling margin down by the same
-# factor to keep the same physical geometry (16 / 50 gives the same 822 A patch).
+# Trap: a margin set here is in BINNED pixels, so it does not scale with
+# pre_binning; raising pre_binning for contrast means scaling it down by the same
+# factor (16 / 13 gives a 62 px = 1213 A patch). Left unset, the margin is the
+# default, 5% of the binned image per axis: the same 26 here, and it follows
+# pre_binning by itself.
 pre_binning = 8
 num_patches_x = 5
 num_patches_y = 5
 patch_overlap = 0.33
-patch_margin_px = 100     # binned pixels, not raw
+patch_margin_px = 26      # binned pixels, not raw; 5% of 512, as etomo trims
 
 # The bandpass tiltxcorr correlates through, in cycles/pixel. IMOD's standard
 # recommendations, left at their defaults. This is the knob to reach for if the

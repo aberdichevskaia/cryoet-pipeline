@@ -59,7 +59,9 @@ Gold beads give the most reliable fine alignment, so `imod-autofidseed` plus
 `imod-beadtrack` is the default. When the specimen has no beads, switch **both**
 steps to the patch pair — `imod-patch-seed` then `imod-patch-track` — which
 correlates image patches instead. Patch size is derived from the image size, the
-patch count, and the margin rather than entered directly.
+patch count, and the margin rather than entered directly. The margin defaults to
+etomo's, 5% of the binned image along each axis; `--patch-margin-px` sets one
+value for both axes instead.
 
 ### CTF: which estimator
 

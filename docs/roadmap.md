@@ -1166,6 +1166,25 @@ Two related points worth keeping:
 Not urgent: until patch tracking has run against real IMOD it is unknown whether
 the margin is a knob that gets turned at all. Do this once it works.
 
+**Update 2026-10-27.** The premise above is wrong, and so is the second point.
+Foreshortening asks for no margin. Tiltxcorr places the patches on the view
+nearest zero tilt, and on the other views they move toward the tilt axis by
+cos(tilt), so a patch inside that view stays inside every view (tiltxcorr man
+page). What the margin keeps patches off is the blank edge of the prealigned
+stack, which tiltxcorr also handles itself through `-prexf`. IMOD's
+`makecomfile`, which writes etomo's `xcorr_pt.com`, trims 5% of the binned size
+from each edge. The ribo lanes now use the same: 26 of 512 px, leaving the
+patches 81% of the area against 37% at 100. On TS_0306 all 25 patches tracked
+through all 61 views at 26 px, as at 100. A fraction of the field is still the
+right unit, for this reason rather than foreshortening. As for the axes, IMOD
+measures the rotation angle from the Y axis, so 83.6 degrees is a nearly
+*horizontal* tilt axis in EMPIAR-11538's raw frames.
+
+That rule is now also the default: with no `--patch-margin-px`, the seed trims
+5% of the binned image along each axis, as etomo does, so the default follows
+pre-binning and a non-square detector gets its own margin per axis. Only an
+explicit `--patch-margin-px` is still in binned pixels, one value for both axes.
+
 ## 12. Derive the reconstruction thickness from the data
 
 `reconstruct-tomogram` takes its thickness from tiltalign's two-surface analysis
@@ -1291,6 +1310,27 @@ geometry asks for. On EMPIAR-11538 the configured margin leaves 0.609 against a
 foreshortening fraction of 0.439 — aggressive but defensible, and silent. A
 margin of 160 binned pixels would leave 0.375 and warn. That reasoning used to
 live in a comment in the lane config; now it checks itself.
+
+**Withdrawn 2026-10-27 — that warning.** Its premise was wrong (section 11):
+patches are placed on the view nearest zero tilt and move toward the axis on the
+others, so foreshortening never takes them out of the frame. The warning could
+not fire at any sensible margin and is gone; `PatchGridQc` is schema 2, without
+`foreshortening_fraction`.
+
+**Fixed 2026-10-27 — the coarse shifts were applied twice.** This one has a
+different shape: not an absence misread, but a step of the bead path the patch
+path left out. The bead seed prealigns its tracking stack with `newstack -xform`;
+the patch seed only binned the raw stack, yet handed tiltxcorr the coarse
+transforms through `-prexf`, and fine alignment then composed tiltalign's
+solution with them, as etomo does on a `.preali`. Run with local IMOD 5.1.12 on
+the ribo-mdc TS_0306 stack, `-prexf` changed neither the tracked positions
+(0.00 px over 1525 points) nor which patches survived, so the model was in the
+unaligned frame. After `xfproduct`, each view was off from the etomo route by
+its coarse shift: median 3.4, max 9 bin8 px (33 and 88 Å). The cluster's
+TS_0306 coarse shifts span x −5.6..7.3 and y −6.8..6.1 bin8 px. Tiltalign's own residual
+cannot see this: 3.29 against 3.24 nm for the two routes. Both seeds now share
+one prealignment helper. Every patch-tracked tomogram made before the fix
+(EMPIAR-11538, both ribo lanes) needs its lane rerun from the seed step.
 
 **The audit is the work item.** Three found by tripping over them says nothing
 about how many are left. Every stage between seeding and reconstruction should

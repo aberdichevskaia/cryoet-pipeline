@@ -18,6 +18,7 @@ from cryoet_pipeline.backends.fiducials import (
     ImodPatchSeedBackend,
     ImodPatchTrackBackend,
     _compute_patch_size_px,
+    _etomo_patch_border_px,
     generate_seed_and_register,
     parse_imod_model_ascii,
     track_fiducials_and_register,
@@ -348,57 +349,118 @@ def test_compute_patch_size_px_rejects_invalid_inputs() -> None:
         _compute_patch_size_px(100, 10, margin_px=40, overlap_fraction=0.0)
 
 
-def test_patch_grid_qc_warns_when_the_margin_beats_foreshortening() -> None:
-    """The margin is judged against geometry, not against a round number.
+def test_etomo_patch_border_is_five_percent_of_the_binned_size() -> None:
+    # IMOD's makecomfile: int(0.05 * size + 0.5), per axis.
+    assert _etomo_patch_border_px(512) == 26  # EMPIAR-11538, 4096 px at bin 8
+    assert _etomo_patch_border_px(720) == 36  # a K3 frame's width at bin 8
+    assert _etomo_patch_border_px(511) == 26  # and its height
+    assert _etomo_patch_border_px(256) == 13  # 4096 px at bin 16
 
-    At the largest tilt the specimen foreshortens by cos(tilt) along the axis
-    across the tilt axis, so that fraction of one image is what every view still
-    covers. A margin leaving less than that is cutting more than the geometry
-    asks for — which is worth saying, because the margin is in binned pixels and
-    so does not scale with pre_binning.
-    """
 
-    common = dict(
-        tilt_series_id="TS_TEST",
-        backend="imod-patch-seed",
-        model_id="TS_TEST:fiducial_seed:imod-patch-seed",
-        image_count=59,
-        num_patches_x=5,
-        num_patches_y=5,
-        num_patches=25,
-        patch_overlap=0.33,
-        pre_binning=8,
-        patch_size_x_px=84,
-        patch_size_y_px=84,
-        patch_size_x_angstrom=822.0,
-        patch_size_y_angstrom=822.0,
-        binned_width_px=512,
-        binned_height_px=512,
-        # cos(64 degrees), the largest tilt in EMPIAR-11538
-        foreshortening_fraction=0.438,
+def test_patch_seed_defaults_to_etomos_border_on_each_axis(tmp_path: Path) -> None:
+    """With no margin configured, X and Y each get 5% of their own binned size."""
+
+    stack_data = np.arange(4 * 160 * 224, dtype=np.float32).reshape(4, 160, 224)
+    stack = _stack_artifact(tmp_path, stack_data)
+    alignment = _alignment_artifact(tmp_path, stack)
+    manifest = _manifest()
+    registry = ArtifactRegistry.empty()
+    registry.extend([stack, alignment])
+    imod_dir = _fake_imod_dir(tmp_path)
+    tiltxcorr_commands: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        program = Path(command[0]).name
+        if program == "newstack":
+            shutil.copyfile(
+                command[command.index("-input") + 1],
+                command[command.index("-output") + 1],
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if program == "tiltxcorr":
+            tiltxcorr_commands.append(list(command))
+            Path(command[command.index("-output") + 1]).write_bytes(b"patchmodel")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if program == "imodinfo":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    "imod 1\nmax 4 4 3\n"
+                    "contour 0 0 3 0\ncontour 1 0 3 0\n"
+                    "contour 2 0 3 0\ncontour 3 0 3 0\n"
+                ),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    tracking_stack, seed_model, seed_qc_artifact = generate_seed_and_register(
+        ImodPatchSeedBackend(fake_runner),
+        stack,
+        alignment,
+        manifest,
+        _context(
+            tmp_path,
+            imod_dir,
+            {
+                "pre_binning": 2,
+                "num_patches_x": 2,
+                "num_patches_y": 2,
+                "patch_overlap": 0.0,
+            },
+        ),
+        registry,
     )
 
-    # 100 px of margin leaves 312 of 512, or 0.609 — more than foreshortening
-    # needs, so aggressive but defensible and no warning.
-    generous = PatchGridQc(
-        **common,
-        patch_margin_px=100,
-        usable_width_fraction=312 / 512,
-        usable_height_fraction=312 / 512,
-        status=QcStatus.PASS,
-    )
-    assert generous.usable_width_fraction > generous.foreshortening_fraction
+    # 224 x 160 binned 2 is 112 x 80: borders of int(5.6 + 0.5) = 6 in X and
+    # int(4.0 + 0.5) = 4 in Y, leaving 100 and 72 px for two patches each.
+    assert seed_model.parameters["patch_margin_x_px"] == 6
+    assert seed_model.parameters["patch_margin_y_px"] == 4
+    assert seed_model.parameters["patch_margin_source"] == "five_percent_of_binned_size"
+    assert seed_model.parameters["patch_size_x_px"] == 50
+    assert seed_model.parameters["patch_size_y_px"] == 36
+    seed_qc = PatchGridQc.model_validate_json(seed_qc_artifact.path.read_text())
+    assert (seed_qc.patch_margin_x_px, seed_qc.patch_margin_y_px) == (6, 4)
+    assert seed_qc.usable_width_fraction == pytest.approx(100 / 112)
+    assert seed_qc.usable_height_fraction == pytest.approx(72 / 80)
 
-    # 160 px leaves 192 of 512, or 0.375, below what every view covers.
-    tight = PatchGridQc(
-        **common,
-        patch_margin_px=160,
-        usable_width_fraction=192 / 512,
-        usable_height_fraction=192 / 512,
-        status=QcStatus.WARNING,
-        warnings=["the margin is cutting more than foreshortening requires"],
+    tracking_context = _context(tmp_path, imod_dir, {"min_tracked_fiducials": 2})
+    track_fiducials_and_register(
+        ImodPatchTrackBackend(fake_runner),
+        tracking_stack,
+        seed_model,
+        manifest,
+        tracking_context,
+        registry,
     )
-    assert tight.usable_width_fraction < tight.foreshortening_fraction
+    (command,) = tiltxcorr_commands
+    assert command[command.index("-border") + 1] == "6,4"
+    assert command[command.index("-size") + 1] == "50,36"
+
+    # A seed from before the tracking stack was prealigned recorded one margin;
+    # tracking it would apply the coarse shifts twice, so it is refused.
+    stale_parameters = {
+        key: value
+        for key, value in seed_model.parameters.items()
+        if not key.startswith("patch_margin")
+    }
+    stale_seed = seed_model.model_copy(
+        update={"parameters": {**stale_parameters, "patch_margin_px": 100}}
+    )
+    with pytest.raises(ValueError, match="rerun generate-fiducial-seed"):
+        ImodPatchTrackBackend(fake_runner).track(
+            tracking_stack,
+            stale_seed,
+            manifest,
+            tracking_context,
+        )
+    assert len(tiltxcorr_commands) == 1
 
 
 def test_patch_grid_qc_rejects_an_inconsistent_patch_count() -> None:
@@ -417,12 +479,13 @@ def test_patch_grid_qc_rejects_an_inconsistent_patch_count() -> None:
             patch_size_y_px=84,
             patch_size_x_angstrom=822.0,
             patch_size_y_angstrom=822.0,
-            patch_margin_px=100,
+            patch_margin_x_px=100,
+            patch_margin_y_px=100,
+            patch_margin_source="user_override",
             binned_width_px=512,
             binned_height_px=512,
             usable_width_fraction=0.609,
             usable_height_fraction=0.609,
-            foreshortening_fraction=0.438,
             status=QcStatus.PASS,
         )
 
@@ -430,19 +493,54 @@ def test_patch_grid_qc_rejects_an_inconsistent_patch_count() -> None:
 def test_imod_patch_tracking_backends_generate_and_track_models(
     tmp_path: Path,
 ) -> None:
-    stack_data = np.arange(4 * 96 * 96, dtype=np.float32).reshape(4, 96, 96)
+    stack_data = np.arange(4 * 128 * 128, dtype=np.float32).reshape(4, 128, 128)
     stack = _stack_artifact(tmp_path, stack_data)
     alignment = _alignment_artifact(tmp_path, stack)
     manifest = _manifest()
     registry = ArtifactRegistry.empty()
     registry.extend([stack, alignment])
     imod_dir = _fake_imod_dir(tmp_path)
+    binned_views = stack_data[[3, 2, 0]].reshape(3, 64, 2, 64, 2).mean(
+        axis=(2, 4),
+        dtype=np.float32,
+    )
+    seed_commands: list[list[str]] = []
+
+    # Tiltxcorr reports positions in the frame of the stack it is given, and fine
+    # alignment composes them with the coarse transforms, so the tracking stack
+    # has to come out of newstack with those transforms applied. A plain binned
+    # stack had the coarse shifts applied twice.
+    def seed_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd
+        assert env["IMOD_DIR"] == str(imod_dir)
+        seed_commands.append(list(command))
+        assert Path(command[0]).name == "newstack"
+        input_path = Path(command[command.index("-input") + 1])
+        transform_path = Path(command[command.index("-xform") + 1])
+        assert command[command.index("-mode") + 1] == "2"
+        with mrcfile.open(input_path, permissive=True) as binned:
+            np.testing.assert_allclose(binned.data, binned_views)
+        # Shifts are scaled to the binned pixels newstack works in.
+        assert transform_path.read_text().splitlines()[0].endswith("-2.000 3.000")
+        with mrcfile.new(Path(command[command.index("-output") + 1])) as aligned:
+            aligned.set_data(binned_views + 1000.0)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="prealigned tracking stack",
+            stderr="",
+        )
 
     seed_context = _context(
         tmp_path,
         imod_dir,
         {
-            "pre_binning": 1,
+            "pre_binning": 2,
             "num_patches_x": 2,
             "num_patches_y": 2,
             "patch_overlap": 0.0,
@@ -450,7 +548,7 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
         },
     )
     seed_artifacts = generate_seed_and_register(
-        ImodPatchSeedBackend(),
+        ImodPatchSeedBackend(seed_runner),
         stack,
         alignment,
         manifest,
@@ -458,14 +556,18 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
         registry,
     )
 
+    assert [Path(command[0]).name for command in seed_commands] == ["newstack"]
     tracking_stack, seed_model, seed_qc_artifact = seed_artifacts
     assert tracking_stack.kind == ArtifactKind.ALIGNED_TILT_STACK
     assert tracking_stack.parameters["purpose"] == "fiducial_tracking"
-    assert tracking_stack.shape == (3, 96, 96)
+    assert tracking_stack.shape == (3, 64, 64)
+    assert tracking_stack.binning == 2
     assert tracking_stack.parameters["included_z_values"] == [3, 2, 0]
     assert tracking_stack.parameters["excluded_z_values"] == [1]
-    with mrcfile.open(tracking_stack.path, permissive=True) as binned:
-        np.testing.assert_allclose(binned.data, stack_data[[3, 2, 0]])
+    with mrcfile.open(tracking_stack.path, permissive=True) as prealigned:
+        np.testing.assert_allclose(prealigned.data, binned_views + 1000.0)
+    assert Path(tracking_stack.parameters["newstack_log_path"]).is_file()
+    # The transforms handed on to tiltxcorr and fine alignment stay unbinned.
     transform_path = Path(tracking_stack.parameters["prealign_transform_path"])
     assert transform_path.read_text().splitlines()[0].endswith("-4.000 6.000")
 
@@ -476,8 +578,8 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
     assert seed_model.parent_ids == [tracking_stack.id]
     assert seed_model.parameters["num_patches_x"] == 2
     assert seed_model.parameters["num_patches_y"] == 2
-    assert seed_model.parameters["patch_size_x_px"] == 48
-    assert seed_model.parameters["patch_size_y_px"] == 48
+    assert seed_model.parameters["patch_size_x_px"] == 32
+    assert seed_model.parameters["patch_size_y_px"] == 32
     # A patch seed reports its grid, not point counts: through FiducialModelQc
     # every field read zero, which for a bead seed would mean total failure.
     seed_qc = PatchGridQc.model_validate_json(seed_qc_artifact.path.read_text())
@@ -486,18 +588,19 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
     assert seed_qc.warnings == []
     assert (seed_qc.num_patches_x, seed_qc.num_patches_y) == (2, 2)
     assert seed_qc.num_patches == 4
-    assert seed_qc.patch_size_x_px == 48
-    assert seed_qc.patch_size_y_px == 48
-    assert seed_qc.pre_binning == 1
+    assert seed_qc.patch_size_x_px == 32
+    assert seed_qc.patch_size_y_px == 32
+    assert seed_qc.pre_binning == 2
     # Reported in Angstrom too, because only a physical size can be judged
-    # against a specimen.
-    scale = seed_qc.pre_binning * tracking_stack.pixel_spacing_angstrom
-    assert seed_qc.patch_size_x_angstrom == pytest.approx(48 * scale)
-    # Margin 0 leaves the whole field, which is never below foreshortening.
-    assert seed_qc.patch_margin_px == 0
+    # against a specimen. The tracking stack's pixel already includes the binning.
+    scale = tracking_stack.pixel_spacing_angstrom
+    assert scale == pytest.approx(2 * 0.675)
+    assert seed_qc.patch_size_x_angstrom == pytest.approx(32 * scale)
+    # A configured margin is the same on both axes.
+    assert (seed_qc.patch_margin_x_px, seed_qc.patch_margin_y_px) == (0, 0)
+    assert seed_qc.patch_margin_source == "user_override"
     assert seed_qc.usable_width_fraction == pytest.approx(1.0)
     assert seed_qc.usable_height_fraction == pytest.approx(1.0)
-    assert 0.0 < seed_qc.foreshortening_fraction <= 1.0
 
     commands: list[list[str]] = []
 
@@ -514,10 +617,13 @@ def test_imod_patch_tracking_backends_generate_and_track_models(
         if program == "tiltxcorr":
             assert "-overlap" not in command
             assert "-length" not in command
-            assert command[command.index("-size") + 1] == "48,48"
+            assert Path(command[command.index("-input") + 1]) == (
+                tracking_stack.path.resolve()
+            )
+            assert command[command.index("-size") + 1] == "32,32"
             assert command[command.index("-number") + 1] == "2,2"
             assert command[command.index("-border") + 1] == "0,0"
-            assert command[command.index("-imagebinned") + 1] == "1"
+            assert command[command.index("-imagebinned") + 1] == "2"
             Path(command[command.index("-output") + 1]).write_bytes(b"patchmodel")
             return subprocess.CompletedProcess(
                 command,

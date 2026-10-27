@@ -817,13 +817,14 @@ def generate_fiducial_seed(
         ),
     ] = 0.33,
     patch_margin_px: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=0,
-            help="Unused border on each side of the binned image, in pixels "
-            "(imod-patch-seed backend only).",
+            help="Unused border on each side of the binned image, in pixels, the "
+            "same on both axes. Default: 5% of the binned width in X and of the "
+            "binned height in Y, as etomo trims (imod-patch-seed backend only).",
         ),
-    ] = 100,
+    ] = None,
     raw_pixel_spacing: Annotated[
         float | None,
         typer.Option(
@@ -879,8 +880,9 @@ def generate_fiducial_seed(
         "num_patches_x": num_patches_x,
         "num_patches_y": num_patches_y,
         "patch_overlap": patch_overlap,
-        "patch_margin_px": patch_margin_px,
     }
+    if patch_margin_px is not None:
+        parameters["patch_margin_px"] = patch_margin_px
     if raw_pixel_spacing is not None:
         parameters["raw_pixel_spacing_angstrom"] = raw_pixel_spacing
     if fiducial_diameter_px is not None:
