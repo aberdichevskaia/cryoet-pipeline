@@ -10,6 +10,15 @@ three-sample spline. Candidates are evaluated a chunk at a time instead of one b
 one; the winner is chosen as the CPU loop chooses it, the last candidate whose
 score is at least the best so far.
 
+What is done differently, for speed, gives the same numbers. The rotation sums the
+eight corners with the same float32 weights in the same order, bit for bit; a
+cell's eight support tests are read from one map of whole cells. The filters and
+correlations use real-input FFTs: the real part of a full-FFT product with a real
+filter is the product with the filter's Hermitian part, which differs from the
+filter only on the Nyquist planes, where the wedge is not point-symmetric. The
+peak is read from the shift sphere's voxels and their neighbours only, mapped into
+the uncentred correlation map, instead of centring the whole map.
+
 `dtype` float64 is for checking this module against the numpy kernel: the
 rotation is float32 in both, as in Dynamo, and the rest agrees to FFT rounding,
 so the poses agree but for exact ties. float32 is what a GPU runs, as Dynamo's
@@ -19,6 +28,8 @@ disagreement measured between Dynamo's own GPU and CPU modes (Gag, 2026-10-13:
 rotation median ~1.3 deg, one finest step), and it is the tolerance this module
 is to be held to against Dynamo's GPU, not bitwise parity.
 
+`MultiDeviceSearch` deals the particles among several devices, a process each.
+
 Where the numpy kernel raises (a rotated mask with fewer than two voxels, a
 zero-variance template) this raises the same errors.
 """
@@ -27,6 +38,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import lru_cache
+from typing import Any
 
 import numpy as np
 import torch
@@ -44,8 +56,10 @@ from cryoet_pipeline.backends.dynamo_search import (
     wedge,
 )
 
-DEFAULT_CHUNK = 64
-"""Candidates evaluated at once: about 11 complex volumes each, 1.1 MB apiece at 52^3."""
+DEFAULT_CHUNK = 256
+"""Candidates evaluated at once: about 11 volumes each, 0.6 MB apiece at 52^3 in float32."""
+
+DIMS = (-3, -2, -1)
 
 # The order the CPU kernel sums the eight interpolation corners in.
 _CORNERS = ((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 0), (1, 1, 1))
@@ -65,77 +79,148 @@ def _matrices(candidates: np.ndarray) -> np.ndarray:
                      for angles in candidates])
 
 
+def cell_support(support: torch.Tensor) -> torch.Tensor:
+    """Whether each voxel, as a 2x2x2 cell's low corner, has all eight corners in `support`."""
+
+    s = support
+    cells = torch.zeros_like(s)
+    cells[:-1, :-1, :-1] = (s[:-1, :-1, :-1] & s[1:, :-1, :-1] & s[:-1, 1:, :-1]
+                            & s[:-1, :-1, 1:] & s[1:, 1:, :-1] & s[1:, :-1, 1:]
+                            & s[:-1, 1:, 1:] & s[1:, 1:, 1:])
+    return cells
+
+
+def support_reach(support: torch.Tensor) -> torch.Tensor:
+    """The output voxels a rotation of `support` can give support to, as linear indices.
+
+    A rotation about the box centre keeps distances to it, so an output voxel more
+    than the support's farthest voxel plus 2 from the centre pulls from a cell whose
+    corner nearest the centre lies outside the support: it is undefined, zero, for
+    every rotation, and need not be computed. For a sphere mask in a box twice the
+    particle's size that is four fifths of the box.
+    """
+
+    n = support.shape[0]
+    x, y, z = _grid(n, support.device)
+    squared = x * x + y * y + z * z
+    farthest = float(squared[support].max()) if bool(support.any()) else 0.0
+    return torch.nonzero((squared <= (farthest**0.5 + 2) ** 2).reshape(-1))[:, 0]
+
+
 def resample_batch(volume: torch.Tensor, matrices: torch.Tensor,
-                   support: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
+                   support: torch.Tensor | None, *, cells: torch.Tensor | None = None,
+                   reach: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """`resample(volume, angles, mask=support)` for every matrix, zero shift.
 
     `volume` (n, n, n) float32; `matrices` (B, 3, 3) float32; `support` (n, n, n)
-    bool or None. Returns float32 values (B, n, n, n), zero where undefined, and
-    the bool support of each.
+    bool or None; `cells`, `cell_support(support)`, and `reach`,
+    `support_reach(support)`, when the caller keeps them: only the voxels in reach
+    are computed, the rest are undefined anyway. Returns float32 values
+    (B, n, n, n), zero where undefined, and the bool support of each.
     """
 
     n = volume.shape[0]
     x, y, z = _grid(n, volume.device)
-    m = matrices[:, :, :, None, None, None]
+    if reach is not None:
+        x, y, z = (component.reshape(-1)[reach] for component in (x, y, z))
+        m = matrices[:, :, :, None]
+    else:
+        m = matrices[:, :, :, None, None, None]
     q = [m[:, i, 0] * x + m[:, i, 1] * y + m[:, i, 2] * z for i in range(3)]
-    floors = [torch.floor(component).to(torch.int32) for component in q]
-    frac = [component - floor.to(torch.float32) for component, floor in zip(q, floors, strict=True)]
-    base = [floor + n // 2 for floor in floors]
+    floors = [torch.floor(component) for component in q]
+    frac = [component - floor for component, floor in zip(q, floors, strict=True)]
+    near = [1 - weight for weight in frac]
+    base = [floor.to(torch.int64) + n // 2 for floor in floors]
     valid = torch.ones_like(base[0], dtype=torch.bool)
     for component in base:
         valid &= (component >= 0) & (component + 1 < n)
-    base = [component.clamp(0, n - 2).to(torch.int64) for component in base]
+    base = [component.clamp(0, n - 2) for component in base]
+    low = (base[2] * n + base[1]) * n + base[0]
+    if support is not None:
+        if cells is None:
+            cells = cell_support(support)
+        valid &= cells.reshape(-1)[low]
     flat = volume.reshape(-1)
-    mask_flat = support.reshape(-1) if support is not None else None
     result = torch.zeros_like(q[0])
     for dx, dy, dz in _CORNERS:
-        index = ((base[2] + dz) * n + (base[1] + dy)) * n + (base[0] + dx)
-        if mask_flat is not None:
-            valid &= mask_flat[index]
-        value = flat[index]
-        for axis, step in enumerate((dx, dy, dz)):
-            value = value * (frac[axis] if step else 1 - frac[axis])
+        value = flat[low + (dz * n + dy) * n + dx]
+        value = value * (frac[0] if dx else near[0])
+        value = value * (frac[1] if dy else near[1])
+        value = value * (frac[2] if dz else near[2])
         result += value
     result = torch.where(valid, result, torch.zeros_like(result))
-    return result, valid
+    if reach is None:
+        return result, valid
+    full = torch.zeros((len(matrices), n * n * n), dtype=result.dtype, device=result.device)
+    full_valid = torch.zeros((len(matrices), n * n * n), dtype=torch.bool, device=result.device)
+    full[:, reach] = result
+    full_valid[:, reach] = valid
+    return full.reshape(-1, n, n, n), full_valid.reshape(-1, n, n, n)
+
+
+def half_filter(centred_filter: torch.Tensor) -> torch.Tensor:
+    """A real centred filter as `rfftn` spectra take it: its Hermitian part, halved.
+
+    The real part of `ifftn(fftn(v) * F)` for a real `v` is `ifftn(fftn(v) * H)`
+    with H(k) = (F(k) + F(-k)) / 2, and H, being symmetric, multiplies an `rfftn`
+    spectrum exactly. F and H differ only where F is not point-symmetric: on a
+    Nyquist plane, which has no partner, under a wedge that is not symmetric.
+    """
+
+    n = centred_filter.shape[-1]
+    full = torch.fft.ifftshift(centred_filter, dim=DIMS)
+    mirrored = torch.roll(torch.flip(full, dims=DIMS), shifts=(1, 1, 1), dims=DIMS)
+    return ((full + mirrored) / 2)[..., : n // 2 + 1]
+
+
+def _apply_half_filter(volumes: torch.Tensor, half: torch.Tensor) -> torch.Tensor:
+    n = volumes.shape[-1]
+    spectrum = torch.fft.rfftn(volumes, dim=DIMS) * half
+    return torch.fft.irfftn(spectrum, s=(n, n, n), dim=DIMS)
 
 
 def _centred(volume: torch.Tensor) -> torch.Tensor:
-    """`np.roll(np.fft.fftshift(v)[::-1, ::-1, ::-1], (1, 1, 1), (0, 1, 2))` per volume."""
+    """`np.roll(np.fft.fftshift(v)[::-1, ::-1, ::-1], (1, 1, 1), (0, 1, 2))` per volume.
 
-    dims = (-3, -2, -1)
-    shifted = torch.fft.fftshift(volume, dim=dims)
-    return torch.roll(torch.flip(shifted, dims=dims), shifts=(1, 1, 1), dims=dims)
+    Its voxel i holds the uncentred map's voxel (n/2 - i) mod n along each axis.
+    """
+
+    shifted = torch.fft.fftshift(volume, dim=DIMS)
+    return torch.roll(torch.flip(shifted, dims=DIMS), shifts=(1, 1, 1), dims=DIMS)
 
 
 def local_correlation_batch(templates: torch.Tensor, supports: torch.Tensor,
-                            particle_fft: torch.Tensor,
-                            particle_squared_fft: torch.Tensor) -> torch.Tensor:
-    """`local_correlation` for each (template, support) against one particle."""
+                            particle_rfft: torch.Tensor,
+                            particle_squared_rfft: torch.Tensor) -> torch.Tensor:
+    """`local_correlation` for each (template, support) against one particle, uncentred.
 
-    dims = (-3, -2, -1)
+    The particle comes as `rfftn` spectra of itself and of its square; `_centred`
+    puts a result in the numpy kernel's frame.
+    """
+
+    n = templates.shape[-1]
+    shape = (n, n, n)
     valid = supports
-    counts = valid.sum(dim=dims)
+    counts = valid.sum(dim=DIMS)
     if bool((counts < 2).any()):
         raise ValueError("rotated mask has fewer than two supported voxels")
     zero = torch.zeros((), dtype=templates.dtype, device=templates.device)
-    means = torch.where(valid, templates, zero).sum(dim=dims) / counts
+    means = torch.where(valid, templates, zero).sum(dim=DIMS) / counts
     t = torch.where(valid, templates - means[:, None, None, None], zero)
-    norms = torch.linalg.vector_norm(t, dim=dims)
+    norms = torch.linalg.vector_norm(t, dim=DIMS)
     if bool((norms == 0).any()):
         raise ValueError("zero-variance rotated template")
-    fm = torch.fft.fftn(valid.to(templates.dtype), dim=dims)
-    conj_p, conj_p2 = particle_fft.conj(), particle_squared_fft.conj()
-    numerator = torch.fft.ifftn(torch.fft.fftn(t, dim=dims) * conj_p, dim=dims).real
-    sum_p = torch.fft.ifftn(fm * conj_p, dim=dims).real
-    sum_p2 = torch.fft.ifftn(fm * conj_p2, dim=dims).real
+    fm = torch.fft.rfftn(valid.to(templates.dtype), dim=DIMS)
+    conj_p, conj_p2 = particle_rfft.conj(), particle_squared_rfft.conj()
+    numerator = torch.fft.irfftn(torch.fft.rfftn(t, dim=DIMS) * conj_p, s=shape, dim=DIMS)
+    sum_p = torch.fft.irfftn(fm * conj_p, s=shape, dim=DIMS)
+    sum_p2 = torch.fft.irfftn(fm * conj_p2, s=shape, dim=DIMS)
     count = counts.to(templates.dtype)[:, None, None, None]
     variance = torch.clamp(sum_p2 - sum_p**2 / count, min=0)
     denominator = torch.sqrt(variance) * norms[:, None, None, None]
-    cc = torch.full_like(numerator, -1.0)
     positive = denominator > 0
-    cc[positive] = numerator[positive] / denominator[positive]
-    return _centred(cc)
+    one = torch.ones((), dtype=templates.dtype, device=templates.device)
+    return torch.where(positive, numerator / torch.where(positive, denominator, one), -one)
 
 
 def spline_peaks(y1: np.ndarray, y2: np.ndarray, y3: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -175,53 +260,65 @@ def spline_peaks(y1: np.ndarray, y2: np.ndarray, y3: np.ndarray) -> tuple[np.nda
     return np.where(use, picked, b), np.where(use, offsets, 0.0)
 
 
+def _uncentred(n: int, zyx: np.ndarray) -> np.ndarray:
+    """Linear indices in the uncentred map of voxels given in the centred frame."""
+
+    raw = (n // 2 - zyx) % n
+    return (raw[..., 0] * n + raw[..., 1]) * n + raw[..., 2]
+
+
 def restricted_peaks(cc: torch.Tensor, shift: np.ndarray,
                      radius: float) -> tuple[np.ndarray, np.ndarray]:
-    """`restricted_peak` for each map of a batch, all about the same centre."""
+    """`restricted_peak` for each uncentred map of a batch, all about the same centre.
 
-    n = cc.shape[-1]
+    The maximum is taken over the sphere's voxels in the centred frame's C order,
+    as numpy's `argmax` over the restricted map takes it, and the spline reads the
+    winner's unrestricted neighbours. A map whose sphere holds nothing above -1,
+    where the full restricted map would put its first -1 outside the sphere, is
+    centred whole and read as the numpy kernel reads it.
+    """
+
+    batch, n = cc.shape[0], cc.shape[-1]
     if not 0 < radius < n / 2:
         raise ValueError("shift radius must be in (0, N/2)")
     old = _triple(shift)
     steps = (np.sign(old) * np.floor(np.abs(old) + 0.5)).astype(int)
     sphere = np.sum(_xyz(n) ** 2, axis=0) <= np.ceil(radius) ** 2
     sphere = np.roll(sphere, tuple(steps[::-1]), axis=(0, 1, 2))
-    inside = torch.from_numpy(sphere).to(cc.device)
-    restricted = torch.where(inside, cc, torch.full_like(cc, -1.0))
-    flat_index = torch.argmax(restricted.reshape(len(cc), -1), dim=1)
-    zi, yi, xi = (flat_index // (n * n)), (flat_index // n) % n, flat_index % n
-    index = torch.stack([zi, yi, xi], dim=1)
-    batch = torch.arange(len(cc), device=cc.device)
-    y2 = restricted[batch, zi, yi, xi]
-    sides = []
+    inside = np.argwhere(sphere)
+    flat = cc.reshape(batch, -1)
+    gathered = flat[:, torch.from_numpy(_uncentred(n, inside)).to(cc.device)]
+    best = torch.argmax(gathered, dim=1)
+    index = inside[best.cpu().numpy()]
+    y2 = gathered.gather(1, best[:, None])[:, 0].cpu().numpy().astype(np.float64)
+    degenerate = np.flatnonzero(y2 <= -1)
+    if degenerate.size:
+        centred = _centred(cc[torch.from_numpy(degenerate).to(cc.device)])
+        restricted = torch.where(torch.from_numpy(sphere).to(cc.device), centred,
+                                 torch.full_like(centred, -1.0))
+        full = torch.argmax(restricted.reshape(len(degenerate), -1), dim=1).cpu().numpy()
+        index[degenerate] = np.stack(np.unravel_index(full, (n, n, n)), axis=1)
+        y2[degenerate] = -1.0
+    neighbours = []
     for axis in range(3):
-        low, high = index.clone(), index.clone()
+        low, high = index.copy(), index.copy()
         low[:, axis] -= 1
         high[:, axis] += 1
-        inner = (index[:, axis] > 0) & (index[:, axis] < n - 1)
-        low = low.clamp(0, n - 1)
-        high = high.clamp(0, n - 1)
-        y1 = torch.where(inner, cc[batch, low[:, 0], low[:, 1], low[:, 2]], y2)
-        y3 = torch.where(inner, cc[batch, high[:, 0], high[:, 1], high[:, 2]], y2)
-        sides.append((y1, y3))
-    # Read back to the host before widening: an MPS device has no float64.
-    host = [value.cpu().numpy().astype(np.float64) for pair in sides for value in pair]
-    centre = y2.cpu().numpy().astype(np.float64)
-    location = index.cpu().numpy().astype(np.float64)
+        neighbours.extend([low % n, high % n])
+    lookup = torch.from_numpy(_uncentred(n, np.stack(neighbours, axis=1))).to(cc.device)
+    values = flat.gather(1, lookup).cpu().numpy().astype(np.float64)
+    location = index.astype(np.float64)
     peaks = []
     for axis in range(3):
-        value, offset = spline_peaks(host[2 * axis], centre, host[2 * axis + 1])
+        inner = (index[:, axis] > 0) & (index[:, axis] < n - 1)
+        y1 = np.where(inner, values[:, 2 * axis], y2)
+        y3 = np.where(inner, values[:, 2 * axis + 1], y2)
+        value, offset = spline_peaks(y1, y2, y3)
         peaks.append(value)
         location[:, axis] += offset
-    values = np.max(np.stack(peaks), axis=0)
-    values = np.where((values > 1) & (values < 1.05), 1.0, values)
-    return location[:, ::-1] - n / 2, values
-
-
-def _apply_filter(volumes: torch.Tensor, centred_filter: torch.Tensor) -> torch.Tensor:
-    dims = (-3, -2, -1)
-    spectrum = torch.fft.fftn(volumes, dim=dims) * torch.fft.ifftshift(centred_filter, dim=dims)
-    return torch.fft.ifftn(spectrum, dim=dims).real
+    scores = np.max(np.stack(peaks), axis=0)
+    scores = np.where((scores > 1) & (scores < 1.05), 1.0, scores)
+    return location[:, ::-1] - n / 2, scores
 
 
 def refine_particle_torch(
@@ -240,17 +337,21 @@ def refine_particle_torch(
         raise ValueError("chunk must be at least 1")
     device = torch.device(device)
     n = len(p)
-    # Narrowed on the host, then moved: an MPS device takes no float64 at all.
-    shell = torch.from_numpy(bandpass(n, settings.high, settings.low)).to(dtype).to(device)
-    filter_mask = shell * torch.from_numpy(wedge(n, tilt_range)).to(dtype).to(device)
+    # Built on the host in float64 and narrowed there, then moved: an MPS device
+    # takes no float64 at all.
+    shell = torch.from_numpy(bandpass(n, settings.high, settings.low))
+    filter_mask = shell * torch.from_numpy(wedge(n, tilt_range))
+    shell_half = half_filter(shell).to(dtype).to(device)
+    filter_half = half_filter(filter_mask).to(dtype).to(device)
     volume = torch.from_numpy(p).to(dtype).to(device)
-    volume = _apply_filter(_apply_filter(volume, shell), filter_mask)
+    volume = _apply_half_filter(_apply_half_filter(volume, shell_half), filter_half)
     volume = (volume - volume.mean()) / volume.std(correction=1)
-    dims = (-3, -2, -1)
-    fp = torch.fft.fftn(volume, dim=dims)
-    fp2 = torch.fft.fftn(volume * volume, dim=dims)
+    fp = torch.fft.rfftn(volume, dim=DIMS)
+    fp2 = torch.fft.rfftn(volume * volume, dim=DIMS)
     reference_f32 = torch.from_numpy(ref.astype(np.float32)).to(device)
     support = torch.from_numpy(mask != 0).to(device)
+    cells = cell_support(support)
+    reach = support_reach(support)
 
     best_angles, best_shift = _triple(angles).copy(), _triple(shift).copy()
     cr, cs, ir, ins = (settings.cone_aperture, settings.cone_sampling,
@@ -264,8 +365,9 @@ def refine_particle_torch(
         for start in range(0, len(candidates), chunk):
             part = candidates[start:start + chunk]
             matrices = torch.from_numpy(_matrices(part)).to(device)
-            rotated, valid = resample_batch(reference_f32, matrices, support)
-            rotated = _apply_filter(rotated.to(dtype), filter_mask)
+            rotated, valid = resample_batch(reference_f32, matrices, support, cells=cells,
+                                            reach=reach)
+            rotated = _apply_half_filter(rotated.to(dtype), filter_half)
             cc = local_correlation_batch(rotated, valid, fp, fp2)
             shifts, scores = restricted_peaks(cc, center_shift, settings.shift_limit)
             # The CPU loop keeps a candidate whose score is at least the best so far,
@@ -303,3 +405,71 @@ def search_particles_torch(
                                        settings, device=device, dtype=dtype, chunk=chunk)
         results.append((result.angles, result.shift, result.correlation))
     return results
+
+
+_WORKER: tuple[torch.Tensor, torch.device, torch.dtype, int] | None = None
+
+
+def _start_worker(particles: torch.Tensor, devices: Any, dtype_name: str, chunk: int) -> None:
+    global _WORKER
+    _WORKER = (particles, torch.device(devices.get()), getattr(torch, dtype_name), chunk)
+
+
+def _search_block(task: tuple[Any, ...]) -> list[tuple[np.ndarray, np.ndarray, float]]:
+    assert _WORKER is not None
+    particles, device, dtype, chunk = _WORKER
+    block, reference, mask, starts, tilt_ranges, settings = task
+    return search_particles_torch([particles[int(i)].numpy() for i in block], reference, mask,
+                                  starts, tilt_ranges, settings, device=device, dtype=dtype,
+                                  chunk=chunk)
+
+
+class MultiDeviceSearch:
+    """`search_particles_torch` with the particles dealt among devices, one process each.
+
+    Called as `search_particles` is. The particles are put in shared memory and
+    the processes started on the first call; later calls must pass the same
+    particles, in the same order, and send each process only its block's starts.
+    The blocks are contiguous and in order, so the results are each particle's
+    own, as one device would give them. `close` ends the processes.
+    """
+
+    def __init__(self, devices: Sequence[str], *, dtype: str = "float32",
+                 chunk: int = DEFAULT_CHUNK) -> None:
+        if not devices:
+            raise ValueError("at least one device")
+        self.devices = list(devices)
+        self.dtype = dtype
+        self.chunk = chunk
+        self._pool: Any = None
+        self._count = 0
+
+    def _start(self, particles: Sequence[np.ndarray]) -> None:
+        context = torch.multiprocessing.get_context("spawn")
+        shared = torch.from_numpy(np.stack([np.asarray(p) for p in particles])).share_memory_()
+        devices = context.Queue()
+        for device in self.devices:
+            devices.put(device)
+        self._pool = context.Pool(len(self.devices), initializer=_start_worker,
+                                  initargs=(shared, devices, self.dtype, self.chunk))
+        self._count = len(particles)
+
+    def __call__(self, particles: Sequence[np.ndarray], reference: np.ndarray, mask: np.ndarray,
+                 starts: Sequence[tuple[np.ndarray, np.ndarray]],
+                 tilt_ranges: Sequence[tuple[float, float]], settings: SearchSettings, *,
+                 workers: int = 1) -> list[tuple[np.ndarray, np.ndarray, float]]:
+        if self._pool is None:
+            self._start(particles)
+        elif len(particles) != self._count:
+            raise ValueError(f"started with {self._count} particles, called with {len(particles)}")
+        blocks = [block for block in np.array_split(np.arange(len(particles)), len(self.devices))
+                  if len(block)]
+        tasks = [(block, reference, mask, [starts[i] for i in block],
+                  [tilt_ranges[i] for i in block], settings) for block in blocks]
+        return [result for part in self._pool.map(_search_block, tasks) for result in part]
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.close()
+            self._pool.join()
+            self._pool = None

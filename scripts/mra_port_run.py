@@ -8,7 +8,9 @@ table, seeds, soft mask, particles, and every iteration's search from that
 iteration's card), runs it with the port and writes the run beside the Dynamo
 project, as a project of the same layout, named --name (default <project>_port):
 
-- --device cuda (or mps, cpu): the torch kernel, float32 unless --dtype float64;
+- --device cuda (or mps, cpu): the torch kernel, float32 unless --dtype float64,
+  with the particles dealt among --gpus devices, a process each (all the GPUs the
+  job sees unless given);
 - --device numpy: the numpy kernel on --workers processes, the one the replays of
   Dynamo's CPU path checked.
 
@@ -99,6 +101,9 @@ def main() -> int:
     parser.add_argument("--dtype", default="float32", choices=("float32", "float64"))
     parser.add_argument("--chunk", type=int, default=256, help="torch: candidates per batch")
     parser.add_argument("--workers", type=int, default=1, help="numpy: processes")
+    parser.add_argument("--gpus", type=int, default=0,
+                        help="torch on cuda: how many GPUs to deal the particles among; "
+                        "0 (default) for all the job sees")
     parser.add_argument("--iterations", type=int, default=None,
                         help="only the first so many of the project's iterations")
     parser.add_argument("--compare-only", action="store_true",
@@ -115,8 +120,13 @@ def main() -> int:
         if args.device == "numpy":
             search, destination = search_particles, f"cryoet-pipeline numpy, {args.workers} workers"
         else:
-            search = torch_search(args.device, args.dtype, args.chunk)
-            destination = f"cryoet-pipeline torch {args.device} {args.dtype}"
+            devices = max(1, args.gpus)
+            if args.device == "cuda" and args.gpus == 0:
+                import torch
+
+                devices = max(1, torch.cuda.device_count())
+            search = torch_search(args.device, args.dtype, args.chunk, devices=devices)
+            destination = f"cryoet-pipeline torch {args.device} {args.dtype} x{devices}"
         run_mra_project(plan, out, search=search, destination=destination,
                         workers=args.workers, spacing=spacing)
     compare(out, project)

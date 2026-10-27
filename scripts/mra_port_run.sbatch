@@ -15,10 +15,12 @@
 #       sbatch --export=ALL --job-name=mra_pad_ssn_cone5_port scripts/mra_port_run.sbatch
 #
 # NAME (default <project>_port), DEVICE (cuda) and DTYPE (float32) pass through.
-# An A40, the card Dynamo's own GPU runs were asked for (the timings compare).
-# Measured on one A40 (2026-10-26, RyR1 bin8, box 52): 1.3-1.9 ms per candidate
-# orientation, so a cone round of 2,384 particles x 3 channels is about half an
-# hour, a 5-step cone round about three quarters of one.
+# An A40, the card Dynamo's own GPU runs were asked for (the timings compare);
+# more with --gres=gpu:a40:4 and the particles are dealt among all the job's GPUs,
+# a process each. Measured on one A40 (2026-10-26, RyR1 bin8, box 52, before the
+# kernel was made about four times faster on the Mac's GPU): 1.3-1.9 ms per
+# candidate orientation, about half an hour for a cone round of 2,384 particles x
+# 3 channels.
 
 set -euo pipefail
 

@@ -39,6 +39,20 @@ def test_the_rotation_is_the_numpy_one_bit_for_bit():
         np.testing.assert_array_equal(valid[index].numpy(), expected_valid)
 
 
+def test_only_the_voxels_in_reach_are_computed_and_nothing_else_changes():
+    phantom = _granular_phantom(BOX).numpy().astype(float)
+    candidates = core.angle_list(np.array([30.0, 60.0, -45.0]), 360, 30, 360, 30)
+    for mask in (core.search_mask(BOX, 14.0), core.search_mask(BOX, 22.0)):
+        support = torch.from_numpy(mask != 0)
+        reach = gpu.support_reach(support)
+        assert len(reach) < BOX**3
+        arguments = (torch.from_numpy(phantom.astype(np.float32)),
+                     torch.from_numpy(gpu._matrices(candidates)), support)
+        values, valid = gpu.resample_batch(*arguments)
+        reached, reached_valid = gpu.resample_batch(*arguments, reach=reach)
+        assert torch.equal(reached, values) and torch.equal(reached_valid, valid)
+
+
 def test_the_spline_is_the_scalar_one_element_by_element():
     rng = np.random.default_rng(3)
     triples = rng.uniform(-1.2, 1.2, size=(4000, 3))
@@ -64,8 +78,9 @@ def test_the_local_correlation_is_the_numpy_one():
         torch.from_numpy(gpu._matrices(candidates)),
         torch.from_numpy(mask != 0),
     )
-    cc = gpu.local_correlation_batch(rotated.double(), valid, torch.from_numpy(fp),
-                                     torch.from_numpy(fp2)).numpy()
+    volume = torch.from_numpy(particle)
+    cc = gpu._centred(gpu.local_correlation_batch(
+        rotated.double(), valid, torch.fft.rfftn(volume), torch.fft.rfftn(volume * volume))).numpy()
     for index in range(len(candidates)):
         expected = core.local_correlation(rotated[index].double().numpy(),
                                           valid[index].numpy(), fp, fp2)
@@ -118,3 +133,53 @@ def test_several_particles_are_searched_as_one_by_one():
         np.testing.assert_allclose(angles, e_angles, atol=1e-9)
         np.testing.assert_allclose(shift, e_shift, atol=1e-9)
         assert cc == pytest.approx(e_cc, abs=1e-9)
+
+
+def test_the_half_filter_is_what_the_full_fft_keeps_even_on_the_nyquist_planes():
+    # An asymmetric wedge with a bandpass reaching Nyquist: the full filter is not
+    # point-symmetric there, and the real part of the full-FFT product is the product
+    # with its Hermitian part.
+    rng = np.random.default_rng(2)
+    volume = rng.normal(size=(BOX,) * 3)
+    centred = core.bandpass(BOX, 2, BOX / 2) * core.wedge(BOX, (-40.0, 65.0))
+    expected = core.apply_filter(volume, centred)
+    found = gpu._apply_half_filter(torch.from_numpy(volume),
+                                   gpu.half_filter(torch.from_numpy(centred))).numpy()
+    np.testing.assert_allclose(found, expected, atol=1e-12)
+
+
+@pytest.mark.parametrize("shift", [(0.0, 0.0, 0.0), (1.6, -2.4, 0.3)])
+def test_the_peak_is_read_from_the_uncentred_map_as_numpy_reads_the_centred_one(shift):
+    rng = np.random.default_rng(5)
+    raw = rng.uniform(-0.9, 0.9, size=(6, BOX, BOX, BOX))
+    raw[3] = -1.0  # a sphere with nothing above -1: the full map's first -1 wins
+    shifts, scores = gpu.restricted_peaks(torch.from_numpy(raw), np.array(shift), 3.0)
+    for index in range(len(raw)):
+        centred = gpu._centred(torch.from_numpy(raw[index])[None])[0].numpy()
+        expected_shift, expected_score = core.restricted_peak(centred, np.array(shift), 3.0)
+        np.testing.assert_allclose(shifts[index], expected_shift, atol=1e-12)
+        assert scores[index] == pytest.approx(expected_score, abs=1e-12)
+
+
+def test_particles_dealt_among_devices_are_searched_as_on_one():
+    mask = core.search_mask(BOX, 18.0)
+    particles, starts = [], []
+    for seed in range(5):
+        angles = np.array([20.0 + 30 * seed, 50.0, 10.0 * seed])
+        particle, phantom = _particle(angles, [0.5, -0.5, 0.0], seed=seed)
+        particles.append(particle)
+        starts.append((angles + 2.0, np.zeros(3)))
+    tilts = [TILTS] * len(particles)
+    expected = gpu.search_particles_torch(particles, phantom, mask, starts, tilts, SETTINGS,
+                                          dtype=torch.float64)
+    search = gpu.MultiDeviceSearch(["cpu", "cpu"], dtype="float64")
+    try:
+        found = search(particles, phantom, mask, starts, tilts, SETTINGS)
+        again = search(particles, phantom, mask, starts, tilts, SETTINGS)
+    finally:
+        search.close()
+    for (angles, shift, cc), (e_angles, e_shift, e_cc) in zip(found, expected, strict=True):
+        np.testing.assert_array_equal(angles, e_angles)
+        np.testing.assert_array_equal(shift, e_shift)
+        assert cc == e_cc
+    assert [result[2] for result in again] == [result[2] for result in found]

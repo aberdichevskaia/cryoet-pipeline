@@ -268,6 +268,19 @@ def run_mra_project(
     if not wrote_vpr:
         log("no scipy: settings/virtual_project.mat not written; the report shows round 1 only")
 
+    try:
+        _iterate(plan, out, particles, tilt_ranges, search, destination, workers, log)
+    finally:
+        close = getattr(search, "close", None)
+        if callable(close):
+            close()
+
+
+def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
+             tilt_ranges: list[tuple[float, float]], search: Callable[..., list],
+             destination: str, workers: int, log: Callable[[str], None]) -> None:
+    name = out.name
+    box = plan.soft_mask.shape[0]
     references = dict(plan.references)
     tables = {channel: plan.table.copy() for channel in references}
     for number, settings in enumerate(plan.settings, 1):
@@ -322,13 +335,25 @@ def run_mra_project(
         tables = {channel: tables[channel] for channel in step.surviving}
 
 
-def torch_search(device: str, dtype: str, chunk: int) -> Callable[..., list]:
-    """The torch kernel bound to a device, called as `search_particles` is."""
+def torch_search(device: str, dtype: str, chunk: int, devices: int = 1) -> Callable[..., list]:
+    """The torch kernel bound to a device, called as `search_particles` is.
+
+    With `devices` above 1 the particles are dealt among that many devices of the
+    kind, cuda:0, cuda:1, ... (or as many processes on one CPU or MPS device), a
+    process each (`dynamo_search_torch.MultiDeviceSearch`); the run closes them.
+    """
 
     import torch
 
-    from cryoet_pipeline.backends.dynamo_search_torch import search_particles_torch
+    from cryoet_pipeline.backends.dynamo_search_torch import (
+        MultiDeviceSearch,
+        search_particles_torch,
+    )
 
+    if devices > 1:
+        names = ([f"{device}:{index}" for index in range(devices)] if device == "cuda"
+                 else [device] * devices)
+        return MultiDeviceSearch(names, dtype=dtype, chunk=chunk)
     kind = {"float32": torch.float32, "float64": torch.float64}[dtype]
 
     def search(particles: Sequence[np.ndarray], reference: np.ndarray, mask: np.ndarray,
