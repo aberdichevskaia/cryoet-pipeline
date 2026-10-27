@@ -88,6 +88,15 @@ def test_what_the_port_does_not_model_is_refused(tmp_path: Path, change, name) -
         plan_from_dynamo(project)
 
 
+def test_several_processes_can_share_each_device() -> None:
+    # Nothing starts until the first search, so CUDA names can be checked without CUDA.
+    search = torch_search("cuda", "float32", 8, devices=2, per_device=2)
+    assert search.devices == ["cuda:0", "cuda:0", "cuda:1", "cuda:1"]
+    assert torch_search("mps", "float32", 8, per_device=3).devices == ["mps"] * 3
+    with pytest.raises(ValueError, match="per_device"):
+        torch_search("cuda", "float32", 8, per_device=0)
+
+
 def test_the_run_is_written_as_dynamo_writes_a_project(tmp_path: Path) -> None:
     project, truth = _project(tmp_path)
     plan = plan_from_dynamo(project)

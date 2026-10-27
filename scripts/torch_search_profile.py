@@ -6,19 +6,22 @@
 
 The port's cone rounds took as long with 221 candidates per search as with 300 (cone5
 on two A40s, 2026-10-27: 26-27 min an iteration, about 0.45 s a search), so the time
-is not in the candidates. For each iteration (a finished one searched at the full box,
-as scripts/torch_search_check.py takes them) a seeded sample of particles is searched
-in every channel from the iteration's own inputs, four ways:
+was not in the candidates: the first profile found one process on one A40 searching
+in 0.097 s, and two processes in 0.43 s each, on one A40 or two. For each iteration
+(a finished one searched at the full box, as scripts/torch_search_check.py takes
+them) a seeded sample of particles is searched in every channel from the iteration's
+own inputs, four ways:
 
-1. the kernel as the port runs it, in this process: seconds per search and per
-   candidate;
+1. the kernel as the port runs it, in this process, each channel's particles in one
+   call (search_results_torch): seconds per search and per candidate;
 2. the same searches with each step of the kernel timed between device
    synchronizations: the kernel's code is unchanged, its functions are wrapped in
    this process only. Steps: the grid on the host (angle_list, rotation matrices),
-   the particle's filters on the host and on the device, the mask's support, the
-   rotation, the candidates' filter, the correlation, the peak; the rest of the
-   search is "other". The synchronizations take away a little overlap, so the steps
-   add up to a little more than 1;
+   the filters (made once per tilt range), the reference and mask sent to the
+   device (once per call), the particle's filters on the device, the rotation, the
+   candidates' filter, the correlation, the peak; the rest of the search is
+   "other". The synchronizations take away a little overlap, so the steps add up
+   to a little more than 1;
 3. on CUDA, torch.profiler over one search per channel: how long the GPU itself
    computes per search, against 1's wall clock, and which kernels take it;
 4. the kernel in each of --processes processes sharing the one device, as
@@ -49,18 +52,15 @@ from cryoet_pipeline.reports.dynamo_project import read_card, read_em, read_tabl
 STEPS = {
     "angle_list": "grid (host)",
     "_matrices": "grid (host)",
-    "bandpass": "particle: host filters",
-    "wedge": "particle: host filters",
-    "half_filter": "particle: host filters",
-    "cell_support": "mask support",
-    "support_reach": "mask support",
+    "_filters": "filters (once per tilt range)",
+    "_share": "reference and mask (once a call)",
     "resample_batch": "rotate",
     "_apply_half_filter": None,  # the particle's (one volume) or the candidates' (a batch)
     "local_correlation_batch": "correlate",
     "restricted_peaks": "peak",
 }
-ORDER = ("grid (host)", "particle: host filters", "particle: device filters", "mask support",
-         "rotate", "filter candidates", "correlate", "peak", "other")
+ORDER = ("grid (host)", "filters (once per tilt range)", "reference and mask (once a call)",
+         "particle: device filters", "rotate", "filter candidates", "correlate", "peak", "other")
 
 
 def _synchronize(device: torch.device) -> None:
@@ -166,19 +166,23 @@ def _profile_iteration(project: Path, ite: int, args: argparse.Namespace,
         project, ite, args.particles, args.seed)
     searches = [(channel, tag) for channel in channels for tag in sample]
 
-    def search(channel: int, tag: int):
-        row = rows[channel][tag]
-        return kernel.refine_particle_torch(
-            volumes[tag], references[channel], mask, row[6:9], row[3:6],
-            (float(row[13]), float(row[14])), settings[channel], device=device,
-            chunk=args.chunk)
+    def starts(channel: int, tags: list[int]) -> list[tuple[np.ndarray, np.ndarray]]:
+        return [(rows[channel][tag][6:9], rows[channel][tag][3:6]) for tag in tags]
 
-    def run(pairs=searches):
-        results = [search(channel, tag) for channel, tag in pairs]
+    def tilts(channel: int, tags: list[int]) -> list[tuple[float, float]]:
+        return [(float(rows[channel][tag][13]), float(rows[channel][tag][14])) for tag in tags]
+
+    def run(tags: list[int] = sample) -> list:
+        results = []
+        for channel in channels:
+            results += kernel.search_results_torch(
+                [volumes[tag] for tag in tags], references[channel], mask,
+                starts(channel, tags), tilts(channel, tags), settings[channel],
+                device=device, chunk=args.chunk)
         _synchronize(device)
         return results
 
-    run([(channel, sample[0]) for channel in channels])  # kernels loaded, FFT plans made
+    run([sample[0]])  # kernels loaded, FFT plans made
     began = time.perf_counter()
     plain = run()
     seconds = (time.perf_counter() - began) / len(searches)
@@ -207,16 +211,15 @@ def _profile_iteration(project: Path, ite: int, args: argparse.Namespace,
     print(f"  2. steps between synchronizations ({total / len(searches):.3f} s per search):")
     for name in ORDER:
         share = steps.seconds.get(name, 0.0)
-        print(f"       {name:26s} {1000 * share / len(searches):8.1f} ms  "
+        print(f"       {name:33s} {1000 * share / len(searches):8.1f} ms  "
               f"{100 * share / total:5.1f}%")
     print("     poses and CCs equal to 1 bit for bit: "
           + ("yes" if _same(plain, [(r.angles, r.shift, r.correlation) for r in staged])
              else "NO"))
 
     if device.type == "cuda":
-        pairs = [(channel, sample[0]) for channel in channels]
         try:
-            report = _gpu_time(lambda: run(pairs), len(pairs))
+            report = _gpu_time(lambda: run([sample[0]]), len(channels))
         except Exception as error:  # the profiler's API moves between torch versions
             report = f"profiler unavailable: {type(error).__name__}: {error}"
         print(f"  3. {report}")
@@ -229,10 +232,8 @@ def _profile_iteration(project: Path, ite: int, args: argparse.Namespace,
     def dealt_by(pool) -> list:
         results = []
         for channel in channels:
-            results += pool(particles, references[channel], mask,
-                            [(rows[channel][tag][6:9], rows[channel][tag][3:6]) for tag in sample],
-                            [(float(rows[channel][tag][13]), float(rows[channel][tag][14]))
-                             for tag in sample], settings[channel])
+            results += pool(particles, references[channel], mask, starts(channel, sample),
+                            tilts(channel, sample), settings[channel])
         return results
 
     lines = []

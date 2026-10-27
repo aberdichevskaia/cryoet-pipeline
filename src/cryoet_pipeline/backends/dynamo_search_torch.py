@@ -17,7 +17,9 @@ correlations use real-input FFTs: the real part of a full-FFT product with a rea
 filter is the product with the filter's Hermitian part, which differs from the
 filter only on the Nyquist planes, where the wedge is not point-symmetric. The
 peak is read from the shift sphere's voxels and their neighbours only, mapped into
-the uncentred correlation map, instead of centring the whole map.
+the uncentred correlation map, instead of centring the whole map. The particles of
+one call share the reference and the mask's support on the device, and those of a
+tilt range their filters (`search_results_torch`).
 
 `dtype` float64 is for checking this module against the numpy kernel: the
 rotation is float32 in both, as in Dynamo, and the rest agrees to FFT rounding,
@@ -28,7 +30,7 @@ disagreement measured between Dynamo's own GPU and CPU modes (Gag, 2026-10-13:
 rotation median ~1.3 deg, one finest step), and it is the tolerance this module
 is to be held to against Dynamo's GPU, not bitwise parity.
 
-`MultiDeviceSearch` deals the particles among several devices, a process each.
+`MultiDeviceSearch` deals the particles among processes, one or more per device.
 
 Where the numpy kernel raises (a rotated mask with fewer than two voxels, a
 zero-variance template) this raises the same errors.
@@ -37,6 +39,7 @@ zero-variance template) this raises the same errors.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -321,6 +324,43 @@ def restricted_peaks(cc: torch.Tensor, shift: np.ndarray,
     return location[:, ::-1] - n / 2, scores
 
 
+@lru_cache(maxsize=64)
+def _filters(n: int, high: float, low: float, tilt_range: tuple[float, float],
+             dtype: torch.dtype, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    """The bandpass, and the bandpass through a tilt range's wedge, as `rfftn` spectra
+    take them, on the device: every particle of a tomogram shares them, so they are
+    made once instead of for each particle.
+
+    Built on the host in float64 and narrowed there, then moved: an MPS device takes
+    no float64 at all.
+    """
+
+    shell = torch.from_numpy(bandpass(n, high, low))
+    filter_mask = shell * torch.from_numpy(wedge(n, tilt_range))
+    return (half_filter(shell).to(dtype).to(device),
+            half_filter(filter_mask).to(dtype).to(device))
+
+
+@dataclass(frozen=True)
+class _Shared:
+    """What every particle searched against one reference uses, on the device."""
+
+    reference: torch.Tensor
+    support: torch.Tensor
+    cells: torch.Tensor
+    reach: torch.Tensor
+
+
+def _share(reference: np.ndarray, mask: np.ndarray, shape: tuple[int, ...],
+           device: torch.device) -> _Shared:
+    ref, mask = _cube(reference), _cube(mask)
+    if not shape == ref.shape == mask.shape or np.any(mask < 0) or not np.any(mask):
+        raise ValueError("shared shape and a nonnegative/nonempty mask are required")
+    support = torch.from_numpy(mask != 0).to(device)
+    return _Shared(torch.from_numpy(ref.astype(np.float32)).to(device), support,
+                   cell_support(support), support_reach(support))
+
+
 def refine_particle_torch(
     particle: np.ndarray, reference: np.ndarray, mask: np.ndarray,
     angles: np.ndarray | Sequence[float], shift: np.ndarray | Sequence[float],
@@ -330,28 +370,52 @@ def refine_particle_torch(
 ) -> SearchResult:
     """`refine_particle`, with each level's candidates evaluated `chunk` at a time."""
 
-    p, ref, mask = _cube(particle), _cube(reference), _cube(mask)
-    if not p.shape == ref.shape == mask.shape or np.any(mask < 0) or not np.any(mask):
-        raise ValueError("shared shape and a nonnegative/nonempty mask are required")
-    if chunk < 1:
-        raise ValueError("chunk must be at least 1")
+    return search_results_torch([particle], reference, mask, [(angles, shift)], [tilt_range],
+                                settings, device=device, dtype=dtype, chunk=chunk)[0]
+
+
+def search_results_torch(
+    particles: Sequence[np.ndarray], reference: np.ndarray, mask: np.ndarray,
+    starts: Sequence[tuple[np.ndarray, np.ndarray]], tilt_ranges: Sequence[tuple[float, float]],
+    settings: SearchSettings = DEFAULT_SETTINGS, *, device: torch.device | str = "cpu",
+    dtype: torch.dtype = torch.float32, chunk: int = DEFAULT_CHUNK,
+) -> list[SearchResult]:
+    """`refine_particle_torch` for every particle against one reference, in order.
+
+    What the particles share goes to the device once: the reference and the mask's
+    support for the call, the filters for each tilt range (`_filters`). Each particle
+    is then searched by the same operations on the same values as alone.
+    """
+
     device = torch.device(device)
+    shared = None
+    results = []
+    for particle, (angles, shift), tilt_range in zip(particles, starts, tilt_ranges, strict=True):
+        p = _cube(particle)
+        if shared is None:
+            shared = _share(reference, mask, p.shape, device)
+            if chunk < 1:
+                raise ValueError("chunk must be at least 1")
+        elif p.shape != tuple(shared.reference.shape):
+            raise ValueError("shared shape and a nonnegative/nonempty mask are required")
+        results.append(_refine(p, shared, angles, shift, tilt_range, settings,
+                               device=device, dtype=dtype, chunk=chunk))
+    return results
+
+
+def _refine(p: np.ndarray, shared: _Shared, angles: np.ndarray | Sequence[float],
+            shift: np.ndarray | Sequence[float], tilt_range: tuple[float, float],
+            settings: SearchSettings, *, device: torch.device, dtype: torch.dtype,
+            chunk: int) -> SearchResult:
     n = len(p)
-    # Built on the host in float64 and narrowed there, then moved: an MPS device
-    # takes no float64 at all.
-    shell = torch.from_numpy(bandpass(n, settings.high, settings.low))
-    filter_mask = shell * torch.from_numpy(wedge(n, tilt_range))
-    shell_half = half_filter(shell).to(dtype).to(device)
-    filter_half = half_filter(filter_mask).to(dtype).to(device)
+    lo, hi = tilt_range
+    shell_half, filter_half = _filters(n, float(settings.high), float(settings.low),
+                                       (float(lo), float(hi)), dtype, device)
     volume = torch.from_numpy(p).to(dtype).to(device)
     volume = _apply_half_filter(_apply_half_filter(volume, shell_half), filter_half)
     volume = (volume - volume.mean()) / volume.std(correction=1)
     fp = torch.fft.rfftn(volume, dim=DIMS)
     fp2 = torch.fft.rfftn(volume * volume, dim=DIMS)
-    reference_f32 = torch.from_numpy(ref.astype(np.float32)).to(device)
-    support = torch.from_numpy(mask != 0).to(device)
-    cells = cell_support(support)
-    reach = support_reach(support)
 
     best_angles, best_shift = _triple(angles).copy(), _triple(shift).copy()
     cr, cs, ir, ins = (settings.cone_aperture, settings.cone_sampling,
@@ -365,8 +429,8 @@ def refine_particle_torch(
         for start in range(0, len(candidates), chunk):
             part = candidates[start:start + chunk]
             matrices = torch.from_numpy(_matrices(part)).to(device)
-            rotated, valid = resample_batch(reference_f32, matrices, support, cells=cells,
-                                            reach=reach)
+            rotated, valid = resample_batch(shared.reference, matrices, shared.support,
+                                            cells=shared.cells, reach=shared.reach)
             rotated = _apply_half_filter(rotated.to(dtype), filter_half)
             cc = local_correlation_batch(rotated, valid, fp, fp2)
             shifts, scores = restricted_peaks(cc, center_shift, settings.shift_limit)
@@ -399,20 +463,31 @@ def search_particles_torch(
 ) -> list[tuple[np.ndarray, np.ndarray, float]]:
     """`search_particles` on a torch device: every particle against one fixed reference."""
 
-    results = []
-    for particle, (angles, shift), tilt_range in zip(particles, starts, tilt_ranges, strict=True):
-        result = refine_particle_torch(particle, reference, mask, angles, shift, tilt_range,
-                                       settings, device=device, dtype=dtype, chunk=chunk)
-        results.append((result.angles, result.shift, result.correlation))
-    return results
+    return [(result.angles, result.shift, result.correlation)
+            for result in search_results_torch(particles, reference, mask, starts, tilt_ranges,
+                                               settings, device=device, dtype=dtype, chunk=chunk)]
 
 
 _WORKER: tuple[torch.Tensor, torch.device, torch.dtype, int] | None = None
 
 
 def _start_worker(particles: torch.Tensor, devices: Any, dtype_name: str, chunk: int) -> None:
+    """A process's device and inputs; on a GPU, one CPU thread for torch.
+
+    Each of torch's CPU operations wakes its whole OpenMP team and waits for every
+    thread of it (ATen/ParallelOpenMP.h opens `omp parallel` without a thread count),
+    so processes that each keep a team as large as the job's CPUs wait on one another:
+    on max (2026-10-27, 8 cores, 16 threads a team) two processes searched 0.43 s a
+    particle each, on one A40 or on two, against one process's 0.097 s. A GPU process
+    leaves the host only elementwise work, the same on one thread; on the CPU the
+    search's own reductions would change with the team, so it keeps it.
+    """
+
     global _WORKER
-    _WORKER = (particles, torch.device(devices.get()), getattr(torch, dtype_name), chunk)
+    device = torch.device(devices.get())
+    if device.type != "cpu":
+        torch.set_num_threads(1)
+    _WORKER = (particles, device, getattr(torch, dtype_name), chunk)
 
 
 def _search_block(task: tuple[Any, ...]) -> list[tuple[np.ndarray, np.ndarray, float]]:
@@ -425,7 +500,8 @@ def _search_block(task: tuple[Any, ...]) -> list[tuple[np.ndarray, np.ndarray, f
 
 
 class MultiDeviceSearch:
-    """`search_particles_torch` with the particles dealt among devices, one process each.
+    """`search_particles_torch` with the particles dealt among devices, a process for
+    each name in `devices`: a name given twice is a device shared by two processes.
 
     Called as `search_particles` is. The particles are put in shared memory and
     the processes started on the first call; later calls must pass the same

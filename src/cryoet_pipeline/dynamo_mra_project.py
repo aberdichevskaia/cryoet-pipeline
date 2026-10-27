@@ -339,12 +339,15 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
         tables = {channel: tables[channel] for channel in step.surviving}
 
 
-def torch_search(device: str, dtype: str, chunk: int, devices: int = 1) -> Callable[..., list]:
+def torch_search(device: str, dtype: str, chunk: int, devices: int = 1,
+                 per_device: int = 1) -> Callable[..., list]:
     """The torch kernel bound to a device, called as `search_particles` is.
 
     With `devices` above 1 the particles are dealt among that many devices of the
-    kind, cuda:0, cuda:1, ... (or as many processes on one CPU or MPS device), a
-    process each (`dynamo_search_torch.MultiDeviceSearch`); the run closes them.
+    kind, cuda:0, cuda:1, ... (or as many processes on one CPU or MPS device), and
+    with `per_device` above 1 among that many processes on each device, so that one
+    process's host work can overlap another's on the GPU: a process each
+    (`dynamo_search_torch.MultiDeviceSearch`); the run closes them.
     """
 
     import torch
@@ -354,9 +357,11 @@ def torch_search(device: str, dtype: str, chunk: int, devices: int = 1) -> Calla
         search_particles_torch,
     )
 
-    if devices > 1:
-        names = ([f"{device}:{index}" for index in range(devices)] if device == "cuda"
-                 else [device] * devices)
+    if per_device < 1:
+        raise ValueError(f"per_device must be at least 1, got {per_device}")
+    if devices * per_device > 1:
+        names = ([f"{device}:{index}" for index in range(devices) for _ in range(per_device)]
+                 if device == "cuda" else [device] * (devices * per_device))
         return MultiDeviceSearch(names, dtype=dtype, chunk=chunk)
     kind = {"float32": torch.float32, "float64": torch.float64}[dtype]
 

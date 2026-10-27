@@ -9,8 +9,8 @@ iteration's card), runs it with the port and writes the run beside the Dynamo
 project, as a project of the same layout, named --name (default <project>_port):
 
 - --device cuda (or mps, cpu): the torch kernel, float32 unless --dtype float64,
-  with the particles dealt among --gpus devices, a process each (all the GPUs the
-  job sees unless given);
+  with the particles dealt among --gpus devices (all the GPUs the job sees unless
+  given), --per-gpu processes on each (1 unless given);
 - --device numpy: the numpy kernel on --workers processes, the one the replays of
   Dynamo's CPU path checked.
 
@@ -117,6 +117,8 @@ def main() -> int:
     parser.add_argument("--gpus", type=int, default=0,
                         help="torch on cuda: how many GPUs to deal the particles among; "
                         "0 (default) for all the job sees")
+    parser.add_argument("--per-gpu", type=int, default=1,
+                        help="torch: processes sharing each device")
     parser.add_argument("--iterations", type=int, default=None,
                         help="only the first so many of the project's iterations")
     parser.add_argument("--compare-only", action="store_true",
@@ -141,8 +143,11 @@ def main() -> int:
                 import torch
 
                 devices = max(1, torch.cuda.device_count())
-            search = torch_search(args.device, args.dtype, args.chunk, devices=devices)
+            search = torch_search(args.device, args.dtype, args.chunk, devices=devices,
+                                  per_device=args.per_gpu)
             destination = f"cryoet-pipeline torch {args.device} {args.dtype} x{devices}"
+            if args.per_gpu > 1:
+                destination += f", {args.per_gpu} processes each"
         run_mra_project(plan, out, search=search, destination=destination,
                         workers=args.workers, spacing=spacing)
     if not computed:

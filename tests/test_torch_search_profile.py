@@ -50,8 +50,8 @@ def test_the_steps_and_the_processes_give_the_kernels_own_poses(tmp_path: Path) 
     out = result.stdout
     assert "mra_t, iteration 1: channels [1, 2], 4 particles each (8 searches)" in out
     assert "1. kernel, one process:" in out
-    for step in ("grid (host)", "particle: host filters", "mask support", "rotate",
-                 "filter candidates", "correlate", "peak", "other"):
+    for step in ("grid (host)", "filters (once per tilt range)", "reference and mask (once a call)",
+                 "rotate", "filter candidates", "correlate", "peak", "other"):
         assert f"       {step} " in out
     assert "poses and CCs equal to 1 bit for bit: yes" in out
     assert "4. processes sharing cpu: 2:" in out and "same bit for bit" in out
