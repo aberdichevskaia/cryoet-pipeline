@@ -19,6 +19,13 @@ What one iteration does, read from Dynamo's CPU project path
    way the MRA plugin calls `dynamo_average` (`average_class`); that average is
    the channel's next reference. A channel that received none dies.
 
+A project without MRA (`mra = 0`: one channel, as a map seed makes it) has no
+plugin to average: the project averages its one channel itself, as every
+single-reference project does (`average_particles`, the `fsc = true` assembly of
+odd and even halves), and that average, not normalized again, is the next
+reference (`assembly="project"`; on a Dynamo 1.1.511 toy of this kind, 4.7e-6
+of the average's std from Dynamo's own, where the plugin's way is 2 std off).
+
 Scope, refused rather than guessed: the classification mask equal to the
 alignment mask (so the CC compared is the search's own, table column 10), the
 search kernel's own scope (`use_CC = 1`, `localnc = 1`, C1, no resizing),
@@ -70,9 +77,11 @@ import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import (
     DEFAULT_SETTINGS,
+    FOURIER_WEIGHT_THRESHOLD,
     ClassAverage,
     SearchSettings,
     average_class,
+    average_particles,
     fweight_divide,
     prepare_reference,
     search_particles,
@@ -133,6 +142,7 @@ def mra_iteration(
     fmin: int = 1,
     workers: int = 1,
     search: Callable[..., list] = search_particles,
+    assembly: str = "mra",
 ) -> MraIteration:
     """One iteration: every live channel searches every particle, then they swap.
 
@@ -140,10 +150,16 @@ def mra_iteration(
     0.5 for the search and the reference normalization, its nonzero voxels for
     the class averages' normalization. `search` is the kernel, called as
     `search_particles` is: the numpy one, or the torch one bound to a device
-    (`dynamo_search_torch.search_particles_torch`).
+    (`dynamo_search_torch.search_particles_torch`). `assembly` is "mra", the
+    plugin's class averages, or "project": the one channel of a project without
+    MRA, averaged as the project averages it.
     """
+    if assembly not in ("mra", "project"):
+        raise ValueError(f"assembly is 'mra' or 'project', got {assembly!r}")
     if set(references) != set(starts):
         raise ValueError("every live channel needs a reference and starting poses")
+    if assembly == "project" and len(references) != 1:
+        raise ValueError(f"a project without MRA has one channel, not {len(references)}")
     binary = (np.asarray(mask) > 0.5).astype(float)
     computed = sorted(references)
     searches = {}
@@ -169,15 +185,20 @@ def mra_iteration(
     averages = {}
     for k in surviving:
         members = np.flatnonzero(assignment == k)
-        averages[k] = average_class(
-            [particles[i] for i in members],
-            searches[k].angles[members],
-            searches[k].shifts[members],
-            [tilt_ranges[i] for i in members],
-            mask,
-            fmin=fmin,
-        )
+        group = ([particles[i] for i in members], searches[k].angles[members],
+                 searches[k].shifts[members], [tilt_ranges[i] for i in members])
+        averages[k] = (_project_average(*group, mask) if assembly == "project"
+                       else average_class(*group, mask, fmin=fmin))
     return MraIteration(computed, searches, assignment, surviving, averages)
+
+
+def _project_average(particles, angles, shifts, tilt_ranges, mask) -> ClassAverage:
+    """`average_particles`, the project's own averaging, as a `ClassAverage`."""
+
+    average, raw, weights = average_particles(particles, angles, shifts, tilt_ranges, mask)
+    return ClassAverage(average, raw, weights,
+                        (weights >= FOURIER_WEIGHT_THRESHOLD).astype(float),
+                        FOURIER_WEIGHT_THRESHOLD, len(particles))
 
 
 def run_mra(

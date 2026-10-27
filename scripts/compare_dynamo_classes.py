@@ -194,15 +194,27 @@ def main() -> int:
                         for column in range(len(right)))
         print(f"{'first ' + str(k):<10}{cells}")
 
-    null = shuffled_null(first, second, rounds=args.shuffles, seed=args.seed)
-    index = adjusted_rand_index(table)
-    share = paired_share(table)
-    pairs = [(left[row], right[column]) for row, column in best_pairing(table)]
+    index = share = index_p = share_p = None
+    pairs: list[tuple[int, int]] = []
+    single = [name for name, classes in (("the first run", left), ("the second", right))
+              if len(classes) < 2]
     print()
-    print(describe_null(null.rand_index, index, f"adjusted Rand index {index:.3f}"))
-    print(describe_null(null.paired_share, share,
-                        "classes paired " + ", ".join(f"{a}-{b}" for a, b in pairs)
-                        + f": {100 * share:.1f}% of particles in the same class", percent=True))
+    if single:
+        # One class leaves nothing to shuffle: the index is 0/0 against one class on
+        # each side, 0 against several, and every shuffle gives the same.
+        print(f"one class in {' and '.join(single)}: nothing to compare with chance")
+    else:
+        null = shuffled_null(first, second, rounds=args.shuffles, seed=args.seed)
+        index = adjusted_rand_index(table)
+        share = paired_share(table)
+        index_p = ShuffledNull.p_value(null.rand_index, index)
+        share_p = ShuffledNull.p_value(null.paired_share, share)
+        pairs = [(left[row], right[column]) for row, column in best_pairing(table)]
+        print(describe_null(null.rand_index, index, f"adjusted Rand index {index:.3f}"))
+        print(describe_null(null.paired_share, share,
+                            "classes paired " + ", ".join(f"{a}-{b}" for a, b in pairs)
+                            + f": {100 * share:.1f}% of particles in the same class",
+                            percent=True))
 
     result: dict[str, Any] = {
         "first": {"project": str(runs[0].source), "iteration": first_number},
@@ -215,10 +227,10 @@ def main() -> int:
         "table": table.tolist(),
         "expected": expected.round(2).tolist(),
         "adjusted_rand_index": index,
-        "adjusted_rand_index_p": ShuffledNull.p_value(null.rand_index, index),
+        "adjusted_rand_index_p": index_p,
         "pairing": pairs,
         "paired_share": share,
-        "paired_share_p": ShuffledNull.p_value(null.paired_share, share),
+        "paired_share_p": share_p,
         "shuffles": args.shuffles,
     }
 

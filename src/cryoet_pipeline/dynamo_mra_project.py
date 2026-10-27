@@ -9,8 +9,9 @@ project the setup made and Dynamo never computed has its whole plan too, and tha
 is how the pipeline makes runs of its own. `run_mra_project` then runs those
 iterations with `dynamo_mra` (reference preparation, every channel's search,
 assignment by the highest CC,
-class averages as the MRA plugin makes them, dead channels dropped) and writes a
-project folder laid out as Dynamo 1.1.511 lays out its own:
+class averages as the MRA plugin makes them, dead channels dropped; in a project
+without MRA, a map seed's one channel, its average as the project makes it) and
+writes a project folder laid out as Dynamo 1.1.511 lays out its own:
 
 - `results/ite_N/currently_surviving_references_ite_N.txt`: the channels that
   searched in iteration N, and after the last iteration the ones kept;
@@ -81,6 +82,9 @@ class MraPlan:
     """One per iteration."""
     cards: list[dict[str, str]]
     """Each iteration's card as Dynamo wrote it, for the record."""
+    mra: list[bool]
+    """Per iteration, the card's `mra`: the MRA plugin assigns and averages, or (0)
+    the project averages its one channel itself."""
 
 
 _REFUSED = {
@@ -155,11 +159,15 @@ def plan_from_dynamo(project: Path, *, iterations: int | None = None) -> MraPlan
         seeds = seeds.parent
     notes_path = seeds / "seed_kinds.txt"
     notes = notes_path.read_text().splitlines() if notes_path.exists() else []
+    mra = [card.get("mra", "1").strip() != "0" for card in cards]
+    if len(references) > 1 and not all(mra):
+        raise ValueError(f"{project}: mra 0 with {len(references)} references, each refined "
+                         "on its own: outside what the port models")
     return MraPlan(
         source=project, particles=particles, table=table, references=references,
         reference_notes=notes, soft_mask=soft_mask,
         settings=[_card_settings(card, box, index) for index, card in enumerate(cards, 1)],
-        cards=cards,
+        cards=cards, mra=mra,
     )
 
 
@@ -216,7 +224,7 @@ def _write_vpr(path: Path, plan: MraPlan, name: str, destination: str, box: int,
         fields["area_search"] = np.array([settings.shift_limit] * 3)
         card.update({f"{key}_r{round_}": value for key, value in fields.items()})
         card.update({f"ite_r{round_}": 1, f"nref_r{round_}": nref,
-                     f"mra_r{round_}": int(nref > 1)})
+                     f"mra_r{round_}": int(plan.mra[round_ - 1])})
     for round_ in range(len(plan.settings) + 1, 9):
         card[f"ite_r{round_}"] = 0
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -310,7 +318,8 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
         starts = {channel: (tables[channel][:, 6:9], tables[channel][:, 3:6])
                   for channel in references}
         step = mra_iteration(particles, references, starts, tilt_ranges, plan.soft_mask,
-                             settings, fmin=1, workers=workers, search=timed_search)
+                             settings, fmin=1, workers=workers, search=timed_search,
+                             assembly="mra" if plan.mra[number - 1] else "project")
         seconds = time.perf_counter() - clock
         finished = datetime.now()
         averages = here / "averages"
@@ -334,7 +343,7 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
             " ".join(str(channel) for channel in step.surviving) + "\n")
         card = {
             "name_project": name, "database_ite": number, "nref": len(step.computed),
-            "mra": int(len(plan.references) > 1), **_search_fields(settings, box),
+            "mra": int(plan.mra[number - 1]), **_search_fields(settings, box),
             "folder_data": plan.particles.name, "file_template_initial": f"{name}_seeds",
             "feature_data_sidelength": box, "destination": destination,
             "time_start_computation": started.strftime(DYNAMO_TIME),

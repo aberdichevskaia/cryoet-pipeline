@@ -23,6 +23,15 @@ with --particles 0. There the numpy kernel takes minutes per search, so
 --skip-numpy compares the torch kernel with Dynamo directly: on cone rounds the two
 kernels gave the same poses (2026-10-26, A40).
 
+Every search that ends more than 0.1 deg from Dynamo's pose is listed with three
+CCs: ours, Dynamo's, and ours at Dynamo's orientation (its shift searched again).
+All three alike is a near-tie, two poses that score the same (a C1 search of a
+near-symmetric particle such as RyR1 has one per symmetry copy). Ours above the
+other two: Dynamo's search stopped short of the higher peak. Dynamo's above ours
+at its own orientation: a CC our scoring does not reproduce, as Dynamo's spline
+gave 1.00000 on the Mac toy (2026-10-27). Ours below ours at Dynamo's orientation:
+our search missed a peak it scores, which would be the port's fault.
+
 With --global-step it also times the torch kernel alone on a 360 deg search at
 that step (cone and in-plane), refined twice by 2 as the setup's global rounds
 are, low-pass --global-low Fourier px, at the full box: what a global round
@@ -36,6 +45,7 @@ from __future__ import annotations
 import argparse
 import math
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -142,6 +152,8 @@ def main() -> int:
         starts = {int(row[0]): row for row in start}
         dynamo = {int(row[0]): row for row in refined}
         rows = []
+        apart = []
+        at_their_orientation = replace(settings, cone_aperture=0, inplane_range=0, refine=0)
         times = {"numpy": [0.0, 0], "torch": [0.0, 0]}
         for tag in sample:
             row = starts[int(tag)]
@@ -168,6 +180,12 @@ def main() -> int:
                 _angle(first.angles, truth[6:9]), float(np.linalg.norm(first.shift - truth[3:6])),
                 first.correlation - truth[9], *between,
             ))
+            if rows[-1][0] > 0.1:
+                theirs = kernel.refine_particle_torch(
+                    inputs[0], reference, mask, truth[6:9], truth[3:6], inputs[5],
+                    at_their_orientation, device=device, chunk=args.chunk)
+                apart.append((int(tag), rows[-1][0], rows[-1][1], first.correlation, truth[9],
+                              theirs.correlation))
         rows_by_channel[channel] = rows
         table = np.array(rows)
         print(f"channel {channel}: {settings.cone_aperture:g} deg cone in "
@@ -180,6 +198,9 @@ def main() -> int:
             print(f"  {name:16s} angle median {np.median(angle):.3f}, max {angle.max():.3f} "
                   f"deg, {int(np.sum(angle > 0.1))} over 0.1; shift median {np.median(shift):.3f}, "
                   f"max {shift.max():.3f} px; CC difference max {np.abs(cc).max():.2e}")
+        for tag, angle, shift, ours, dynamo_cc, at_theirs in apart:
+            print(f"  tag {tag}: {angle:.2f} deg and {shift:.2f} px from Dynamo's pose; CC ours "
+                  f"{ours:.5f}, Dynamo's {dynamo_cc:.5f}, ours at its orientation {at_theirs:.5f}")
         for name, (seconds, count) in times.items():
             if count:
                 print(f"  {name:5s} {1000 * seconds / count:8.2f} ms per candidate "

@@ -109,6 +109,25 @@ def test_two_dynamo_projects_are_compared_by_tag(dynamo_project: Path, tmp_path:
     assert "same series, stack and index" in numbers["identity"]
 
 
+def test_one_class_is_not_tested_against_chance(dynamo_project: Path, tmp_path: Path) -> None:
+    # A one-channel run (SEEDS=map, or a port mirror of one) has nothing to shuffle:
+    # its index is 0/0, and NaN once read here as beating every shuffle.
+    write_manifest(dynamo_project)
+    second = _second_project(dynamo_project, {tag: 1 for tag in TAGS})
+    out = tmp_path / "comparison.json"
+    result = _run(dynamo_project, second, "--shuffles", "50", "--out", out)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "one class in the second: nothing to compare with chance" in result.stdout
+    assert "shuffles reached it" not in result.stdout and "nan" not in result.stdout
+    numbers = json.loads(out.read_text())
+    assert numbers["adjusted_rand_index"] is None and numbers["paired_share_p"] is None
+    assert numbers["table"] == [[sum(1 for t in TAGS if SECOND[t] == k)] for k in (1, 2)]
+    both = _run(second, second, "--shuffles", "50")
+    assert both.returncode == 0, both.stdout + both.stderr
+    assert "one class in the first run and the second: nothing to compare" in both.stdout
+    assert "nan" not in both.stdout
+
+
 def test_tags_naming_other_particles_are_refused(dynamo_project: Path) -> None:
     write_manifest(dynamo_project)
     second = _second_project(dynamo_project, SECOND)

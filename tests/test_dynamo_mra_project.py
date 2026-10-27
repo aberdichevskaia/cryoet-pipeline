@@ -10,7 +10,12 @@ from test_wedge import _granular_phantom
 
 from cryoet_pipeline.backends import dynamo_search as core
 from cryoet_pipeline.dynamo_mra_project import plan_from_dynamo, run_mra_project, torch_search
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification, read_table
+from cryoet_pipeline.reports.dynamo_project import (
+    read_dynamo_classification,
+    read_em,
+    read_map,
+    read_table,
+)
 
 BOX = 16
 TILTS = (-60.0, 60.0)
@@ -22,9 +27,10 @@ CARD = {
 }
 
 
-def _project(root: Path, **card_changes: object) -> tuple[Path, list[int]]:
+def _project(root: Path, channels: int = 2, **card_changes: object) -> tuple[Path, list[int]]:
     """Two phantoms, 6 particles each at random poses, and a two-channel Dynamo project
-    whose channels start from the two phantoms; returns it and each tag's phantom."""
+    whose channels start from the two phantoms (with `channels` 1, only the first);
+    returns it and each tag's phantom."""
 
     rng = np.random.default_rng(4)
     first = _granular_phantom(BOX).numpy().astype(float)
@@ -48,7 +54,7 @@ def _project(root: Path, **card_changes: object) -> tuple[Path, list[int]]:
         rows.append(row)
         truth.append(kind)
     project = root / "mra_t"
-    for channel, reference in ((1, first), (2, second)):
+    for channel, reference in ((1, first), (2, second))[:channels]:
         write_em(project / "settings" / f"template_initial_ref_{channel:03d}.em", reference)
         table = np.array(rows)
         table[:, 33] = channel
@@ -64,7 +70,8 @@ def _project(root: Path, **card_changes: object) -> tuple[Path, list[int]]:
         card.parent.mkdir(parents=True)
         card.write_text("".join(f"{k}={v};\n" for k, v in {**CARD, **card_changes}.items()))
     (root / "mra_t_seeds").mkdir()
-    (root / "mra_t_seeds" / "seed_kinds.txt").write_text("1 subset 6\n2 subset 6\n")
+    (root / "mra_t_seeds" / "seed_kinds.txt").write_text(
+        "".join(f"{channel} subset 6\n" for channel in range(1, channels + 1)))
     return project, truth
 
 
@@ -81,11 +88,33 @@ def test_the_plan_is_the_projects_own(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("change, name", [({"dim": 8}, "dim"), ({"sym": "c4"}, "sym"),
-                                          ({"area_search": "3 3 2"}, "area_search")])
+                                          ({"area_search": "3 3 2"}, "area_search"),
+                                          ({"mra": 0}, "mra 0 with 2 references")])
 def test_what_the_port_does_not_model_is_refused(tmp_path: Path, change, name) -> None:
     project, _ = _project(tmp_path, **change)
     with pytest.raises(ValueError, match=name):
         plan_from_dynamo(project)
+
+
+def test_a_project_without_mra_averages_as_the_project_does(tmp_path: Path) -> None:
+    # A map seed's one channel, mra 0: no plugin, so the average is the project's own
+    # (odd and even halves), as Dynamo writes it; the plugin's differs.
+    project, _ = _project(tmp_path, channels=1, mra=0)
+    plan = plan_from_dynamo(project)
+    assert sorted(plan.references) == [1] and plan.mra == [False, False]
+    out = tmp_path / "ours"
+    run_mra_project(plan, out, log=lambda _: None)
+    averages = out / "results" / "ite_0001" / "averages"
+    rows = read_table(averages / "refined_table_ref_001_ite_0001.tbl")
+    particles = [read_map(plan.particles / f"particle_{int(tag):05d}.mrc") for tag in rows[:, 0]]
+    poses = (rows[:, 6:9], rows[:, 3:6], [tuple(row) for row in rows[:, 13:15]])
+    written = read_em(averages / "average_ref_001_ite_0001.em")
+    own, _, _ = core.average_particles(particles, *poses, plan.soft_mask)
+    plugin = core.average_class(particles, *poses, plan.soft_mask).average
+    np.testing.assert_allclose(written, own, atol=1e-5 * own.std())
+    assert np.abs(plugin - own).max() > 0.1 * own.std()
+    card = (out / "cards" / "ite_0001" / "card_ite_ite_0001.card").read_text()
+    assert "mra=0;" in card and "nref=1;" in card
 
 
 def test_several_processes_can_share_each_device() -> None:
