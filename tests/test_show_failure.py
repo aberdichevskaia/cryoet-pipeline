@@ -152,3 +152,55 @@ def test_error_lines_are_capped_at_the_first_and_the_last():
     picked = show_failure._errors(lines, range(len(lines)))
     half = show_failure.MAX_ERRORS // 2
     assert picked == [*range(half), *range(30 - half, 30)]
+
+
+def test_a_failure_rerun_since_is_listed_apart_with_the_jobs_it_failed_in(tmp_path):
+    _project(tmp_path)
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    [rerun] = result["rerun_since"]
+    assert (rerun["series"], rerun["step"]) == ("A", "track-fiducials")
+    assert [job["id"] for job in rerun["jobs"]] == ["120"]
+    assert rerun["passed_at"] == "2026-10-26T12:00:00+00:00"
+    text = "\n".join(show_failure.render(result))
+    assert "A  track-fiducials  failed in p-cpu 120; passed 2026-10-26T12:00:00+00:00" in text
+
+
+def _qc(root: Path, series: str, qc_type: str, status: str, warning: str) -> dict:
+    path = f"outputs/p/qc/{series}/{qc_type}.json"
+    _write(root / path, json.dumps({"status": status, "warnings": [warning]}), CRASHED)
+    return {"id": f"{series}:qc:{qc_type}", "kind": "qc", "path": path,
+            "parameters": {"qc_type": qc_type, "tilt_series_id": series}}
+
+
+def test_a_step_whose_result_failed_qc_is_named_with_its_first_warning(tmp_path):
+    _project(tmp_path)
+    shift = "residual maximum shift 143.773 px exceeds failure threshold 5.000 px"
+    artifacts = [
+        _qc(tmp_path, "B", "coarse_alignment_report", "fail", shift),
+        _qc(tmp_path, "A", "ctf_estimation", "warning", "3 of 29 views stopped at 30 A"),
+    ]
+    registry = tmp_path / "outputs" / "p" / "artifacts.json"
+    registry.write_text(json.dumps({"artifacts": artifacts}))
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    assert result["qc_failures"] == [{
+        "series": "B", "step": "qc-coarse-alignment",
+        "path": "outputs/p/qc/B/coarse_alignment_report.json", "warnings": [shift],
+    }]
+    text = "\n".join(show_failure.render(result))
+    assert "ran, but the result failed QC" in text
+    assert "B  qc-coarse-alignment  outputs/p/qc/B/coarse_alignment_report.json" in text
+    # Asked about one step, it keeps to that step.
+    other = show_failure.failures(_config(), tmp_path, step="generate-fiducial-seed", slurm=False)
+    assert other["qc_failures"] == []
+
+
+def test_no_failed_step_still_says_what_failed_before(tmp_path):
+    _project(tmp_path)
+    result = show_failure.failures(_config(), tmp_path, series=["A"], step="track-fiducials",
+                                   slurm=False)
+    text = show_failure.render(result)
+    assert text[:2] == [
+        "outputs/p: lane ribo-bin8 (variant bin8), 0 failed steps",
+        "no failed step on record for this lane",
+    ]
+    assert "failed before, and passed when run again since:" in text

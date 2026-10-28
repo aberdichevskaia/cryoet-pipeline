@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -382,7 +383,7 @@ def test_every_recipe_names_what_its_script_reads(name):
     assert submit_recipe.script_time(recipe), f"{recipe.script} sets no time limit"
     chain = [
         step for step, _ in submit_recipe.run_series.build_steps(
-            submit_recipe.tomllib.loads((ROOT / "configs/lanes/ryr1-bin8.toml").read_text()),
+            tomllib.loads((ROOT / "configs/lanes/ryr1-bin8.toml").read_text()),
             Path("outputs/ryr1"), "TS_X",
         )
     ]

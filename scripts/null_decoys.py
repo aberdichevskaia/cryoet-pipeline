@@ -73,7 +73,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
 import zlib
 from pathlib import Path
 from typing import Any
@@ -504,7 +503,7 @@ def main() -> int:
     if args.count < 1:
         parser.error("--count must be at least 1")
 
-    cfg = tomllib.loads(args.config.read_text())
+    _, cfg = run_series.read_config(args.config)
     lane = cfg["lane"]["variant"]
     variant = args.variant or f"{lane}-null"
     if variant == lane:

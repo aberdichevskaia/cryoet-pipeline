@@ -24,7 +24,8 @@ Step names, keys, and output folders are in [pipeline_map.md](pipeline_map.md).
    - `python3 scripts/show_project.py <config>` shows where every series of the
      lane stands.
    - `python3 scripts/show_failure.py <config>` shows why each failed step
-     failed.
+     failed, then the steps that failed before and passed when run again, and
+     the results that failed QC.
    - `python3 scripts/show_series.py --project P --series TS` shows what exists.
    - `python3 scripts/run_series.py --project P --config C --series TS --from A
      --until B` prints the exact commands those steps would run.

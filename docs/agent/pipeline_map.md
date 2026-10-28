@@ -129,6 +129,10 @@ Slurm log.
     non-zero, with its error output and exit code.
   - A job that stopped in its preflight, or stopped in the middle of a step,
     counts as a failure too. A failure fixed by a later run does not.
+  - After the failures, without excerpts: each step that failed in a job and
+    passed when run again since, with those jobs; and each step that ran but
+    whose result failed QC, with its QC file and first warning. "0 failed steps"
+    means nothing is broken now, not that nothing ever failed.
   - The output is bounded and carries line numbers. `--series`, `--step` and
     `--json` work as above.
 - `python3 scripts/show_series.py --project P --series TS` — the series'

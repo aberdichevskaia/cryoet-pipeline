@@ -67,6 +67,8 @@ from pathlib import Path
 from typing import Any
 
 Command = list[str]
+# Where the lane files are, for the hint when a config path names no file.
+LANES = Path(__file__).resolve().parents[1] / "configs" / "lanes"
 
 
 def flag(name: str, value: Any) -> Command:
@@ -251,6 +253,43 @@ def unknown_keys(cfg: dict[str, Any]) -> list[str]:
                             + _did_you_mean(stage_key, STAGE_KEYS)
                         )
     return found
+
+
+def read_config(path: Path) -> tuple[str, dict[str, Any]]:
+    """A lane config's text and its TOML. A path that names no file is refused
+    with the lane file it was probably meant to be, rather than a traceback."""
+    try:
+        text = path.read_text()
+    except IsADirectoryError:
+        inside = ", ".join(sorted(other.name for other in path.glob("*.toml"))) or "none"
+        raise SystemExit(
+            f"{path} is a folder, not a lane config; the configs in it: {inside}"
+        ) from None
+    except FileNotFoundError:
+        raise SystemExit(f"no lane config {path}{_lane_file_hint(path)}") from None
+    try:
+        return text, tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise SystemExit(f"{path} is not valid TOML: {error}") from None
+
+
+def _lane_file_hint(path: Path) -> str:
+    """Where a config path that names no file probably meant: a file with a close
+    name in its folder, or, for a bare name such as `ribo-mdc`, in configs/lanes."""
+    stem = path.stem if path.suffix == ".toml" else path.name
+    bare = len(path.parts) == 1
+    folder = LANES if bare else path.parent
+    if not folder.is_dir():
+        return f": there is no folder {folder}"
+    shown = Path("configs", "lanes") if bare else folder
+    stems = sorted(other.stem for other in folder.glob("*.toml"))
+    # Stems, not file names: a shared ".toml" would make unrelated names look close.
+    close = [stem] if stem in stems else difflib.get_close_matches(stem, stems, n=3, cutoff=0.75)
+    if close:
+        return "; did you mean " + " or ".join(str(shown / f"{one}.toml") for one in close) + "?"
+    if bare:
+        return "; the lane files are " + ", ".join(str(shown / f"{one}.toml") for one in stems)
+    return ""
 
 
 def check_keys(cfg: dict[str, Any], config: Path | None = None) -> None:
@@ -652,7 +691,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    cfg = tomllib.loads(args.config.read_text())
+    _, cfg = read_config(args.config)
 
     if args.list_steps:
         for name, _ in build_steps(cfg, args.project, args.series[0]):

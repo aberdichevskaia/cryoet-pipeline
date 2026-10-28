@@ -828,8 +828,7 @@ def main(argv: list[str] | None = None) -> int:
     # does not leave the first lane submitted alone.
     lanes: list[Submission] = []
     for config in args.configs:
-        text = config.read_text()
-        cfg = tomllib.loads(text)
+        text, cfg = run_series.read_config(config)
         lane = plan(cfg, config)
         names = [stage.name for stage in lane.stages]
         if args.from_stage is not None and args.from_stage not in names:

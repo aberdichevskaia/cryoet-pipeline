@@ -1,6 +1,8 @@
 """Every lane config renders commands the CLI accepts: known flags, required ones present."""
 
 import copy
+import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -128,6 +130,73 @@ def test_every_unknown_key_is_named_at_once():
         "variant is set above every section: it belongs in [lane]",
     ):
         assert expected in message
+
+
+@pytest.mark.parametrize(
+    ("given", "hint"),
+    [
+        ("ribo-mdc", "; did you mean configs/lanes/ribo-mdc.toml?"),
+        ("ribo_mdc.toml", "; did you mean configs/lanes/ribo-mdc.toml?"),
+        ("configs/lanes/ryr1-bin9.toml",
+         "; did you mean configs/lanes/ryr1-bin8.toml or configs/lanes/ryr1-bin4.toml?"),
+        ("riboo", "; the lane files are configs/lanes/example.toml, configs/lanes/gag-bin8.toml"),
+        ("outputs/nowhere/rerun.toml", ": there is no folder outputs/nowhere"),
+    ],
+)
+def test_a_config_that_names_no_file_is_refused_with_the_file_it_meant(monkeypatch, given, hint):
+    # The scripts run from the repository root, where configs/lanes is.
+    monkeypatch.chdir(ROOT)
+    with pytest.raises(SystemExit) as refused:
+        run_series.read_config(Path(given))
+    assert str(refused.value).startswith(f"no lane config {given}{hint}")
+
+
+def test_a_copy_that_names_no_file_is_matched_against_its_own_folder(tmp_path):
+    (tmp_path / "rerun-seed.toml").write_text("")
+    (tmp_path / "ryr1-bin8.toml").write_text("")
+    with pytest.raises(SystemExit) as refused:
+        run_series.read_config(tmp_path / "rerun-sed.toml")
+    assert str(refused.value).endswith(f"; did you mean {tmp_path / 'rerun-seed.toml'}?")
+    # Nothing close: no guess, rather than a lane file that only shares ".toml".
+    with pytest.raises(SystemExit) as refused:
+        run_series.read_config(tmp_path / "rerun.toml")
+    assert str(refused.value) == f"no lane config {tmp_path / 'rerun.toml'}"
+
+
+def test_a_folder_or_broken_toml_is_refused_without_a_traceback(monkeypatch, tmp_path):
+    monkeypatch.chdir(ROOT)
+    with pytest.raises(SystemExit, match="configs/lanes is a folder, not a lane config; "
+                       "the configs in it: example.toml, gag-bin8.toml"):
+        run_series.read_config(Path("configs/lanes"))
+    broken = tmp_path / "lane.toml"
+    broken.write_text("[run\n")
+    with pytest.raises(SystemExit, match="lane.toml is not valid TOML"):
+        run_series.read_config(broken)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run_series.py", "--project", "p", "--config", "ribo-mdc", "--series", "S",
+         "--list-steps"],
+        ["submit_lanes.py", "ribo-mdc", "--dry-run"],
+        ["submit_recipe.py", "ctf-window", "ribo-mdc", "--series", "S", "--dry-run"],
+        ["show_project.py", "ribo-mdc"],
+        ["show_failure.py", "ribo-mdc"],
+        ["repick.py", "--project", "p", "--config", "ribo-mdc", "--series", "S",
+         "--label", "x"],
+        ["null_decoys.py", "--project", "p", "--config", "ribo-mdc", "--series", "S"],
+    ],
+    ids=lambda command: command[0],
+)
+def test_every_script_that_reads_a_lane_config_gives_the_hint(command):
+    env = {key: value for key, value in os.environ.items() if key != "OVERWRITE"}
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / command[0]), *command[1:]],
+        cwd=ROOT, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 1 and "Traceback" not in result.stderr, result.stderr
+    assert "no lane config ribo-mdc; did you mean configs/lanes/ribo-mdc.toml?" in result.stderr
 
 
 def _combination(source: str, alignment: str, segment: bool) -> dict:

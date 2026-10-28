@@ -35,7 +35,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -399,7 +398,7 @@ def main() -> int:
     parser.add_argument("--no-slurm", action="store_true", help="do not ask sacct and squeue")
     args = parser.parse_args()
 
-    cfg = tomllib.loads(args.config.read_text())
+    _, cfg = run_series.read_config(args.config)
     run_series.check_keys(cfg, args.config)
     if not isinstance(cfg.get("run"), dict) or not cfg["run"].get("project"):
         raise SystemExit(f"{args.config}: no [run] project to summarize")

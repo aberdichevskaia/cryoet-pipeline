@@ -48,7 +48,6 @@ import json
 import os
 import subprocess
 import sys
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -235,7 +234,7 @@ def main() -> int:
                         help="compare picks made before; run nothing")
     args = parser.parse_args()
 
-    cfg = tomllib.loads(args.config.read_text())
+    _, cfg = run_series.read_config(args.config)
     lane = cfg["lane"]["variant"]
     null_label = args.null_label or f"{lane}-null"
     if args.label in (lane, null_label):

@@ -19,6 +19,12 @@ says which those are):
 * a job whose log stops in the middle of a step: still running, or stopped by
   Slurm (time limit, memory, node). sacct, where it can be run, says which.
 
+Two kinds of record are listed after the failures, without excerpts, so that an
+answer of "no failed step" is not read as "nothing ever failed": a step that
+failed in a job and passed when run again since, with the jobs it failed in; and
+a step that ran but whose result failed QC, with the QC file and its first
+warning. scripts/show_project.py has every QC verdict, the warnings included.
+
 A program's log is found by where its step writes and by when: the logs written
 while the step ran. That is a stand-in for logs recorded on the run itself, the
 second half of roadmap section 6.
@@ -32,7 +38,6 @@ import argparse
 import json
 import re
 import sys
-import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -252,11 +257,14 @@ def failures(
         show_project.ask_slurm(jobs, names)
 
     found: dict[tuple[str, str], dict[str, Any]] = {}
+    rerun: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def wanted(one: str, name: str | None) -> bool:
+        return one in chosen and (step is None or name == step)
 
     def add(one: str, name: str, **fields: Any) -> None:
-        if one not in chosen or (step is not None and name != step):
-            return
-        found.setdefault((one, name), {"series": one, "step": name}).update(fields)
+        if wanted(one, name):
+            found.setdefault((one, name), {"series": one, "step": name}).update(fields)
 
     for (one, name), run in runs.items():
         if run.get("exit_code") != 0:
@@ -269,7 +277,13 @@ def failures(
         for failure in job["failed"]:
             key = (failure["series"], failure["step"])
             if runs.get(key, {}).get("exit_code") == 0:
-                continue  # rerun since, and the rerun worked
+                # Rerun since, and the rerun worked: no longer a failure, but on record.
+                if wanted(*key):
+                    rerun.setdefault(key, {
+                        "series": key[0], "step": key[1], "jobs": [],
+                        "passed_at": runs[key].get("finished_at"),
+                    })["jobs"].append(_job(job))
+                continue
             window = slurm_window(lines, *key)
             add(*key, kind="crashed", exit_code=failure["exit_code"], job=_job(job),
                 slurm_lines=slurm_excerpt(lines, window) if window else [])
@@ -305,8 +319,20 @@ def failures(
         logs, more = program_logs(root, project, entry["series"], entry["step"], since, until)
         entry["program_logs"] = logs
         entry["more_logs"] = more
+    def place(entry: dict[str, Any]) -> tuple[int, int]:
+        return chosen.index(entry["series"]), order.get(entry["step"], len(order))
+
+    # Steps that ran but whose result failed QC: not crashes, and not excerpted.
+    qc_failures = [
+        {"series": record["series"], "step": record["step"] or record["qc_type"],
+         "path": record["path"], "warnings": record["warnings"][:1]}
+        for record in show_project.qc_records(root, project, set(chosen), lane["variant"])
+        if record["status"] == "fail"
+        and wanted(record["series"], record["step"] or record["qc_type"])
+    ]
     return {"project": project_name, "lane": lane.get("name"), "variant": lane["variant"],
-            "failures": result}
+            "failures": result, "rerun_since": sorted(rerun.values(), key=place),
+            "qc_failures": sorted(qc_failures, key=place)}
 
 
 def _describe(entry: dict[str, Any]) -> str:
@@ -348,6 +374,21 @@ def render(result: dict[str, Any]) -> list[str]:
             lines += _excerpt(log["lines"], "  ")
         if entry.get("more_logs"):
             lines.append(f"  ({entry['more_logs']} more logs from the same run not shown)")
+    if result.get("rerun_since"):
+        lines += ["", "failed before, and passed when run again since:"]
+        for entry in result["rerun_since"]:
+            jobs = ", ".join(
+                f"{job.get('name', '?')} {job.get('id', '?')}" for job in entry["jobs"]
+            )
+            passed = f"; passed {entry['passed_at']}" if entry.get("passed_at") else ""
+            lines.append(f"  {entry['series']}  {entry['step']}  failed in {jobs}{passed}")
+    if result.get("qc_failures"):
+        lines += [
+            "", "ran, but the result failed QC (scripts/show_project.py lists every verdict):"
+        ]
+        for entry in result["qc_failures"]:
+            lines.append(f"  {entry['series']}  {entry['step']}  {entry['path']}")
+            lines += [f"      {warning}" for warning in entry["warnings"]]
     return lines
 
 
@@ -363,7 +404,7 @@ def main() -> int:
     parser.add_argument("--no-slurm", action="store_true", help="do not ask sacct and squeue")
     args = parser.parse_args()
 
-    cfg = tomllib.loads(args.config.read_text())
+    _, cfg = run_series.read_config(args.config)
     run_series.check_keys(cfg, args.config)
     if not isinstance(cfg.get("run"), dict) or not cfg["run"].get("project"):
         raise SystemExit(f"{args.config}: no [run] project")

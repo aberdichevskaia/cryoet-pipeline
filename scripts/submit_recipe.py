@@ -50,7 +50,6 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -414,8 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             "a submission from the assistant needs --reason: what was asked, and by whom"
         )
 
-    text = args.config.read_text()
-    cfg = tomllib.loads(text)
+    text, cfg = run_series.read_config(args.config)
     lane = submit_lanes.plan(cfg, args.config)  # the config's keys and stages checked
     project = lane.project
     if recipe.one_series and len(args.series) != 1:
