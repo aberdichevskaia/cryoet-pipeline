@@ -551,13 +551,18 @@ record a person's action would.
 **The client** is Claude Code, started by its own launcher with its own settings
 and skills — not through a `CLAUDE.md` at the repository root, which development
 sessions would load as well. Running under the person's own account gives
-identity, isolation, and quotas for free.
+identity, isolation, and quotas for free. The launcher is
+[`scripts/assistant`](../scripts/assistant); the settings, instructions and
+skills it starts the client with are in [`assistant/`](../assistant/README.md).
 
 **Four skills to start with**: a lane config from a description, shown as a dry-run
 and submitted after a yes; the status of a project and the diagnosis of what
 failed, from its QC and logs; reading an unfamiliar data folder
 ([roadmap.md](roadmap.md) section 22); proposing a template from EMDB (section 23).
-One assistant with skills, not several agents.
+One assistant with skills, not several agents. The first two, the status and
+diagnosis and the lane config, have existed since 28 October 2026 as
+`assistant/plugin/skills/project-status` and `lane-config`, and have not yet run
+with a model.
 
 **Gates**, following the action classes above:
 
@@ -622,7 +627,7 @@ the hashes of the files they name.
   client's own variables, as they are: `CRYOET_ASSISTANT`, `AI_AGENT`,
   `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, and the model as
   `CRYOET_ASSISTANT_MODEL`. The two `CRYOET_` variables come from the launcher,
-  which does not exist yet; until it does, the model ID is not recorded.
+  `scripts/assistant`; a session started without it does not record the model.
 
 **Prerequisites in code**, small, deterministic, and useful to a person without
 the assistant:
@@ -702,12 +707,13 @@ enough has to be measured rather than argued. Seven rules keep it so.
 1. **Guardrails live in our code, not in the client's settings or the prompt.**
    `submit_lanes.py` and `submit_recipe.py`, called from the assistant, refuse to
    submit without a fresh dry-run of the same plan; the journal is written by the
-   scripts; outputs are overwritten only by an explicit flag. Whatever drives the scripts inherits the
-   same guarantees. This is "capability boundaries are enforced by the tool set,
-   not by the prompt", extended to the client's configuration. It is not a
-   sandbox: a client with a shell under the same Unix user could call `sbatch`
-   directly, and only its own deny rules stop that. Both layers are needed; only
-   the first moves with us.
+   scripts; outputs are overwritten only by an explicit flag. Whatever drives the
+   scripts inherits the same guarantees. This is "capability boundaries are
+   enforced by the tool set, not by the prompt", extended to the client's
+   configuration. It is not a sandbox: a client with a shell under the same Unix
+   user could call `sbatch` directly, and only its own deny rules and the hook
+   `assistant/guard.py` stop that. Both layers are needed; only the first moves
+   with us.
 2. **Knowledge is plain markdown in the repository** — the pipeline map (step,
    keys, flags, outputs, QC, logs), the playbooks, the instrument and sample
    cards — readable by any model and by a person. Skills are thin `SKILL.md`

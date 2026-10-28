@@ -253,6 +253,15 @@ The average, the two half-maps and the particle STAR file are written to
 `outputs/<project>/averages/`. The FSC and the resolution estimate are in the QC
 report under `outputs/<project>/qc/`.
 
+## The terminal assistant
+
+A terminal assistant for the steps above is being built: Claude Code, started by
+`scripts/assistant` with its own instructions, permission rules and two skills so
+far, the status of a project with the reasons a step failed, and writing a lane
+config. It submits only through the scripts above, after a dry run and an
+explicit yes. It has not yet been run with a model or on the cluster. How to
+start it, and what it may and may not do: [assistant/README.md](assistant/README.md).
+
 ## Development
 
 ```bash

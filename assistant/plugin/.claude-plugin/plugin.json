@@ -1,0 +1,8 @@
+{
+  "name": "cryoet",
+  "version": "0.1.0",
+  "description": "Skills of the cryoet-pipeline terminal assistant: project status and diagnosis, and lane configs. Loaded by scripts/assistant only.",
+  "author": {
+    "name": "Anna Berdichevskaia"
+  }
+}

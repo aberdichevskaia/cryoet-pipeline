@@ -1,0 +1,67 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable",
+    "allow": [
+      "Bash(python3 scripts/show_project.py *)",
+      "Bash(python scripts/show_project.py *)",
+      "Bash(python3 scripts/show_failure.py *)",
+      "Bash(python scripts/show_failure.py *)",
+      "Bash(python3 scripts/show_series.py *)",
+      "Bash(python scripts/show_series.py *)",
+      "Bash(python3 scripts/run_series.py *)",
+      "Bash(python scripts/run_series.py *)",
+      "Bash(python3 scripts/submit_lanes.py * --dry-run*)",
+      "Bash(python scripts/submit_lanes.py * --dry-run*)",
+      "Bash(python3 scripts/submit_lanes.py --dry-run *)",
+      "Bash(python scripts/submit_lanes.py --dry-run *)",
+      "Bash(python3 scripts/submit_recipe.py --list)",
+      "Bash(python scripts/submit_recipe.py --list)",
+      "Bash(python3 scripts/submit_recipe.py * --dry-run*)",
+      "Bash(python scripts/submit_recipe.py * --dry-run*)",
+      "Bash(squeue)",
+      "Bash(squeue *)",
+      "Bash(sacct *)",
+      "Bash(sinfo)",
+      "Bash(sinfo *)",
+      "Bash(ls)",
+      "Bash(ls *)"
+    ],
+    "ask": [
+      "Bash(scancel *)",
+      "Edit(configs/lanes/**)"
+    ],
+    "deny": [
+      "Bash(sbatch)",
+      "Bash(sbatch *)",
+      "Bash(srun *)",
+      "Bash(salloc *)",
+      "Bash(git)",
+      "Bash(git *)",
+      "Bash(python3 scripts/run_series.py * --execute*)",
+      "Bash(python scripts/run_series.py * --execute*)",
+      "Edit(**/journal.jsonl)",
+      "Edit(**/*.sbatch)",
+      "Edit(scripts/**)",
+      "Edit(src/**)",
+      "Edit(tests/**)",
+      "Edit(docs/**)",
+      "Edit(assistant/**)",
+      "Edit(.claude/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/assistant/guard.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

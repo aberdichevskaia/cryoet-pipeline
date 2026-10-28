@@ -3,7 +3,9 @@
 What the terminal assistant reads. It is written so that any model and any client
 can use it, and so that a person can check every line. The design is in
 [agent_architecture.md](../agent_architecture.md), sections *First increment*
-and *Portability*.
+and *Portability*. The assistant is started by `scripts/assistant`; its
+instructions, permission rules and skills are in
+[assistant/](../../assistant/README.md).
 
 | File | What it is |
 |---|---|

@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# The pipeline's terminal assistant: Claude Code, started in the repository root,
+# under the person's own account, with the assistant's own settings, instructions
+# and skills from assistant/ (see assistant/README.md).
+#
+#     scripts/assistant                      start a session
+#     scripts/assistant -c                   continue the last one
+#     scripts/assistant --model claude-sonnet-5-5
+#     scripts/assistant --print-command      show what would run, and run nothing
+#
+# What it sets up:
+#   CRYOET_ASSISTANT        marks the session as the assistant's; submit_lanes.py
+#                           and submit_recipe.py journal it and hold it to their gate
+#   CRYOET_ASSISTANT_MODEL  the model it starts, for the journal; a full model ID
+#                           (claude-opus-5-5 unless --model or the variable says)
+#   --setting-sources user  the person's own settings, but not this clone's
+#                           .claude/settings*.json, which belong to development
+#   --settings              assistant/settings.json: the permission rules, and
+#                           assistant/guard.py on every shell command
+#   --plugin-dir            assistant/plugin: the skills
+#   --append-system-prompt  assistant/instructions.md, in every turn
+#
+# Other options pass on to claude, except the ones that would undo the above.
+# Switching the model inside a session (/model) leaves CRYOET_ASSISTANT_MODEL
+# naming the first one: start a new session instead.
+#
+# Disposable, like the rest of scripts/: the first increment of the assistant
+# (docs/agent_architecture.md).
+
+set -euo pipefail
+
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+model=${CRYOET_ASSISTANT_MODEL:-claude-opus-5-5}
+print_only=0
+passed=()
+while (($#)); do
+    case "$1" in
+        --model)
+            model=${2:?--model needs a model ID}
+            shift 2
+            ;;
+        --model=*)
+            model=${1#--model=}
+            shift
+            ;;
+        --print-command)
+            print_only=1
+            shift
+            ;;
+        -h | --help)
+            sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
+            exit 0
+            ;;
+        --dangerously-skip-permissions | --allow-dangerously-skip-permissions | \
+        --permission-mode | --permission-mode=* | --settings | --settings=* | \
+        --setting-sources | --setting-sources=* | --allowedTools | --allowedTools=* | \
+        --allowed-tools | --allowed-tools=* | --tools | --tools=* | \
+        --system-prompt | --system-prompt=* | --system-prompt-file | --system-prompt-file=* | \
+        --plugin-dir | --plugin-dir=* | --plugin-url | --plugin-url=* | --safe-mode | --bare)
+            echo "scripts/assistant: ${1%%=*} would undo what the assistant is started with" \
+                "(see the header of scripts/assistant); run claude itself for that" >&2
+            exit 2
+            ;;
+        *)
+            passed+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# The journal names the model by what is given here, and an alias names a
+# different model as releases move on.
+case "$model" in
+    opus | sonnet | haiku | fable | default | best | opusplan)
+        echo "scripts/assistant: give a full model ID, such as claude-opus-5-5, not the" \
+            "alias '$model', so that the journal says which model it was" >&2
+        exit 2
+        ;;
+esac
+
+claude=$(command -v claude || true)
+if [[ -z "$claude" ]]; then
+    echo "scripts/assistant: Claude Code (claude) is not on PATH. Install it, or ask" \
+        "whoever set up the assistant on this machine." >&2
+    exit 1
+fi
+version=$("$claude" --version 2>/dev/null | head -n 1 || true)
+export CRYOET_ASSISTANT="cryoet-assistant; claude-code ${version%% *}"
+export CRYOET_ASSISTANT_MODEL=$model
+
+cd "$REPO"
+options=(
+    --model "$model"
+    --setting-sources user
+    --settings "$REPO/assistant/settings.json"
+    --plugin-dir "$REPO/assistant/plugin"
+)
+if ((print_only)); then
+    printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\ncd %q\n' \
+        "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL" "$REPO"
+    printf '%q' "$claude"
+    printf ' %q' "${options[@]}"
+    printf ' --append-system-prompt "$(cat assistant/instructions.md)" --name cryoet-assistant'
+    printf ' %q' ${passed[@]+"${passed[@]}"}
+    printf '\n'
+    exit 0
+fi
+exec "$claude" "${options[@]}" \
+    --append-system-prompt "$(cat "$REPO/assistant/instructions.md")" \
+    --name cryoet-assistant ${passed[@]+"${passed[@]}"}
