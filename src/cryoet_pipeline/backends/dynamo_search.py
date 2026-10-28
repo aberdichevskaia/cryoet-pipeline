@@ -135,6 +135,9 @@ class SearchSettings:
     shift_limit: float = 3.0
     # Dynamo's limm: 2 centres the shift sphere on the preceding winner, 1 on the box.
     area_search_modus: int = 2
+    # Dynamo's dim: the box the search runs at, 0 for the particles' own. The kernel
+    # runs at the size it is given; `downsized` and `resize_box` make a smaller one.
+    dim: int = 0
 
     def __post_init__(self):
         numbers = np.array(list(vars(self).values()), dtype=float)
@@ -152,6 +155,8 @@ class SearchSettings:
             raise ValueError("sampling must be positive")
         if type(self.refine) is not int or not 0 <= self.refine <= 4 or self.refine_factor <= 1:
             raise ValueError("require integer refine in [0, 4] and refine_factor > 1")
+        if type(self.dim) is not int or self.dim < 0 or self.dim % 2:
+            raise ValueError("dim must be 0 (the particles' box) or an even box")
 
 
 @dataclass(frozen=True)
@@ -474,6 +479,9 @@ def refine_particle(
     if not p.shape == ref.shape == mask.shape or np.any(mask < 0) or not np.any(mask):
         raise ValueError("shared shape and a nonnegative/nonempty mask are required")
     n = len(p)
+    if settings.dim not in (0, n):
+        raise ValueError(f"a search at dim {settings.dim} is given {n}-voxel maps: resize them "
+                         "and pass `downsized` settings")
     shell = bandpass(n, settings.high, settings.low)
     filter_mask = shell * wedge(n, tilt_range)
     p = normalize_roi(apply_filter(apply_filter(p, shell), filter_mask))
@@ -796,6 +804,80 @@ def prepare_reference(template, mask, settings: SearchSettings = DEFAULT_SETTING
     return normalize_roi(
         apply_filter(t, bandpass(len(t), settings.high, settings.low)), np.asarray(mask) > 0.5
     )
+
+
+@lru_cache(maxsize=8)
+def _spline_rows(size: int, dim: int) -> np.ndarray:
+    """MATLAB's `interp3(..., 'spline')` along one axis, from `size` samples to the
+    points `1:size/dim:size` (1-based), as a (dim, size) matrix: not-a-knot cubic
+    splines, which `interp3` uses on a grid."""
+
+    from scipy.interpolate import CubicSpline  # type: ignore[import-untyped]
+
+    points = np.arange(dim) * (size / dim)
+    rows = CubicSpline(np.arange(size, dtype=float), np.eye(size), bc_type="not-a-knot")(points)
+    rows.flags.writeable = False
+    return rows
+
+
+def resize_box(volume, dim: int) -> np.ndarray:
+    """A map at Dynamo's smaller box `dim`, as `dynamo_resize_template` makes it.
+
+    Every map a search at `dim` uses (each particle, each reference, the alignment
+    mask) goes through it: `dynamo_database_volume_process` calls it through
+    `dynamo_pipeline_resize`. It samples the map at 1, 1 + N/dim, 1 + 2N/dim, ...
+    with cubic splines, so the box's centre N/2 + 1 lands on the smaller box's
+    dim/2 + 1, and nothing is low-passed first. A `dim` that divides N makes Dynamo
+    bin instead (`dynamo_bin`), which is not ported, so it is refused.
+    """
+
+    v = _cube(volume)
+    n = len(v)
+    if dim % 2 or not 4 <= dim < n or n % dim == 0:
+        raise ValueError(f"dim {dim} for a {n}-voxel box: an even dim below it, not dividing it "
+                         "(Dynamo bins then, which is not ported)")
+    rows = _spline_rows(n, dim)
+    v = np.einsum("ai,ijk->ajk", rows, v)
+    v = np.einsum("bj,ajk->abk", rows, v)
+    return np.einsum("ck,abk->abc", rows, v)
+
+
+def resize_mask(mask, dim: int) -> np.ndarray:
+    """`dynamo_resize_mask`: the mask resized as a map, then thresholded at 0.5. A
+    soft mask's edge is gone at the smaller box."""
+
+    return (resize_box(mask, dim) > 0.5).astype(float)
+
+
+def downsized(settings: SearchSettings, box: int) -> SearchSettings:
+    """A search at `settings.dim` as the kernel runs it on maps `resize_box` made.
+
+    The band, given in the particles' Fourier pixels, scales with the box
+    (`dynamo_zaux_rescalings`), and the shift limit too, rounded up
+    (`dynamo__align_motor`: `ceil(area_search * factor_shrink)`). The rest of the
+    search is the same at either size.
+    """
+
+    factor = settings.dim / box
+    return replace(settings, high=factor * settings.high, low=factor * settings.low,
+                   shift_limit=float(math.ceil(settings.shift_limit * factor)), dim=0)
+
+
+def expanded_shift(angles, shift, box: int, dim: int) -> np.ndarray:
+    """A shift found at `dim` in the particles' box, as `pipeline_align_one_particle`
+    writes it back to the table.
+
+    Scaled by box/dim, then composed (`dynamo_rigid_compose`, all three transforms
+    'rotshift') with a move by b(1, 1, 1) before the found rotation and by -b after
+    it, b = box/2dim - 1/2: Dynamo's correction for the half voxel by which binning
+    moves a box's centre. Dynamo applies it to the interpolated box as well, whose
+    centre `resize_box` does not move, so a shift found there comes back off by up
+    to 2b sqrt(3) voxels, depending on the rotation; the port does as Dynamo does.
+    """
+
+    expand = 1 / (dim / box)
+    offset = (0.5 * expand - 0.5) * np.ones(3)
+    return (euler_matrix(angles).T @ -offset + np.asarray(shift, dtype=float) * expand) + offset
 
 
 def search_mask(box: int, diameter_px: float) -> np.ndarray:

@@ -26,8 +26,8 @@ A project the setup made and Dynamo never computed (scripts/dynamo_mra_mdc.sbatc
 with SETUP_ONLY=1) is run the same way: Dynamo writes every iteration's card when
 the setup unfolds a project, so the port follows the plan Dynamo would have
 followed, and there is nothing to compare. That is how the pipeline's own runs are
-made. A global round must then be set up at the full box (GLOBAL_FULL_BOX=1): the
-port searches only there, and refuses Dynamo's CPU downsampling (dim).
+made. A global round runs at the card's dim, downsampled as Dynamo's CPU path does
+it (GLOBAL_FULL_BOX=1 at the setup searches it at the full box instead).
 
 The comparison of classes alone, with chance levels, is
 scripts/compare_dynamo_classes.py; the report, scripts/dynamo_classification_report.py.

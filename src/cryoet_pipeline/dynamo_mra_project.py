@@ -29,10 +29,11 @@ So the classification report, `compare_dynamo_classes.py` and
 only in the code that searched, assigned and averaged: Dynamo's, or ours on the
 CPU (numpy, float64, the replayed port) or on a torch device.
 
-What the port does not model is refused when the plan is read, iteration by
-iteration: a search at a dim other than the box (Dynamo's CPU downsampling,
-which the GPU path replaces by searching at the full box), symmetry, CC modes
-other than `use_CC 1`, `localnc 1`, thresholding, a shift area other than a sphere.
+Dynamo's CPU downsampling (a card's `dim` below the box) is modelled as the
+iteration setup makes it (`dynamo_mra.mra_iteration`). What the port does not
+model is refused when the plan is read, iteration by iteration: a dim that divides
+the box (Dynamo bins then instead of interpolating), symmetry, CC modes other than
+`use_CC 1`, `localnc 1`, thresholding, a shift area other than a sphere.
 """
 
 from __future__ import annotations
@@ -102,9 +103,9 @@ def _card_settings(card: dict[str, str], box: int, number: int) -> SearchSetting
 
     wrong = {key: card[key] for key, allowed in _REFUSED.items()
              if key in card and card[key].strip() not in allowed}
-    dim = card.get("dim")
-    if dim is not None and int(float(dim)) != box:
-        wrong["dim"] = dim
+    dim = int(float(card.get("dim", box)))
+    if dim != box and (dim % 2 or not 4 <= dim < box or box % dim == 0):
+        wrong["dim"] = card["dim"]  # Dynamo bins when dim divides the box: not ported
     limits = [float(value) for value in card.get("area_search", "").replace(",", " ")
               .strip("[] ").split()]
     if len(limits) != 3 or len(set(limits)) != 1:
@@ -117,7 +118,7 @@ def _card_settings(card: dict[str, str], box: int, number: int) -> SearchSetting
         inplane_sampling=float(card["inplane_sampling"]),
         refine=int(float(card["refine"])), refine_factor=float(card["refine_factor"]),
         high=float(card["high"]), low=float(card["low"]), shift_limit=limits[0],
-        area_search_modus=int(float(card["area_search_modus"])),
+        area_search_modus=int(float(card["area_search_modus"])), dim=0 if dim == box else dim,
     )
 
 
@@ -195,7 +196,7 @@ def _search_fields(settings: SearchSettings, box: int) -> dict[str, Any]:
         "inplane_range": f"{settings.inplane_range:g}",
         "inplane_sampling": f"{settings.inplane_sampling:g}",
         "refine": settings.refine, "refine_factor": f"{settings.refine_factor:g}",
-        "high": f"{settings.high:g}", "low": f"{settings.low:g}", "dim": box,
+        "high": f"{settings.high:g}", "low": f"{settings.low:g}", "dim": settings.dim or box,
         "area_search": " ".join([f"{settings.shift_limit:g}"] * 3),
         "area_search_modus": settings.area_search_modus, "sym": "c1", "use_CC": 1,
         "localnc": 1, "threshold_modus": 0,

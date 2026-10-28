@@ -117,6 +117,28 @@ def test_a_project_without_mra_averages_as_the_project_does(tmp_path: Path) -> N
     assert "mra=0;" in card and "nref=1;" in card
 
 
+def test_a_project_at_a_smaller_dim_runs_resized_on_either_kernel(tmp_path: Path) -> None:
+    # Dynamo's dim 12 for the 16-voxel box: the search at 12, the classes at 16.
+    project, _ = _project(tmp_path, dim=12)
+    plan = plan_from_dynamo(project)
+    assert [settings.dim for settings in plan.settings] == [12, 12]
+    run_mra_project(plan, tmp_path / "ours_numpy", log=lambda _: None)
+    run_mra_project(plan, tmp_path / "ours_torch", search=torch_search("cpu", "float64", 8),
+                    log=lambda _: None)
+    for number in (1, 2):
+        for channel in (1, 2):
+            name = f"refined_table_ref_{channel:03d}_ite_{number:04d}.tbl"
+            numpy_rows, torch_rows = (
+                read_table(tmp_path / run / "results" / f"ite_{number:04d}" / "averages" / name)
+                for run in ("ours_numpy", "ours_torch"))
+            np.testing.assert_allclose(torch_rows, numpy_rows, atol=1e-8)
+    card = (tmp_path / "ours_numpy" / "cards" / "ite_0001" / "card_ite_ite_0001.card").read_text()
+    assert "dim=12;" in card
+    average = read_em(tmp_path / "ours_numpy" / "results" / "ite_0001" / "averages"
+                      / "average_ref_001_ite_0001.em")
+    assert average.shape == (BOX,) * 3
+
+
 def test_several_processes_can_share_each_device() -> None:
     # Nothing starts until the first search, so CUDA names can be checked without CUDA.
     search = torch_search("cuda", "float32", 8, devices=2, per_device=2)

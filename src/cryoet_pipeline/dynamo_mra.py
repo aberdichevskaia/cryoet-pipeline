@@ -28,7 +28,8 @@ of the average's std from Dynamo's own, where the plugin's way is 2 std off).
 
 Scope, refused rather than guessed: the classification mask equal to the
 alignment mask (so the CC compared is the search's own, table column 10), the
-search kernel's own scope (`use_CC = 1`, `localnc = 1`, C1, no resizing),
+search kernel's own scope (`use_CC = 1`, `localnc = 1`, C1; a smaller `dim` by
+interpolation, as `mra_iteration` makes it, not by binning),
 no thresholding, `fmin` counting particles (no `fminFraction`), no compensation
 smoothing, references updated from the weighted average. Dynamo can also stop
 early when every reference saturates; that check is not ported.
@@ -82,8 +83,12 @@ from cryoet_pipeline.backends.dynamo_search import (
     SearchSettings,
     average_class,
     average_particles,
+    downsized,
+    expanded_shift,
     fweight_divide,
     prepare_reference,
+    resize_box,
+    resize_mask,
     search_particles,
 )
 
@@ -153,6 +158,13 @@ def mra_iteration(
     (`dynamo_search_torch.search_particles_torch`). `assembly` is "mra", the
     plugin's class averages, or "project": the one channel of a project without
     MRA, averaged as the project averages it.
+
+    With `settings.dim` below the box the search runs at that box, as the iteration
+    setup and `pipeline_align_one_particle` make it: every particle and reference
+    resized (`resize_box`), the mask resized and thresholded (`resize_mask`), the
+    band and shift limit scaled (`downsized`), the starting shifts scaled down and
+    the found ones back (`expanded_shift`). The classes are averaged from the
+    particles at their own box, as the plugin averages them.
     """
     if assembly not in ("mra", "project"):
         raise ValueError(f"assembly is 'mra' or 'project', got {assembly!r}")
@@ -160,26 +172,38 @@ def mra_iteration(
         raise ValueError("every live channel needs a reference and starting poses")
     if assembly == "project" and len(references) != 1:
         raise ValueError(f"a project without MRA has one channel, not {len(references)}")
-    binary = (np.asarray(mask) > 0.5).astype(float)
+    box = np.asarray(mask).shape[0]
+    small = settings.dim if settings.dim not in (0, box) else 0
+    if small:
+        inner = downsized(settings, box)
+        searched = [resize_box(particle, small) for particle in particles]
+        binary = resize_mask(mask, small)
+    else:
+        inner, searched = settings, particles
+        binary = (np.asarray(mask) > 0.5).astype(float)
     computed = sorted(references)
     searches = {}
     for k in computed:
-        prepared = prepare_reference(references[k], mask, settings)
+        reference = resize_box(references[k], small) if small else references[k]
+        prepared = prepare_reference(reference, binary, inner)
         angles, shifts = (np.asarray(v, dtype=float) for v in starts[k])
+        if small:
+            shifts = (small / box) * shifts
         results = search(
-            particles,
+            searched,
             prepared,
             binary,
             list(zip(angles, shifts, strict=True)),
             tilt_ranges,
-            settings,
+            inner,
             workers=workers,
         )
-        searches[k] = ChannelSearch(
-            np.array([r[0] for r in results]),
-            np.array([r[1] for r in results]),
-            np.array([r[2] for r in results]),
-        )
+        found = np.array([r[0] for r in results])
+        moved = np.array([r[1] for r in results])
+        if small:
+            moved = np.array([expanded_shift(a, s, box, small)
+                              for a, s in zip(found, moved, strict=True)])
+        searches[k] = ChannelSearch(found, moved, np.array([r[2] for r in results]))
     assignment = assign({k: searches[k].correlations for k in computed})
     surviving = sorted({int(k) for k in assignment})
     averages = {}

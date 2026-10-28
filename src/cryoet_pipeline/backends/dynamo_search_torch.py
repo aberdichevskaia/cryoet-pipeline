@@ -393,6 +393,9 @@ def search_results_torch(
     for particle, (angles, shift), tilt_range in zip(particles, starts, tilt_ranges, strict=True):
         p = _cube(particle)
         if shared is None:
+            if settings.dim not in (0, len(p)):
+                raise ValueError(f"a search at dim {settings.dim} is given {len(p)}-voxel maps: "
+                                 "resize them and pass `downsized` settings")
             shared = _share(reference, mask, p.shape, device)
             if chunk < 1:
                 raise ValueError("chunk must be at least 1")
@@ -508,8 +511,10 @@ class MultiDeviceSearch:
     Called as `search_particles` is. The particles are put in shared memory and
     the processes started on the first call; later calls must pass the same
     particles, in the same order, and send each process only its block's starts.
-    The blocks are contiguous and in order, so the results are each particle's
-    own, as one device would give them. `close` ends the processes.
+    Particles of another shape (a round at another of Dynamo's `dim`, the same
+    particles resized) start the processes again with those. The blocks are
+    contiguous and in order, so the results are each particle's own, as one
+    device would give them. `close` ends the processes.
     """
 
     def __init__(self, devices: Sequence[str], *, dtype: str = "float32",
@@ -520,7 +525,7 @@ class MultiDeviceSearch:
         self.dtype = dtype
         self.chunk = chunk
         self._pool: Any = None
-        self._count = 0
+        self._shape: tuple[int, ...] = ()
 
     def _start(self, particles: Sequence[np.ndarray]) -> None:
         context = torch.multiprocessing.get_context("spawn")
@@ -530,16 +535,16 @@ class MultiDeviceSearch:
             devices.put(device)
         self._pool = context.Pool(len(self.devices), initializer=_start_worker,
                                   initargs=(shared, devices, self.dtype, self.chunk))
-        self._count = len(particles)
+        self._shape = tuple(shared.shape)
 
     def __call__(self, particles: Sequence[np.ndarray], reference: np.ndarray, mask: np.ndarray,
                  starts: Sequence[tuple[np.ndarray, np.ndarray]],
                  tilt_ranges: Sequence[tuple[float, float]], settings: SearchSettings, *,
                  workers: int = 1) -> list[tuple[np.ndarray, np.ndarray, float]]:
+        if self._pool is not None and (len(particles), *np.shape(particles[0])) != self._shape:
+            self.close()
         if self._pool is None:
             self._start(particles)
-        elif len(particles) != self._count:
-            raise ValueError(f"started with {self._count} particles, called with {len(particles)}")
         blocks = [block for block in np.array_split(np.arange(len(particles)), len(self.devices))
                   if len(block)]
         tasks = [(block, reference, mask, [starts[i] for i in block],

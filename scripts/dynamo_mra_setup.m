@@ -61,9 +61,12 @@
 % For blob seeds, which carry no orientation to search near (the PI, 2026-10-22:
 % bbn with a 360 deg search, ssn with the cone, or ssn with 360 deg for two
 % rounds and then the cone). A global round is paid for by searching
-% downsampled particles: its dim is 2 * (low-pass + 2) Fourier px, so Fourier
-% cropping keeps every frequency the low-pass passes plus its soft edge, and
-% Dynamo scales the band and the shift range with dim itself. Measured with
+% downsampled particles: its dim is 2 * (low-pass + 2) Fourier px, so the smaller
+% box's Nyquist lies beyond the low-pass and its soft edge, and Dynamo scales the
+% band and the shift range with dim itself. Dynamo downsamples by cubic splines
+% (dynamo_resize_template), not by Fourier cropping: nothing above that Nyquist
+% is removed first, so it folds back into the band (read 2026-10-28; the port's
+% resize_box does the same, checked against Dynamo 1.1.511). Measured with
 % dynamo_align on the Mac (box 48): 360 deg in 11.4 deg steps took 80.7 s per
 % particle and channel at full size and 19.0 s at half, the cone 2.0 s. For RyR1
 % at bin8 that makes round 1 (9 deg, dim 30) about 11 h and round 2 (7.8 deg,
@@ -71,11 +74,11 @@
 % to 4.9 deg, would take about two weeks. global_step (deg) sets a coarser grid
 % for the global rounds instead, refined by 2 down to the round's step: cheaper,
 % at the risk above, and only when asked for. global_full_box (default false)
-% searches the global rounds at the full box instead of downsampled: as the
-% pipeline's port does, which does not model dim, and as Dynamo's CPU search
-% must be made for the port to be checked against it
-% (scripts/torch_search_check.py). Too slow on the CPU for a whole export: for a
-% small one, scripts/sample_export.py's. It takes global_rounds too.
+% searches the global rounds at the full box instead of downsampled, as the
+% port's full-box check against Dynamo's CPU search was made
+% (scripts/torch_search_check.py); the port also runs dim as Dynamo does. Too
+% slow on the CPU for a whole export: for a small one, scripts/sample_export.py's.
+% It takes global_rounds too.
 % cone_steps (default 3) is how wide the cone and the in-plane range are, in the
 % round's own steps: one number for every round, or one per round, e.g. [5 5 3 3 3]
 % for the PI's alternative to global rounds (2026-10-26): 5 steps for the first
