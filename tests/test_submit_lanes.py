@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import time
 import tomllib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,16 @@ if [[ -n "${SQUEUE_EXIT:-}" ]]; then
 fi
 if [[ -n "${SQUEUE_LINES:-}" ]]; then printf '%s\\n' "$SQUEUE_LINES"; fi
 """
+# Stands in for CTFFIND: its start-up banner, with FAKE_CTFFIND_VERSION, then
+# its first question; it reads nothing and stops.
+CTFFIND = """#!/bin/bash
+echo "        **   Welcome to Ctffind   **"
+echo ""
+echo "            Version : ${FAKE_CTFFIND_VERSION:-5.0.2}"
+echo "    Library Version : 2.0.0-alpha-295"
+echo ""
+echo "Input image file name [input.mrc]                  :"
+"""
 REASON = ["--reason", "Anna asked: rerun TS_A and TS_B"]
 
 
@@ -62,7 +73,8 @@ def lane(tmp_path, monkeypatch):
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, script in (("sbatch", SBATCH), ("squeue", SQUEUE)):
+    # A CTFFIND 5 ahead of whatever CTFFIND the machine has (MDC's is 4.1.14).
+    for name, script in (("sbatch", SBATCH), ("squeue", SQUEUE), ("ctffind5", CTFFIND)):
         (bin_dir / name).write_text(script)
         (bin_dir / name).chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
@@ -71,7 +83,7 @@ def lane(tmp_path, monkeypatch):
     # A person, whatever runs the tests, until a test says otherwise.
     for name in (
         *submit_lanes.CLIENT_VARIABLES, "OVERWRITE", "SBATCH_FAIL_AT", "SQUEUE_EXIT",
-        "SQUEUE_LINES",
+        "SQUEUE_LINES", "FAKE_CTFFIND_VERSION",
     ):
         monkeypatch.delenv(name, raising=False)
     return config
@@ -326,3 +338,80 @@ def test_a_squeue_that_fails_is_a_problem_and_a_missing_one_a_note(
     code, _, err = _run(capsys, lane, "--dry-run")
     assert code == 0
     assert "no squeue here" in err and "would refuse" not in err
+
+
+def test_a_ctffind_4_that_estimate_ctf_would_find_is_refused(lane, capsys, monkeypatch):
+    # MDC's ctffind on PATH is CTFFIND 4.1.14 (ribo-mdc job 3781480, 2026-10-28).
+    monkeypatch.setenv("FAKE_CTFFIND_VERSION", "4.1.14")
+    found = lane.parent / "bin" / "ctffind5"
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert f"would refuse: {lane}: estimate-ctf would run {found}, which is CTFFIND 4.1.14" in err
+    code, _, err = _run(capsys, lane)
+    assert code == 1 and "which is CTFFIND 4.1.14" in err
+    assert not _overwrite_per_call(lane)
+
+
+def test_a_lane_that_names_its_ctffind_or_fits_no_ctf_is_not_asked(lane, capsys, monkeypatch):
+    monkeypatch.setenv("FAKE_CTFFIND_VERSION", "4.1.14")
+    # The GPU stage fits no CTF.
+    assert "CTFFIND" not in _run(capsys, lane, "--from-stage", "gpu", "--dry-run")[2]
+    # A CTFFIND the lane names is taken at its word, as estimate-ctf takes it.
+    text = lane.read_text()
+    assert "[executables]\n" in text
+    lane.write_text(text.replace("[executables]\n", '[executables]\nctffind = "$CTFFIND5"\n', 1))
+    monkeypatch.setenv("CTFFIND5", "/opt/ctffind5")
+    assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]
+
+
+def test_a_ctffind_that_is_missing_or_silent_is_noted_not_refused(
+    lane, capsys, monkeypatch, tmp_path
+):
+    (tmp_path / "bin" / "ctffind5").unlink()
+    monkeypatch.setenv("PATH", os.pathsep.join([str(tmp_path / "bin"), "/usr/bin", "/bin"]))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0 and "refuse" not in err
+    assert "neither ctffind5 nor ctffind is on PATH here" in err
+
+    # One that prints nothing and waits is stopped after the probe's time.
+    silent = tmp_path / "bin" / "ctffind"
+    silent.write_text("#!/bin/bash\nexec sleep 30\n")
+    silent.chmod(0o755)
+    monkeypatch.setattr(submit_lanes, "CTFFIND_PROBE_SECONDS", 0.3)
+    started = time.monotonic()
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert time.monotonic() - started < 10
+    assert code == 0 and "refuse" not in err
+    assert f"not checked which CTFFIND {silent} is: it printed no version within 0.3 s" in err
+
+
+def test_a_ctffind_that_keeps_asking_is_read_and_stopped(tmp_path):
+    asking = tmp_path / "ctffind"
+    asking.write_text(
+        '#!/bin/bash\necho "            Version : 4.1.14"\n'
+        'while true; do echo "Input image file name [input.mrc] :"; done\n'
+    )
+    asking.chmod(0o755)
+    started = time.monotonic()
+    assert submit_lanes.ctffind_version(str(asking)) == "4.1.14"
+    assert time.monotonic() - started < 5
+
+
+def test_the_banner_is_read_as_the_ctf_backend_reads_it():
+    from cryoet_pipeline.backends.ctf import ctffind_version
+
+    for banner in (
+        "**   Welcome to Ctffind   **\n    Library Version : 2.0.0-alpha\n"
+        "            Version : 5.0.2\n",
+        "**   Welcome to Ctffind   **\n            Version : 4.1.14\n",
+        "no banner here",
+    ):
+        mine = submit_lanes._CTFFIND_VERSION.search(banner)
+        assert (mine["version"] if mine else None) == ctffind_version(banner)
+
+
+def test_ctffind5_is_taken_before_ctffind_as_the_backend_takes_it(lane, capsys, tmp_path):
+    older = tmp_path / "bin" / "ctffind"
+    older.write_text('#!/bin/bash\necho "            Version : 4.1.14"\n')
+    older.chmod(0o755)
+    assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]

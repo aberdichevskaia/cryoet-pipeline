@@ -284,7 +284,10 @@ Motion correction, then the tilt stack from the corrected sums.
   ctffind` → `--ctffind-executable`.
 - Without `[executables] ctffind`, the step takes `ctffind5`, then `ctffind`,
   from `PATH`. At MDC `ctffind` can be CTFFIND 4.1.14, which the step refuses;
-  name CTFFIND 5 through `$CTFFIND5` there.
+  name CTFFIND 5 through `$CTFFIND5` there. Since 28 October 2026 the dry run
+  of a lane or recipe that runs this step without naming a CTFFIND asks the one
+  on `PATH` for its version, and refuses CTFFIND 4. One it cannot find or ask is
+  noted, not refused.
 - Writes: `ctf/<TS>/` (the IMOD `.defocus` model and a diagnostic stack of
   measured against fitted Thon rings); QC in `qc/<TS>/ctf/`.
 - QC: every view whose fit stops at the low-resolution end of the fit range

@@ -244,13 +244,15 @@ the program the job found.
 
 **What to try:** in the lane, `[executables] ctffind = "$CTFFIND5"`; export
 `CTFFIND5` with the path to CTFFIND 5 before submitting. `submit_lanes.py`
-refuses a `$VAR` that is not set.
+refuses a `$VAR` that is not set. Since 28 October 2026 its dry run also asks a
+CTFFIND found on `PATH` for its version, and refuses CTFFIND 4 before the queue.
 
 **What not to do:** change CTF parameters.
 
 **When to stop and ask someone:** when CTFFIND 5 is not installed on the site.
 
-**Source:** MDC, job 3670792, October 2026.
+**Source:** MDC, job 3670792, October 2026; again on ribo-mdc, job 3781480,
+28 October 2026, in a shell that no longer had `ctffind5` on `PATH`.
 
 ## Stacks
 

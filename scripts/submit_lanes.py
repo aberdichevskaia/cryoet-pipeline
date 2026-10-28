@@ -71,10 +71,13 @@ import hashlib
 import json
 import os
 import re
+import select
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
+import time
 import tomllib
 import uuid
 from dataclasses import dataclass, replace
@@ -110,6 +113,12 @@ CLIENT_VARIABLES = (
 _HEADER_PROJECT = re.compile(r"^project\s+(?P<project>[^\s,]+)")
 _HEADER_SERIES_IN = re.compile(r"^series\s+(?P<series>.+?)\s+in\s+(?P<project>\S+)\s*$")
 _HEADER_SERIES = re.compile(r"^series\s+(?P<series>.+?)\s*$")
+# The version line of CTFFIND's start-up banner, as the backend reads it
+# (cryoet_pipeline.backends.ctf.ctffind_version): anchored, so that CTFFIND 5's
+# "Library Version" line is not taken for it.
+_CTFFIND_VERSION = re.compile(r"^\s*Version\s*:\s*(?P<version>\d+(?:\.\d+)*)", re.MULTILINE)
+# How long CTFFIND may take to print its banner when asked here.
+CTFFIND_PROBE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -250,6 +259,13 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
         for name in sorted(stage.env)
         if not os.environ.get(name)
     ]
+    chain = run_series.build_steps(
+        cfg, Path(lane.project), lane.series[0] if lane.series else "TS_X"
+    )
+    found += ctffind_problems(cfg, {
+        name for stage in stages
+        for name, _ in run_series.slice_steps(chain, stage.start, stage.end)
+    })
     if run_series.lane_input(cfg) != "frames":
         # A stack lane writes its own manifests in import-tilt-stack; only its
         # inputs can be checked here, which saves a queue wait on a typo.
@@ -288,6 +304,74 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
             "and init would erase the project to add them; use a new project for them"
         )
     return found
+
+
+def ctffind_problems(cfg: dict[str, Any], steps: set[str]) -> list[str]:
+    """A CTFFIND 4 that estimate-ctf would find on PATH, as a problem.
+
+    Only where the config names no CTFFIND of its own ([executables] ctffind):
+    estimate-ctf then takes ctffind5, or else ctffind, from PATH, the job's PATH
+    being this one (--export=ALL), and its backend refuses a CTFFIND 4 after the
+    queue wait. Which one it is, its start-up banner says. A CTFFIND that cannot
+    be found or asked here is noted rather than refused, since the job's
+    environment may still find one.
+    """
+
+    if "estimate-ctf" not in steps or (cfg.get("executables") or {}).get("ctffind"):
+        return []
+    # The backend's order (cryoet_pipeline.backends.ctf._resolve_ctffind_executable).
+    found = next((path for name in ("ctffind5", "ctffind") if (path := shutil.which(name))), None)
+    if found is None:
+        print("not checked which CTFFIND estimate-ctf will run: neither ctffind5 nor ctffind "
+              "is on PATH here", file=sys.stderr)
+        return []
+    version = ctffind_version(found)
+    if version is None:
+        print(f"not checked which CTFFIND {found} is: it printed no version within "
+              f"{CTFFIND_PROBE_SECONDS:g} s", file=sys.stderr)
+        return []
+    if int(version.split(".")[0]) >= 5:
+        return []
+    return [
+        f"estimate-ctf would run {found}, which is CTFFIND {version}, and its backend answers "
+        "CTFFIND 5's questions: name CTFFIND 5 in [executables] ctffind (\"$CTFFIND5\", as "
+        "ryr1-bin8 does), or put ctffind5 on PATH ahead of it"
+    ]
+
+
+def ctffind_version(executable: str, limit: int = 1 << 16) -> str | None:
+    """The version a CTFFIND's start-up banner states, read from what it prints
+    before its first question; None if it states none in CTFFIND_PROBE_SECONDS.
+
+    It is given no input and stopped once the banner is read, so it fits nothing,
+    and at most `limit` bytes are read from a program that keeps asking.
+    """
+    try:
+        process = subprocess.Popen(
+            [executable], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError:
+        return None
+    assert process.stdout is not None
+    output = b""
+    deadline = time.monotonic() + CTFFIND_PROBE_SECONDS
+    try:
+        while len(output) < limit:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([process.stdout], [], [], left)[0]:
+                break
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            output += chunk
+            if match := _CTFFIND_VERSION.search(output.decode(errors="replace")):
+                return match["version"]
+    finally:
+        process.kill()
+        process.wait()
+        process.stdout.close()
+    return None
 
 
 def init_command(cfg: dict[str, Any], lane: Plan) -> list[str] | None:

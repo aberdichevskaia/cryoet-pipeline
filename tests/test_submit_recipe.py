@@ -37,6 +37,12 @@ if [[ -n "${SQUEUE_EXIT:-}" ]]; then
 fi
 if [[ -n "${SQUEUE_LINES:-}" ]]; then printf '%s\\n' "$SQUEUE_LINES"; fi
 """
+# Stands in for CTFFIND: its start-up banner, with FAKE_CTFFIND_VERSION.
+CTFFIND = """#!/bin/bash
+echo "        **   Welcome to Ctffind   **"
+echo "            Version : ${FAKE_CTFFIND_VERSION:-5.0.2}"
+echo "Input image file name [input.mrc]                  :"
+"""
 REASON = ["--reason", "Anna asked: the CTF window test on TS_A"]
 CTF_A = ["ctf-window", "--series", "TS_A"]
 
@@ -69,7 +75,9 @@ def lane(tmp_path, monkeypatch):
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, script in (("sbatch", SBATCH), ("squeue", SQUEUE)):
+    # A CTFFIND 5 ahead of whatever CTFFIND the machine has (MDC's is 4.1.14).
+    stand_ins = (("sbatch", SBATCH), ("squeue", SQUEUE), ("ctffind5", CTFFIND))
+    for name, script in stand_ins:
         (bin_dir / name).write_text(script)
         (bin_dir / name).chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
@@ -80,7 +88,7 @@ def lane(tmp_path, monkeypatch):
     parameters = {key for recipe in submit_recipe.RECIPES.values() for key in recipe.parameters}
     for name in (
         *submit_lanes.CLIENT_VARIABLES, *parameters, "OVERWRITE", "SBATCH_FAIL_AT",
-        "SQUEUE_EXIT", "SQUEUE_LINES",
+        "SQUEUE_EXIT", "SQUEUE_LINES", "FAKE_CTFFIND_VERSION",
     ):
         monkeypatch.delenv(name, raising=False)
     return config
@@ -489,3 +497,11 @@ def test_the_pick_ablation_replaces_its_picks_only_when_told(tmp_path, overwrite
     (pick,) = calls  # task 0's template was there already
     assert pick.startswith("pick-particles") and " --output-variant bin8-abl-lane " in pick
     assert pick.endswith(" --overwrite") == overwrite
+
+
+def test_a_ctf_window_that_would_find_ctffind_4_is_refused(lane, capsys, monkeypatch):
+    monkeypatch.setenv("FAKE_CTFFIND_VERSION", "4.1.14")
+    code, _, err = _run(capsys, lane, *CTF_A, "--dry-run")
+    assert code == 0 and "would refuse" in err and "which is CTFFIND 4.1.14" in err
+    # A recipe that fits no CTF is not asked.
+    assert "CTFFIND" not in _run(capsys, lane, "repick", "--set", "LABEL=x", "--dry-run")[2]

@@ -136,7 +136,11 @@ client, which is what makes it the instrument for deciding about either (see
 - **Request:** "estimate-ctf fails at MDC but worked in Munich."
 - **Evidence** (MDC, job 3670792; to collect): the Slurm log, whose header's
   `ctffind` line points at CTFFIND 4.1.14; the step's refusal; the lane config
-  without `[executables] ctffind`.
+  without `[executables] ctffind`. A second instance: ribo-mdc, job 3781480
+  (2026-10-28), where `show_failure.py` quotes the refusal itself,
+  "/fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind is CTFFIND
+  4.1.14". Since that day the dry run refuses such a lane, so the case now tests
+  reading that refusal as much as the failed job.
 - **Expected reading:** an old CTFFIND first on `PATH`.
 - **Expected action:** `[executables] ctffind = "$CTFFIND5"`, and `CTFFIND5`
   exported, then recipe A.

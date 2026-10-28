@@ -463,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
         for key, reader in variables.items()
         if not os.environ.get(key)
     ]
+    problems += submit_lanes.ctffind_problems(cfg, set(recipe.steps))
     problems += recipe.check(Context(cfg, project, series, parameters, commands))
     there = registered(project, series, recipe.outputs(cfg["lane"]["variant"], parameters))
     if args.overwrite:
