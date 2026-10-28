@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import itertools
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 
 import numpy as np
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.table import Table
 
-from cryoet_pipeline.reports import style
+from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import (
     QC_STEPS,
     SeriesReport,
@@ -41,7 +44,15 @@ HOW_TO_READ = (
     "PASS, WARN and FAIL are the verdicts each step recorded about its own output. This "
     "report adds none of its own: it only reads the project's records and the files they "
     "name, and changes nothing.",
+    "Times are how long each step ran, as the lane runner timed it, without waiting in the "
+    "queue. A page's heading gives the time of the steps that made what it shows; totals add "
+    "the steps up, though series may have run side by side. A step run outside the runner "
+    "says “not recorded”, and a sum that misses one says “at least”.",
 )
+
+TILE_X = (0.035, 0.165, 0.295, 0.48, 0.76)
+"""Where the title page's big numbers start: spaced by what they hold, the fourth's label
+being the long one."""
 
 
 def title_page(
@@ -60,12 +71,12 @@ def title_page(
         (str(len(with_picks)), "with picks"),
         (f"{sum(row.picks or 0 for row in with_picks):,}", "picks in total"),
         (f"{sum(above):,}" if above else "–", "above the one-false-positive height"),
+        total_run_time(rows),
     )
-    for index, (value, label) in enumerate(tiles):
-        x = 0.035 + index * 0.235
+    for x, (value, label) in zip(TILE_X, tiles, strict=True):
         figure.text(x, 0.835, value, fontsize=style.FONT_HERO, va="top")
         figure.text(x, 0.765, label, fontsize=style.FONT_TEXT, color=style.INK_SECONDARY,
-                    va="top")
+                    va="top", linespacing=1.35)
 
     figure.text(0.035, 0.675, "How to read this report", fontsize=style.FONT_PANEL_TITLE + 1,
                 fontweight="bold", va="top")
@@ -79,6 +90,20 @@ def title_page(
     figure.text(0.035, 0.05, f"Written by {software}.", fontsize=style.FONT_SMALL,
                 color=style.INK_SECONDARY)
     return figure
+
+
+def total_run_time(rows: Sequence[SummaryRow]) -> tuple[str, str]:
+    """The title page's big number for time: every step of every series, added up."""
+
+    total = timing.Timing(tuple(itertools.chain.from_iterable(row.run_time.steps for row in rows)))
+    seconds = total.seconds
+    if seconds is None:
+        return "–", "run time of all steps:\nnot recorded"
+    if not total.missing:
+        return timing.short_duration(seconds), "run time of all steps"
+    steps = "step" if total.missing == 1 else "steps"
+    return (f"≥ {timing.short_duration(seconds)}",
+            f"run time of all steps;\n{total.missing} {steps} not recorded")
 
 
 def contents_pages(
@@ -137,6 +162,7 @@ _TABLE_COLUMNS = (
     "Picks",
     "Above\nthe height",
     "Best\n(σ)",
+    "Run\ntime",
 )
 
 
@@ -159,6 +185,7 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
             _number(row.picks, "{:,}"),
             _number(row.above_floor, "{:,}"),
             _number(row.best_sigma, "{:.1f}"),
+            timing.table_cell(row.run_time),
         ]
         cells: list[str | tuple[float, float, float]] = ["white"] * len(values)
         for step in steps:
@@ -192,17 +219,37 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
             cell.set_text_props(fontweight="bold", color=style.INK_SECONDARY)
             cell.set_height(cell.get_height() * 1.8)
     table.auto_set_column_width(list(range(len(labels))))
+    fit_width(table, axes)
 
     legend = "; ".join(f"{qc_step(step).short}: {qc_step(step).label.lower()}" for step in steps)
     style.caption(
         figure,
         "Tilts: used in the tomogram / collected. CTF fit at 0°: how far CTFFIND fitted Thon "
         "rings on the tilt nearest 0°. Alignment residual: mean fine-alignment residual. Above "
-        "the height: picks above the one-false-positive height. "
-        + (f"Verdict columns: {legend}." if legend else ""),
+        "the height: picks above the one-false-positive height. Run time: every step from "
+        "motion correction or stack import to picking, added up; ≥ when a step's time was not "
+        "recorded. " + (f"Verdict columns: {legend}." if legend else ""),
         y=0.2,
     )
     return figure
+
+
+TABLE_FONT_SIZES = (style.FONT_SMALL, 8.0, 7.0, 6.5)
+"""Tried in turn until a table fits the page; the last is kept if none does."""
+
+
+def fit_width(table: Table, axes: Axes) -> None:
+    """Shrink a table's type until it is no wider than its axes.
+
+    Its columns are as wide as their text, so a lane with many steps, each a
+    verdict column, made the table wider than the page: ryr1-bin8's lost the
+    Series column on the left and ctf_cor on the right (2026-10-19).
+    """
+
+    for size in TABLE_FONT_SIZES:
+        table.set_fontsize(size)
+        if table.get_window_extent().width <= axes.get_window_extent().width:
+            return
 
 
 def _views(row: SummaryRow) -> str:

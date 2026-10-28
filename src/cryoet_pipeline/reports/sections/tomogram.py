@@ -12,7 +12,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import PercentFormatter
 
-from cryoet_pipeline.reports import style
+from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import SeriesReport, TomogramInfo
 from cryoet_pipeline.reports.imaging import (
     SMOOTHING_SIGMA_PX,
@@ -170,6 +170,9 @@ def _tomogram_subtitle(report: SeriesReport) -> str:
         parts.append(text)
     if info.ctf_corrected is not None:
         parts.append("CTF corrected" if info.ctf_corrected else "not CTF corrected")
+    took = timing.took(report.timing.page("tomogram"))
+    if took is not None:
+        parts.append(took)
     return " · ".join(parts)
 
 
@@ -197,6 +200,9 @@ def membranes_page(report: SeriesReport, depths: list[Depth]) -> Figure:
     subtitle = "MemBrain-seg"
     if isinstance(fraction, (int, float)):
         subtitle += f" · {fraction:.1%} of the volume segmented as membrane"
+    took = timing.took(report.timing.page("membranes"))
+    if took is not None:
+        subtitle += f" · {took}"
     figure = style.new_page(f"{report.series} · Membranes", subtitle)
     grid = GridSpec(
         2, 3, figure=figure, left=0.035, right=0.965, top=style.CONTENT_TOP,

@@ -3495,6 +3495,7 @@ def report(
             param_hint="project",
         ) from exc
     from cryoet_pipeline.reports.collect import load_series
+    from cryoet_pipeline.reports.timing import load_step_runs
 
     registry_path = project / "artifacts.json"
     if not registry_path.is_file():
@@ -3523,11 +3524,14 @@ def report(
         )
 
     artifact_registry = ArtifactRegistry.load(registry_path)
+    # How long each step ran, as scripts/run_series.py timed it; none for a
+    # project whose steps were run some other way.
+    runs = load_step_runs(project)
     reports = []
     for manifest in manifests:
         typer.echo(f"reading {manifest.tilt_series_id}")
         resolved = _report_artifacts(artifact_registry, manifest, variant=variant)
-        reports.append(load_series(artifact_registry, resolved))
+        reports.append(load_series(artifact_registry, resolved, runs))
     typer.echo("drawing")
     outcome = write_report(
         destination,

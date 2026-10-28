@@ -10,8 +10,10 @@ are exercised as they are in a lane.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import mrcfile
@@ -33,6 +35,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.reports.collect import (
+    QC_STEPS,
     PickTable,
     QcRecord,
     SeriesArtifacts,
@@ -46,6 +49,7 @@ from cryoet_pipeline.reports.collect import (
     load_series,
     map_agreement,
     per_view_table,
+    summary_row,
 )
 from cryoet_pipeline.reports.imaging import (
     choose_depths,
@@ -53,6 +57,19 @@ from cryoet_pipeline.reports.imaging import (
     random_positions,
     rank_bands,
     sphere_sections,
+)
+from cryoet_pipeline.reports.timing import (
+    STEPS,
+    StepTime,
+    Timing,
+    duration,
+    expected_steps,
+    load_step_runs,
+    panel_lines,
+    series_timing,
+    short_duration,
+    table_cell,
+    took,
 )
 from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
 from cryoet_pipeline.score_preview import score_preview_from_volume, write_score_preview
@@ -62,7 +79,9 @@ pytest.importorskip("matplotlib")
 from matplotlib.figure import Figure  # noqa: E402
 
 from cryoet_pipeline.reports import imaging, style  # noqa: E402
+from cryoet_pipeline.reports.sections import alignment as alignment_pages  # noqa: E402
 from cryoet_pipeline.reports.sections import ctf, front, gallery, picking  # noqa: E402
+from cryoet_pipeline.reports.sections import tomogram as tomogram_pages  # noqa: E402
 
 _ANGLES = [-40.0, -20.0, 0.0, 20.0, 40.0]
 # Dose-symmetric: 0 deg first, then +20, -20, +40, -40. PriorRecordDose is the
@@ -932,3 +951,367 @@ def test_ctf_page_colours_tilts_without_thon_rings(tmp_path: Path) -> None:
     assert "1 left out (red), 1 kept (yellow)" in numbers
     # The full text stays on the warnings page, not in this corner.
     assert "stopped at the low end" not in numbers
+
+
+# --- run times ---------------------------------------------------------------------------
+
+_T0 = datetime(2026, 10, 20, 8, 0, tzinfo=UTC).timestamp()
+
+# TS_A's steps as a lane ran them: (step, start, seconds, the files it wrote).
+# The fixture has no aligned stack of its own, so that step's run wrote nothing
+# shown, and its time is not recorded.
+_LANE_RUNS = (
+    ("track-fiducials", 0, 30.0, ("beads.json",)),
+    ("fine-align-tilt-series", 40, 150.0, ("fine_alignment.json", "fine_alignment_qc.json")),
+    ("build-ctf-stack", 200, 30.0, ("ctf_stack.mrc",)),
+    ("estimate-ctf", 240, 54.0, ("ctf.defocus", "ctf_estimation_qc.json")),
+    ("build-final-aligned-stack", 300, 6.0, ()),
+    ("correct-ctf", 400, 11.0, ("corrected.mrc",)),
+    ("reconstruct-tomogram", 420, 12.0, ("tomogram.zarr", "fine_reconstruction_qc.json")),
+    ("segment-tomogram", 500, 460.0,
+     ("segmentation.zarr", "tomogram_segmentation_qc.json")),
+    ("prepare-template", 1000, 20.0,
+     ("template.mrc", "mask.mrc", "template_preparation_qc.json")),
+    ("pick-particles", 1100, 1850.0, ("job.json", "particles.star", "picking_qc.json")),
+)
+
+
+def _row(series: str, step: str, start: float, seconds: float, *,
+         variant: str | None = None, exit_code: int = 0) -> dict[str, object]:
+    """One line of step_timings.jsonl as scripts/run_series.py writes it; old rows
+    name no lane."""
+
+    finished = datetime.fromtimestamp(_T0 + start + seconds, UTC)
+    row: dict[str, object] = {
+        "series": series, "step": step, "seconds": seconds, "disk_delta_bytes": 0,
+        "exit_code": exit_code, "finished_at": finished.isoformat(timespec="seconds"),
+    }
+    if variant is not None:
+        row.update(lane=f"lane-{variant}", variant=variant)
+    return row
+
+
+def _timed_project(root: Path, *, extra: tuple[dict[str, object], ...] = ()) -> Path:
+    """The synthetic project with its lane's timings, and TS_A's files dated by them."""
+
+    project = _project(root)
+    rows = [_row("TS_A", step, start, seconds, variant="bin8")
+            for step, start, seconds, _ in _LANE_RUNS]
+    with (project / "step_timings.jsonl").open("w") as handle:
+        for row in (*rows, *extra):
+            handle.write(json.dumps(row) + "\n")
+    for _, start, seconds, files in _LANE_RUNS:
+        for name in files:
+            moment = _T0 + start + seconds - 1.0
+            os.utime(project / "TS_A" / name, (moment, moment))
+    return project
+
+
+def _timed_reports(project: Path) -> list[SeriesReport]:
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    runs = load_step_runs(project)
+    return [
+        load_series(registry, cli._report_artifacts(registry, _manifest(series), variant="bin8"),
+                    runs)
+        for series in ("TS_A", "TS_B", "TS_C")
+    ]
+
+
+def _step_seconds(timing: Timing) -> dict[str, float | None]:
+    return {one.step.name: one.seconds for one in timing.steps}
+
+
+def test_a_duration_reads_in_seconds_minutes_or_hours() -> None:
+    assert duration(0.2) == "under 1 s"
+    assert duration(12.4) == "12 s"
+    assert duration(59.6) == "1 min"
+    assert duration(252.0) == "4 min 12 s"
+    assert duration(3599.6) == "1 h"
+    # From an hour on, to the minute.
+    assert duration(3899.0) == "1 h 5 min"
+    assert duration(26 * 3600 + 10 * 60 + 29) == "26 h 10 min"
+    assert short_duration(50.0) == "50 s"
+    assert short_duration(45 * 60.0 + 10) == "45 min"
+    assert short_duration(12.7 * 3600) == "12.7 h"
+    assert short_duration(130 * 3600) == "130 h"
+
+
+def test_a_sum_says_at_least_when_a_step_was_not_timed() -> None:
+    first, second, third = STEPS[2], STEPS[3], STEPS[4]
+    partial = Timing((StepTime(first, 12.0), StepTime(second, None), StepTime(third, 30.0)))
+    nothing = Timing((StepTime(first, None),))
+    whole = Timing((StepTime(first, 12.0), StepTime(third, 30.0)))
+
+    assert (partial.seconds, partial.missing) == (42.0, 1)
+    assert took(partial) == "took at least 42 s"
+    assert took(whole) == "took 42 s"
+    assert took(nothing) == "time not recorded"
+    # A page no step is known to have made says nothing about time.
+    assert took(Timing()) is None
+    assert (table_cell(partial), table_cell(whole), table_cell(nothing)) == (
+        "≥ 42 s", "42 s", "–")
+    # Broken between steps, never inside a time.
+    assert panel_lines(partial, 30) == [
+        "Time: coarse alignment 12 s,", "  coarse check not recorded,", "  seeding 30 s"]
+    assert panel_lines(nothing, 30) == []
+
+
+def test_timing_rows_are_read_forgivingly(tmp_path: Path) -> None:
+    rows = [
+        json.dumps(_row("TS_A", "estimate-ctf", 0, 54.0, variant="bin8")),
+        json.dumps(_row("TS_A", "estimate-ctf", 100, 3.0, exit_code=1)),
+        json.dumps(_row("TS_A", "reconstruct-tomogram", 200, 12.0)),
+        json.dumps({"series": "TS_A", "step": "correct-ctf", "seconds": "11", "exit_code": 0,
+                    "finished_at": "2026-10-20T08:00:00+00:00"}),
+        json.dumps({"series": "TS_A", "step": "correct-ctf", "seconds": 11.0, "exit_code": 0}),
+        '{"series": "TS_A", "step": "pick-partic',
+    ]
+    (tmp_path / "step_timings.jsonl").write_text("\n".join(rows) + "\n")
+
+    runs = load_step_runs(tmp_path)
+
+    # The failed run, the text seconds, the missing time and the cut line are dropped.
+    assert [(run.step, run.seconds, run.variant) for run in runs] == [
+        ("estimate-ctf", 54.0, "bin8"), ("reconstruct-tomogram", 12.0, None)]
+    assert runs[0].started_at == pytest.approx(_T0)
+    assert load_step_runs(tmp_path / "no-such-project") == []
+
+
+def test_each_step_takes_the_time_of_the_run_that_wrote_its_result(tmp_path: Path) -> None:
+    """By the files' modification times, not by which row came last.
+
+    Each decoy would win by being the latest of its step, and none of them made
+    what the report shows.
+    """
+
+    project = _timed_project(tmp_path, extra=(
+        # Another lane reconstructed TS_A later, before rows named their lane.
+        _row("TS_A", "reconstruct-tomogram", 5000, 100.0),
+        # Picking under another label whose span holds the bin8 picks' time.
+        _row("TS_A", "pick-particles", 1050, 1950.0, variant="bin4"),
+        # A run that failed after the real one, and TS_B's run at TS_A's time.
+        _row("TS_A", "segment-tomogram", 950, 40.0, exit_code=1),
+        _row("TS_B", "prepare-template", 1000, 25.0),
+        # A step no page shows, even where its span holds a result's time.
+        _row("TS_A", "visualize-picks", 420, 30.0),
+    ))
+
+    first, second, third = _timed_reports(project)
+
+    timing = first.timing
+    assert _step_seconds(timing.page("alignment")) == {
+        "track-fiducials": 30.0, "fine-align-tilt-series": 150.0}
+    assert _step_seconds(timing.page("ctf")) == {
+        "build-ctf-stack": 30.0, "estimate-ctf": 54.0, "correct-ctf": 11.0}
+    assert _step_seconds(timing.page("aligned tilts")) == {"build-final-aligned-stack": None}
+    assert _step_seconds(timing.page("tomogram")) == {"reconstruct-tomogram": 12.0}
+    assert _step_seconds(timing.page("membranes")) == {"segment-tomogram": 460.0}
+    assert _step_seconds(timing.page("picks")) == {
+        "prepare-template": 20.0, "pick-particles": 1850.0}
+    assert (timing.total.seconds, timing.total.missing) == (2617.0, 1)
+    assert not any(problem.startswith("run times") for problem in first.problems)
+    # TS_B's tomogram came with no run of its own; TS_C has nothing to time.
+    assert _step_seconds(second.timing.total) == {"reconstruct-tomogram": None}
+    assert third.timing.total.steps == ()
+
+
+def test_a_result_rewritten_outside_the_runner_has_no_time(tmp_path: Path) -> None:
+    project = _timed_project(tmp_path)
+    # Reconstructed again by hand a day later: the file is newer than every run.
+    later = _T0 + 86400.0
+    os.utime(project / "TS_A" / "tomogram.zarr", (later, later))
+    os.utime(project / "TS_A" / "fine_reconstruction_qc.json", (later, later))
+
+    report = _timed_reports(project)[0]
+
+    assert _step_seconds(report.timing.page("tomogram")) == {"reconstruct-tomogram": None}
+    assert took(report.timing.page("tomogram")) == "time not recorded"
+    assert table_cell(report.timing.total) == "≥ 43 min 25 s"
+
+
+def test_a_project_copied_without_file_times_says_so(tmp_path: Path) -> None:
+    project = _timed_project(tmp_path)
+    # As cp leaves them: every file dated now, long after the runs.
+    for path in (project / "TS_A").iterdir():
+        os.utime(path)
+
+    report = _timed_reports(project)[0]
+
+    assert report.timing.total.seconds is None
+    assert any(problem.startswith("run times: the timing file has 10 runs of this series, "
+                                  "but none wrote the files shown here")
+               for problem in report.problems)
+
+
+def test_the_steps_a_result_needed_are_read_off_its_lineage() -> None:
+    def made(name: str, kind: ArtifactKind, *parents: str, **parameters: object) -> Artifact:
+        return Artifact(id=name, kind=kind, path=Path(name), parent_ids=list(parents),
+                        parameters=dict(parameters))
+
+    chain = [
+        made("frame", ArtifactKind.CORRECTED_PROJECTION),
+        made("stack", ArtifactKind.TILT_STACK, "frame"),
+        made("coarse", ArtifactKind.ALIGNMENT, "stack"),
+        made("tracking", ArtifactKind.ALIGNED_TILT_STACK, "stack", "coarse"),
+        made("seed", ArtifactKind.FIDUCIAL_SEED_MODEL, "tracking"),
+        made("model", ArtifactKind.FIDUCIAL_MODEL, "tracking", "seed"),
+        made("fine", ArtifactKind.ALIGNMENT, "tracking", "model"),
+        made("fit stack", ArtifactKind.ALIGNED_TILT_STACK, "stack", "fine"),
+        made("ctf", ArtifactKind.CTF_MODEL, "fit stack", "fine"),
+        made("final", ArtifactKind.ALIGNED_TILT_STACK, "stack", "fine"),
+        made("corrected", ArtifactKind.ALIGNED_TILT_STACK, "final", "ctf"),
+        made("tomogram", ArtifactKind.TOMOGRAM, "corrected", "fine"),
+        made("template", ArtifactKind.TEMPLATE, "tomogram"),
+        made("picks", ArtifactKind.PICKS, "tomogram"),
+        made("filtered", ArtifactKind.PICKS, "picks", filtered_from="picks"),
+        # A cut of the filtered list keeps its source's key, and adds its own.
+        made("cut", ArtifactKind.PICKS, "filtered", filtered_from="picks",
+             selected_from="filtered"),
+    ]
+    qc = {"coarse_alignment_report": object()}
+
+    assert expected_steps(chain, qc) == [
+        "prepare-tilt-series", "align-tilt-series", "qc-coarse-alignment",
+        "generate-fiducial-seed", "track-fiducials", "fine-align-tilt-series",
+        "build-ctf-stack", "estimate-ctf", "build-final-aligned-stack", "correct-ctf",
+        "reconstruct-tomogram", "prepare-template", "pick-particles", "filter-picks",
+        "select-picks",
+    ]
+    # An imported stack, a tomogram left uncorrected, and no coarse check.
+    imported = [one for one in chain if one.id not in {"frame", "corrected"}]
+    imported = [one.model_copy(update={"parent_ids": ["final", "fine"]})
+                if one.id == "tomogram" else one for one in imported]
+    names = expected_steps(imported, {})
+    assert names[0] == "import-tilt-stack"
+    assert "correct-ctf" not in names and "qc-coarse-alignment" not in names
+
+
+def test_motion_correction_counts_in_the_series_total(tmp_path: Path) -> None:
+    """It has no page; the timed run decides which entry step it was."""
+
+    def written(name: str, kind: ArtifactKind, moment: float, *parents: str) -> Artifact:
+        path = tmp_path / name
+        path.write_text("")
+        os.utime(path, (_T0 + moment, _T0 + moment))
+        return Artifact(id=name, kind=kind, path=path, parent_ids=list(parents))
+
+    frame = written("frame.mrc", ArtifactKind.CORRECTED_PROJECTION, 100)
+    stack = written("stack.st", ArtifactKind.TILT_STACK, 590, "frame.mrc")
+    tomogram = written("tomogram.zarr", ArtifactKind.TOMOGRAM, 900, "stack.st")
+    motion = _row("TS_A", "prepare-tilt-series", 0, 600.0, variant="bin8")
+    (tmp_path / "step_timings.jsonl").write_text(json.dumps(motion) + "\n")
+    runs = load_step_runs(tmp_path)
+
+    corrected, _ = series_timing("TS_A", [frame, stack, tomogram], {}, runs)
+    # Without its corrected frames the lineage reads as an imported stack; the run says not.
+    imported, _ = series_timing("TS_A", [stack, tomogram], {}, runs)
+
+    for found in (corrected, imported):
+        assert _step_seconds(found.total) == {
+            "prepare-tilt-series": 600.0, "reconstruct-tomogram": None}
+        assert found.page("").steps[0].step.label == "motion correction"
+
+
+def test_each_page_heading_says_how_long_its_steps_took(tmp_path: Path) -> None:
+    first, second, third = _timed_reports(_timed_project(tmp_path))
+    rows = [summary_row(report) for report in (first, second, third)]
+
+    def heading(figure: Figure) -> str:
+        return figure.texts[1].get_text()
+
+    def depths(report: SeriesReport) -> list[imaging.Depth]:
+        assert report.tomogram is not None
+        return choose_depths(report.tomogram.shape[0], None, None, 3)
+
+    page = alignment_pages.alignment_page(first)
+    assert heading(page).endswith(" · took 3 min")
+    # Each step's own time on its verdict line, with or without a verdict.
+    panel = "\n".join(text.get_text() for axes in page.axes for text in axes.texts)
+    assert "Fiducial tracking: took 30 s" in panel
+    assert "Fine alignment: WARN · took 2 min 30 s" in panel
+    assert heading(alignment_pages.aligned_tilts_page(first)).endswith(" · time not recorded")
+    assert heading(ctf.ctf_page(first)).endswith(" · took 1 min 35 s")
+    assert heading(tomogram_pages.tomogram_page(first, depths(first))).endswith(
+        " · took 12 s")
+    assert heading(tomogram_pages.membranes_page(first, depths(first))).endswith(
+        " · took 7 min 40 s")
+    assert heading(picking.scores_page(first, [])).endswith(" · took 31 min 10 s")
+    assert heading(tomogram_pages.tomogram_page(second, depths(second))).endswith(
+        " · time not recorded")
+    # A page of several steps lists each one's time.
+    assert first.ctf is not None
+    numbers = ctf._numbers(first, first.ctf)
+    assert "Time: fit stack 30 s, fit 54 s,\n  correction 11 s" in numbers
+
+    # The series' sum in the table, and every series' on the title page.
+    assert [table_cell(row.run_time) for row in rows] == ["≥ 43 min 37 s", "–", "–"]
+    assert front.total_run_time(rows) == ("≥ 44 min", "run time of all steps;\n"
+                                                      "2 steps not recorded")
+    title = front.title_page(rows, project="p", variant="bin8", written="now", software="s")
+    assert "≥ 44 min" in [text.get_text() for text in title.texts]
+
+
+def test_the_report_command_reads_the_lane_timings(tmp_path: Path, monkeypatch) -> None:
+    project = _timed_project(tmp_path)
+    drawn: list[SeriesReport] = []
+
+    def capture(path: Path, reports: list[SeriesReport], **_: object) -> object:
+        drawn.extend(reports)
+        return type("Outcome", (), {"path": path, "pages": 0, "problems": []})()
+
+    monkeypatch.setattr("cryoet_pipeline.reports.pdf.write_report", capture)
+    result = CliRunner().invoke(cli.app, ["report", "--project", str(project), "--variant",
+                                          "bin8"])
+
+    assert result.exit_code == 0, result.output
+    assert _step_seconds(drawn[0].timing.page("tomogram")) == {"reconstruct-tomogram": 12.0}
+
+
+def test_a_project_without_timings_says_every_time_is_missing(tmp_path: Path) -> None:
+    """A project run before the runner timed its steps, or without the runner.
+
+    It still renders: test_the_report_has_a_page_for_everything_each_series_has
+    draws this same project, which has no timing file.
+    """
+
+    project = _project(tmp_path)
+
+    reports = _timed_reports(project)
+
+    timing = reports[0].timing
+    assert timing.total.steps and timing.total.seconds is None
+    assert took(timing.page("alignment")) == "time not recorded"
+    assert front.total_run_time([summary_row(report) for report in reports]) == (
+        "–", "run time of all steps:\nnot recorded")
+    assert not any(problem.startswith("run times") for problem in reports[0].problems)
+
+
+def test_a_table_of_many_steps_still_fits_the_page() -> None:
+    """ryr1-bin8's ten verdict columns pushed the table past both edges (2026-10-19)."""
+
+    steps = [step.qc_type for step in QC_STEPS] + ["ctf_correction"]
+    rows = [
+        SummaryRow(f"TS_{number:03d}", 26, 29, (-36.0, 42.0), 4.7, 6.9, 0.25, 5.0, 789, 291,
+                   12.5, dict.fromkeys(steps, "warning"))
+        for number in range(5)
+    ]
+
+    figure = front.summary_table_pages(rows)[0]()
+
+    axes = next(axes for axes in figure.axes if axes.tables)
+    assert axes.tables[0].get_window_extent().width <= axes.get_window_extent().width
+
+
+def test_a_long_picking_warning_points_to_the_warnings_page() -> None:
+    """Instead of running over the caption and the page's foot, as on ryr1-bin8."""
+
+    report = _scored_report("TS_1", 30)
+    report.qc = {"particle_picking": QcRecord(
+        "particle_picking", "warning", ("picks spread 23.6 px through Z " * 12,), {}, "x")}
+    figure = Figure()
+
+    picking._numbers_panel(figure.add_subplot(), report)
+
+    lines = figure.axes[0].texts[0].get_text().splitlines()
+    assert lines[-2:] == ["QC: WARN", "… more on the warnings page"]
+    assert len(lines) <= picking._PANEL_LINES

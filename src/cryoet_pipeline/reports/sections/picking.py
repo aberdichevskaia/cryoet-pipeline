@@ -14,7 +14,7 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec, SubplotSpec
 from matplotlib.patches import Circle
 from matplotlib.ticker import FuncFormatter
 
-from cryoet_pipeline.reports import style
+from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import PickTable, SeriesReport, TomogramInfo
 from cryoet_pipeline.reports.imaging import (
     Band,
@@ -170,6 +170,10 @@ def _subtitle(report: SeriesReport) -> str:
         backend = report.artifacts.picks.parameters.get("backend")
         if isinstance(backend, str):
             parts.append(backend)
+    # The picks page and the scores page share this line: one result, one time.
+    took = timing.took(report.timing.page("picks"))
+    if took is not None:
+        parts.append(took)
     return " · ".join(parts)
 
 
@@ -469,14 +473,26 @@ def _numbers_panel(axes: Axes, report: SeriesReport) -> None:
     lines.append(
         "Correlation map: " + ("saved" if report.correlation else "not saved")
     )
+    lines.extend(timing.panel_lines(report.timing.page("picks"), 40))
     record = report.qc.get("particle_picking")
     if record is not None:
         lines.append("")
         lines.append(f"QC: {style.STATUS_LABELS.get(record.status, record.status)}")
-        for warning in record.warnings:
-            lines.extend(textwrap.wrap(warning, 40))
+        # As in the CTF corner: what does not fit whole is on the warnings page.
+        blocks = [textwrap.wrap(warning, 40) for warning in record.warnings]
+        for index, block in enumerate(blocks):
+            pointer = 1 if index < len(blocks) - 1 else 0
+            if len(lines) + len(block) + pointer > _PANEL_LINES:
+                lines.append("… more on the warnings page")
+                break
+            lines.extend(block)
     axes.text(0.0, 0.98, "\n".join(lines), transform=axes.transAxes, va="top",
               fontsize=style.FONT_SMALL, linespacing=1.45)
+
+
+_PANEL_LINES = 15
+"""What the scores page's numbers panel holds before it runs into the caption (measured on
+ryr1-bin8's report, 2026-10-28, where a long QC warning ran past the page's foot)."""
 
 
 def correlation_page(report: SeriesReport, depths: list[Depth]) -> Figure:

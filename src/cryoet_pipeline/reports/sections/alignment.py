@@ -12,7 +12,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Circle
 
-from cryoet_pipeline.reports import style
+from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import AlignmentInfo, SeriesReport, qc_step
 from cryoet_pipeline.reports.imaging import block_mean, display_range, reduction_factor, smooth
 from cryoet_pipeline.reports.sections.tomogram import add_scale_bar, show
@@ -22,6 +22,14 @@ SHOWN_TILTS = (-60.0, -30.0, 0.0, 30.0, 60.0, -45.0, 45.0)
 
 ALIGNMENT_STEPS = ("coarse_alignment_report", "fiducial_seed", "fiducial_tracking",
                    "fine_alignment")
+
+TIMED_BY_QC = {
+    "coarse_alignment_report": ("align-tilt-series", "qc-coarse-alignment"),
+    "fiducial_seed": ("generate-fiducial-seed",),
+    "fiducial_tracking": ("track-fiducials",),
+    "fine_alignment": ("fine-align-tilt-series",),
+}
+"""The steps whose time goes on each verdict line: the coarse alignment with its check."""
 
 
 def alignment_page(report: SeriesReport) -> Figure:
@@ -61,6 +69,9 @@ def _subtitle(report: SeriesReport, alignment: AlignmentInfo) -> str:
     mean = document.get("residual_mean_nm")
     if isinstance(mean, (int, float)):
         parts.append(f"mean residual {mean:.2f} nm")
+    took = timing.took(report.timing.page("alignment"))
+    if took is not None:
+        parts.append(took)
     return " · ".join(parts)
 
 
@@ -184,13 +195,20 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
         lines.append("Left out, no Thon rings: "
                      + ", ".join(f"{angle:+.0f}°" for angle in no_rings))
     lines.append("")
+    steps = report.timing.page("alignment")
     for qc_type in ALIGNMENT_STEPS:
         record = report.qc.get(qc_type)
-        if record is None:
+        # Each step's time on its verdict line, so that the panel grows no longer.
+        took = timing.took(steps.of(*TIMED_BY_QC[qc_type]))
+        items = []
+        if record is not None:
+            items.append(style.STATUS_LABELS.get(record.status, record.status))
+        if took is not None:
+            items.append(took)
+        if not items:
             continue
-        lines.append(f"{qc_step(qc_type).label}: "
-                     f"{style.STATUS_LABELS.get(record.status, record.status)}")
-        for warning in record.warnings:
+        lines.append(f"{qc_step(qc_type).label}: " + " · ".join(items))
+        for warning in record.warnings if record is not None else ():
             lines.extend("  " + line for line in textwrap.wrap(warning, 40))
     axes.text(0.0, 0.98, "\n".join(lines), transform=axes.transAxes, va="top",
               fontsize=style.FONT_SMALL, linespacing=1.45)
@@ -204,6 +222,9 @@ def aligned_tilts_page(report: SeriesReport) -> Figure:
     subtitle = "The aligned tilt series the tomogram was reconstructed from"
     if alignment.aligned_pixel_angstrom is not None:
         subtitle += f", {alignment.aligned_pixel_angstrom:.2f} Å per pixel"
+    took = timing.took(report.timing.page("aligned tilts"))
+    if took is not None:
+        subtitle += f" · {took}"
     figure = style.new_page(f"{report.series} · Aligned tilts", subtitle)
     grid = GridSpec(2, 3, figure=figure, left=0.035, right=0.965, top=style.CONTENT_TOP,
                     bottom=style.PICTURE_BOTTOM, hspace=0.14, wspace=0.05)

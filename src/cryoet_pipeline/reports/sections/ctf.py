@@ -14,14 +14,14 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 
-from cryoet_pipeline.reports import style
+from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import CtfTable, SeriesReport
 
 
 def ctf_page(report: SeriesReport) -> Figure:
     ctf = report.ctf
     assert ctf is not None
-    figure = style.new_page(f"{report.series} · CTF ({ctf.backend})", _subtitle(ctf))
+    figure = style.new_page(f"{report.series} · CTF ({ctf.backend})", _subtitle(report, ctf))
     grid = GridSpec(
         2, 4, figure=figure, left=0.065, right=0.965, top=style.CONTENT_TOP,
         bottom=style.PICTURE_BOTTOM, height_ratios=[1.0, 0.9], hspace=0.42, wspace=0.3,
@@ -83,7 +83,7 @@ def fit_sampling(ctf: CtfTable) -> str | None:
     return f"fitted at {text}"
 
 
-def _subtitle(ctf: CtfTable) -> str:
+def _subtitle(report: SeriesReport, ctf: CtfTable) -> str:
     parts = []
     sampling = fit_sampling(ctf)
     if sampling is not None:
@@ -95,6 +95,9 @@ def _subtitle(ctf: CtfTable) -> str:
     if ctf.amplitude_contrast is not None:
         parts.append(f"amplitude contrast {ctf.amplitude_contrast:g}")
     parts.append(f"{len(ctf.z_value)} tilts")
+    took = timing.took(report.timing.page("ctf"))
+    if took is not None:
+        parts.append(took)
     return " · ".join(parts)
 
 
@@ -248,6 +251,7 @@ def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
         lines.append(f"At {ctf.tilt_angle_deg[near_zero]:+.0f}°: {fit[near_zero]:.1f} Å")
     if ctf.dose is not None:
         lines.append(f"Dose {float(np.min(ctf.dose)):.0f} to {float(np.max(ctf.dose)):.0f} e⁻/Å²")
+    lines.extend(timing.panel_lines(report.timing.page("ctf"), 36))
     record = report.qc.get("ctf_estimation")
     if record is not None:
         lines.append("")

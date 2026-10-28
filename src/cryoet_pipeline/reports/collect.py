@@ -28,6 +28,7 @@ from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.imod_defocus import parse_ctffind_summary, read_imod_defocus_file
 from cryoet_pipeline.models import Artifact, ArtifactKind, TiltAlignment, TiltSeriesManifest
 from cryoet_pipeline.particles import read_star_loop
+from cryoet_pipeline.reports.timing import SeriesTiming, StepRun, Timing, series_timing
 from cryoet_pipeline.score_preview import (
     ScorePreview,
     read_score_preview,
@@ -135,29 +136,39 @@ def lineage_qc(registry: ArtifactRegistry, roots: Sequence[Artifact]) -> dict[st
     is hidden.
     """
 
-    by_id = {artifact.id: artifact for artifact in registry.artifacts}
-    lineage: set[str] = set()
-    pending = [root.id for root in roots]
-    while pending:
-        current = pending.pop()
-        if current in lineage:
-            continue
-        lineage.add(current)
-        artifact = by_id.get(current)
-        if artifact is not None:
-            pending.extend(artifact.parent_ids)
-
+    ancestors = lineage(registry, roots)
+    ids = {artifact.id for artifact in ancestors}
+    ids.update(parent for artifact in ancestors for parent in artifact.parent_ids)
     records: dict[str, QcRecord] = {}
     for artifact in registry.by_kind(ArtifactKind.QC):
         qc_type = artifact.parameters.get("qc_type")
         if not isinstance(qc_type, str) or qc_type in _NOT_VERDICTS:
             continue
-        if lineage.isdisjoint(artifact.parent_ids):
+        if ids.isdisjoint(artifact.parent_ids):
             continue
         record = _qc_record(artifact, qc_type)
         earlier = records.get(qc_type)
         records[qc_type] = record if earlier is None else _merge_records(earlier, record)
     return records
+
+
+def lineage(registry: ArtifactRegistry, roots: Sequence[Artifact]) -> list[Artifact]:
+    """These artifacts and every ancestor of theirs the registry holds, each once."""
+
+    by_id = {artifact.id: artifact for artifact in registry.artifacts}
+    seen: set[str] = set()
+    found: list[Artifact] = []
+    pending = [root.id for root in roots]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        artifact = by_id.get(current)
+        if artifact is not None:
+            found.append(artifact)
+            pending.extend(artifact.parent_ids)
+    return found
 
 
 def _qc_record(artifact: Artifact, qc_type: str) -> QcRecord:
@@ -822,6 +833,7 @@ class SeriesReport:
     template: TemplateInfo | None = None
     correlation: CorrelationMap | None = None
     alignment: AlignmentInfo | None = None
+    timing: SeriesTiming = field(default_factory=SeriesTiming)
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -852,9 +864,22 @@ class SeriesReport:
         return template.box_px / 4.0 * scale, "a quarter of the template box (no mask found)"
 
 
-def load_series(registry: ArtifactRegistry, artifacts: SeriesArtifacts) -> SeriesReport:
+def load_series(
+    registry: ArtifactRegistry,
+    artifacts: SeriesArtifacts,
+    runs: Sequence[StepRun] = (),
+) -> SeriesReport:
+    """One series' report; `runs` are the project's timed step runs, for the run times."""
+
     report = SeriesReport(artifacts=artifacts, problems=list(artifacts.problems))
     report.qc = lineage_qc(registry, artifacts.roots())
+    by_id = {artifact.id: artifact for artifact in registry.artifacts}
+    shown = lineage(registry, artifacts.roots()) + [
+        by_id[record.artifact_id] for record in report.qc.values() if record.artifact_id in by_id
+    ]
+    report.timing, timing_problem = series_timing(report.series, shown, report.qc, runs)
+    if timing_problem is not None:
+        report.problems.append(timing_problem)
 
     def attempt(what: str, load: Any) -> Any:
         try:
@@ -902,6 +927,8 @@ class SummaryRow:
     above_floor: int | None
     best_sigma: float | None
     statuses: dict[str, str]
+    run_time: Timing = field(default_factory=Timing)
+    """Every step that made this series' results, from motion correction to picking."""
 
 
 def summary_row(report: SeriesReport) -> SummaryRow:
@@ -947,6 +974,7 @@ def summary_row(report: SeriesReport) -> SummaryRow:
         above_floor=picks.above_floor if picks is not None else None,
         best_sigma=float(sigma.max()) if sigma is not None and sigma.size else None,
         statuses={qc_type: record.status for qc_type, record in report.qc.items()},
+        run_time=report.timing.total,
     )
 
 
