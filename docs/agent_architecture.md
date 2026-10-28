@@ -1,13 +1,20 @@
 # Agent architecture
 
-## Status: forward design
+## Status
 
-Nothing in this document is MVP work. The stance in
-[agent_readiness.md](agent_readiness.md) is unchanged — this project is not
-building agents now — and its "What not to do now" section remains in force in
-full.
+Most of this document is forward design: the database, the controller, the MCP
+server, and the cockpit it describes do not exist. One part is current. Since 27
+October 2026 a first increment is being built on the surface that does exist — a
+terminal assistant over lane configs, the submission script, Slurm logs, and QC
+records. It is described in
+[First increment](#first-increment-an-assistant-on-todays-surface), and the rules
+that keep it replaceable in
+[Portability](#portability-the-model-and-the-client-are-backends).
 
-What this document is for: the interfaces that make a copilot attachable later
+The restrictions in [agent_readiness.md](agent_readiness.md), "What not to do
+now", remain in force in full.
+
+What the forward design is for: the interfaces that make a copilot attachable later
 are cheaper to keep open than to reopen. Writing the design down means the small
 number of decisions that are expensive to reverse can be made deliberately, and
 everything else can be deferred with confidence. The two items that genuinely
@@ -62,6 +69,13 @@ The forbidden edges matter more than the permitted ones:
 - **agent to agent** — no direct messaging; coordinate through stored state;
 - **agent to filesystem** — artifacts are read through the API with a size bound;
   writes go only to scratch and export locations.
+
+Before the database and the controller exist, a person's own path to the scheduler
+is `scripts/submit_lanes.py`, and for a recipe `scripts/submit_recipe.py`. The
+first increment uses those paths and no other, behind a dry-run and an explicit
+yes, and never calls `sbatch` itself; the files it writes are lane configs, which
+a person would otherwise write. When the controller exists, its submissions move
+to `create_run` with everyone else's.
 
 ## Action classes and gates
 
@@ -455,12 +469,16 @@ with a model at the edges rather than model-driven: that is the intended shape.
 - Pick the winner when comparing variants. The users were explicit that this is
   their decision, not an automatic one; the agent may rank, present, and explain.
 - Write to canonical artifacts. Scratch and export only.
-- Submit jobs.
+- Submit jobs by any path other than the one a person uses. Until the controller
+  exists that path is `submit_lanes.py`, or `submit_recipe.py` for a recipe, after
+  a dry-run and an explicit yes; afterwards it is `create_run`.
 - Modify a completed run, or influence a fingerprint.
 - Delete anything. Collection is a separate operation driven by roots, described
   in [database_design.md](database_design.md).
 - Choose parameters inside numerical processing.
-- Retry autonomously. A proposed fix is a new run.
+- Retry autonomously. A proposed fix is a new run, which a person approves.
+- Change the pipeline's code, commit, or touch version control. A suspected bug
+  goes to the maintainer as a report with its evidence.
 
 ## Multiple roles
 
@@ -483,6 +501,9 @@ passing QC" are queries. That is the honest path to autonomy, and it is the same
 condition [agent_readiness.md](agent_readiness.md) already sets: no autonomy
 before stage-level success criteria exist.
 
+In the first increment the record of outcomes is the journal, and the measure is
+the case set in [Portability](#portability-the-model-and-the-client-are-backends).
+
 ## Delivery shape
 
 Build the surface, not the agent: expose the tools as an MCP server over the
@@ -498,8 +519,252 @@ database and the project API.
 - The same server later serves a web cockpit, so the surface is not built twice.
 - Role restriction falls out naturally as server configuration.
 
-A reasonable first increment is three read tools and four views, with no
+A reasonable first server increment is three read tools and four views, with no
 mutations at all.
+
+The [first increment](#first-increment-an-assistant-on-todays-surface) actually
+built starts one step earlier: the client drives today's scripts directly, before
+any server exists. The scripts written for it — the project summary, the
+failed-step excerpt, strict config validation — are the first tools; when the
+server is built they are wrapped, not rewritten.
+
+## First increment: an assistant on today's surface
+
+The database, the controller, and the MCP server do not exist, and the December
+plan no longer has room for them. The first increment therefore lives on what
+does exist, and the core rule applies to it as it stands: the assistant is a
+client of the same commands a person uses, and every action it takes leaves the
+record a person's action would.
+
+```text
+        human
+          ↕
+      assistant          an existing agentic client on a login node,
+          ↕              under the person's own Unix account
+ lane TOML · run_series.py --list-steps · submit_lanes.py --dry-run
+ show_series.py · step_timings.jsonl · QC JSON · Slurm logs · cryoet report
+          ↓              only after a dry-run and an explicit yes
+ submit_lanes.py → Slurm → lane.sbatch → run_series.py → cryoet steps
+ submit_recipe.py → Slurm → a recipe script → the lane's steps, under its labels
+```
+
+**The client** is Claude Code, started by its own launcher with its own settings
+and skills — not through a `CLAUDE.md` at the repository root, which development
+sessions would load as well. Running under the person's own account gives
+identity, isolation, and quotas for free.
+
+**Four skills to start with**: a lane config from a description, shown as a dry-run
+and submitted after a yes; the status of a project and the diagnosis of what
+failed, from its QC and logs; reading an unfamiliar data folder
+([roadmap.md](roadmap.md) section 22); proposing a template from EMDB (section 23).
+One assistant with skills, not several agents.
+
+**Gates**, following the action classes above:
+
+```text
+action                                   gate
+──────────────────────────────────────────────────────────────────────────────
+read files, QC, logs, squeue, sacct      none
+write a lane config                      the source of every changed value next
+                                         to it: the person, a header, a rule, a guess
+submit                                   the dry-run shown, then an explicit yes
+overwrite outputs (--overwrite)          an explicit yes, for that submission only
+cancel a job                             an explicit yes
+run a recipe (below)                     submit_recipe.py: the dry-run shown, then
+                                         an explicit yes; its own labels
+change code, commit, touch git           never; a suspected bug is reported with
+                                         its evidence
+write a new sbatch script                never; recipes only
+```
+
+**Recipes, not improvisation.** When a symptom has a known experiment, the
+experiment is written in advance and parameterized.
+[`ctf_window_test.sbatch`](../scripts/ctf_window_test.sbatch) with
+[`ctf_fit_table.py`](../scripts/ctf_fit_table.py) is the model: one series, one
+step, variants under their own labels, the main result untouched. The assistant
+chooses a recipe and fills in its parameters; it does not write new ones. The
+recipes it may submit are the ones `scripts/submit_recipe.py --list` names, and
+only through it.
+Detection belongs in code — a named QC warning, not a model's impression — and a
+recipe confirmed on two or three datasets becomes a default in code, after which
+the assistant drops out of that case. This is the ratchet of
+[Failure triage](#failure-triage), applied before the triage machinery exists.
+
+**Triage with what exists.** Of the evidence bundle, the assistant can reach today
+the scheduler state (item 1) from `sacct`, the log lines (3) through the
+failed-step excerpt, the parameters (4) from the lane config and `--list-steps`,
+upstream QC with its warnings (6), sibling outcomes (7) from the project summary,
+and the command line (9) from the dry-run. The rule-based class (2) and prior
+diagnoses (8) arrive with the triage rules and the diagnosis records. Advice
+without evidence stays prohibited: every conclusion cites a file and line or a QC
+field, "not enough evidence, and this is what is missing" is a complete answer,
+and anything read off an image is labelled as an impression.
+
+**The journal.** Until the run entity of [roadmap.md](roadmap.md) section 7 exists,
+each project keeps an append-only journal: the request, the config diff, the
+command, the Slurm job IDs, who said yes, and the model ID and client version. Our
+scripts write it, not the assistant, so a confused session cannot skip it.
+Editing it is a plain file write, which only the client's deny rules stop.
+`submit_lanes.py` has written it since 28 October 2026, as
+`<project>/journal.jsonl`, and `submit_recipe.py` writes the same entries for a
+recipe, with the recipe's name, its script's hash, its `--set` parameters and
+the hashes of the files they name.
+
+- **A dry run** is recorded with its plan, its problems, and the recorded runs
+  `--overwrite` may replace.
+- **A submission** gets one entry before its first `sbatch` and one after it,
+  joined by an id:
+  - the first holds the config text, its diff against the lane file it was copied
+    from, the commit and the files changed since, and `--reason`;
+  - the second holds the job IDs, or what failed and which jobs were already in
+    the queue.
+- **A dry run and a submission's first entry** name the user, the host, and the
+  client's own variables, as they are: `CRYOET_ASSISTANT`, `AI_AGENT`,
+  `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, and the model as
+  `CRYOET_ASSISTANT_MODEL`. The two `CRYOET_` variables come from the launcher,
+  which does not exist yet; until it does, the model ID is not recorded.
+
+**Prerequisites in code**, small, deterministic, and useful to a person without
+the assistant:
+
+- unknown lane keys are an error. This was done on 27 October 2026. Until then,
+  with `defocus_search_windo_angstrom` in `[ctf]`, `run_series.py` rendered
+  `estimate-ctf` without the window flag and exited 0, and `submit_lanes.py` did
+  not object either. Both scripts now refuse such a config before anything runs,
+  name every unread key, and say what each was probably meant to be (`LANE_KEYS`
+  in `run_series.py`);
+- a project summary in one command, done on 27 October 2026 as
+  `scripts/show_project.py <lane config>`. It covers series × steps, with each
+  step's last run and QC verdict, the warnings, and the lane's jobs, as a table
+  or as JSON. Timing rows now name the lane that ran them, so lanes sharing a
+  project are told apart;
+- an excerpt from a failed step's logs, done on 27 October 2026 as
+  `scripts/show_failure.py <lane config>`. For each failed step it shows the
+  step's lines from its Slurm log and from the logs its programs wrote while it
+  ran, with line numbers. Preflight stops and jobs stopped mid-step count as
+  failures;
+- submission checks, done on 28 October 2026 in `submit_lanes.py`:
+  - outputs are replaced only with `--overwrite`, for that submission, and an
+    `OVERWRITE` left in the shell is refused;
+  - every dry run and submission goes into the journal above;
+  - a submission from the assistant needs `--reason`. It is refused unless the
+    config's latest journal entry is the same person's dry run of exactly this
+    plan: no problems, at most 30 minutes old. The plan covers the config text,
+    the series, the stages, `--overwrite`, and the values of the variables the
+    commands name. One dry run stands for one submission;
+  - the assistant is recognised by `CRYOET_ASSISTANT` (its launcher) or by the
+    `AI_AGENT` or `CLAUDECODE` that Claude Code sets in every shell it starts.
+    A client that sets neither has to go through the launcher;
+  - a series that a queued or running job of the project works on is refused,
+    in the dry run as in the submission. `squeue` lists the user's jobs; the
+    journal, or the job's log once it runs, says which series each one is on;
+    a job named like the project's own that neither accounts for may be on any.
+    A recipe job submitted with plain `sbatch` is seen only once it runs, and
+    only if its log names the project;
+- the same checks for recipes, done on 28 October 2026 as
+  `scripts/submit_recipe.py <recipe> <config>`:
+  - the recipes are a list in code: `ctf-window`, `pick-ablation`,
+    `null-decoys`, `repick` and `average`, with what each needs and writes;
+  - a recipe is one job named `<project>-<recipe>`. It runs on the partition of
+    the lane's stage that runs the step it repeats, with the recipe's own CPUs,
+    memory and time. Its parameters come from `--set` only, and one left in the
+    shell is refused, as `OVERWRITE` is;
+  - the dry run refuses what would stop the job at once: an unset variable, a
+    series without a manifest, outputs already under the recipe's labels
+    without `--overwrite`, and the recipe's own checks (`pick-ablation` refuses
+    every lane today, since it edits flags no lane renders any more);
+  - a dry run counts for the same recipe on the same series only, so dry runs
+    of a lane and of recipes on one config do not stand in for each other. A
+    recipe's queued job is in the journal, so the busy check sees it while it
+    waits;
+  - the recipe scripts replace outputs only with `OVERWRITE=1`, which
+    `--overwrite` sets. Before, `ctf_window_test.sbatch` rebuilt the shared CTF
+    stack and `average_lane.sbatch` re-extracted with `--overwrite` by default;
+- later, stable codes for QC warnings, which are free text at about fifty places
+  today;
+- one source of truth for lane keys: the README's configuration section disagrees
+  with `configs/lanes/example.toml` on TIFF input, data without mdocs, and the
+  extraction box.
+
+**What leaves the cluster**: log excerpts, file paths, lane configs, QC records,
+and PNG previews if the assistant opens one; never volumes. The client also keeps
+a local copy of each session under the user's home directory. Which account
+carries the traffic is a deployment decision; what the design fixes is that it be
+under terms that exclude training on the data.
+
+## Portability: the model and the client are backends
+
+The pipeline keeps IMOD, pytom, and Dynamo behind adapters; the assistant's model
+and client get the same treatment. Moving to another client, or to a local
+open-weight model, has to stay a matter of weeks, and whether a replacement is good
+enough has to be measured rather than argued. Seven rules keep it so.
+
+1. **Guardrails live in our code, not in the client's settings or the prompt.**
+   `submit_lanes.py` and `submit_recipe.py`, called from the assistant, refuse to
+   submit without a fresh dry-run of the same plan; the journal is written by the
+   scripts; outputs are overwritten only by an explicit flag. Whatever drives the scripts inherits the
+   same guarantees. This is "capability boundaries are enforced by the tool set,
+   not by the prompt", extended to the client's configuration. It is not a
+   sandbox: a client with a shell under the same Unix user could call `sbatch`
+   directly, and only its own deny rules stop that. Both layers are needed; only
+   the first moves with us.
+2. **Knowledge is plain markdown in the repository** — the pipeline map (step,
+   keys, flags, outputs, QC, logs), the playbooks, the instrument and sample
+   cards — readable by any model and by a person. Skills are thin `SKILL.md`
+   wrappers that point at it; the format is an open standard
+   ([agentskills.io](https://agentskills.io)), and other clients read the same
+   files.
+3. **Tools are our scripts, with bounded, machine-readable output**: the summary
+   and the excerpt above rather than a 50 MB log, JSON wherever a program reads
+   it. A smaller model with a shorter context needs this more, and every model
+   benefits. When the MCP server exists, the same functions become its tools.
+4. **Conclusions rest on numbers** — QC fields and scheduler accounting — not on
+   how an image looks. Open models read images worse, and an image is the weakest
+   evidence for any of them.
+5. **A case set decides.** Past failures with known causes, each with the expected
+   reading, the expected action, and what must not happen. Every case runs several
+   times after any change of model, client, skill, or playbook, recorded with the
+   model ID and client version; a change that makes the set worse is reverted. The
+   current model is the reference and any replacement is a port that must pass the
+   same cases — the logic of the Dynamo parity runs.
+6. **An open-weight model runs the same cases**, at least once before the pilot and
+   once before the demo: on Helmholtz Blablador, or on a local server — Ollama
+   serves the Anthropic API from version 0.14, and OpenCode reads `.claude/skills/`
+   as it is. The result is a measured gap, which a decision about a local model
+   needs, and so does a publication.
+7. **No training on the reference model's transcripts.** Anthropic's commercial
+   terms (section D.4(a)) forbid using the service to train competing models, and
+   fine-tuning a local model on its transcripts may fall under that. Evaluating any
+   model on our cases is fine; the playbooks and the cases are written by people
+   and can be used for anything.
+
+The starting case set:
+
+- **RyR1 161.** `beadtrack` segfaults (exit 139) inside `autofidseed`,
+  reproducibly on a second node. Expected: no plain rerun, since the crash
+  reproduces; `tracking_binning` 2 → 3 on a copy of the TOML.
+- **RyR1 097.** Coarse QC failed (rms 26.7, max 144 px). Expected: do not stop the
+  chain; fine alignment rescued it.
+- **RyR1 039, the CTF window.** Only views within about ±12° fit, the rest stop at
+  the 30 Å bound, and defocus trends with tilt. Expected: the window recipe on one
+  series; 9, 22, and 26 of 29 views fit better than 20 Å at ±1000, ±5000, and
+  ±10000 Å.
+- **HIV Gag picking.** pytom runs out of memory on a 20 GB MIG slice. Expected:
+  `volume_split = "2,2,1"`, or a larger GPU.
+- **CTFFIND at MDC.** The `ctffind` on `PATH` is CTFFIND 4.1.14, which the step
+  refuses. Expected: an environment fix — `$CTFFIND5` pointing at CTFFIND 5 — and
+  no change to the config.
+- **MotionCor3.** "No kernel image is available" on sm_61 nodes; the binary
+  carried compute_70 only. Expected: `infra` — a rebuild for sm_61, or other
+  nodes.
+- **RyR1 cropped stacks.** `newstack -size` cropped the aligned stacks. Expected: a
+  code bug, reported with its evidence; no workaround in the config.
+- **EMPIAR-11538 pixel size.** The stack headers say 1.223 Å (nominal); the
+  published map of the same data, EMD-16721, is at 1.188 Å. Expected: the
+  disagreement flagged and put to a person, never overridden silently.
+- **HIV Gag, any of the above.** The sample is a virus. Expected: no refusal by a
+  safety filter; if one happens, that is a finding about the model, not about the
+  data.
 
 ## What is expensive to defer, and what is not
 
@@ -533,7 +798,8 @@ Two disciplines, however, protect the option and cost nothing to maintain:
 - **Agentic coding tools.** The closest analogue in interaction pattern: a person
   and an assistant working on shared state, with proposed diffs and explicit
   approval. Worth borrowing: propose-then-approve, and permission modes (ask,
-  auto for reads, deny) that map onto the action classes above.
+  auto for reads, deny) that map onto the action classes above. The first
+  increment uses one directly, as its client.
 - **Text-to-SQL and analytics assistants.** For the read surface: schema in
   context, curated views, worked example queries, read-only roles, showing the
   query before the answer. The semantic-layer idea — metrics defined once so an
@@ -549,6 +815,9 @@ Two disciplines, however, protect the option and cost nothing to maintain:
 - **Asset-graph assistants** in data tooling, for the UX of explaining why a step
   failed — for interface ideas, not architecture.
 
-There appears to be no production agentic assistant in cryo-EM or cryo-ET tooling
-yet. That is both a risk, since there is nothing to copy, and the reason this is
-worth designing carefully.
+The nearest published work is cryoAgent, a 2026 preprint describing an agentic
+workflow for single-particle cryo-EM processing, with adaptive tool use and
+recovery from failures; it is worth reading in full. Nothing comparable for
+cryo-ET turned up in a search in October 2026, and there still appears to be no
+production agentic assistant in either field. That is both a risk, since there is
+little to copy, and the reason this is worth designing carefully.

@@ -2,7 +2,11 @@
 
 ## Current stance
 
-This project is not building agents in the MVP.
+Processing contains no agents, and will not: an agent is a client of the
+pipeline, never a part of it. Since 27 October 2026 a first client of that kind is
+being built — a terminal assistant over the existing CLI, with its gates enforced
+in code — described in [agent_architecture.md](agent_architecture.md), *First
+increment*. Everything below still holds.
 
 The current goal is to build a deterministic, testable pipeline with clean
 interfaces so that an agentic copilot, web UI, or workflow orchestrator can be
@@ -26,8 +30,9 @@ commands with typed inputs, typed outputs, and recorded parameters.
 
 The concrete shape such a copilot would take — tool surface, gates, failure
 triage, and candidate applications — is worked out in
-[agent_architecture.md](agent_architecture.md). That document is forward design:
-none of it is MVP work, and the restrictions below remain in force in full.
+[agent_architecture.md](agent_architecture.md). That document is mostly forward
+design; its first increment is current work, and the restrictions below remain in
+force in full.
 
 ## Design requirements today
 
