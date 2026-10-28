@@ -40,6 +40,16 @@ well, and took the finish time after scanning again. A file server's clock can
 also run a little apart from the node's.
 """
 
+ROW_RESOLUTION_SECONDS = 1.0
+"""The runner writes a finish time to the second, cut down, so a run ended up to
+a second after its row says.
+
+A step writes its results as it ends, so they can be dated after the row's
+finish; and the next step's span, worked out from its own cut-down finish, can
+start up to a second early. Missing this left ryr1's 096 coarse and 097 fine
+alignment without a time (2026-10-28), both written in their step's last second.
+"""
+
 
 @dataclass(frozen=True)
 class StepRun:
@@ -59,9 +69,11 @@ class StepRun:
         return self.finished_at - self.seconds
 
     def distance(self, moment: float) -> float:
-        """Seconds from `moment` to this run's span; 0 inside it."""
+        """Seconds from `moment` to this run's span, which ends within the second its
+        row names; 0 inside it."""
 
-        return max(0.0, self.started_at - moment, moment - self.finished_at)
+        ended = self.finished_at + ROW_RESOLUTION_SECONDS
+        return max(0.0, self.started_at - moment, moment - ended)
 
 
 def load_step_runs(project: Path) -> list[StepRun]:
@@ -241,9 +253,12 @@ def written_by(artifacts: Sequence[Artifact], runs: Sequence[StepRun]) -> dict[s
 
     A file is the work of the run nearest its modification time, within
     SLACK_SECONDS of its span, and among runs of the same series only (the
-    caller's choice of `runs`). A labelled file can only be the work of a run
-    under the same label, when the run's row says which. A file no run is near
-    was written outside the runner, and its step has no time.
+    caller's choice of `runs`). Where the spans of two consecutive runs both
+    hold it, it is the earlier run's: a step writes its results as it ends,
+    and the next one needs seconds of start-up before it can write anything.
+    A labelled file can only be the work of a run under the same label, when
+    the run's row says which. A file no run is near was written outside the
+    runner, and its step has no time.
     """
 
     known = {step.name for step in STEPS}
@@ -261,7 +276,7 @@ def written_by(artifacts: Sequence[Artifact], runs: Sequence[StepRun]) -> dict[s
         ]
         if not near:
             continue
-        run = min(near, key=lambda one: (one.distance(written), -one.finished_at))
+        run = min(near, key=lambda one: (one.distance(written), one.finished_at))
         earlier = chosen.get(run.step)
         if earlier is None or run.finished_at > earlier.finished_at:
             chosen[run.step] = run

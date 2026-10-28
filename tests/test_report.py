@@ -1080,20 +1080,21 @@ def test_timing_rows_are_read_forgivingly(tmp_path: Path) -> None:
 def test_each_step_takes_the_time_of_the_run_that_wrote_its_result(tmp_path: Path) -> None:
     """By the files' modification times, not by which row came last.
 
-    Each decoy would win by being the latest of its step, and none of them made
-    what the report shows.
+    The first decoy is the latest run of its step. The others hold a result's
+    time and end before its real run, so that each would win, as the earlier of
+    two runs, without the rule it is there for. None made what the report shows.
     """
 
     project = _timed_project(tmp_path, extra=(
         # Another lane reconstructed TS_A later, before rows named their lane.
         _row("TS_A", "reconstruct-tomogram", 5000, 100.0),
         # Picking under another label whose span holds the bin8 picks' time.
-        _row("TS_A", "pick-particles", 1050, 1950.0, variant="bin4"),
-        # A run that failed after the real one, and TS_B's run at TS_A's time.
-        _row("TS_A", "segment-tomogram", 950, 40.0, exit_code=1),
+        _row("TS_A", "pick-particles", 1050, 1899.5, variant="bin4"),
+        # A run that failed, and TS_B's run at TS_A's time.
+        _row("TS_A", "segment-tomogram", 940, 19.5, exit_code=1),
         _row("TS_B", "prepare-template", 1000, 25.0),
         # A step no page shows, even where its span holds a result's time.
-        _row("TS_A", "visualize-picks", 420, 30.0),
+        _row("TS_A", "visualize-picks", 425, 6.5),
     ))
 
     first, second, third = _timed_reports(project)
@@ -1113,6 +1114,57 @@ def test_each_step_takes_the_time_of_the_run_that_wrote_its_result(tmp_path: Pat
     # TS_B's tomogram came with no run of its own; TS_C has nothing to time.
     assert _step_seconds(second.timing.total) == {"reconstruct-tomogram": None}
     assert third.timing.total.steps == ()
+
+
+def test_a_result_written_as_its_step_ended_is_that_steps(tmp_path: Path) -> None:
+    """A row's finish is cut down to the second, and a step writes as it ends.
+
+    Shaped as ryr1's 096 and 097 were on 2026-10-14, when both lost their time:
+    096's coarse alignment was written at 15:04:10 by the run its row puts at
+    15:04:00-15:04:11, and 097's fine alignment at 15:07:26 by the one at
+    15:07:19-15:07:26. The fractions of a second, and the runs after them, are
+    made up as those runs would have run.
+    """
+
+    def at(minute: int, second: float) -> float:
+        return datetime(2026, 10, 14, 15, minute, tzinfo=UTC).timestamp() + second
+
+    def written(name: str, kind: ArtifactKind, moment: float, *parents: str) -> Artifact:
+        path = tmp_path / name
+        path.write_text("")
+        os.utime(path, (moment, moment))
+        return Artifact(id=name, kind=kind, path=path, parent_ids=list(parents))
+
+    rows = [
+        ("096", "align-tilt-series", 10.6, "15:04:11"),
+        # Its own cut-down finish puts the check's start at 15:04:10.6.
+        ("096", "qc-coarse-alignment", 6.4, "15:04:17"),
+        ("097", "fine-align-tilt-series", 7.0, "15:07:26"),
+        ("097", "build-ctf-stack", 18.0, "15:07:44"),
+    ]
+    (tmp_path / "step_timings.jsonl").write_text("".join(
+        json.dumps({"series": series, "step": step, "seconds": seconds, "exit_code": 0,
+                    "finished_at": f"2026-10-14T{finished}+00:00"}) + "\n"
+        for series, step, seconds, finished in rows
+    ))
+    runs = load_step_runs(tmp_path)
+    stack = written("stack.st", ArtifactKind.TILT_STACK, at(3, 0.0))
+    coarse = written("coarse.json", ArtifactKind.ALIGNMENT, at(4, 10.8), "stack.st")
+    check = written("check.json", ArtifactKind.QC, at(4, 16.5), "coarse.json")
+    record = QcRecord("coarse_alignment_report", "pass", (), {}, "check.json")
+    model = written("model.fid", ArtifactKind.FIDUCIAL_MODEL, at(5, 0.0))
+    fine = written("fine.json", ArtifactKind.ALIGNMENT, at(7, 26.4), "model.fid")
+    fit_stack = written("fit.st", ArtifactKind.ALIGNED_TILT_STACK, at(7, 43.5), "fine.json")
+
+    first, _ = series_timing("096", [stack, coarse, check],
+                             {"coarse_alignment_report": record}, runs)
+    second, _ = series_timing("097", [model, fine, fit_stack], {}, runs)
+
+    assert _step_seconds(first.page("alignment")) == {
+        "align-tilt-series": 10.6, "qc-coarse-alignment": 6.4}
+    assert _step_seconds(second.page("alignment")) == {
+        "track-fiducials": None, "fine-align-tilt-series": 7.0}
+    assert _step_seconds(second.page("ctf")) == {"build-ctf-stack": 18.0}
 
 
 def test_a_result_rewritten_outside_the_runner_has_no_time(tmp_path: Path) -> None:
