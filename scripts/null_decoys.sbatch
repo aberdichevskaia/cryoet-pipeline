@@ -12,19 +12,23 @@
 # then, with EXPORT, scripts/export_dynamo.py: every real particle of the lane, and
 # after them these decoys. Submit from the repo root:
 #
-#   PROJECT=outputs/ribo-mdc CONFIG=configs/lanes/ribo-mdc.toml \
-#   SERIES="TS_0306 TS_0463 TS_0493 TS_0564 TS_0623" \
-#   EXPORT=outputs/ribo-mdc/dynamo/export_null \
-#       sbatch --export=ALL --job-name=null-decoys scripts/null_decoys.sbatch
+#   python3 scripts/submit_recipe.py null-decoys configs/lanes/ribo-mdc.toml \
+#       --set EXPORT=outputs/ribo-mdc/dynamo/export_null --dry-run
+#
+# submit_recipe.py takes the lane's series unless --series names others, runs it
+# where the lane picks, checks it first and journals it in the project. Given to
+# sbatch by hand (--export=ALL, with PROJECT, CONFIG, SERIES and the options below
+# in the environment) it runs the same, without any of that.
 #
 # Partition, card and time are the lane's GPU stage (configs/lanes/ribo-mdc.toml),
 # for the same five pytom searches. Optional: COUNT (peaks kept per tomogram, 120),
 # SEED (1), VARIANT (the lane's label plus -null), OVERWRITE=1 (make the copies and
-# pick again). Needs PYTOMO_MP_DIR, as the lane does. The export is written only
-# when every series got through, into EXPORT, which must not hold anything yet.
-# A job that stops on a series has finished the ones before it: resubmit with SERIES
-# from that series on (its copy, if made, is used again) and without EXPORT, then
-# run the export with all the series by hand; it takes minutes on a CPU.
+# pick again; submit_recipe.py --overwrite sets it). Needs PYTOMO_MP_DIR, as the
+# lane does. The export is written only when every series got through, into EXPORT,
+# which must not hold anything yet. A job that stops on a series has finished the
+# ones before it: resubmit with SERIES from that series on (its copy, if made, is
+# used again) and without EXPORT, then run the export with all the series by hand;
+# it takes minutes on a CPU.
 
 set -euo pipefail
 
@@ -61,6 +65,7 @@ echo "job         ${SLURM_JOB_NAME:-null-decoys} (${SLURM_JOB_ID:-local}) on $(h
 echo "started     $(date -Is)"
 echo "project     $PROJECT   config $CONFIG   lane $LANE -> $VARIANT"
 echo "series      $SERIES"
+echo "overwrite   $([[ "${OVERWRITE:-0}" == 1 ]] && echo yes || echo no)"
 echo "cryoet      $(command -v cryoet)"
 nvidia-smi -L 2>/dev/null || true
 echo

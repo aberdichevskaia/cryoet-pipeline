@@ -7,15 +7,20 @@
 #
 # Why do the ryr1 CTF fits fail past ~12 degrees, while the ribosome ones did not?
 #
-#     sbatch --partition=normal \
-#         --export=ALL,PROJECT=outputs/ryr1,CONFIG=configs/lanes/ryr1-bin8.toml,SERIES=039 \
-#         scripts/ctf_window_test.sbatch
+#     python3 scripts/submit_recipe.py ctf-window configs/lanes/ryr1-bin8.toml \
+#         --series 039 --dry-run
+#
+# submit_recipe.py runs it where the lane runs estimate-ctf, checks it first and
+# journals it in the project. Given to sbatch by hand, with PROJECT, CONFIG and
+# SERIES in the environment, it runs the same, without any of that.
 #
 # IMOD_DIR has to name the MDC install (lane.sbatch falls back to Munich's), and
 # CTFFIND5 the CTFFIND 5 executable when the lane names it as "$CTFFIND5":
 # job 3670792 found CTFFIND 4.1.14 as `ctffind` on PATH and could not use it.
-# KEEP_STACK=1 skips the rebuild of the bin-2 stack, for a rerun after a job
-# that already rebuilt it (3670792 did, before it stopped).
+# OVERWRITE=1, which submit_recipe.py --overwrite sets, rebuilds the bin-2 stack
+# and fits again under labels a run before this one left. KEEP_STACK=1 keeps the
+# stack even then, for a rerun after a job that already rebuilt it (3670792 did,
+# before it stopped).
 #
 # What is known (report-bin4.pdf, written 2026-10-15; per-view values read off
 # its CTF plots): on every series the views fitted to 7-9 A sit inside about
@@ -34,10 +39,11 @@
 # fitted only when CTFFIND's refinement walks back to it, and from ~12 degrees
 # on it does not. Not shown yet, which is what this job is for.
 #
-# The job rebuilds the series' unlabelled bin-2 CTF stack first (--overwrite):
-# the registered one predates the newstack -size fix and is cropped, with about
-# 30% of each view blank. Then it fits that stack four ways, each under its own
-# variant, so the lane's own CTF model is not touched:
+# With OVERWRITE=1 the job first rebuilds the series' unlabelled bin-2 CTF stack,
+# which every lane of the project uses: one registered before the newstack -size
+# fix (16 October 2026) is cropped, with about 30% of each view blank. Without it
+# the stack the series has is used. Then it fits that stack four ways, each under
+# its own variant, so the lane's own CTF model is not touched:
 #
 #   variant      window      CTFFIND5 sample tilt
 #   ctfw1        +-1000 A    no      the lane as it ran, on the uncropped stack
@@ -94,9 +100,13 @@ fi
 echo "job       $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname), $(date -Is)"
 echo "series    $SERIES in $PROJECT"
 echo "ctffind   ${CTFFIND5:-$(command -v ctffind5 || command -v ctffind || echo 'not on PATH')}"
+echo "overwrite $([[ -n "${OVERWRITE:-}" ]] && echo yes || echo no)"
 echo
 
-if [[ "${KEEP_STACK:-0}" != 1 ]]; then
+# Outputs are replaced only when the submission says so: the stack, and fits
+# under labels that a run before this one left.
+overwrite=${OVERWRITE:+--overwrite}
+if [[ -n "$overwrite" && "${KEEP_STACK:-0}" != 1 ]]; then
     eval "$STACK --overwrite"
 fi
 
@@ -105,7 +115,7 @@ fit() {  # label window [extra flags]
     shift 2
     echo
     echo "== $label: +-$window A $*"
-    eval "$FIT --ctffind-defocus-search-window-angstrom $window $* --variant $label --overwrite"
+    eval "$FIT --ctffind-defocus-search-window-angstrom $window $* --variant $label $overwrite"
 }
 
 fit ctfw1 1000

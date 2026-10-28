@@ -10,8 +10,9 @@
 #   PROJECT  CONFIG  SERIES (space-separated)  FROM  UNTIL
 # and, for the stages that use them, MOTIONCOR3, MEMBRAIN_EXE, MEMBRAIN_CKPT,
 # PYTOMO_MP_DIR. OVERWRITE=1 adds --overwrite to every step, for re-running a
-# step that already wrote part of its output. Optional: IMOD_DIR (the Munich
-# install otherwise) and ENV_MANAGER=conda|micromamba (scripts/activate_env.sh).
+# step that already wrote part of its output; submit_lanes.py sets it for its
+# --overwrite only. Optional: IMOD_DIR (the Munich install otherwise) and
+# ENV_MANAGER=conda|micromamba (scripts/activate_env.sh).
 #
 # Jobs of one project may run at the same time, one per series: each command
 # merges its own entries into the registry under a lock when it finishes
@@ -62,6 +63,7 @@ echo "started     $(date -Is)"
 echo "project     $PROJECT   config $CONFIG"
 echo "series      $SERIES"
 echo "steps       $(echo $STEPS)"
+echo "overwrite   $([[ -n "${OVERWRITE:-}" ]] && echo yes || echo no)"
 echo "env         $CONDA_PREFIX ($ENV_MANAGER)"
 echo "cryoet      $(command -v cryoet)"
 echo "imod        $(command -v tiltxcorr || echo 'not on PATH')"

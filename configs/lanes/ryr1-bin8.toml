@@ -75,8 +75,8 @@ until = "fine-align-tilt-series"
 time = "12:00:00"
 sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
 
-# The rerun starts here: submit_lanes.py --from-stage cpu, with OVERWRITE=1 so
-# that the shared bin2 CTF stack and its CTF model are rebuilt uncropped.
+# The rerun starts here: submit_lanes.py --from-stage cpu --overwrite, so that
+# the shared bin2 CTF stack and its CTF model are rebuilt uncropped.
 [[run.stage]]
 name = "cpu"
 from = "build-ctf-stack"

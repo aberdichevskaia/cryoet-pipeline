@@ -1,14 +1,21 @@
 #!/bin/bash
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=64G
+#SBATCH --time=24:00:00
 #SBATCH --output=slurm-%x-%j.log
 #
 # The pipeline's tail for one lane, after the pick review: re-extract every
 # series at its threshold from scripts/qc_dynamo_picks.py, then refine them all
 # together with independent halves. Submit from the repo root, e.g.
 #
-#   CONFIG=configs/lanes/ribo-bin8.toml \
-#   THRESHOLDS=outputs/ribo2/dynamo/pick-qc/thresholds.json MASK=381.6 \
-#       sbatch --partition=cpu_p --qos=cpu_normal --cpus-per-task=32 --mem=64G \
-#           --time=24:00:00 --job-name=ribo2-avg scripts/average_lane.sbatch
+#   python3 scripts/submit_recipe.py average configs/lanes/ribo-bin8.toml --overwrite \
+#       --set THRESHOLDS=outputs/ribo2/dynamo/pick-qc/thresholds.json --set MASK=381.6 \
+#       --dry-run
+#
+# submit_recipe.py runs it on the partition the lane reconstructs on, checks it
+# first and journals it in the project. Given to sbatch by hand (--export=ALL, with
+# CONFIG, THRESHOLDS, MASK and the options below in the environment, and a
+# partition) it runs the same, without any of that.
 #
 # PROJECT and SERIES (space-separated) default to the config's [run] section,
 # the one scripts/submit_lanes.py submitted the lane from; set them to average
@@ -20,7 +27,10 @@
 # (the halves' common start; default 60), OVERWRITE=1, VARIANT to average
 # picks under another label than the lane's, such as the ones `cryoet
 # filter-picks --output-variant` registers, and ENV_MANAGER=conda|micromamba
-# (scripts/activate_env.sh).
+# (scripts/activate_env.sh). Extracting again under a label that has an
+# extraction, the lane's own unless VARIANT names another, replaces it, and so
+# does an average under a label that has one: both need OVERWRITE=1, which
+# submit_recipe.py --overwrite sets.
 #
 # The thresholds keep LCCmax >= the minimum, the rule the Dynamo selection
 # uses, so the two branches start from the same particles. Box and variant come
@@ -81,6 +91,8 @@ for series in "${SERIES_LIST[@]}"; do minimums+=("$(threshold "$series")"); done
 echo "job         $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname)"
 echo "started     $(date -Is)"
 echo "project     $PROJECT   variant $variant   box $box   mask ${mask[*]}"
+echo "series      $SERIES"
+echo "overwrite   $([[ -n "${OVERWRITE:-}" ]] && echo yes || echo no)"
 echo "env         $CONDA_PREFIX ($ENV_MANAGER)"
 echo
 
@@ -95,7 +107,7 @@ for i in "${!SERIES_LIST[@]}"; do
         --box-size-px "$box" \
         --variant "$variant" \
         --minimum-score "${minimums[$i]}" \
-        --overwrite
+        ${OVERWRITE:+--overwrite}
     manifests+=(--manifest "$PROJECT/manifests/$series.json")
 done
 

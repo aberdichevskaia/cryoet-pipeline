@@ -6,6 +6,7 @@ Run from the repo root on the submit node:
     python3 scripts/submit_lanes.py configs/lanes/ribo-bin8.toml
     python3 scripts/submit_lanes.py configs/lanes/ribo-bin8.toml configs/lanes/gag-bin8.toml
     python3 scripts/submit_lanes.py configs/lanes/gag-bin8.toml --from-stage gpu
+    python3 scripts/submit_lanes.py configs/lanes/gag-bin8.toml --from-stage gpu --overwrite
     python3 scripts/submit_lanes.py configs/lanes/gag-bin8.toml --dry-run
 
 [run] names the project, its series, and how the chain in scripts/run_series.py
@@ -20,7 +21,31 @@ Two lanes given together run side by side; every config is checked before any
 job is submitted. The environment goes to the jobs with --export=ALL, so set
 what the config's `$VAR` values name (PYTOMO_MP_DIR, MOTIONCOR3, MEMBRAIN_EXE,
 ...) before running; a missing one is refused here rather than in the job.
-OVERWRITE=1 in the environment reaches lane.sbatch the same way.
+OVERWRITE is the exception. Steps replace what they wrote before only with
+--overwrite, which lane.sbatch receives as OVERWRITE=1 for this submission
+alone. OVERWRITE set in the environment is refused: it would apply to every
+submission from that shell, including the ones nobody meant to overwrite with.
+
+Every dry run and every submission is appended to the project's journal.jsonl:
+the plan, who ran it and through which client, and for a submission also the
+config's text, how it differs from the lane file it was copied from, the commit,
+--reason and the job IDs. A submission from the assistant is refused unless it
+gives --reason and the config's latest journal entry is the same person's dry
+run of exactly this plan, without problems, at most 30 minutes old: what is
+submitted is what was shown, once. The assistant is known by CRYOET_ASSISTANT,
+which its launcher sets, or by the AI_AGENT or CLAUDECODE its client sets (see
+docs/agent_architecture.md, "First increment").
+
+Two jobs on one series write the same files, so a series that a queued or
+running job of the same project works on is refused, in a dry run as in a
+submission. squeue lists the jobs. The journal says which series each of them
+works on, or else the job's log does, once the job runs. A job named like the
+project's own jobs that neither accounts for may be on any of its series. Only
+the user's own jobs are asked about, since a project lives in its user's clone.
+
+The recipes, experiments written in advance that run a lane's steps another way
+(scripts/ctf_window_test.sbatch and the like), are submitted by
+scripts/submit_recipe.py, with these checks and into the same journal.
 
 [run] series may be left out, to take every series: a frames lane then gets the
 ones `init` finds, or, for a project that exists, the ones it has manifests for;
@@ -39,23 +64,52 @@ Disposable, like scripts/run_series.py.
 from __future__ import annotations
 
 import argparse
+import difflib
+import getpass
 import glob
+import hashlib
+import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import tomllib
+import uuid
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import run_series  # noqa: E402
+import show_project  # noqa: E402
 
 LANE_SBATCH = ROOT / "scripts" / "lane.sbatch"
 _ENV_REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+# Each project's record of what was shown and what was submitted: one JSON object
+# per line, appended to and never rewritten.
+JOURNAL = "journal.jsonl"
+# How long a dry run stands for the plan it showed. Past it the queue and the
+# outputs may have moved on, and so may what the person remembers agreeing to.
+DRY_RUN_FRESH = timedelta(minutes=30)
+# Any of these, set and not empty, means an agentic client runs this.
+# CRYOET_ASSISTANT is set by the assistant's launcher. Claude Code sets the other
+# two in every shell it starts, and some other clients set AI_AGENT too.
+ASSISTANT_MARKERS = ("CRYOET_ASSISTANT", "AI_AGENT", "CLAUDECODE")
+# Copied into the journal as they are, when set: the client, the model (the
+# launcher's CRYOET_ASSISTANT_MODEL), and the session whose transcript holds the
+# conversation. Nothing else from the environment is, apart from a plan's $VARs.
+CLIENT_VARIABLES = (
+    *ASSISTANT_MARKERS, "CRYOET_ASSISTANT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_SESSION_ID",
+)
+# What a job's log says it works on, in the header lane.sbatch writes and the
+# recipes copy: "project P ..." with "series A B", or "series A B in P".
+_HEADER_PROJECT = re.compile(r"^project\s+(?P<project>[^\s,]+)")
+_HEADER_SERIES_IN = re.compile(r"^series\s+(?P<series>.+?)\s+in\s+(?P<project>\S+)\s*$")
+_HEADER_SERIES = re.compile(r"^series\s+(?P<series>.+?)\s*$")
 
 
 @dataclass(frozen=True)
@@ -85,6 +139,9 @@ def _string_list(value: Any, where: str) -> tuple[str, ...]:
 def plan(cfg: dict[str, Any], config: Path) -> Plan:
     """The lane's stages, checked against its chain. Refuses rather than guesses."""
 
+    # Before anything is read from it: a misspelt [run] series would otherwise be
+    # taken for no list at all, which means every series.
+    run_series.check_keys(cfg, config)
     run = cfg.get("run")
     if not isinstance(run, dict):
         raise SystemExit(f"{config}: no [run] section")
@@ -267,9 +324,22 @@ def _repo_relative(path: Path) -> str:
         return str(resolved)
 
 
-def submit(lane: Plan, stages: tuple[Stage, ...], dry_run: bool) -> list[str]:
+class SubmitError(Exception):
+    """A stage could not be submitted. The stages before it already were."""
+
+    def __init__(self, message: str, job_ids: list[str]) -> None:
+        super().__init__(message)
+        self.job_ids = job_ids
+
+
+def submit(
+    lane: Plan, stages: tuple[Stage, ...], dry_run: bool, overwrite: bool = False
+) -> list[str]:
     job_ids: list[str] = []
     prefix = Path(lane.project).name
+    # OVERWRITE reaches the jobs only from --overwrite: main() refuses one set in
+    # the environment, and an empty one is dropped here.
+    inherited = {key: value for key, value in os.environ.items() if key != "OVERWRITE"}
     for stage in stages:
         after = (
             [f"--dependency=afterok:{job_ids[-1]}", "--kill-on-invalid-dep=yes"]
@@ -285,7 +355,7 @@ def submit(lane: Plan, stages: tuple[Stage, ...], dry_run: bool) -> list[str]:
         # Through the environment rather than --export=VAR=value, whose list is
         # comma-separated: SERIES holds spaces, and nothing has to survive a parser.
         if not lane.series and not dry_run:
-            raise SystemExit(f"{lane.config}: no series to submit")
+            raise SubmitError("no series to submit", job_ids)
         env = {
             "PROJECT": lane.project,
             "CONFIG": _repo_relative(lane.config),
@@ -295,21 +365,427 @@ def submit(lane: Plan, stages: tuple[Stage, ...], dry_run: bool) -> list[str]:
             "FROM": stage.start,
             "UNTIL": stage.end,
         }
+        if overwrite:
+            env["OVERWRITE"] = "1"
         if dry_run:
             shown = " ".join(f"{key}={value!r}" for key, value in env.items())
             print(f"{shown} {' '.join(command)}")
             job_ids.append(f"<{stage.name}>")
             continue
-        result = subprocess.run(
-            command, cwd=ROOT, env={**os.environ, **env},
-            check=True, capture_output=True, text=True,
-        )
+        try:
+            result = subprocess.run(
+                command, cwd=ROOT, env={**inherited, **env},
+                check=True, capture_output=True, text=True,
+            )
+        except subprocess.CalledProcessError as error:
+            said = (error.stderr or "").strip() or f"exit {error.returncode}"
+            raise SubmitError(f"sbatch refused stage {stage.name!r}: {said}", job_ids) from error
+        except OSError as error:
+            raise SubmitError(f"could not run sbatch: {error}", job_ids) from error
         # --parsable prints "id;cluster" on a multi-cluster setup.
         job_ids.append(result.stdout.strip().split(";")[0])
     return job_ids
 
 
-def main() -> int:
+@dataclass
+class Submission:
+    """One config's part of a dry run or of a submission."""
+
+    cfg: dict[str, Any]
+    text: str
+    lane: Plan
+    stages: tuple[Stage, ...]
+    problems: list[str]
+    record: dict[str, Any]
+    replaces: dict[str, list[str]]
+    id: str | None = None  # of its journal entries, once the first is written
+
+
+def plan_record(
+    cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...], text: str, overwrite: bool
+) -> dict[str, Any]:
+    """What a dry run shows, as JSON. A submission from the assistant must repeat
+    it exactly."""
+
+    series = lane.series
+    if not series and init_command(cfg, lane) is None:
+        series = project_series(lane.project)
+    return {
+        "config": _repo_relative(lane.config),
+        "config_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "project": lane.project,
+        "series": list(series),
+        "stages": [
+            {"name": stage.name, "from": stage.start, "until": stage.end,
+             "time": stage.time, "sbatch": list(stage.sbatch)}
+            for stage in stages
+        ],
+        "overwrite": overwrite,
+        # What the jobs will find in the variables their commands name, since
+        # --export=ALL hands them this environment.
+        "env": {
+            name: os.environ.get(name, "")
+            for name in sorted({name for stage in stages for name in stage.env})
+        },
+    }
+
+
+def recorded_runs(
+    cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]
+) -> dict[str, list[str]]:
+    """Per series, the steps of these stages that have run before: what
+    --overwrite may replace.
+
+    Read from step_timings.jsonl, so it is what is known rather than everything:
+    a run from before the project kept timings is missing, and one from before
+    the rows named their lane counts for every lane.
+    """
+
+    series = lane.series or project_series(lane.project)
+    if not series:
+        return {}
+    steps = run_series.build_steps(cfg, Path(lane.project), series[0])
+    labelled = {name for name, command in steps if "--variant" in command}
+    wanted = [
+        name
+        for stage in stages
+        for name, _ in run_series.slice_steps(steps, stage.start, stage.end)
+    ]
+    runs = show_project.last_runs(
+        ROOT / lane.project, set(series), labelled, cfg["lane"]["variant"]
+    )
+    found = {one: [step for step in wanted if (one, step) in runs] for one in series}
+    return {one: names for one, names in found.items() if names}
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _digest(record: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def from_assistant() -> bool:
+    return any(os.environ.get(name, "").strip() for name in ASSISTANT_MARKERS)
+
+
+def _who() -> dict[str, Any]:
+    """Who runs this, where, and through which client: part of every entry."""
+    return {
+        "user": getpass.getuser(),
+        "host": socket.gethostname(),
+        "assistant": from_assistant(),
+        "client": {name: os.environ[name] for name in CLIENT_VARIABLES if os.environ.get(name)},
+    }
+
+
+def read_journal(project: str) -> list[dict[str, Any]]:
+    """The project's journal, oldest entry first."""
+    try:
+        lines = (ROOT / project / JOURNAL).read_text().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # a line cut short
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def write_journal(project: str, row: dict[str, Any]) -> Path:
+    """Append one entry, in a single write, so that two writers' lines do not mix."""
+    path = ROOT / project / JOURNAL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Not escaped to ASCII, so that a reason written in Russian stays readable.
+    data = (json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n").encode()
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    try:
+        if os.write(descriptor, data) != len(data):
+            raise OSError(f"{path}: the entry was written only in part")
+    finally:
+        os.close(descriptor)
+    return path
+
+
+def queued_jobs() -> list[dict[str, str]] | None:
+    """This user's jobs that Slurm still holds, waiting or running; None where
+    there is no squeue to ask. A squeue that fails raises."""
+    try:
+        result = subprocess.run(
+            ["squeue", "-h", "-u", getpass.getuser(), "-o", "%i|%j|%T"],
+            check=True, capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return None
+    jobs = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) == 3:
+            jobs.append(dict(zip(("id", "name", "state"), parts, strict=True)))
+    return jobs
+
+
+def journal_series(rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """The series of every job the journal says was submitted, by job ID."""
+    planned = {
+        row.get("id"): (row.get("plan") or {}).get("series") or []
+        for row in rows
+        if row.get("event") == "submit"
+    }
+    found: dict[str, list[str]] = {}
+    for row in rows:
+        if row.get("event") in ("submitted", "submit-failed"):
+            series = row.get("series") or planned.get(row.get("id"), [])
+            for job in (row.get("jobs") or {}).values():
+                found[str(job)] = list(series)
+    return found
+
+
+def log_header(root: Path, job_id: str) -> dict[str, Any] | None:
+    """The project and series a job's log names, or None while it has no log:
+    a job that waits has not written one yet."""
+    for path in sorted(root.glob(f"slurm-*-{glob.escape(job_id)}.log")):
+        header: dict[str, Any] = {}
+        try:
+            with path.open(errors="replace") as handle:
+                for line in handle:
+                    if header and not line.strip():
+                        break  # the header ends at its first blank line
+                    if match := _HEADER_SERIES_IN.match(line):
+                        header.setdefault("series", match["series"].split())
+                        header.setdefault("project", match["project"])
+                    elif match := _HEADER_PROJECT.match(line):
+                        header.setdefault("project", match["project"])
+                    elif match := _HEADER_SERIES.match(line):
+                        header.setdefault("series", match["series"].split())
+                    if "project" in header and "series" in header:
+                        break
+        except OSError:
+            continue
+        return header
+    return None
+
+
+def busy(
+    cfg: dict[str, Any], lane: Plan, jobs: list[dict[str, str]], root: Path = ROOT,
+    submitting: str = "this lane",
+) -> list[str]:
+    """Problems: jobs of this project, still queued or running, on series this
+    lane (or a recipe, scripts/submit_recipe.py) would run."""
+
+    series = lane.series
+    if not series and init_command(cfg, lane) is None:
+        series = project_series(lane.project)
+    project = (root / lane.project).resolve()
+    journaled = journal_series(read_journal(lane.project))
+    found = []
+    for job in jobs:
+        # squeue names an array job's tasks "<id>_<task>", and sbatch printed "<id>".
+        theirs = journaled.get(job["id"], journaled.get(job["id"].split("_", 1)[0]))
+        if theirs is None:
+            header = log_header(root, job["id"])
+            if header is not None and "project" in header:
+                if (root / header["project"]).resolve() != project:
+                    continue
+                theirs = header.get("series", [])
+            elif job["name"].startswith(f"{Path(lane.project).name}-"):
+                theirs = []
+            else:
+                continue
+        what = f"job {job['id']} ({job['name']}, {job['state'].lower()})"
+        if not theirs:
+            found.append(
+                f"{what} is this project's, and nothing on record says which series it "
+                "works on, so it may be any of them; submit after it has ended"
+            )
+            continue
+        # Without series of its own the lane takes every series.
+        shared = [one for one in theirs if not series or one in series]
+        if shared:
+            found.append(
+                f"{what} works on {', '.join(shared)}, which {submitting} would run too; "
+                "two jobs on one series write the same files, so submit after it has ended"
+            )
+    return found
+
+
+def queue_problems(
+    targets: list[tuple[dict[str, Any], Plan]], submitting: str = "this lane"
+) -> list[list[str]]:
+    """Per lane, the jobs already queued or running on its series, as problems."""
+    try:
+        jobs = queued_jobs()
+    except subprocess.CalledProcessError as error:
+        said = (error.stderr or "").strip() or f"exit {error.returncode}"
+        return [
+            [f"squeue failed ({said}), so it is unknown whether the series are free"]
+            for _ in targets
+        ]
+    if jobs is None:
+        print("not checked whether the series are free: no squeue here", file=sys.stderr)
+    return [busy(cfg, lane, jobs or [], submitting=submitting) for cfg, lane in targets]
+
+
+# How a submission can differ from its dry run, in words, by plan key: a lane's
+# (plan_record) or a recipe's (scripts/submit_recipe.py).
+_DIFFERS = {
+    "config_sha256": "the config file has changed",
+    "script_sha256": "the recipe's script has changed",
+    "project": "the project differs",
+    "series": "the series differ",
+    "stages": "the stages differ",
+    "parameters": "the recipe's parameters differ",
+    "files": "a file the recipe reads has changed",
+    "sbatch": "the sbatch options differ",
+    "overwrite": "only one of them has --overwrite",
+}
+
+
+def _thread(plan: dict[str, Any]) -> tuple[Any, ...]:
+    """What a dry run is a dry run of: a lane's config, or a recipe on a config's
+    series. A dry run counts only for a submission of the same."""
+    if plan.get("recipe") is None:
+        return (plan.get("config"),)
+    return (plan.get("config"), plan["recipe"], plan.get("series"))
+
+
+def unshown(
+    rows: list[dict[str, Any]], record: dict[str, Any], user: str, now: datetime
+) -> str | None:
+    """Why a submission from the assistant is not the dry run it showed, or None.
+
+    It is that dry run when the latest journal entry of the same config (and,
+    for a recipe, of the same recipe on the same series) is this user's dry run
+    of exactly this plan, without problems, at most DRY_RUN_FRESH old. A
+    submission is journaled before its first sbatch, so one dry run stands for
+    one submission.
+    """
+
+    mine = [
+        row for row in rows
+        if row.get("event") in ("dry-run", "submit")
+        and _thread(row.get("plan") or {}) == _thread(record)
+    ]
+    if not mine:
+        return "no dry run of it is on record"
+    last = mine[-1]
+    when = last.get("at", "?")
+    if last["event"] == "submit":
+        return f"it was submitted at {when}, after its last dry run"
+    if last.get("user") != user:
+        return f"its last dry run, at {when}, was {last.get('user')}'s"
+    if last.get("problems"):
+        return f"its last dry run, at {when}, found problems"
+    shown = last.get("plan") or {}
+    # Every key, so that a part of a plan this list does not name yet still counts.
+    keys = [*_DIFFERS, *sorted((set(shown) | set(record)) - set(_DIFFERS) - {"env"})]
+    differs = [
+        _DIFFERS.get(key, f"its {key} differs")
+        for key in keys
+        if shown.get(key) != record.get(key)
+    ]
+    env = shown.get("env") or {}
+    variables = sorted(
+        f"${name}"
+        for name in set(env) | set(record["env"])
+        if env.get(name) != record["env"].get(name)
+    )
+    if variables:
+        differs.append(f"{', '.join(variables)} differ{'s' if len(variables) == 1 else ''}")
+    if differs:
+        return f"it differs from its dry run at {when}: {'; '.join(differs)}"
+    try:
+        age = now - datetime.fromisoformat(when)
+    except (TypeError, ValueError):
+        return f"its last dry run has no time that can be read ({when!r})"
+    if age > DRY_RUN_FRESH:
+        return (
+            f"its dry run at {when} is {int(age.total_seconds() // 60)} minutes old, "
+            f"and a dry run stands for {int(DRY_RUN_FRESH.total_seconds() // 60)}"
+        )
+    return None
+
+
+def config_diff(cfg: dict[str, Any], config: Path, text: str) -> dict[str, str] | None:
+    """How a config copy differs from the lane file it was made from: the one in
+    configs/lanes with the same [lane] name and [run] project. None for a lane
+    file itself, and when not exactly one file matches."""
+
+    lanes = ROOT / "configs" / "lanes"
+    if config.resolve().parent == lanes.resolve():
+        return None
+    key = (cfg["lane"].get("name"), cfg["run"].get("project"))
+    matches = []
+    for path in sorted(lanes.glob("*.toml")):
+        try:
+            other = tomllib.loads(path.read_text())
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        if (other.get("lane", {}).get("name"), other.get("run", {}).get("project")) == key:
+            matches.append(path)
+    if len(matches) != 1:
+        return None
+    lines = difflib.unified_diff(
+        matches[0].read_text().splitlines(keepends=True),
+        text.splitlines(keepends=True),
+        _repo_relative(matches[0]),
+        _repo_relative(config),
+    )
+    return {"from": _repo_relative(matches[0]), "diff": "".join(lines)}
+
+
+def code_version() -> dict[str, Any] | None:
+    """The commit checked out at submission, and the tracked files changed since."""
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=ROOT, check=True, capture_output=True, text=True
+        ).stdout
+
+    try:
+        commit = git("rev-parse", "HEAD").strip()
+        changed = git("status", "--porcelain", "--untracked-files=no").splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return {"commit": commit, "modified": [line[3:] for line in changed]}
+
+
+def next_step(problems_found: bool) -> str:
+    """What the assistant does after a dry run."""
+    if problems_found:
+        return "to submit: once the problems above are resolved, run the dry run again"
+    return (
+        "to submit: show this dry run, and after a yes run the same command without "
+        f"--dry-run and with --reason, within {int(DRY_RUN_FRESH.total_seconds() // 60)} "
+        "minutes"
+    )
+
+
+def _close(one: Submission, event: str, **fields: Any) -> None:
+    """The entry that says how a journaled submission ended."""
+    try:
+        write_journal(one.lane.project, {
+            "at": _now(), "event": event, "config": one.record["config"], "id": one.id,
+            "user": getpass.getuser(), **fields,
+        })
+    except OSError as error:
+        # The jobs already in the queue stay there whether or not this is written.
+        print(f"not journaled: {error}", file=sys.stderr)
+
+
+def _abandon(lanes: list[Submission], why: str) -> None:
+    """Close the journal entries of submissions that will not be made."""
+    for one in lanes:
+        if one.id is not None:
+            _close(one, "submit-failed", jobs={}, error=why)
+
+
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -324,49 +800,160 @@ def main() -> int:
         "--dry-run", action="store_true",
         help="print the sbatch commands and any problems; submit nothing",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="let every step of the submitted stages replace what it wrote before, for "
+        "this submission only; the dry run lists the recorded runs it may replace",
+    )
+    parser.add_argument(
+        "--reason", default=None,
+        help="what was asked and by whom, for the project's journal; required from the "
+        "assistant",
+    )
+    args = parser.parse_args(argv)
+    command_line = ["scripts/submit_lanes.py", *(sys.argv[1:] if argv is None else argv)]
+
+    if os.environ.get("OVERWRITE"):
+        raise SystemExit(
+            "OVERWRITE is set in the environment, and submit_lanes.py does not pass it on: "
+            "give --overwrite to replace outputs in this submission only, or unset OVERWRITE"
+        )
+    who = _who()
+    if who["assistant"] and not args.dry_run and not (args.reason or "").strip():
+        raise SystemExit(
+            "a submission from the assistant needs --reason: what was asked, and by whom"
+        )
 
     # Everything is checked before the first sbatch, so a broken second config
     # does not leave the first lane submitted alone.
-    lanes = []
+    lanes: list[Submission] = []
     for config in args.configs:
-        cfg = tomllib.loads(config.read_text())
+        text = config.read_text()
+        cfg = tomllib.loads(text)
         lane = plan(cfg, config)
         names = [stage.name for stage in lane.stages]
         if args.from_stage is not None and args.from_stage not in names:
             raise SystemExit(f"{config}: no stage {args.from_stage!r}; stages: {', '.join(names)}")
         first = names.index(args.from_stage) if args.from_stage else 0
         stages = lane.stages[first:]
-        lanes.append((cfg, lane, stages, problems(cfg, lane, stages)))
+        lanes.append(Submission(
+            cfg, text, lane, stages, problems(cfg, lane, stages),
+            plan_record(cfg, lane, stages, text, args.overwrite),
+            recorded_runs(cfg, lane, stages) if args.overwrite else {},
+        ))
 
-    projects = [lane.project for _, lane, _, _ in lanes]
+    projects = [one.lane.project for one in lanes]
     if len(set(projects)) != len(projects):
         # Two jobs on the same series write the same files.
         raise SystemExit("two configs submit to the same project; submit them one after the other")
+    # For the same reason, no job already queued or running may be on the series.
+    targets = [(one.cfg, one.lane) for one in lanes]
+    for one, taken in zip(lanes, queue_problems(targets), strict=True):
+        one.problems += taken
 
-    found = [f"{lane.config}: {problem}" for _, lane, _, issues in lanes for problem in issues]
+    found = [f"{one.lane.config}: {problem}" for one in lanes for problem in one.problems]
     for problem in found:
         print(f"{'would refuse' if args.dry_run else 'refused'}: {problem}", file=sys.stderr)
     if found and not args.dry_run:
         return 1
 
-    for cfg, lane, stages, _ in lanes:
+    if who["assistant"] and not args.dry_run:
+        # The person agreed to the dry run they were shown, and to nothing else.
+        now = datetime.now(UTC)
+        refused = [
+            f"{one.lane.config}: {why}; dry-run it, show the dry run, and submit after a yes"
+            for one in lanes
+            if (why := unshown(read_journal(one.lane.project), one.record, who["user"], now))
+        ]
+        for problem in refused:
+            print(f"refused: {problem}", file=sys.stderr)
+        if refused:
+            return 1
+
+    # A submission is journaled before its first sbatch, so that one which dies
+    # half-way is on record, and so that its dry run cannot be used again.
+    journaled = []
+    for index, one in enumerate(lanes):
+        entry = {
+            **who, "at": _now(), "config": one.record["config"], "argv": command_line,
+            "plan": one.record, "plan_sha256": _digest(one.record),
+            "reason": args.reason, "replaces": one.replaces,
+        }
+        if args.dry_run:
+            entry |= {"event": "dry-run", "problems": one.problems}
+        else:
+            one.id = uuid.uuid4().hex[:12]
+            entry |= {
+                "event": "submit", "id": one.id, "config_text": one.text,
+                "config_diff": config_diff(one.cfg, one.lane.config, one.text),
+                "code": code_version(), "init": init_command(one.cfg, one.lane),
+            }
+        try:
+            journaled.append(write_journal(one.lane.project, entry))
+        except OSError as error:
+            if args.dry_run:
+                print(f"not journaled: {error}", file=sys.stderr)
+                continue
+            one.id = None
+            _abandon(lanes[:index], f"not submitted: {one.lane.config} could not be journaled")
+            print(f"refused: {one.lane.config}: cannot write its journal: {error}", file=sys.stderr)
+            return 1
+
+    for index, one in enumerate(lanes):
+        cfg, lane, stages = one.cfg, one.lane, one.stages
         print(f"# {lane.config}: {lane.project}, "
               + (f"{len(lane.series)} series" if lane.series else "every series"))
         init = init_command(cfg, lane)
-        if init is not None:
-            print(("would run: " if args.dry_run else "") + shlex.join(init))
-            if not args.dry_run:
-                subprocess.run(init, cwd=ROOT, check=True)
-        if not lane.series and (init is None or not args.dry_run):
-            # Every series: the ones init just wrote manifests for, or the ones
-            # the project already has.
-            lane = replace(lane, series=project_series(lane.project))
-            print(f"  series: {' '.join(lane.series)}")
-        ids = submit(lane, stages, args.dry_run)
-        chained = zip(stages, ids, strict=True)
-        print("  " + " -> ".join(f"{stage.name} {job}" for stage, job in chained))
-    if not args.dry_run:
+        try:
+            if init is not None:
+                print(("would run: " if args.dry_run else "") + shlex.join(init))
+                if not args.dry_run:
+                    subprocess.run(init, cwd=ROOT, check=True)
+            if not lane.series and (init is None or not args.dry_run):
+                # Every series: the ones init just wrote manifests for, or the ones
+                # the project already has.
+                lane = replace(lane, series=project_series(lane.project))
+                print(f"  series: {' '.join(lane.series)}")
+            ids = submit(lane, stages, args.dry_run, args.overwrite)
+        except subprocess.CalledProcessError as error:
+            queued, why = [], f"init exited with {error.returncode}"
+        except SubmitError as error:
+            queued, why = error.job_ids, str(error)
+        else:
+            queued, why = ids, None
+        # Shorter than the stages when sbatch refused one part-way.
+        jobs = dict(zip((stage.name for stage in stages), queued, strict=False))
+        if why is not None:
+            _close(one, "submit-failed", jobs=jobs, error=why)
+            _abandon(lanes[index + 1 :], f"not submitted: {lane.config} failed before it")
+            print(f"refused: {lane.config}: {why}", file=sys.stderr)
+            if jobs:
+                print(
+                    "  already in the queue, without the stages after it: "
+                    + ", ".join(f"{name} {job}" for name, job in jobs.items())
+                    + f"; to take it back: scancel {' '.join(jobs.values())}",
+                    file=sys.stderr,
+                )
+            return 1
+        print("  " + " -> ".join(f"{name} {job}" for name, job in jobs.items()))
+        if args.overwrite:
+            if one.replaces:
+                print("  --overwrite may replace what these recorded runs wrote:")
+                for series, steps in one.replaces.items():
+                    print(f"    {series}: {', '.join(steps)}")
+            else:
+                print("  --overwrite: no recorded run of these steps to replace")
+        if not args.dry_run:
+            _close(one, "submitted", jobs=jobs, series=list(lane.series))
+
+    shown = ", ".join(_repo_relative(path) for path in journaled)
+    if args.dry_run:
+        if journaled:
+            print(f"recorded in {shown}")
+        if who["assistant"]:
+            print(next_step(bool(found)))
+    else:
+        print(f"journal: {shown}")
         print("watch: squeue -u $USER   logs: slurm-<job name>-<id>.log")
     return 0
 

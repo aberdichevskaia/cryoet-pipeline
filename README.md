@@ -174,11 +174,20 @@ project. The script then only queues the jobs and exits. Follow them with `squeu
 each job writes `slurm-<job name>-<id>.log` in the repository root. If a job
 fails, the log ends with the failed step and the tilt-series. Fix the cause, then
 resubmit from that stage. Steps that already finished in that stage run
-again, which is why `OVERWRITE=1` is needed:
+again, which is why `--overwrite` is needed:
 
 ```bash
-OVERWRITE=1 python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --from-stage gpu
+python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --from-stage gpu --overwrite
 ```
+
+`--overwrite` holds for that submission only; with `--dry-run` it also lists the
+recorded runs it may replace. `OVERWRITE=1` set in the shell is refused. Every
+dry run and every submission is written to the project's `journal.jsonl`.
+Series that one of your queued or running jobs of the same project works on are
+refused, so wait until that job has ended. The batch scripts that run a lane's
+steps another way, such as the averaging in step 5 or the CTF window test, go
+through `scripts/submit_recipe.py`, with the same checks and the same journal;
+`python3 scripts/submit_recipe.py --list` names them.
 
 Each step writes a QC report (`pass`, `warning` or `fail`) under
 `outputs/<project>/qc/`. A `warning` does not stop the chain, so read the reports
@@ -225,14 +234,20 @@ The plots suggest where to look, not where to cut.
 ### 5. Submission 2: average and resolution
 
 ```bash
-CONFIG=configs/lanes/<name>-bin8.toml THRESHOLDS=outputs/<project>/dynamo/pick-qc/thresholds.json MASK=380 sbatch --partition=cpu_p --qos=cpu_normal --cpus-per-task=32 --mem=64G --time=24:00:00 --job-name=<project>-avg scripts/average_lane.sbatch
+python3 scripts/submit_recipe.py average configs/lanes/<name>-bin8.toml --overwrite --set THRESHOLDS=outputs/<project>/dynamo/pick-qc/thresholds.json --set MASK=380 --dry-run
 ```
 
 This re-extracts each tilt-series with its threshold, then refines all of them
-together as two independent half-sets. `MASK` is the alignment mask: either a
+together as two independent half-sets. The new extraction replaces the one
+Submission 1 made under the lane's label, which is why `--overwrite` is needed;
+the dry run lists what it replaces. `MASK` is the alignment mask: either a
 diameter in Å (a bit larger than the particle) or an MRC mask in the particle
-box. Project and series come from the config's `[run]` section. Optional
-settings, such as the number of iterations, are listed at the top of the script.
+box. The project comes from the config's `[run]` section, and so do the series
+unless `--series` names others. The job runs on the partition the lane
+reconstructs on, with 32 CPUs for up to 24 hours (`--time` for longer). Check
+what the dry run lists, then run the same command without `--dry-run`. Optional
+settings, such as `--set ITERATIONS=5`, are listed by `--list` and at the top of
+`scripts/average_lane.sbatch`.
 
 The average, the two half-maps and the particle STAR file are written to
 `outputs/<project>/averages/`. The FSC and the resolution estimate are in the QC

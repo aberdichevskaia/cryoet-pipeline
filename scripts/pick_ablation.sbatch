@@ -8,9 +8,13 @@
 #
 # Which settings let pytom see the ribosomes in the lane's tomograms?
 #
-#     sbatch --partition=gpu --gres=gpu:a40:1 \
-#         --export=ALL,PROJECT=outputs/ribo-mdc,CONFIG=configs/lanes/ribo-mdc.toml,SERIES=TS_0463 \
-#         scripts/pick_ablation.sbatch
+#     python3 scripts/submit_recipe.py pick-ablation configs/lanes/ribo-mdc.toml \
+#         --series TS_0463 --dry-run
+#
+# submit_recipe.py runs it where the lane picks, checks it first and journals it in
+# the project; its dry run refuses today's lanes, as the job's own check does (see
+# the result below). Given to sbatch by hand, with PROJECT, CONFIG and SERIES in the
+# environment, it runs the same, without any of that.
 #
 # What is known (local copies, 2026-10-15): on TS_0005 the lane's old score map
 # put 44% of its top 100 peaks in the specimen band, where noise puts 48%; a
@@ -31,7 +35,9 @@
 # the particle (pytom's tutorial uses 2.8x).
 #
 # Five matches of one series, one at a time (%1), each under its own output
-# variant beside the lane's picks, each keeping its score volume (~1 GB):
+# variant beside the lane's picks, each keeping its score volume (~1 GB). Picks a
+# run before this one left under these labels are replaced only with OVERWRITE=1
+# (submit_recipe.py --overwrite):
 #
 #   task  label              template               low-pass  random-phase  CTF
 #   0     bin8-abl-lane      lane's old: 39 px box,  35 A      on            on
@@ -55,7 +61,7 @@
 #
 # Each task ends with one line from scripts/score_band_readout.py: how many of the
 # map's 100 best peaks sit in the specimen band, against what noise would put
-# there. Collect them with  grep -h "top-100" slurm-pick-ablation-<jobid>_*.log
+# there. Collect them with  grep -h "top-100" slurm-*pick-ablation-<jobid>_*.log
 #
 # The two templates are made here by prepare-template under their own output
 # variants, so the lane's registered template is left alone either way.
@@ -139,12 +145,13 @@ read -r template mask <<<"$paths"
 echo "job       $SLURM_JOB_NAME ($SLURM_ARRAY_JOB_ID task $task) on $(hostname), $(date -Is)"
 echo "series    $SERIES in $PROJECT"
 echo "variant   $label   template $template"
+echo "overwrite $([[ -n "${OVERWRITE:-}" ]] && echo yes || echo no)"
 nvidia-smi -L 2>/dev/null || true
 echo
 
 # eval: the printed commands name the executables through $PYTOMO_MP_DIR.
 eval "$command --pytom-template $template --pytom-template-mask $mask \
-    --output-variant $label --pytom-keep-score-volume"
+    --output-variant $label --pytom-keep-score-volume ${OVERWRITE:+--overwrite}"
 
 echo
 tomogram=$(ls -d "$PROJECT/tomograms/$SERIES/"*bin8*.zarr | head -1)

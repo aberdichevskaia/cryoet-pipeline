@@ -13,17 +13,21 @@
 # then writes the new picks followed by the null decoys, which were picked the same
 # way. Submit from the repo root:
 #
-#   PROJECT=outputs/ribo-mdc CONFIG=configs/lanes/ribo-mdc.toml \
-#   SERIES="TS_0306 TS_0463 TS_0493 TS_0564 TS_0623" LABEL=bin8-solved \
-#       sbatch --export=ALL --job-name=repick scripts/repick.sbatch
+#   python3 scripts/submit_recipe.py repick configs/lanes/ribo-mdc.toml \
+#       --set LABEL=bin8-solved --dry-run
+#
+# submit_recipe.py takes the lane's series unless --series names others, runs it
+# where the lane picks, checks it first and journals it in the project. Given to
+# sbatch by hand (--export=ALL, with PROJECT, CONFIG, SERIES, LABEL and the options
+# below in the environment) it runs the same, without any of that.
 #
 # Partition, card and time are the lane's GPU stage (configs/lanes/ribo-mdc.toml),
 # for the same five pytom searches. Optional: EXPORT (a folder that holds nothing
 # yet; written only when every series got through), NULL_LABEL (the lane's label
-# plus -null), OVERWRITE=1 (pick again under LABEL). Needs PYTOMO_MP_DIR, as the
-# lane does. A job that stops on a series has finished the ones before it:
-# resubmit with SERIES from that series on and without EXPORT, then print the whole
-# comparison with
+# plus -null), OVERWRITE=1 (pick again under LABEL; submit_recipe.py --overwrite
+# sets it). Needs PYTOMO_MP_DIR, as the lane does. A job that stops on a series
+# has finished the ones before it: resubmit with SERIES from that series on and
+# without EXPORT, then print the whole comparison with
 #
 #   python scripts/repick.py --project ... --config ... --series ... --label ... --compare-only
 
@@ -61,6 +65,7 @@ echo "job         ${SLURM_JOB_NAME:-repick} (${SLURM_JOB_ID:-local}) on $(hostna
 echo "started     $(date -Is)"
 echo "project     $PROJECT   config $CONFIG   lane $LANE -> $LABEL, null $NULL_LABEL"
 echo "series      $SERIES"
+echo "overwrite   $([[ "${OVERWRITE:-0}" == 1 ]] && echo yes || echo no)"
 echo "cryoet      $(command -v cryoet)"
 nvidia-smi -L 2>/dev/null || true
 echo
