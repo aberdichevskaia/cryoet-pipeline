@@ -337,6 +337,11 @@ spectral_whitening = true
 box_size_px = 48          # 470 A at 9.78 A/px, ~1.5x the particle
 
 [executables]
+# CTFFIND 5 by name, as ryr1-bin8 does: the rerun of 2026-10-28 (job 3781480)
+# found CTFFIND 4.1.14 as `ctffind` on PATH, which the ctffind5 backend refuses,
+# where the lane's October runs had found a CTFFIND 5. Export CTFFIND5 before
+# submitting.
+ctffind = "$CTFFIND5"
 # $PYTOMO_MP_DIR — note the O; $PYTOM_MP_DIR is unset and expands to nothing.
 pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
 pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
