@@ -23,6 +23,8 @@
 # 2026-10-27), so a 360 deg round in 9 deg steps (21,561 candidates a search) over
 # 2,384 particles x 3 channels is about 11 h on one card, in 7.8 deg steps (32,583)
 # about 17 h; give them several (--gres=gpu:a40:4) or more time (--time=3-00:00:00).
+# On four A40s (mra_pad_ssn_g2full_port, 2026-10-28) the two rounds took 3.0 and
+# 4.5 h, 0.28 ms a candidate a card, and the whole run 7.7 h.
 # An A40, the card Dynamo's own GPU runs were asked for (the timings compare);
 # more with --gres=gpu:a40:4 and the particles are dealt among all the job's GPUs.
 # Measured on one A40 (2026-10-27, scripts/torch_search_profile.sbatch, RyR1 bin8,
@@ -34,9 +36,13 @@
 # thread (dynamo_search_torch._start_worker). Run again so (mra_pad_ssn_cone5_port2,
 # two A40s): 7.0 minutes an iteration in rounds 1-2, 5.4 in rounds 3-5, 32 minutes in
 # all, the results bit for bit the first run's. The profile's rate gives 4.8 and 3.6
-# minutes of searching; to see where the rest goes, each iteration's line says how
-# much of it was the search, and the cards' clocks and load are sampled once a minute
-# into slurm-<job name>-<job id>-gpus.csv and summarized at the end.
+# minutes of searching. Each iteration's line now says how much of it was the search,
+# and the cards' clocks and load are sampled once a minute into
+# slurm-<job name>-<job id>-gpus.csv and summarized at the end. Read so on
+# g2full_port (the same node, four A40s): 1.4-1.6 minutes of every iteration are
+# outside the search, on the main process's one CPU, and the cards held 1740 MHz in
+# every busy sample. With as many minutes outside the search, cone5's searches took
+# about 1.1-1.15x the profile's time, and g2full's global ones 1.06x full_g1's.
 
 set -euo pipefail
 
