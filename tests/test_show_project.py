@@ -159,3 +159,16 @@ def test_a_timing_row_names_the_lane_that_ran_it(tmp_path):
                              variant="bin8", seconds=1.0, disk_delta_bytes=0, exit_code=0)
     row = json.loads((tmp_path / "step_timings.jsonl").read_text())
     assert (row["lane"], row["variant"]) == ("ribo-bin8", "bin8")
+
+
+def test_a_timing_row_finishes_when_its_step_did(tmp_path):
+    """Not after the size walk that follows it: the report reads the step's span
+    from the finish and the seconds."""
+    from datetime import UTC, datetime
+
+    ended = datetime(2026, 10, 28, 12, 0, 5, 700000, tzinfo=UTC)
+    run_series.record_timing(tmp_path, series="A", step="estimate-ctf", lane="ribo-bin8",
+                             variant="bin8", seconds=54.2, disk_delta_bytes=0, exit_code=0,
+                             finished_at=ended)
+    row = json.loads((tmp_path / "step_timings.jsonl").read_text())
+    assert (row["finished_at"], row["seconds"]) == ("2026-10-28T12:00:05+00:00", 54.2)

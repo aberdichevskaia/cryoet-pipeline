@@ -111,12 +111,16 @@ def record_timing(
     seconds: float,
     disk_delta_bytes: int,
     exit_code: int,
+    finished_at: datetime | None = None,
 ) -> None:
     """Append one measured step to the project's timing table.
 
     Appended to a file rather than printed only, because the numbers are needed
     to size a sandbox and a quota request, and scrollback is not a table. One
     JSON object per line so an interrupted run leaves every step it did finish.
+    `finished_at` is when the step's command ended, now if not given; the
+    report reads the step's span as `finished_at` less `seconds`, to tell which
+    run wrote the files it shows.
 
     This is a stand-in for what the `run` entity will record properly, and it is
     deliberately not a substitute: no fingerprint, no parameters, no attribution.
@@ -132,7 +136,7 @@ def record_timing(
         "seconds": round(seconds, 1),
         "disk_delta_bytes": disk_delta_bytes,
         "exit_code": exit_code,
-        "finished_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "finished_at": (finished_at or datetime.now(UTC)).isoformat(timespec="seconds"),
     }
     destination = project / "step_timings.jsonl"
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -718,10 +722,14 @@ def main() -> int:
             # No shell here, so $VAR in a config value would reach the tool
             # literally. Expand it ourselves; printing keeps the readable form.
             expanded = [os.path.expandvars(part) for part in command]
-            started = time.monotonic()
             disk_before = project_size_bytes(args.project)
+            # The clock runs around the step alone. Until 2026-10-28 it also ran
+            # through the size walk above, which is not the step's work and grows
+            # with every file the project holds.
+            started = time.monotonic()
             result = subprocess.run(["cryoet", *expanded], check=False)
             elapsed = time.monotonic() - started
+            finished = datetime.now(UTC)
             disk_after = project_size_bytes(args.project)
             record_timing(
                 args.project,
@@ -732,6 +740,7 @@ def main() -> int:
                 seconds=elapsed,
                 disk_delta_bytes=disk_after - disk_before,
                 exit_code=result.returncode,
+                finished_at=finished,
             )
             print(
                 f"# {name}: {elapsed / 60:.1f} min, "
