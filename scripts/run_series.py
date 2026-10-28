@@ -104,6 +104,8 @@ def record_timing(
     *,
     series: str,
     step: str,
+    lane: str,
+    variant: str,
     seconds: float,
     disk_delta_bytes: int,
     exit_code: int,
@@ -121,6 +123,10 @@ def record_timing(
     row = {
         "series": series,
         "step": step,
+        # Which lane ran it. One project can hold several, and a labelled step
+        # run by one of them is not that step of another (scripts/show_project.py).
+        "lane": lane,
+        "variant": variant,
         "seconds": round(seconds, 1),
         "disk_delta_bytes": disk_delta_bytes,
         "exit_code": exit_code,
@@ -682,6 +688,8 @@ def main() -> int:
                 args.project,
                 series=series,
                 step=name,
+                lane=cfg["lane"]["name"],
+                variant=cfg["lane"]["variant"],
                 seconds=elapsed,
                 disk_delta_bytes=disk_after - disk_before,
                 exit_code=result.returncode,
