@@ -85,6 +85,51 @@ def _lane(stem: str) -> dict:
     return tomllib.loads((ROOT / "configs" / "lanes" / f"{stem}.toml").read_text())
 
 
+@pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])
+def test_every_lane_sets_only_keys_that_are_read(lane):
+    assert run_series.unknown_keys(tomllib.loads(lane.read_text())) == []
+
+
+def test_a_misspelt_key_is_refused_with_the_key_it_was_meant_to_be():
+    # It used to be skipped: estimate-ctf was rendered without the window flag and
+    # ran with its default, and nothing said so.
+    config = _lane("example")
+    config["ctf"]["defocus_search_windo_angstrom"] = 10000
+    meant = (r"\[ctf\] defocus_search_windo_angstrom: "
+             r"did you mean defocus_search_window_angstrom\?")
+    with pytest.raises(SystemExit, match=meant):
+        run_series.build_steps(config, Path("p"), "TS_01")
+    with pytest.raises(SystemExit, match=meant):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_a_misspelt_series_list_is_not_taken_for_every_series():
+    config = _lane("gag-bin8")
+    config["run"]["seires"] = config["run"].pop("series")
+    with pytest.raises(SystemExit, match=r"\[run\] seires: did you mean series\?"):
+        submit_lanes.plan(config, Path("lane.toml"))
+
+
+def test_every_unknown_key_is_named_at_once():
+    config = _lane("gag-bin8")
+    config["data"]["tilt_axis_angle"] = 85.0
+    config["pick"]["lowpass_angstrom"] = 25.0
+    config["ctff"] = {"voltage_kv": 300.0}
+    config["run"]["stage"][0]["partition"] = "gpu_p"
+    config["variant"] = "bin8"
+    with pytest.raises(SystemExit) as refused:
+        run_series.build_steps(config, Path("p"), "TS_01")
+    message = str(refused.value)
+    for expected in (
+        "[data] tilt_axis_angle: it belongs in [align]",
+        "[pick] lowpass_angstrom: did you mean low_pass_angstrom?",
+        "[ctff] is not a section of a lane config: did you mean [ctf]?",
+        "[[run.stage]] 'motion': partition",
+        "variant is set above every section: it belongs in [lane]",
+    ):
+        assert expected in message
+
+
 def _combination(source: str, alignment: str, segment: bool) -> dict:
     """The Gag lane with its input, fiducials and segmentation swapped for the
     ribosome lane's where the combination asks for them."""

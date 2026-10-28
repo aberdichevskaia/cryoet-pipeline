@@ -55,6 +55,7 @@ the same files.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import subprocess
@@ -139,6 +140,123 @@ FIDUCIAL_PAIRS = {
     "imod-patch-seed": "imod-patch-track",
 }
 
+# Every key a lane config may set, by section. Keys are read by name, so a
+# misspelt one used to be skipped without a word: its flag was not rendered and
+# the step ran with its default. Nothing outside this table is accepted, so a key
+# a step starts reading goes in here in the same change.
+LANE_KEYS: dict[str, frozenset[str]] = {
+    # [run] and its [[run.stage]] tables are read by scripts/submit_lanes.py, and
+    # the frames half of [data] by `cryoet init`; the rest by build_steps below.
+    "lane": frozenset({"name", "input", "variant"}),
+    "run": frozenset({"project", "series", "stage"}),
+    "data": frozenset({"frames", "mdocs", "frames_pattern", "pixel_size_angstrom",
+                       "mdoc", "stack"}),
+    "motion": frozenset({"backend", "storage_policy", "gpu", "patch_x", "patch_y",
+                         "pixel_size_angstrom", "gain_reference", "gain_rotation",
+                         "gain_flip", "ftbin"}),
+    "binning": frozenset({"ctf_fit", "tomogram"}),
+    "align": frozenset({"binning", "min_std_ratio", "tilt_axis_angle"}),
+    "qc_coarse": frozenset({"preview_binning", "residual_warning_px"}),
+    "fiducials": frozenset({
+        "seed_backend", "track_backend",
+        "tracking_binning", "fiducial_diameter_nm", "raw_pixel_spacing_angstrom",
+        "target_beads", "rounds",
+        "pre_binning", "num_patches_x", "num_patches_y", "patch_overlap",
+        "patch_margin_px", "patch_filter_sigma1", "patch_filter_radius2",
+        "patch_filter_sigma2",
+        "min_tracked_fiducials", "coverage_warning", "coverage_failure",
+    }),
+    "fine_align": frozenset({"robust_fitting", "auto_prune_outliers",
+                             "max_pruned_fraction", "surfaces_to_analyze"}),
+    "reconstruct": frozenset({"thickness"}),
+    "ctf": frozenset({"voltage_kv", "spherical_aberration_mm", "amplitude_contrast",
+                      "min_defocus_angstrom", "max_defocus_angstrom",
+                      "defocus_search_window_angstrom", "defocus_step_angstrom",
+                      "max_excluded_views", "determine_sample_tilt"}),
+    "segment": frozenset({"executable", "model", "sliding_window_size",
+                          "test_time_augmentation"}),
+    "template": frozenset({"emdb_id", "source_map", "particle_diameter_angstrom",
+                           "low_pass_angstrom", "mask_radius_px", "mask_sigma_px",
+                           "box_size_px"}),
+    "pick": frozenset({
+        "particle_diameter_angstrom", "extract_particle_diameter_angstrom",
+        "z_axis_symmetry", "number_of_particles", "number_of_false_positives",
+        "cut_off", "tophat_filter", "low_pass_angstrom", "random_phase_correction",
+        "ctf_weighting", "per_tilt_weighting", "spectral_whitening", "gpu_ids",
+        "volume_split", "use_segmentation_mask", "segmentation_mask_dilation_px",
+    }),
+    "extract": frozenset({"box_size_px", "pad_edges"}),
+    "executables": frozenset({"motioncor3", "ctffind", "pytom_create_template",
+                              "pytom_create_mask", "pytom_match_template",
+                              "pytom_extract_candidates"}),
+}
+STAGE_KEYS = frozenset({"name", "from", "until", "time", "sbatch"})
+# Keys that were renamed, with what replaced them.
+RENAMED = {
+    ("lane", "chain"): (
+        "is now [lane] input: 'frames' or 'stack'. Alignment and segmentation are "
+        "chosen by [fiducials] and [segment], not by the chain"
+    ),
+}
+
+
+def _did_you_mean(name: str, choices: frozenset[str], brackets: bool = False) -> str:
+    close = difflib.get_close_matches(name, sorted(choices), n=1)
+    if not close:
+        return ""
+    return f": did you mean [{close[0]}]?" if brackets else f": did you mean {close[0]}?"
+
+
+def _belongs_in(key: str) -> str:
+    homes = [f"[{section}]" for section, keys in LANE_KEYS.items() if key in keys]
+    return f": it belongs in {' or '.join(homes)}" if homes else ""
+
+
+def unknown_keys(cfg: dict[str, Any]) -> list[str]:
+    """Every section and key nothing reads, each with what it was likely meant to
+    be. Empty when every key in the config reaches a step."""
+
+    found: list[str] = []
+    for section, values in cfg.items():
+        if not isinstance(values, dict):
+            found.append(f"{section} is set above every section{_belongs_in(section)}")
+            continue
+        if section not in LANE_KEYS:
+            found.append(
+                f"[{section}] is not a section of a lane config"
+                + _did_you_mean(section, frozenset(LANE_KEYS), brackets=True)
+            )
+            continue
+        for key, value in values.items():
+            if (section, key) in RENAMED:
+                found.append(f"[{section}] {key} {RENAMED[section, key]}")
+            elif key not in LANE_KEYS[section]:
+                found.append(
+                    f"[{section}] {key}"
+                    + (_belongs_in(key) or _did_you_mean(key, LANE_KEYS[section]))
+                )
+            elif (section, key) == ("run", "stage") and isinstance(value, list):
+                for stage in value:
+                    if not isinstance(stage, dict):
+                        continue
+                    for stage_key in sorted(set(stage) - STAGE_KEYS):
+                        found.append(
+                            f"[[run.stage]] {stage.get('name', '?')!r}: {stage_key}"
+                            + _did_you_mean(stage_key, STAGE_KEYS)
+                        )
+    return found
+
+
+def check_keys(cfg: dict[str, Any], config: Path | None = None) -> None:
+    """Refuse a config with keys nothing reads, naming all of them at once."""
+    found = unknown_keys(cfg)
+    if found:
+        where = f"{config}: " if config is not None else ""
+        raise SystemExit(
+            f"{where}the config has keys nothing reads, so they would be ignored:\n  "
+            + "\n  ".join(found)
+        )
+
 
 def _require(cfg: dict[str, Any], section: str, keys: tuple[str, ...], why: str) -> dict[str, Any]:
     """One config section with the keys the chain reads from it, or a refusal naming them."""
@@ -155,10 +273,7 @@ def lane_input(cfg: dict[str, Any]) -> str:
     """How the series enter the project: `frames` (movies, through init) or `stack`."""
     lane = cfg.get("lane", {})
     if "chain" in lane:
-        raise SystemExit(
-            "[lane] chain is now [lane] input: 'frames' or 'stack'. Alignment and "
-            "segmentation are chosen by [fiducials] and [segment], not by the chain"
-        )
+        raise SystemExit(f"[lane] chain {RENAMED['lane', 'chain']}")
     value = lane.get("input")
     if value not in INPUTS:
         raise SystemExit(f"[lane] input must be one of {', '.join(INPUTS)}, not {value!r}")
@@ -178,9 +293,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
       picking may use them as a mask; absent: the step is left out.
 
     A flag is rendered only when its value is in the config, so one builder
-    serves every combination: bead-only options never reach a patch lane.
+    serves every combination: bead-only options never reach a patch lane. A key
+    that no step reads is refused rather than skipped.
     """
 
+    check_keys(cfg)
     source = lane_input(cfg)
     manifest = project / "manifests" / f"{series}.json"
     registry = project / "artifacts.json"
