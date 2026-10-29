@@ -20,9 +20,13 @@ Read-only. It joins what is already written down and decides nothing:
   jobs still waiting.
 
 One project can hold several lanes. Steps before build-final-aligned-stack are
-shared, so every lane's runs of them count; the steps after it count only under
-this lane's variant. A timing row written before rows named their lane counts
-for every lane.
+shared, so every lane's runs of them count. The steps after it each lane labels
+for itself: their timing rows count only under this lane's variant, and their
+failures in a job only if the job ran this lane. A job's log names its lane on
+each series' `# ---- <series> (<lane>) ----` line; a job that stopped before
+its first step is known by the lane config in its header. A timing row written
+before rows named their lane, and a job whose lane cannot be told, count for
+every lane.
 
 Disposable, like scripts/run_series.py: a stand-in, for a person and for the
 terminal assistant, until the run entity records all of this.
@@ -38,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -91,13 +96,14 @@ _CELL = {"none": "·", "ok": "ok", "unknown": "?", "warning": "W", "fail": "F"}
 
 # What lane.sbatch and run_series.py write into a job's log.
 _JOB = re.compile(r"^job\s+(?P<name>\S+) \((?P<id>\d+)\)")
-_PROJECT = re.compile(r"^project\s+(?P<project>\S+)")
+_PROJECT = re.compile(r"^project\s+(?P<project>\S+)(?:\s+config\s+(?P<config>\S+))?")
 _SERIES = re.compile(r"^series\s+(?P<series>.*)$")
 _STEPS = re.compile(r"^steps\s+(?P<steps>.*)$")
 _STARTED = re.compile(r"^started\s+(?P<when>\S+)")
 _FINISHED = re.compile(r"^finished\s+(?P<when>\S+)")
 _PREFLIGHT = re.compile(r"^preflight: (?P<problem>.*)$")
-_FAILED = re.compile(r"^# FAILED at (?P<step>\S+) \(exit (?P<code>-?\d+)\) for (?P<series>\S+)\.$")
+_BLOCK = re.compile(r"^# ---- (?P<series>\S+) \((?P<lane>.*)\) ----$")
+_FAILED =re.compile(r"^# FAILED at (?P<step>\S+) \(exit (?P<code>-?\d+)\) for (?P<series>\S+)\.$")
 
 
 def _load_json(path: Path) -> Any:
@@ -159,6 +165,22 @@ def last_runs(
             continue  # another lane's run of a step each lane labels for itself
         runs[(row["series"], step)] = row
     return runs
+
+
+def lane_sees(job: dict[str, Any], step: str, lane: str | None, labelled: set[str]) -> bool:
+    """Whether a job's run of a step counts for this lane: a shared step's counts
+    for every lane, a labelled step's only for the lane the job ran."""
+    return step not in labelled or job.get("lane") in (None, lane)
+
+
+def _config_lane(path: Path) -> str | None:
+    """The lane a config names, if the config can still be read."""
+    try:
+        lane = tomllib.loads(path.read_text()).get("lane")
+    except (OSError, ValueError):
+        return None
+    name = lane.get("name") if isinstance(lane, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def _owner(artifact: dict[str, Any]) -> str | None:
@@ -276,6 +298,8 @@ def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[d
                 job.update(name=match["name"], id=match["id"])
             elif match := _PROJECT.match(line):
                 job["project"] = match["project"]
+                if match["config"]:
+                    job["config"] = match["config"]
             elif match := _SERIES.match(line):
                 job["series"] = match["series"].split()
             elif match := _STEPS.match(line):
@@ -286,6 +310,9 @@ def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[d
                 job["finished"] = match["when"]
             elif match := _PREFLIGHT.match(line):
                 job["preflight"] = match["problem"]
+            elif match := _BLOCK.match(line):
+                # One job runs one lane, named as it was when the job ran.
+                job.setdefault("lane", match["lane"])
             elif match := _FAILED.match(line):
                 job["failed"].append({
                     "series": match["series"],
@@ -297,6 +324,11 @@ def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[d
         # folder it ran in, which is where its log is.
         if (path.parent / job.get("project", "")).resolve() != target:
             continue
+        if "lane" not in job and "config" in job:
+            # Stopped before its first step: the lane its config names now.
+            lane = _config_lane(path.parent / job["config"])
+            if lane is not None:
+                job["lane"] = lane
         if job["failed"] or "preflight" in job:
             job["outcome"] = "failed"
         elif "finished" in job:
@@ -375,6 +407,7 @@ def summarize(
         "lane": lane.get("name"),
         "variant": lane["variant"],
         "steps": chain,
+        "labelled": [step for step in chain if step in labelled],
         "series": rows,
         "jobs": jobs,
         "waiting": waiting,
@@ -404,8 +437,10 @@ def render(summary: dict[str, Any]) -> list[str]:
     lines.append("· no record  ok  W warning  F QC failure  ? QC status unknown  "
                  "X<n> exited with n")
 
+    labelled = set(summary["labelled"])
     failures = {(failure["series"], failure["step"]): job["log"]
-                for job in summary["jobs"] for failure in job["failed"]}
+                for job in summary["jobs"] for failure in job["failed"]
+                if lane_sees(job, failure["step"], summary["lane"], labelled)}
     crashed = [(row["id"], step, entry) for row in summary["series"]
                for step, entry in row["steps"].items() if entry["state"] == "crashed"]
     if crashed:
@@ -429,7 +464,9 @@ def render(summary: dict[str, Any]) -> list[str]:
     if summary["jobs"] or summary["waiting"]:
         lines += ["", "jobs"]
         for job in summary["jobs"]:
-            text = f"  {job.get('name', '?')}  {job.get('id', '?')}  {job['outcome']}"
+            # Lanes of one project share job names: the lane says whose job it is.
+            lane = f"  lane {job['lane']}" if "lane" in job else ""
+            text = f"  {job.get('name', '?')}  {job.get('id', '?')}{lane}  {job['outcome']}"
             if "slurm" in job:
                 slurm = job["slurm"]
                 text += f" (Slurm: {slurm['state']}, exit {slurm['exit_code']}, {slurm['elapsed']})"

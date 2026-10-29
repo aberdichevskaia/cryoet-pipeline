@@ -11,12 +11,14 @@ that look like errors (the first and the last of them, since the real error is
 often not at the end), and the last lines before the step stopped. Paths and line
 numbers say where to read on.
 
-What counts as failed, among the runs this lane sees (scripts/show_project.py
-says which those are):
+What counts as failed, among the runs and jobs this lane sees
+(scripts/show_project.py says which those are: another lane's job, for the
+shared steps only):
 
 * a step whose last run exited non-zero;
 * a job that stopped in its preflight, before any step ran, unless one of its
-  steps has run for the series since;
+  steps has run for the series since. Another lane's job counts only if every
+  step it was to run is shared;
 * a job whose log stops in the middle of a step: still running, or stopped by
   Slurm (time limit, memory, node). sacct, where it can be run, says which.
 
@@ -237,7 +239,7 @@ def program_logs(
 
 
 def _job(job: dict[str, Any]) -> dict[str, Any]:
-    return {key: job[key] for key in ("id", "name", "log", "started", "outcome", "slurm")
+    return {key: job[key] for key in ("id", "name", "lane", "log", "started", "outcome", "slurm")
             if key in job}
 
 
@@ -268,6 +270,9 @@ def failures(
     def wanted(one: str, name: str | None) -> bool:
         return one in chosen and (step is None or name == step)
 
+    def sees(job: dict[str, Any], name: str) -> bool:
+        return show_project.lane_sees(job, name, lane.get("name"), labelled)
+
     def add(one: str, name: str, **fields: Any) -> None:
         if wanted(one, name):
             found.setdefault((one, name), {"series": one, "step": name}).update(fields)
@@ -294,6 +299,8 @@ def failures(
         started = _time(job.get("started"))
         for failure in job["failed"]:
             key = (failure["series"], failure["step"])
+            if not sees(job, failure["step"]):
+                continue  # another lane's run of a step each lane labels for itself
             if runs.get(key, {}).get("exit_code") == 0:
                 # Rerun since, and the rerun worked: no longer a failure, but on record.
                 if wanted(*key):
@@ -305,7 +312,9 @@ def failures(
             window = slurm_window(lines, *key)
             add(*key, kind="crashed", exit_code=failure["exit_code"], job=_job(job),
                 slurm_lines=slurm_excerpt(lines, window) if window else [])
-        if "preflight" in job:
+        # A stop before the first step is about every step the job was to run, the
+        # whole chain if its log does not say: another lane's, if any is labelled.
+        if "preflight" in job and all(sees(job, name) for name in job.get("steps") or chain):
             stop = next((index for index, line in enumerate(lines)
                          if line.startswith("preflight: ")), len(lines) - 1)
             excerpt = [_line(lines, index) for index in sorted(
@@ -322,7 +331,7 @@ def failures(
                         "series": one, "step": "preflight", "jobs": [], "passed_at": passed,
                     })["jobs"].append(_job(job))
         stopped = in_progress(lines) if not job["failed"] and "finished" not in job else None
-        if stopped is not None:
+        if stopped is not None and sees(job, stopped[1]):
             run = runs.get(stopped)
             finished = _time(run.get("finished_at")) if run else None
             if run is None or started is None or finished is None or finished < started:
@@ -371,6 +380,13 @@ def _describe(entry: dict[str, Any]) -> str:
     return f"crashed, exit {entry.get('exit_code')}" + (f", {when}" if when else "")
 
 
+def _job_name(job: dict[str, Any], lane: str | None) -> str:
+    """A job's name and ID, and its lane if another: lanes of one project share
+    job names."""
+    other = f" of lane {job['lane']}" if job.get("lane") not in (None, lane) else ""
+    return f"{job.get('name', '?')} {job.get('id', '?')}{other}"
+
+
 def _excerpt(lines: list[dict[str, Any]], indent: str) -> list[str]:
     out: list[str] = []
     previous = None
@@ -392,7 +408,7 @@ def render(result: dict[str, Any]) -> list[str]:
         lines += ["", f"{entry['series']}  {entry['step']}  {_describe(entry)}"]
         job = entry.get("job")
         if job:
-            lines.append(f"  {job['log']} (job {job.get('name', '?')} {job.get('id', '?')})")
+            lines.append(f"  {job['log']} (job {_job_name(job, result['lane'])})")
             lines += _excerpt(entry.get("slurm_lines", []), "  ")
         for log in entry.get("program_logs", []):
             lines.append(f"  {log['path']} (written {log['modified']})")
@@ -402,9 +418,7 @@ def render(result: dict[str, Any]) -> list[str]:
     if result.get("rerun_since"):
         lines += ["", "failed before, and passed when run again since:"]
         for entry in result["rerun_since"]:
-            jobs = ", ".join(
-                f"{job.get('name', '?')} {job.get('id', '?')}" for job in entry["jobs"]
-            )
+            jobs = ", ".join(_job_name(job, result["lane"]) for job in entry["jobs"])
             passed = f"; passed {entry['passed_at']}" if entry.get("passed_at") else ""
             lines.append(f"  {entry['series']}  {entry['step']}  failed in {jobs}{passed}")
     if result.get("qc_failures"):
