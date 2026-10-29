@@ -233,6 +233,87 @@ def test_a_preflight_stop_is_history_once_its_steps_ran_for_the_series(
     assert "B  preflight  failed in p-cpu-B 118; passed 2026-10-27T10:00:00+00:00" in text
 
 
+def _other_lane(root: Path) -> None:
+    """Jobs of ribo-bin4, another lane of the project, which labels its steps
+    bin4 and names its jobs as ribo-bin8 does. On C its pick crashed, and a later
+    job stopped before reconstructing and picking; on D its alignment crashed, and
+    a later job stopped before aligning; on E its pick is still running."""
+    (root / "configs" / "lanes").mkdir(parents=True)
+    (root / "configs" / "lanes" / "ribo-bin4.toml").write_text(
+        '[lane]\nname = "ribo-bin4"\nvariant = "bin4"\n'
+    )
+    with (root / "outputs" / "p" / "step_timings.jsonl").open("a") as handle:
+        for series, step, exit_code, hour in (("D", "align-tilt-series", 2, 12),
+                                              ("C", "pick-particles", 1, 13)):
+            row = _row(series, step, exit_code, datetime(2026, 10, 27, hour, 1, tzinfo=UTC))
+            handle.write(json.dumps({**row, "lane": "ribo-bin4", "variant": "bin4"}) + "\n")
+
+    def log(job_id: str, hour: int, series: str, steps: str, rest: str) -> None:
+        (root / f"slurm-p-gpu-{job_id}.log").write_text(
+            f"job         p-gpu ({job_id}) on node3\nstarted     2026-10-27T{hour}:00:00+00:00\n"
+            "project     outputs/p   config configs/lanes/ribo-bin4.toml\n"
+            f"series      {series}\nsteps       {steps}\n" + rest
+        )
+
+    def ran(series: str, step: str, *lines: str) -> str:
+        return (f"preflight   ok\n\n# ---- {series} (ribo-bin4) ----\n\n# {step}\n"
+                f"cryoet {step} --manifest outputs/p/manifests/{series}.json\n" + "".join(lines))
+
+    log("201", 12, "D", "align-tilt-series", ran(
+        "D", "align-tilt-series", "ERROR: no tilt angles\n",
+        "# align-tilt-series: 1.0 min, +0.00 GB\n\n# FAILED at align-tilt-series (exit 2) for D.\n",
+    ))
+    log("200", 13, "C", "pick-particles", ran(
+        "C", "pick-particles", "out of memory\n",
+        "# pick-particles: 1.0 min, +0.00 GB\n\n# FAILED at pick-particles (exit 1) for C.\n",
+    ))
+    log("205", 14, "C", "reconstruct-tomogram pick-particles",
+        "preflight: PYTOMO_MP_DIR is not set (note the O)\n")
+    log("203", 15, "D", "align-tilt-series generate-fiducial-seed",
+        "preflight: cannot lock the registry from this node (above)\n")
+    log("206", 16, "E", "pick-particles", ran("E", "pick-particles", "matching rotations 1/3\n"))
+
+
+def _lane(name: str, variant: str) -> dict:
+    config = _config()
+    config["lane"].update(name=name, variant=variant)
+    config["run"]["series"] = ["A", "B", "C", "D", "E"]
+    return config
+
+
+def test_another_lanes_job_fails_only_its_shared_steps_here(tmp_path):
+    _project(tmp_path)
+    _other_lane(tmp_path)
+    result = show_failure.failures(_lane("ribo-bin8", "bin8"), tmp_path, slurm=False)
+    found = {(entry["series"], entry["step"]): entry for entry in result["failures"]}
+    # Its pick, its stop before picking and its pick still running are its own.
+    assert set(found) == {
+        ("A", "preflight"), ("A", "pick-particles"), ("B", "generate-fiducial-seed"),
+        ("D", "align-tilt-series"), ("D", "preflight"),
+    }
+    assert found["D", "align-tilt-series"]["job"]["id"] == "201"
+    assert found["D", "preflight"]["job"]["id"] == "203"
+    text = "\n".join(show_failure.render(result))
+    assert "slurm-p-gpu-201.log (job p-gpu 201 of lane ribo-bin4)" in text
+    assert "slurm-p-cpu-123.log (job p-cpu 123)" in text
+
+    # That lane sees all of them, but not this lane's pick still running on A.
+    # Job 124's config is gone, so its stop counts for every lane.
+    other = show_failure.failures(_lane("ribo-bin4", "bin4"), tmp_path, slurm=False)
+    found = {(entry["series"], entry["step"]): entry for entry in other["failures"]}
+    assert set(found) == {
+        ("A", "preflight"), ("B", "generate-fiducial-seed"), ("C", "pick-particles"),
+        ("C", "preflight"), ("D", "align-tilt-series"), ("D", "preflight"),
+        ("E", "pick-particles"),
+    }
+    assert (found["C", "pick-particles"]["kind"], found["C", "pick-particles"]["job"]["id"]) \
+        == ("crashed", "200")
+    assert found["C", "preflight"]["job"]["id"] == "205"
+    assert found["E", "pick-particles"]["kind"] == "interrupted"
+    text = "\n".join(show_failure.render(other))
+    assert "slurm-p-cpu-123.log (job p-cpu 123 of lane ribo-bin8)" in text
+
+
 def _qc(root: Path, series: str, qc_type: str, status: str, warning: str) -> dict:
     path = f"outputs/p/qc/{series}/{qc_type}.json"
     _write(root / path, json.dumps({"status": status, "warnings": [warning]}), CRASHED)

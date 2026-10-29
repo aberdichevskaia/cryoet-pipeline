@@ -103,8 +103,9 @@ the directory the job was submitted from: the repository root, for the jobs
 `submit_lanes.py` submits. A job submitted by hand from another folder logs
 there, under the job name it was given; `sacct -j <job id> -o WorkDir` says
 where, and `show_project.py` and `show_failure.py` look there too. The log holds
-the job header (node, GPU, environment, the steps), the preflight result, every
-command as run, the time and disk used per step, and the failure line.
+the job header (node, GPU, environment, the config, the steps), the preflight
+result, a `# ---- <TS> (<lane>) ----` line for each series with every command as
+run under it, the time and disk used per step, and the failure line.
 
 External programs write their own logs next to the step's outputs, named after
 the program: `<TS>_..._beadtrack.log`, `<TS>_fine_tiltalign.log`,
@@ -123,6 +124,9 @@ Slurm log.
     waiting.
   - Shared steps count whichever lane ran them. Labelled steps count only
     under the lane's variant, so experiments under other labels are left out.
+    A job's failure of a labelled step counts only for the lane the job ran,
+    which its log names. Lanes of one project share job names, so the jobs list
+    gives each job's lane.
   - `--json` gives the same for a program; `--series` narrows it.
 - `python3 scripts/show_failure.py <lane config>` shows, for every step that
   failed, the lines that matter.
@@ -131,7 +135,9 @@ Slurm log.
   - From the logs its programs wrote while it ran: each command that exited
     non-zero, with its error output and exit code.
   - A job that stopped in its preflight, or stopped in the middle of a step,
-    counts as a failure too. A failure fixed by a later run does not.
+    counts as a failure too. A failure fixed by a later run does not. Another
+    lane's preflight stop counts only if every step that job was to run is
+    shared.
   - After the failures, without excerpts: each step that failed in a job and
     passed when run again since, with those jobs; and each step that ran but
     whose result failed QC, with its QC file and first warning. "0 failed steps"

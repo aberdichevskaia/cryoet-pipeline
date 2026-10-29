@@ -199,6 +199,32 @@ def test_the_table_marks_a_crash_and_points_at_its_log(tmp_path):
     assert "every view unfitted" not in text
 
 
+def test_a_crash_points_only_at_a_job_of_the_lane_that_labels_the_step(tmp_path):
+    """Lanes of one project share job names; the log names each job's lane."""
+    _project(tmp_path)
+    # This lane's pick on A crashed in a job whose log is not here, and so did the
+    # other lane's, in job 200.
+    with (tmp_path / "outputs" / "p" / "step_timings.jsonl").open("a") as handle:
+        row = _run("A", "pick-particles", 1, lane="ribo-bin8", variant="bin8")
+        handle.write("\n" + json.dumps(row) + "\n")
+    (tmp_path / "slurm-p-gpu-200.log").write_text(
+        "job         p-gpu (200) on node2\n"
+        "project     outputs/p   config configs/lanes/ribo-bin4.toml\n"
+        "series      A\n\n# ---- A (ribo-bin4) ----\n\n# pick-particles\n"
+        "# FAILED at pick-particles (exit 1) for A.\n"
+    )
+    lines = show_project.render(show_project.summarize(_config(), tmp_path, slurm=False))
+    [crash] = [line for line in lines if line.startswith("  A  pick-particles  exit 1")]
+    assert "slurm-p-gpu-200.log" not in crash
+    assert "  p-gpu  200  lane ribo-bin4  failed  slurm-p-gpu-200.log" in lines
+
+    other = _config()
+    other["lane"].update(name="ribo-bin4", variant="bin4")
+    lines = show_project.render(show_project.summarize(other, tmp_path, slurm=False))
+    [crash] = [line for line in lines if line.startswith("  A  pick-particles  exit 1")]
+    assert crash.endswith("slurm-p-gpu-200.log")
+
+
 def test_a_timing_row_names_the_lane_that_ran_it(tmp_path):
     run_series.record_timing(tmp_path, series="A", step="pick-particles", lane="ribo-bin8",
                              variant="bin8", seconds=1.0, disk_delta_bytes=0, exit_code=0)
