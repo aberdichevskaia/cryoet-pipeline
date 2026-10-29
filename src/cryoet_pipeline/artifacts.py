@@ -7,8 +7,9 @@ import os
 import random
 import shutil
 import socket
+import threading
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,7 +100,11 @@ class ArtifactRegistry(BaseModel):
     def load(cls, path: Path) -> ArtifactRegistry:
         # No lock: commits replace the file atomically, so a reader gets one
         # whole document or the next one, never part of either.
-        registry = cls.model_validate_json(path.read_text())
+        return cls._parse(path.read_text(), path)
+
+    @classmethod
+    def _parse(cls, document: str | bytes, path: Path) -> ArtifactRegistry:
+        registry = cls.model_validate_json(document)
         registry._source = path.resolve()
         return registry
 
@@ -119,11 +124,27 @@ class ArtifactRegistry(BaseModel):
         writers this cannot happen, so `replace=True` (`--overwrite`) keeps its
         meaning: the entry is replaced whatever it held when the command started.
 
+        Refused as well when the document is no longer the one the merge started
+        from by the time the result is renamed over it: another command wrote it
+        while this one held the lock, so the lock does not keep out other nodes on
+        this filesystem, and renaming would erase that command's entries. That is
+        how three of five jobs lost their entries on MDC's GPFS on 2026-10-29,
+        when the lock was still flock. Two commits that reach this check within
+        the same few milliseconds both pass it, so it shows that a lock fails; it
+        does not stand in for one.
+
         Afterwards this registry holds the merged document, with nothing pending.
         """
 
         with registry_lock(path, timeout=lock_timeout):
-            current = ArtifactRegistry.load(path) if path.exists() else ArtifactRegistry.empty()
+            # The document the merge starts from, to be found unchanged before the
+            # result replaces it.
+            based_on = path.read_bytes() if path.exists() else None
+            current = (
+                ArtifactRegistry._parse(based_on, path)
+                if based_on is not None
+                else ArtifactRegistry.empty()
+            )
             conflicts = self._changed_since_loaded(current)
             if conflicts:
                 raise RegistryConflictError(_conflict_message(path, conflicts))
@@ -142,7 +163,9 @@ class ArtifactRegistry(BaseModel):
                     f"{path}: this command's changes no longer apply to the registry "
                     f"as it is now ({exc}); nothing was registered"
                 ) from exc
-            _replace_atomically(path, current._document())
+            _replace_atomically(
+                path, current._document(), before_rename=lambda: _unchanged(path, based_on)
+            )
         self._settle(current.artifacts, path)
 
     def write(self, path: Path, *, lock_timeout: float = LOCK_TIMEOUT_SECONDS) -> None:
@@ -378,31 +401,66 @@ class ArtifactRegistry(BaseModel):
             )
 
 
+_in_process = threading.Lock()
+"""Taken before the POSIX lock, which another thread of this process would get too."""
+
+_held_here = threading.local()
+
+
 @contextmanager
 def registry_lock(path: Path, *, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
-    """Hold the exclusive lock of the registry at `path`: `flock` on `<path>.lock`.
+    """Hold the exclusive lock of the registry at `path`: a POSIX lock on `<path>.lock`.
 
     A separate file, because every commit replaces the registry itself, and a
     lock held on a replaced file excludes nobody. The lock file is never deleted
     for the same reason.
+
+    A POSIX record lock (fcntl), not flock: on MDC's GPFS, flock locks only within
+    one node, and five jobs on five nodes lost three of their entries there on
+    2026-10-29, while a POSIX lock kept the other node out (scripts/lock_probe.py).
+    A POSIX lock belongs to the process rather than to the open file: another
+    thread of the process gets it too, and closing any descriptor of the lock file
+    releases it. So the threads of a process take turns on a lock of their own
+    first, and asking for this lock while holding it is refused.
 
     Refused rather than skipped when the lock cannot be had or would not reach
     other nodes: proceeding unlocked would reopen the lost update this lock
     exists to prevent, and nothing would show it until entries went missing.
     """
 
+    if getattr(_held_here, "lock_path", None) is not None:
+        raise RuntimeError(
+            f"registry_lock({path}) asked for while this thread holds "
+            f"{_held_here.lock_path}: closing the inner lock file would release the "
+            "outer lock, so it is not re-entrant"
+        )
     lock_path = path.with_name(path.name + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    problem = flock_scope_problem(lock_path.parent)
+    problem = lock_scope_problem(lock_path.parent)
     if problem is not None:
         raise RegistryLockError(f"{lock_path}: {problem}")
-    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+    if not _in_process.acquire(timeout=timeout):
+        raise RegistryLockError(
+            f"another thread of this process has held a registry lock for over {timeout:g} s; "
+            "a commit holds it for well under a second. The registry was left as it was."
+        )
+    _held_here.lock_path = lock_path
     try:
-        _acquire(descriptor, lock_path, timeout)
-        yield
+        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o666)
+        try:
+            _acquire(descriptor, lock_path, timeout)
+            yield
+        finally:
+            # This process's only descriptor of the lock file: closing it releases
+            # the lock.
+            os.close(descriptor)
     finally:
-        # Closing the only descriptor of this open file releases the lock.
-        os.close(descriptor)
+        _held_here.lock_path = None
+        _in_process.release()
+
+
+_HELD_ELSEWHERE = frozenset({errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK})
+"""What a non-blocking POSIX lock fails with while another process holds it."""
 
 
 def _acquire(descriptor: int, lock_path: Path, timeout: float) -> None:
@@ -410,9 +468,17 @@ def _acquire(descriptor: int, lock_path: Path, timeout: float) -> None:
     delay = 0.01
     while True:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.lockf(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
-        except BlockingIOError:
+        except OSError as exc:
+            if exc.errno not in _HELD_ELSEWHERE:
+                name = errno.errorcode.get(exc.errno or 0, str(exc.errno))
+                raise RegistryLockError(
+                    f"a POSIX lock on {lock_path} failed with {name} ({exc.strerror}). "
+                    "Without the lock, commands committing at the same time can lose each "
+                    "other's entries, so the registry was left as it was. On Lustre, ENOSYS "
+                    "means the client is mounted without -o flock."
+                ) from exc
             if time.monotonic() >= deadline:
                 raise RegistryLockError(
                     f"{lock_path} has been held by another command for over {timeout:g} s; "
@@ -421,35 +487,34 @@ def _acquire(descriptor: int, lock_path: Path, timeout: float) -> None:
                 ) from None
             time.sleep(delay * random.uniform(0.5, 1.5))
             delay = min(delay * 2, 0.5)
-        except OSError as exc:
-            name = errno.errorcode.get(exc.errno or 0, str(exc.errno))
-            raise RegistryLockError(
-                f"flock() on {lock_path} failed with {name} ({exc.strerror}). Without the "
-                "lock, commands committing at the same time can lose each other's entries, "
-                "so the registry was left as it was. On Lustre, ENOSYS means the client is "
-                "mounted without -o flock."
-            ) from exc
 
 
-def flock_scope_problem(directory: Path) -> str | None:
-    """Why `flock` in `directory` would lock only this node, or None.
+def lock_scope_problem(directory: Path) -> str | None:
+    """Why a POSIX lock in `directory` would lock only this node, or None.
 
-    A mount can grant every `flock` locally while saying nothing: Lustre mounted
-    with `localflock`, and NFS mounted with `nolock` or `local_lock=flock|all`.
-    Jobs on two nodes would then both hold the lock. (Lustre with `noflock` makes
-    the call itself fail with ENOSYS, which `_acquire` reports.) Read from
-    /proc/self/mountinfo, so Linux only; elsewhere there is nothing to read.
+    A mount can grant every lock locally while saying nothing: Lustre mounted with
+    `localflock`, which covers fcntl locks as well as flock, and NFS mounted with
+    `nolock` or `local_lock=posix|all`. Jobs on two nodes would then both hold the
+    lock. (Lustre with `noflock` makes the call itself fail with ENOSYS, which
+    `_acquire` reports.) Read from /proc/self/mountinfo, so Linux only; elsewhere
+    there is nothing to read.
+
+    Other filesystems are not judged from their mount options. GPFS mounts at MDC
+    as plain `rw,relatime` and keeps POSIX locks across nodes but flock within one,
+    which only trying it on two nodes showed (scripts/lock_probe.py). For a
+    filesystem that misbehaves unseen, a commit that finds the registry replaced
+    under its lock refuses (see `ArtifactRegistry.commit`).
     """
 
     try:
         mountinfo = Path("/proc/self/mountinfo").read_text()
     except OSError:
         return None
-    return _mount_flock_problem(mountinfo, os.stat(directory).st_dev)
+    return _mount_lock_problem(mountinfo, os.stat(directory).st_dev)
 
 
-def _mount_flock_problem(mountinfo: str, device: int) -> str | None:
-    """The mountinfo line of `device`, judged for node-local flock.
+def _mount_lock_problem(mountinfo: str, device: int) -> str | None:
+    """The mountinfo line of `device`, judged for node-local POSIX locks.
 
     Lines look like `36 35 0:52 / /lustre rw,relatime shared:1 - lustre mgs@o2ib:/fs
     rw,flock,lazystatfs`: the per-mount options in field 6, then optional fields,
@@ -474,26 +539,44 @@ def _mount_flock_problem(mountinfo: str, device: int) -> str | None:
         if fstype == "lustre":
             local = sorted(options & {"localflock"})
         elif fstype in {"nfs", "nfs4"}:
-            local = sorted(options & {"nolock", "local_lock=flock", "local_lock=all"})
+            local = sorted(options & {"nolock", "local_lock=posix", "local_lock=all"})
         else:
             local = []
         if local:
             return (
-                f"{mount_point} is {fstype} mounted with {', '.join(local)}, so flock() there "
-                f"locks only on this node ({socket.gethostname()}) and a job on another node "
-                "could commit to the same registry at the same time. The registry needs "
-                "flock across nodes (Lustre: -o flock)."
+                f"{mount_point} is {fstype} mounted with {', '.join(local)}, so a POSIX lock "
+                f"there holds only on this node ({socket.gethostname()}) and a job on another "
+                "node could commit to the same registry at the same time. The registry needs "
+                "locks across nodes (Lustre: -o flock)."
             )
         return None
     return None
 
 
-def _replace_atomically(path: Path, text: str) -> None:
+def _unchanged(path: Path, based_on: bytes | None) -> None:
+    """Refuse, before the rename, if `path` is not the document a merge started from."""
+
+    now = path.read_bytes() if path.exists() else None
+    if now != based_on:
+        raise RegistryLockError(
+            f"{path} was written by another command while this one held the registry "
+            "lock, so on this filesystem the lock does not keep out commands on other "
+            "nodes. Nothing was registered: renaming this command's result over it "
+            "would have erased the other command's entries. Run the step again; "
+            "scripts/lock_probe.py shows which locks reach other nodes here."
+        )
+
+
+def _replace_atomically(
+    path: Path, text: str, *, before_rename: Callable[[], None] | None = None
+) -> None:
     """Write `text` to `path` so that readers see the old document or the new one.
 
     The temporary file sits beside the target because `os.replace` is atomic
     only within one filesystem, and the target's own directory is the one place
-    certain to be on it.
+    certain to be on it. `before_rename` runs once the new document is written
+    and synced, as near the rename as it can be; if it raises, nothing replaces
+    `path`.
     """
 
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
@@ -508,6 +591,8 @@ def _replace_atomically(path: Path, text: str) -> None:
         if path.exists():
             # The new file was created with the umask's mode; keep the old one's.
             shutil.copymode(path, temporary)
+        if before_rename is not None:
+            before_rename()
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)

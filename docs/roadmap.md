@@ -30,12 +30,21 @@ picking does not quietly lose entries, it brings the runs down — section 20.
 duplicate job's fine-align wrote back a copy loaded 1.5 minutes earlier and
 erased TS_0487's bin2 final aligned stack and TS_0572's import. Since then a
 command records what it adds, replaces and removes, and `ArtifactRegistry.commit`
-replays that onto the document as it is at the end, under `flock` on
+replays that onto the document as it is at the end, under a lock on
 `artifacts.json.lock`, written to a temporary file and renamed over the
 registry. A concurrent change to an entry the command replaces, or to a parent
 of one it registers, is refused rather than overwritten. Jobs no longer erase
-one another's entries, given a flock that reaches across nodes; without one, a
+one another's entries, given a lock that reaches across nodes; without one, a
 commit refuses to run. Section 20's crash is a separate question.
+
+*Changed 2026-10-29.* The lock was `flock`, and on MDC's GPFS `flock` locks only
+within one node: five ryr1-bin4 jobs on five nodes committed at once, and three
+of them lost their rebuilt stacks' entries. Nothing in the mount options said
+so; `scripts/lock_probe.py`, run as two tasks on two nodes, showed that a POSIX
+lock (`fcntl`) and an `O_EXCL` file do reach the other node there and `flock`
+does not. The registry lock is a POSIX lock since. And a commit now reads the
+registry again just before its rename and refuses if another command wrote it
+meanwhile, which shows a lock that fails on a filesystem not yet tried.
 
 The database is not first because its design needs the scale-up as input. Several
 of the open questions in [database_design.md](database_design.md) — the

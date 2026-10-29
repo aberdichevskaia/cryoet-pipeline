@@ -8,10 +8,12 @@ points.
 from __future__ import annotations
 
 import errno
-import fcntl
 import multiprocessing
 import os
 import stat
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,8 @@ from cryoet_pipeline.artifacts import (
     ArtifactRegistry,
     RegistryConflictError,
     RegistryLockError,
-    _mount_flock_problem,
+    _mount_lock_problem,
+    registry_lock,
 )
 from cryoet_pipeline.models import Artifact, ArtifactKind
 
@@ -330,20 +333,33 @@ def test_a_commit_keeps_the_registry_file_mode(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
+_HOLD_LOCK = """
+import fcntl, os, sys
+descriptor = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o666)
+fcntl.lockf(descriptor, fcntl.LOCK_EX)
+print("held", flush=True)
+sys.stdin.read()
+"""
+
+
 def test_a_commit_waits_for_the_lock_and_gives_up_loudly(tmp_path: Path) -> None:
     path = _registry_file(tmp_path, _artifact("stack"))
     before = path.read_bytes()
     command = ArtifactRegistry.load(path)
     command.add(_artifact("tomogram", "stack"))
 
-    # Another open file, so flock treats it as another holder even in this process.
-    holder = os.open(tmp_path / "artifacts.json.lock", os.O_RDWR)
+    # Another process: a POSIX lock never keeps out the process that holds it.
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_LOCK, str(tmp_path / "artifacts.json.lock")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
     try:
-        fcntl.flock(holder, fcntl.LOCK_EX)
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
         with pytest.raises(RegistryLockError, match="held by another command"):
             command.commit(path, lock_timeout=0.2)
     finally:
-        os.close(holder)
+        holder.communicate(timeout=30)
     assert path.read_bytes() == before
 
     command.commit(path)
@@ -351,7 +367,7 @@ def test_a_commit_waits_for_the_lock_and_gives_up_loudly(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("code", [errno.ENOSYS, errno.ENOLCK], ids=["ENOSYS", "ENOLCK"])
-def test_a_flock_that_fails_is_refused_not_skipped(
+def test_a_lock_that_fails_is_refused_not_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
     """ENOSYS is Lustre mounted without flock; proceeding unlocked is the bug itself."""
@@ -361,16 +377,16 @@ def test_a_flock_that_fails_is_refused_not_skipped(
     command = ArtifactRegistry.load(path)
     command.add(_artifact("tomogram", "stack"))
 
-    def failing_flock(descriptor: int, operation: int) -> None:
+    def failing_lockf(descriptor: int, operation: int, *args: int) -> None:
         raise OSError(code, os.strerror(code))
 
-    monkeypatch.setattr(artifacts_module.fcntl, "flock", failing_flock)
+    monkeypatch.setattr(artifacts_module.fcntl, "lockf", failing_lockf)
     with pytest.raises(RegistryLockError, match=f"failed with {errno.errorcode[code]}"):
         command.commit(path)
     assert path.read_bytes() == before
 
 
-def test_a_commit_on_a_mount_with_node_local_flock_is_refused(
+def test_a_commit_on_a_mount_with_node_local_locks_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = _registry_file(tmp_path, _artifact("stack"))
@@ -380,12 +396,90 @@ def test_a_commit_on_a_mount_with_node_local_flock_is_refused(
 
     monkeypatch.setattr(
         artifacts_module,
-        "flock_scope_problem",
+        "lock_scope_problem",
         lambda directory: "/lustre is lustre mounted with localflock",
     )
     with pytest.raises(RegistryLockError, match="mounted with localflock"):
         command.commit(path)
     assert path.read_bytes() == before
+
+
+def test_a_commit_whose_registry_was_written_under_its_lock_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MDC, 2026-10-29: flock on GPFS let a job on another node commit at the same
+    time, and the later rename erased the earlier job's entry. Whatever the lock
+    does, the rename must not erase what it finds written in the meantime."""
+
+    path = _registry_file(tmp_path, _artifact("stack"))
+    command = ArtifactRegistry.load(path)
+    command.add(_artifact("from_here", "stack", run="here"))
+
+    merge = ArtifactRegistry._changed_since_loaded
+
+    def another_node_commits_meanwhile(
+        self: ArtifactRegistry, current: ArtifactRegistry
+    ) -> dict[str, str]:
+        other = ArtifactRegistry.load(path)
+        other.artifacts.append(_artifact("from_another_node", "stack", run="there"))
+        # Straight to the file, as a commit the lock did not keep out would.
+        artifacts_module._replace_atomically(path, other._document())
+        return merge(self, current)
+
+    monkeypatch.setattr(
+        ArtifactRegistry, "_changed_since_loaded", another_node_commits_meanwhile
+    )
+    with pytest.raises(RegistryLockError, match="written by another command"):
+        command.commit(path)
+
+    assert _on_disk(path) == {"stack": "initial", "from_another_node": "there"}
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == [
+        "artifacts.json",
+        "artifacts.json.lock",
+    ]
+
+
+def test_threads_of_one_process_take_turns(tmp_path: Path) -> None:
+    """A POSIX lock does not keep out the threads of the process that holds it."""
+
+    path = _registry_file(tmp_path, _artifact("stack"))
+    count = 8
+    barrier = threading.Barrier(count)
+    errors: list[BaseException] = []
+
+    def load_wait_add_commit(index: int) -> None:
+        try:
+            registry = ArtifactRegistry.load(path)
+            barrier.wait(timeout=60)
+            registry.add(_artifact(f"series_{index}", "stack", run=f"thread {index}"))
+            registry.commit(path)
+        except BaseException as error:  # noqa: BLE001 - reported below
+            errors.append(error)
+
+    threads = [threading.Thread(target=load_wait_add_commit, args=(i,)) for i in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert errors == []
+    assert _on_disk(path) == {
+        "stack": "initial",
+        **{f"series_{index}": f"thread {index}" for index in range(count)},
+    }
+
+
+def test_the_lock_is_not_taken_again_by_the_thread_that_holds_it(tmp_path: Path) -> None:
+    """Closing the inner lock file would release the outer POSIX lock."""
+
+    path = _registry_file(tmp_path, _artifact("stack"))
+    with registry_lock(path):
+        with pytest.raises(RuntimeError, match="not re-entrant"):
+            with registry_lock(path):
+                pass
+    # Released properly afterwards.
+    with registry_lock(path, timeout=1.0):
+        pass
 
 
 _MOUNTINFO = (
@@ -404,17 +498,22 @@ _MOUNTINFO = (
         # An old Lustre showed both after a localflock mount; refused, not guessed at.
         ("lustre", "flock,localflock", "localflock"),
         ("nfs4", "vers=4.2,local_lock=none", None),
-        ("nfs4", "vers=4.2,local_lock=flock", "local_lock=flock"),
+        # Only flock stays local; POSIX locks still go to the server.
+        ("nfs4", "vers=4.2,local_lock=flock", None),
+        ("nfs4", "vers=4.2,local_lock=posix", "local_lock=posix"),
         ("nfs", "vers=3,nolock,local_lock=all", "local_lock=all, nolock"),
+        # /fast at MDC, as findmnt printed it on 2026-10-29. Its flock stays on one
+        # node, its POSIX locks do not (scripts/lock_probe.py); nothing here says so.
+        ("gpfs", "relatime", None),
         ("xfs", "attr2,inode64", None),
     ],
 )
-def test_a_mount_whose_flock_stays_on_this_node_is_named(
+def test_a_mount_whose_locks_stay_on_this_node_is_named(
     fstype: str, options: str, named: str | None
 ) -> None:
     mountinfo = _MOUNTINFO.format(fstype=fstype, options=options)
 
-    problem = _mount_flock_problem(mountinfo, os.makedev(0, 52))
+    problem = _mount_lock_problem(mountinfo, os.makedev(0, 52))
 
     if named is None:
         assert problem is None
@@ -426,8 +525,8 @@ def test_a_mount_whose_flock_stays_on_this_node_is_named(
 def test_a_device_missing_from_the_mount_table_is_not_judged() -> None:
     mountinfo = _MOUNTINFO.format(fstype="lustre", options="localflock")
 
-    assert _mount_flock_problem(mountinfo, os.makedev(0, 53)) is None
-    assert _mount_flock_problem(mountinfo, os.makedev(8, 1)) is None
+    assert _mount_lock_problem(mountinfo, os.makedev(0, 53)) is None
+    assert _mount_lock_problem(mountinfo, os.makedev(8, 1)) is None
 
 
 def _load_wait_add_commit(path_text: str, index: int, barrier: Any) -> None:
@@ -440,7 +539,7 @@ def _load_wait_add_commit(path_text: str, index: int, barrier: Any) -> None:
 
 
 def test_processes_committing_at_once_lose_nothing(tmp_path: Path) -> None:
-    """Real processes and the real flock, all loading before anyone commits."""
+    """Real processes and the real lock, all loading before anyone commits."""
 
     path = _registry_file(tmp_path, _artifact("stack"))
     count = 8

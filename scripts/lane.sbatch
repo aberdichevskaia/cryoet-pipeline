@@ -135,8 +135,9 @@ if needs estimate-ctf; then
     command -v ctffind >/dev/null || command -v ctffind5 >/dev/null || fail "no ctffind on PATH"
 fi
 # Every step commits to the registry under a lock and refuses to without one that
-# holds across nodes (no flock on this mount, or localflock); find that out here,
-# not after the first step has run.
+# holds across nodes (no locks on this mount, or node-local ones by its options);
+# find that out here, not after the first step has run. Locks that only trying
+# shows to stay on one node, as flock did on MDC's GPFS, need scripts/lock_probe.py.
 python3 - "$PROJECT/artifacts.json" <<'EOF' || fail "cannot lock the registry from this node (above)"
 import sys
 from pathlib import Path

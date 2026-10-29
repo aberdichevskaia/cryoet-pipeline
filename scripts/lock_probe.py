@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
 """Does a lock taken on one node keep out a process on another node, here?
 
-    srun -N2 --ntasks-per-node=1 -t 5 python3 scripts/lock_probe.py DIR
+    sbatch --wait -N2 --ntasks-per-node=1 -t 5 -o DIR/lockprobe-%j.log \
+        --wrap "srun -N2 -n2 python3 scripts/lock_probe.py DIR"
+
+A job of its own, because srun run from a shell inside an allocation stays
+within that allocation: from a one-node one, it ran a single task at MDC
+(2026-10-29). Outside any allocation, `srun -N2 --ntasks-per-node=1 ...` does
+the same as the line above.
 
 Every job commits to its project's registry under a lock (artifacts.py,
 registry_lock), and jobs of one project run side by side on different nodes. At
-MDC on 2026-10-29 five jobs on five nodes lost three of their registry writes,
-on GPFS, which the lock's own check does not judge. Whether a lock reaches other
-nodes depends on the filesystem and how it is mounted, and only trying it there
-says so.
+MDC on 2026-10-29 five jobs on five nodes lost three of their registry writes.
+This showed why: on that GPFS, flock, which the registry lock was then, stays on
+one node, while a POSIX lock and an O_EXCL file reach the other; the registry
+lock is a POSIX lock since. Whether a lock reaches other nodes depends on the
+filesystem and how it is mounted, and only trying it there says so: on a new
+cluster, run this before running jobs of one project side by side, and expect
+the registry_lock line to say "excluded".
 
 Run as two Slurm tasks on two nodes, with DIR on the filesystem the projects
 live on. Task 0 takes each lock and holds it; task 1 tries each one without
@@ -167,6 +176,14 @@ def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
         raise SystemExit(__doc__)
+    # Without this, task 0 alone waits two minutes for a partner that never comes.
+    tasks = os.environ.get("SLURM_STEP_NUM_TASKS") or os.environ.get("SLURM_NTASKS")
+    if tasks is not None and tasks != "2":
+        raise SystemExit(
+            f"this step runs {tasks} task(s), and the probe needs 2, on 2 nodes; srun from a "
+            "shell inside a one-node allocation cannot reach a second node, so submit it as "
+            "a job of its own (see the top of scripts/lock_probe.py)"
+        )
     directory = Path(args[0])
     directory.mkdir(parents=True, exist_ok=True)
     token = f"{os.environ.get('SLURM_JOB_ID', 'local')}.{os.environ.get('SLURM_STEP_ID', '0')}"
