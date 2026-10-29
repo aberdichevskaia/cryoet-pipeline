@@ -12,9 +12,12 @@ Read-only. It joins what is already written down and decides nothing:
   ran and how they exited. A step that crashes leaves no artifact, so this is the
   only place a crash shows;
 * the registry's QC records say how good the result of a step that did run is;
-* the Slurm logs in the repository root, where lane.sbatch writes them, say what
-  the lane's jobs did. Where they can be run, sacct adds what only Slurm knows
-  (a time limit, memory, a node failure) and squeue the jobs still waiting.
+* the lane's Slurm logs say what its jobs did. lane.sbatch writes a job's log in
+  the folder the job was submitted from: the repository root for the jobs
+  submit_lanes.py submits, but a job submitted by hand from elsewhere logs
+  there. Where sacct can be run, it says which folder each job ran in, and adds
+  what only Slurm knows (a time limit, memory, a node failure); squeue adds the
+  jobs still waiting.
 
 One project can hold several lanes. Steps before build-final-aligned-stack are
 shared, so every lane's runs of them count; the steps after it count only under
@@ -35,6 +38,8 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +93,7 @@ _CELL = {"none": "·", "ok": "ok", "unknown": "?", "warning": "W", "fail": "F"}
 _JOB = re.compile(r"^job\s+(?P<name>\S+) \((?P<id>\d+)\)")
 _PROJECT = re.compile(r"^project\s+(?P<project>\S+)")
 _SERIES = re.compile(r"^series\s+(?P<series>.*)$")
+_STEPS = re.compile(r"^steps\s+(?P<steps>.*)$")
 _STARTED = re.compile(r"^started\s+(?P<when>\S+)")
 _FINISHED = re.compile(r"^finished\s+(?P<when>\S+)")
 _PREFLIGHT = re.compile(r"^preflight: (?P<problem>.*)$")
@@ -107,6 +113,31 @@ def _resolve(root: Path, path: str | Path) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def _time(text: Any) -> datetime | None:
+    try:
+        value = datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _timings(project: Path) -> list[dict[str, Any]]:
+    """The rows of the project's step_timings.jsonl."""
+    try:
+        lines = (project / "step_timings.jsonl").read_text().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # a line cut short by a job that was killed while writing it
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
 def lane_series(cfg: dict[str, Any], project: Path) -> list[str]:
     """The series the lane lists, in its order, then any other the project has a
     manifest for."""
@@ -120,16 +151,8 @@ def last_runs(
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """The latest run of each step of each series, among the runs this lane sees."""
     runs: dict[tuple[str, str], dict[str, Any]] = {}
-    try:
-        lines = (project / "step_timings.jsonl").read_text().splitlines()
-    except OSError:
-        return runs
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue  # a line cut short by a job that was killed while writing it
-        if not isinstance(row, dict) or row.get("series") not in series:
+    for row in _timings(project):
+        if row.get("series") not in series:
             continue
         step = str(row.get("step"))
         if step in labelled and row.get("variant", variant) != variant:
@@ -209,15 +232,45 @@ def step_state(run: dict[str, Any] | None, records: list[dict[str, Any]]) -> dic
     return entry
 
 
-def job_logs(root: Path, project: str) -> list[dict[str, Any]]:
-    """The lane jobs of this project, as their logs in the repository root tell it."""
+def slurm_logs(project: Path) -> list[Path]:
+    """The logs of this user's jobs named for the project, wherever they were
+    submitted from: a lane job writes its log in the folder it ran in, which sacct
+    records as WorkDir. Nothing, where sacct cannot be run.
+
+    sacct is asked from a week before the project's first recorded step, for the
+    jobs that stopped before running one (a preflight, a kill); from 30 days ago
+    for a project with no step on record."""
+    started = [
+        finished - timedelta(seconds=float(row.get("seconds") or 0))
+        for row in _timings(project)
+        if (finished := _time(row.get("finished_at"))) is not None
+    ]
+    since = min(started) - timedelta(days=7) if started else datetime.now(UTC) - timedelta(days=30)
+    prefix = f"{project.name}-"
+    return [
+        Path(parts[2]) / f"slurm-{parts[1]}-{parts[0]}.log"
+        for parts in _slurm(["sacct", "-n", "-P", "-X", "-u", os.environ.get("USER", ""),
+                             "-S", since.astimezone().strftime("%Y-%m-%dT%H:%M:%S"),
+                             "-o", "JobID,JobName,WorkDir"])
+        if len(parts) == 3 and parts[1].startswith(prefix) and parts[2]
+    ]
+
+
+def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[dict[str, Any]]:
+    """The lane jobs of this project, as their logs tell it: the logs in the
+    repository root, and those found `elsewhere` (slurm_logs)."""
+    here = root.glob(f"slurm-{glob.escape(Path(project).name)}-*.log")
+    # A log in the root can be found both ways; the root's name for it is kept.
+    paths = {path.resolve(): path for path in [*elsewhere, *here]}
+    target = _resolve(root, project).resolve()
     jobs: list[dict[str, Any]] = []
-    for path in sorted(root.glob(f"slurm-{glob.escape(Path(project).name)}-*.log")):
+    for path in sorted(paths.values(), key=lambda path: path.name):
         try:
             text = path.read_text(errors="replace")
         except OSError:
             continue
-        job: dict[str, Any] = {"log": str(path.relative_to(root)), "failed": []}
+        shown = path.relative_to(root) if path.is_relative_to(root) else path
+        job: dict[str, Any] = {"log": str(shown), "failed": []}
         for line in text.splitlines():
             if match := _JOB.match(line):
                 job.update(name=match["name"], id=match["id"])
@@ -225,6 +278,8 @@ def job_logs(root: Path, project: str) -> list[dict[str, Any]]:
                 job["project"] = match["project"]
             elif match := _SERIES.match(line):
                 job["series"] = match["series"].split()
+            elif match := _STEPS.match(line):
+                job["steps"] = match["steps"].split()
             elif match := _STARTED.match(line):
                 job["started"] = match["when"]
             elif match := _FINISHED.match(line):
@@ -238,8 +293,9 @@ def job_logs(root: Path, project: str) -> list[dict[str, Any]]:
                     "exit_code": int(match["code"]),
                 })
         # Job names are the project's directory name, which another project can
-        # share; the header says which project the job really ran.
-        if Path(job.get("project", "")) != Path(project):
+        # share; the header says which project the job really ran, from the
+        # folder it ran in, which is where its log is.
+        if (path.parent / job.get("project", "")).resolve() != target:
             continue
         if job["failed"] or "preflight" in job:
             job["outcome"] = "failed"
@@ -310,7 +366,7 @@ def summarize(
             "other_qc": [record for record in mine if record["step"] not in chain],
         })
 
-    jobs = job_logs(root, project_name)
+    jobs = job_logs(root, project_name, slurm_logs(project) if slurm else ())
     names = {f"{Path(project_name).name}-{stage.get('name')}"
              for stage in cfg["run"].get("stage") or []}
     waiting = ask_slurm(jobs, names) if slurm else []
@@ -395,7 +451,9 @@ def main() -> int:
     parser.add_argument("--series", action="append", default=None,
                         help="only this series; repeat for several")
     parser.add_argument("--json", action="store_true", help="print the summary as JSON")
-    parser.add_argument("--no-slurm", action="store_true", help="do not ask sacct and squeue")
+    parser.add_argument("--no-slurm", action="store_true",
+                        help="do not ask sacct and squeue; read the logs in the repository "
+                             "root only")
     args = parser.parse_args()
 
     _, cfg = run_series.read_config(args.config)

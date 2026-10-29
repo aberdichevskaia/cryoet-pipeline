@@ -99,8 +99,11 @@ qc/<TS>/<step>/             QC records (JSON) for most steps, see below
 ```
 
 The Slurm log of a lane job is `slurm-<project name>-<stage>-<job id>.log` in
-the repository root, the directory the job was submitted from. It holds the
-job header (node, GPU, environment, the steps), the preflight result, every
+the directory the job was submitted from: the repository root, for the jobs
+`submit_lanes.py` submits. A job submitted by hand from another folder logs
+there, under the job name it was given; `sacct -j <job id> -o WorkDir` says
+where, and `show_project.py` and `show_failure.py` look there too. The log holds
+the job header (node, GPU, environment, the steps), the preflight result, every
 command as run, the time and disk used per step, and the failure line.
 
 External programs write their own logs next to the step's outputs, named after

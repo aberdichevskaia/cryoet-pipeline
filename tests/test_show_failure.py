@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import show_failure  # noqa: E402
+import show_project  # noqa: E402
 
 LANE = tomllib.loads((ROOT / "configs" / "lanes" / "ribo-bin8.toml").read_text())
 CRASHED = datetime(2026, 10, 27, 10, 0, tzinfo=UTC)
@@ -163,6 +164,73 @@ def test_a_failure_rerun_since_is_listed_apart_with_the_jobs_it_failed_in(tmp_pa
     assert rerun["passed_at"] == "2026-10-26T12:00:00+00:00"
     text = "\n".join(show_failure.render(result))
     assert "A  track-fiducials  failed in p-cpu 120; passed 2026-10-26T12:00:00+00:00" in text
+
+
+def _submitted_elsewhere(
+    root: Path, runs: Path, monkeypatch, logs: dict[tuple[str, str], str]
+) -> None:
+    """`runs`, a folder outside the repository that jobs were submitted from by
+    hand, reaching the project through a link as cryoet-runs does in Munich,
+    gets the logs of these jobs (by ID and name); sacct names it as their WorkDir."""
+    (runs / "outputs").mkdir()
+    (runs / "outputs" / "p").symlink_to(root / "outputs" / "p")
+    for (job_id, name), text in logs.items():
+        (runs / f"slurm-{name}-{job_id}.log").write_text(text)
+    rows = [[job_id, name, str(runs)] for job_id, name in logs]
+    monkeypatch.setattr(show_project, "_slurm",
+                        lambda command: rows if "JobID,JobName,WorkDir" in command else [])
+
+
+HEADER = "project     outputs/p   config p.toml\n"
+# A job that stopped in its preflight, because a path in its environment was wrong.
+STOPPED = (
+    "job         p-cpu-B (118) on node1\nstarted     2026-10-27T07:00:00+00:00\n" + HEADER
+    + "series      B\nsteps       align-tilt-series generate-fiducial-seed\n"
+    "preflight: MEMBRAIN_CKPT does not exist: fast/membrain.ckpt\n"
+)
+
+
+def test_a_job_submitted_from_another_folder_is_read_where_it_ran(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    _project(tmp_path)
+    with (tmp_path / "outputs" / "p" / "step_timings.jsonl").open("a") as handle:
+        row = _row("A", "pick-particles", 1, datetime(2026, 10, 27, 13, 5, tzinfo=UTC))
+        handle.write(json.dumps(row) + "\n")
+    runs = tmp_path_factory.mktemp("runs")
+    _submitted_elsewhere(tmp_path, runs, monkeypatch, {("131", "p-gpu-A"): (
+        "job         p-gpu-A (131) on node2\nstarted     2026-10-27T13:00:00+00:00\n" + HEADER
+        + "series      A\nsteps       pick-particles\npreflight   ok\n\n"
+        "# ---- A (ribo-bin8) ----\n\n# pick-particles\n"
+        "cryoet pick-particles --manifest outputs/p/manifests/A.json\n"
+        "cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 1,179,648,000 bytes\n"
+        "# pick-particles: 1.8 min, +0.00 GB\n\n# FAILED at pick-particles (exit 1) for A.\n"
+    )})
+    result = show_failure.failures(_config(), tmp_path)
+    [pick] = [entry for entry in result["failures"]
+              if (entry["series"], entry["step"]) == ("A", "pick-particles")]
+    assert (pick["kind"], pick["exit_code"], pick["job"]["id"]) == ("crashed", 1, "131")
+    assert pick["job"]["log"] == str(runs / "slurm-p-gpu-A-131.log")
+    assert any("OutOfMemoryError" in line["text"] for line in pick["slurm_lines"])
+
+
+def test_a_preflight_stop_is_history_once_its_steps_ran_for_the_series(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    _project(tmp_path)
+    runs = tmp_path_factory.mktemp("runs")
+    _submitted_elsewhere(tmp_path, runs, monkeypatch, {("118", "p-cpu-B"): STOPPED})
+    result = show_failure.failures(_config(), tmp_path)
+    found = {(entry["series"], entry["step"]) for entry in result["failures"]}
+    # B's seeding ran at 10:00, after the stop, and crashed: that crash is B's
+    # failure. Job 124 names no steps, so its stop stays a failure.
+    assert ("B", "preflight") not in found
+    assert {("B", "generate-fiducial-seed"), ("A", "preflight")} <= found
+    [stop] = [entry for entry in result["rerun_since"] if entry["step"] == "preflight"]
+    assert [job["id"] for job in stop["jobs"]] == ["118"]
+    assert stop["passed_at"] == CRASHED.isoformat()
+    text = "\n".join(show_failure.render(result))
+    assert "B  preflight  failed in p-cpu-B 118; passed 2026-10-27T10:00:00+00:00" in text
 
 
 def _qc(root: Path, series: str, qc_type: str, status: str, warning: str) -> dict:

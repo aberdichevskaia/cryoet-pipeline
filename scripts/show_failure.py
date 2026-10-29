@@ -15,15 +15,20 @@ What counts as failed, among the runs this lane sees (scripts/show_project.py
 says which those are):
 
 * a step whose last run exited non-zero;
-* a job that stopped in its preflight, before any step ran;
+* a job that stopped in its preflight, before any step ran, unless one of its
+  steps has run for the series since;
 * a job whose log stops in the middle of a step: still running, or stopped by
   Slurm (time limit, memory, node). sacct, where it can be run, says which.
 
+The jobs are found by their Slurm logs, in the repository root and, where sacct
+can be run, wherever else a job of the project was submitted from.
+
 Two kinds of record are listed after the failures, without excerpts, so that an
 answer of "no failed step" is not read as "nothing ever failed": a step that
-failed in a job and passed when run again since, with the jobs it failed in; and
-a step that ran but whose result failed QC, with the QC file and its first
-warning. scripts/show_project.py has every QC verdict, the warnings included.
+failed in a job and passed when run again since, or a preflight a later job got
+past, with the jobs it failed in; and a step that ran but whose result failed QC,
+with the QC file and its first warning. scripts/show_project.py has every QC
+verdict, the warnings included.
 
 A program's log is found by where its step writes and by when: the logs written
 while the step ran. That is a stand-in for logs recorded on the run itself, the
@@ -249,7 +254,8 @@ def failures(
     chain = [name for name, _ in steps]
     labelled = {name for name, command in steps if "--variant" in command}
     runs = show_project.last_runs(project, set(chosen), labelled, lane["variant"])
-    jobs = show_project.job_logs(root, project_name)
+    jobs = show_project.job_logs(root, project_name,
+                                 show_project.slurm_logs(project) if slurm else ())
     jobs.sort(key=lambda job: int(job["id"]) if str(job.get("id", "")).isdigit() else 0)
     if slurm:
         names = {f"{Path(project_name).name}-{stage.get('name')}"
@@ -265,6 +271,18 @@ def failures(
     def add(one: str, name: str, **fields: Any) -> None:
         if wanted(one, name):
             found.setdefault((one, name), {"series": one, "step": name}).update(fields)
+
+    def ran_since(one: str, job: dict[str, Any]) -> str | None:
+        """When one of the job's steps last ran for the series, if that was after
+        the job started; None if none did, or the log names no steps."""
+        started = _time(job.get("started"))
+        if started is None:
+            return None
+        later = [
+            when for name in job.get("steps", [])
+            if (when := _time(runs.get((one, name), {}).get("finished_at"))) and when > started
+        ]
+        return max(later).isoformat() if later else None
 
     for (one, name), run in runs.items():
         if run.get("exit_code") != 0:
@@ -294,8 +312,15 @@ def failures(
                 set(_errors(lines, range(stop + 1))) | set(range(max(0, stop - TAIL), stop + 1))
             )]
             for one in job.get("series", []):
-                add(one, "preflight", kind="preflight", problem=job["preflight"],
-                    job=_job(job), slurm_lines=excerpt)
+                passed = ran_since(one, job)
+                if passed is None:
+                    add(one, "preflight", kind="preflight", problem=job["preflight"],
+                        job=_job(job), slurm_lines=excerpt)
+                elif wanted(one, "preflight"):
+                    # A later job got past the preflight: on record, no longer a failure.
+                    rerun.setdefault((one, "preflight"), {
+                        "series": one, "step": "preflight", "jobs": [], "passed_at": passed,
+                    })["jobs"].append(_job(job))
         stopped = in_progress(lines) if not job["failed"] and "finished" not in job else None
         if stopped is not None:
             run = runs.get(stopped)
@@ -401,7 +426,9 @@ def main() -> int:
                         help="only this series; repeat for several")
     parser.add_argument("--step", default=None, help="only this step")
     parser.add_argument("--json", action="store_true", help="print the excerpts as JSON")
-    parser.add_argument("--no-slurm", action="store_true", help="do not ask sacct and squeue")
+    parser.add_argument("--no-slurm", action="store_true",
+                        help="do not ask sacct and squeue; read the logs in the repository "
+                             "root only")
     args = parser.parse_args()
 
     _, cfg = run_series.read_config(args.config)

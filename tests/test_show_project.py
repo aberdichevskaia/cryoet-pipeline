@@ -5,6 +5,7 @@ import copy
 import json
 import sys
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,6 +140,50 @@ def test_the_jobs_are_this_projects_as_their_logs_tell_it(tmp_path):
     ]
 
 
+def test_a_job_submitted_from_another_folder_is_found_where_sacct_says_it_ran(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    """Its log is in the folder it was submitted from, and the project in its
+    header is a path from there."""
+    _project(tmp_path)
+    runs = tmp_path_factory.mktemp("runs")
+    (runs / "outputs").mkdir()
+    # The folder reaches the project through a link, as cryoet-runs does in Munich.
+    (runs / "outputs" / "p").symlink_to(tmp_path / "outputs" / "p")
+    (runs / "slurm-p-gpu-A-130.log").write_text(
+        "job         p-gpu-A (130) on node2\n"
+        "project     outputs/p   config p.toml\n"
+        "series      A\n"
+        "# FAILED at pick-particles (exit 1) for A.\n"
+    )
+    # Another folder's project of the same name is not this one.
+    other = tmp_path_factory.mktemp("other")
+    (other / "outputs" / "p").mkdir(parents=True)
+    (other / "slurm-p-gpu-140.log").write_text(
+        "job         p-gpu (140) on node2\nproject     outputs/p   config q.toml\n"
+    )
+    asked = []
+
+    def slurm(command):
+        asked.append(command)
+        if "JobID,JobName,WorkDir" not in command:
+            return []
+        # Job 123 was submitted from the root, so its log is found both ways.
+        return [["123", "p-cpu", str(tmp_path)], ["130", "p-gpu-A", str(runs)],
+                ["140", "p-gpu", str(other)], ["150", "ribo-cpu", str(runs)]]
+
+    monkeypatch.setattr(show_project, "_slurm", slurm)
+    jobs = show_project.summarize(_config(), tmp_path)["jobs"]
+    assert {job["id"]: job["log"] for job in jobs} == {
+        "123": "slurm-p-cpu-123.log",
+        "130": str(runs / "slurm-p-gpu-A-130.log"),
+    }
+    # Asked from a week before the first step the project records.
+    [sacct] = [command for command in asked if "JobID,JobName,WorkDir" in command]
+    since = datetime.fromisoformat(sacct[sacct.index("-S") + 1]).astimezone(UTC)
+    assert since == datetime(2026, 10, 20, 9, 59, 59, tzinfo=UTC)
+
+
 def test_the_table_marks_a_crash_and_points_at_its_log(tmp_path):
     _project(tmp_path)
     summary = show_project.summarize(_config(), tmp_path, series=["A", "B"], slurm=False)
@@ -164,8 +209,6 @@ def test_a_timing_row_names_the_lane_that_ran_it(tmp_path):
 def test_a_timing_row_finishes_when_its_step_did(tmp_path):
     """Not after the size walk that follows it: the report reads the step's span
     from the finish and the seconds."""
-    from datetime import UTC, datetime
-
     ended = datetime(2026, 10, 28, 12, 0, 5, 700000, tzinfo=UTC)
     run_series.record_timing(tmp_path, series="A", step="estimate-ctf", lane="ribo-bin8",
                              variant="bin8", seconds=54.2, disk_delta_bytes=0, exit_code=0,
