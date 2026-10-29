@@ -104,11 +104,12 @@ What the rules do not cover:
 
 ## Not done yet
 
-- **One session so far.** It ran on 28 October 2026 on a Munich login node,
-  with Claude Code 2.1.312 and a Helmholtz Munich Enterprise seat, which
+- **Two sessions so far.** The first ran on 28 October 2026 on a Munich login
+  node, with Claude Code 2.1.312 and a Helmholtz Munich Enterprise seat, which
   includes Claude Code. The rules, the guard and the skill worked, and it read a
-  picking failure right. The MCP and editor switches above came after it, and
-  are not yet checked there.
+  picking failure right. The MCP and editor switches above came after it. A
+  second session there on 29 October checked them: `/mcp` listed no servers,
+  and `/status` gave the VS Code extension as installed, not connected.
 - **Two of the four planned skills are missing:** reading a data folder
   ([docs/agent/data_folders.md](../docs/agent/data_folders.md) is its
   knowledge), and proposing a template from EMDB (roadmap section 23).
