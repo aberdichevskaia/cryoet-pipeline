@@ -1,0 +1,156 @@
+# Where the evidence of each case in ../eval_cases.md is, for
+# scripts/collect_case.py. Its --inventory lists what of it is still there.
+#
+#   cluster      mdc, munich, or none for a case built by hand in its own folder
+#                (README.md)
+#   lane         the lane config, from the repository root
+#   series       the series that matter; every series of the lane if left out
+#   steps        the steps whose runs, program logs and QC records matter
+#   since/until  the days it happened, in the cluster's time. A file written
+#                after `until` is a later run's. Without days, the case is the
+#                project as it is now
+#   jobs         Slurm job IDs, found wherever their logs are
+#   log_pattern  a regular expression: the project's jobs whose log matches it
+#                are listed at any date, to find the IDs not known yet
+#   extras       more files, as globs from the project folder
+#   elsewhere    evidence that is not on the cluster
+#
+# Days and job IDs not known yet are filled in from the inventory's output.
+
+[E01]
+title = "A crash that reproduces while seeding — RyR1 161"
+cluster = "mdc"
+lane = "configs/lanes/ryr1-bin4.toml"
+steps = ["qc-coarse-alignment", "generate-fiducial-seed"]
+since = 2026-10-14
+until = 2026-10-14
+log_pattern = "Segmentation fault|core dumped|exit 139"
+
+[E02]
+title = "Coarse QC fails, fine alignment passes — RyR1 097"
+cluster = "mdc"
+lane = "configs/lanes/ryr1-bin4.toml"
+steps = ["qc-coarse-alignment", "track-fiducials", "fine-align-tilt-series",
+         "reconstruct-tomogram"]
+since = 2026-10-14
+until = 2026-10-14
+
+[E03]
+title = "The CTF cliff at high tilt — RyR1 039"
+cluster = "mdc"
+lane = "configs/lanes/ryr1-bin4.toml"
+series = ["039"]
+steps = ["estimate-ctf"]
+since = 2026-10-14
+until = 2026-10-15
+extras = ["ctf/039/039_ctffind5.defocus", "ctf/039/039_ctffind5_ctffind.txt"]
+note = """The window test of 16 October fitted 039 again under labels; ctfw1 is the \
+lane's window on the uncropped stack (scripts/ctf_window_test.sbatch)."""
+
+[E04]
+title = "Out of GPU memory in template matching — HIV-1 Gag"
+cluster = "munich"
+lane = "configs/lanes/gag-bin8.toml"
+series = ["TS_01"]
+steps = ["pick-particles"]
+since = 2026-10-07
+until = 2026-10-08
+jobs = ["41075712"]
+log_pattern = "out of memory|OutOfMemory"
+note = """The GPU slice is in sacct's AllocTRES; the log's nvidia-smi line shows the \
+whole card."""
+
+[E05]
+title = "The wrong CTFFIND at MDC"
+cluster = "mdc"
+lane = "configs/lanes/ribo-mdc.toml"
+steps = ["estimate-ctf"]
+since = 2026-10-16
+until = 2026-10-28
+jobs = ["3670792", "3781480"]
+log_pattern = 'CTFFIND 4\.1|ctffind-4\.'
+
+[E06]
+title = "MotionCor3 and the GPU generation"
+cluster = "munich"
+lane = "configs/lanes/gag-bin8.toml"
+steps = ["prepare-tilt-series"]
+log_pattern = "MotionCor3 has nothing this GPU|no kernel image"
+note = "Its day and job are not known: the pattern looks through every job of the project."
+
+[E07]
+title = "Stacks with blank borders — a code bug"
+cluster = "mdc"
+lane = "configs/lanes/ryr1-bin4.toml"
+steps = ["build-final-aligned-stack"]
+since = 2026-10-14
+until = 2026-10-15
+extras = ["aligned/*/*", "stacks/*/*"]
+
+[E08]
+title = "The pixel size disagrees with the published map — EMPIAR-11538"
+cluster = "mdc"
+lane = "configs/lanes/ribo-mdc.toml"
+steps = []
+since = 2026-10-14
+until = 2026-10-15
+elsewhere = ["EMD-16721 at EMDB, 1.188 Å, fetched where the case is put together"]
+
+[E09]
+title = "Score maps that do not see the specimen — EMPIAR-11538"
+cluster = "mdc"
+lane = "configs/lanes/ribo-mdc.toml"
+steps = ["prepare-template", "pick-particles"]
+since = 2026-10-14
+until = 2026-10-15
+
+[E10]
+title = "HIV-1 Gag through the safety filter"
+cluster = "none"
+note = "E04's evidence, with other requests."
+
+[E11]
+title = "A misspelled lane key"
+cluster = "none"
+note = "its folder E11/ holds made-up evidence."
+
+[E12]
+title = "A rerun on a series that is busy"
+cluster = "none"
+note = "its folder E12/ holds made-up evidence."
+
+[E13]
+title = "New series for an existing frames project"
+cluster = "none"
+note = "its folder E13/ holds made-up evidence."
+
+[E14]
+title = "A lane from a description"
+cluster = "none"
+note = "its folder E14/ holds made-up evidence."
+
+[E15]
+title = "Every view off by its coarse shift — patch tracking, EMPIAR-11538"
+cluster = "mdc"
+lane = "configs/lanes/ribo-mdc.toml"
+series = ["TS_0306"]
+steps = ["generate-fiducial-seed", "track-fiducials", "fine-align-tilt-series"]
+since = 2026-10-14
+until = 2026-10-26
+extras = ["fiducials/TS_0306/TS_0306_patch.prexg", "alignments/TS_0306/fine/*"]
+elsewhere = ["the etomo reconstruction of TS_0306, whose path is not recorded here"]
+
+[E16]
+title = "`track-fiducials` refuses a seed made before the fix"
+cluster = "none"
+note = "its folder E16/ holds made-up evidence."
+
+[E17]
+title = "A yes to a plan that has since changed"
+cluster = "none"
+note = "its folder E17/ holds made-up evidence."
+
+[E18]
+title = "A recipe again on labels that hold its last results"
+cluster = "none"
+note = "its folder E18/ holds made-up evidence."

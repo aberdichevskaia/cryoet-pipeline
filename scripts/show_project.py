@@ -278,6 +278,55 @@ def slurm_logs(project: Path) -> list[Path]:
     ]
 
 
+def read_job_log(path: Path, root: Path) -> dict[str, Any] | None:
+    """One lane job as its log tells it, whatever project it ran; None for a log
+    that cannot be read."""
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None
+    shown = path.relative_to(root) if path.is_relative_to(root) else path
+    job: dict[str, Any] = {"log": str(shown), "failed": []}
+    for line in text.splitlines():
+        if match := _JOB.match(line):
+            job.update(name=match["name"], id=match["id"])
+        elif match := _PROJECT.match(line):
+            job["project"] = match["project"]
+            if match["config"]:
+                job["config"] = match["config"]
+        elif match := _SERIES.match(line):
+            job["series"] = match["series"].split()
+        elif match := _STEPS.match(line):
+            job["steps"] = match["steps"].split()
+        elif match := _STARTED.match(line):
+            job["started"] = match["when"]
+        elif match := _FINISHED.match(line):
+            job["finished"] = match["when"]
+        elif match := _PREFLIGHT.match(line):
+            job["preflight"] = match["problem"]
+        elif match := _BLOCK.match(line):
+            # One job runs one lane, named as it was when the job ran.
+            job.setdefault("lane", match["lane"])
+        elif match := _FAILED.match(line):
+            job["failed"].append({
+                "series": match["series"],
+                "step": match["step"],
+                "exit_code": int(match["code"]),
+            })
+    if "lane" not in job and "config" in job:
+        # Stopped before its first step: the lane its config names now.
+        lane = _config_lane(path.parent / job["config"])
+        if lane is not None:
+            job["lane"] = lane
+    if job["failed"] or "preflight" in job:
+        job["outcome"] = "failed"
+    elif "finished" in job:
+        job["outcome"] = "finished"
+    else:
+        job["outcome"] = "no end line: still running, or stopped by Slurm"
+    return job
+
+
 def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[dict[str, Any]]:
     """The lane jobs of this project, as their logs tell it: the logs in the
     repository root, and those found `elsewhere` (slurm_logs)."""
@@ -287,54 +336,12 @@ def job_logs(root: Path, project: str, elsewhere: Iterable[Path] = ()) -> list[d
     target = _resolve(root, project).resolve()
     jobs: list[dict[str, Any]] = []
     for path in sorted(paths.values(), key=lambda path: path.name):
-        try:
-            text = path.read_text(errors="replace")
-        except OSError:
-            continue
-        shown = path.relative_to(root) if path.is_relative_to(root) else path
-        job: dict[str, Any] = {"log": str(shown), "failed": []}
-        for line in text.splitlines():
-            if match := _JOB.match(line):
-                job.update(name=match["name"], id=match["id"])
-            elif match := _PROJECT.match(line):
-                job["project"] = match["project"]
-                if match["config"]:
-                    job["config"] = match["config"]
-            elif match := _SERIES.match(line):
-                job["series"] = match["series"].split()
-            elif match := _STEPS.match(line):
-                job["steps"] = match["steps"].split()
-            elif match := _STARTED.match(line):
-                job["started"] = match["when"]
-            elif match := _FINISHED.match(line):
-                job["finished"] = match["when"]
-            elif match := _PREFLIGHT.match(line):
-                job["preflight"] = match["problem"]
-            elif match := _BLOCK.match(line):
-                # One job runs one lane, named as it was when the job ran.
-                job.setdefault("lane", match["lane"])
-            elif match := _FAILED.match(line):
-                job["failed"].append({
-                    "series": match["series"],
-                    "step": match["step"],
-                    "exit_code": int(match["code"]),
-                })
+        job = read_job_log(path, root)
         # Job names are the project's directory name, which another project can
         # share; the header says which project the job really ran, from the
         # folder it ran in, which is where its log is.
-        if (path.parent / job.get("project", "")).resolve() != target:
+        if job is None or (path.parent / job.get("project", "")).resolve() != target:
             continue
-        if "lane" not in job and "config" in job:
-            # Stopped before its first step: the lane its config names now.
-            lane = _config_lane(path.parent / job["config"])
-            if lane is not None:
-                job["lane"] = lane
-        if job["failed"] or "preflight" in job:
-            job["outcome"] = "failed"
-        elif "finished" in job:
-            job["outcome"] = "finished"
-        else:
-            job["outcome"] = "no end line: still running, or stopped by Slurm"
         jobs.append(job)
     return jobs
 

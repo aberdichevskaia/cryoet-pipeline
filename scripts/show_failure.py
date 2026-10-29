@@ -208,12 +208,11 @@ def log_excerpt(lines: list[str]) -> list[dict[str, Any]]:
     return [_line(lines, index) for index in sorted(keep)]
 
 
-def program_logs(
-    root: Path, project: Path, series: str, step: str,
-    since: datetime | None, until: datetime | None,
-) -> tuple[list[dict[str, Any]], int]:
-    """The logs the step's programs wrote while it ran, newest first, and how many
-    more there were than are shown."""
+def step_logs(
+    project: Path, series: str, step: str, since: datetime | None, until: datetime | None,
+) -> list[tuple[Path, datetime]]:
+    """The logs the step's programs last wrote between since and until, with when,
+    newest first."""
     found: dict[Path, datetime] = {}
     for folder in STEP_DIRS.get(step, ()):
         directory = project / folder.format(s=series)
@@ -226,7 +225,16 @@ def program_logs(
             if until is not None and modified > until + SLACK:
                 continue
             found[path] = modified
-    newest = sorted(found.items(), key=lambda item: item[1], reverse=True)
+    return sorted(found.items(), key=lambda item: item[1], reverse=True)
+
+
+def program_logs(
+    root: Path, project: Path, series: str, step: str,
+    since: datetime | None, until: datetime | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """The logs the step's programs wrote while it ran, newest first, and how many
+    more there were than are shown."""
+    newest = step_logs(project, series, step, since, until)
     shown = [
         {
             "path": str(path.relative_to(root)) if path.is_relative_to(root) else str(path),

@@ -18,7 +18,9 @@ client, which is what makes it the instrument for deciding about either (see
   playbook, or prompt. Headless, with the case's request as the prompt.
 - **Where:** in a sandbox holding the case's evidence laid out as a project, with
   no Slurm. A proposed submission is graded on the dry run and the question it
-  shows.
+  shows. Edits, such as a config copy, go through as a person who approves them
+  would let them (`--permission-mode acceptEdits`, headless only), and so do
+  plain file commands such as `cp` and `rm` inside the sandbox.
 - **What is recorded per run:** the case id, the model ID, the client version, the
   result per criterion, and the transcript.
 - **Grading:** a run passes when every *Pass if* line holds. Report each case as
@@ -32,10 +34,18 @@ client, which is what makes it the instrument for deciding about either (see
   removed. With the entry present, a case tests whether the assistant applies what
   it has been told. Without it, the case tests whether the assistant reasons from
   the evidence. Only the held-out result says anything about the second.
-- **Evidence: none collected yet.** Each case says where its evidence is.
-  Proposal: trimmed copies in `docs/agent/cases/<id>/`. Open question: the logs
-  contain user names in paths — decide whether they go in the repository or are
-  stripped first.
+- **Evidence:** each case's goes in `docs/agent/cases/<id>/`
+  ([cases/README.md](cases/README.md)), and `scripts/run_cases.py` runs the cases
+  that have a folder. Since 29 October 2026 the constructed cases E11–E14 and
+  E16–E18 have one, with made-up evidence. None from history has one yet: theirs
+  is on the cluster, and goes in as trimmed copies with user names and home paths
+  replaced by placeholders first (decided 29 October 2026).
+  - [cases/cases.toml](cases/cases.toml) says where each case's evidence is: the
+    lane, the days, the steps, the jobs and the files.
+  - `scripts/collect_case.py --inventory --cluster mdc` (or `munich`) lists what
+    of it is still on that cluster, and copies nothing. A later run of a step
+    writes its files again, so a file written after the case's last day is not
+    the case's any more.
 
 ## From history
 
@@ -288,7 +298,8 @@ handling.
 ### E12. A rerun on a series that is busy
 
 - **Class:** operations.
-- **Request:** "Rerun picking on TS_0463 with low-pass 25."
+- **Request:** "Rerun picking on TS_0463 with low-pass 35." The lane itself runs
+  25 Å since 15 October 2026.
 - **Evidence:**
   - `squeue` shows the project's GPU job running;
   - its Slurm log header lists TS_0463 among its series;
