@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -169,6 +170,144 @@ def lineage(registry: ArtifactRegistry, roots: Sequence[Artifact]) -> list[Artif
             found.append(artifact)
             pending.extend(artifact.parent_ids)
     return found
+
+
+REWRITE_SLACK_SECONDS = 60.0
+"""How much later than a result the file it was made from may be dated and still be
+the version it was made from: files one step writes together can be dated seconds
+apart, in either order, and a file server's clock can run a little apart from the
+node's."""
+
+
+def written_again_after_use(
+    artifacts: Sequence[Artifact], by_id: Mapping[str, Artifact]
+) -> list[str]:
+    """Each result dated after something among `artifacts` was made from it, in words.
+
+    A step reads its inputs as they are when it runs, and the registry keeps one
+    record per result, which the step's next run overwrites. A result made again
+    after use leaves what was made from it on an earlier version, while this
+    report reads the later one, and nothing but the files' modification times
+    says so. ryr1 had it (2026-10-28): its bin8 lane remade the shared CTF fit on
+    18 Oct, and the bin4 report drew that fit beside tomograms whose stacks bin4
+    had corrected on 14 Oct with the one before.
+
+    Parents are looked up in `by_id`. Parents of one kind dated after the same
+    results are said together, as the tilts of a series motion-corrected again
+    would be. A file that cannot be read has no date, and says nothing.
+    """
+
+    children = list({artifact.id: artifact for artifact in artifacts}.values())
+    involved = {artifact.id: artifact for artifact in children}
+    involved.update(
+        (parent_id, by_id[parent_id])
+        for child in children
+        for parent_id in child.parent_ids
+        if parent_id in by_id
+    )
+    dated = {
+        artifact_id: moment
+        for artifact_id, artifact in involved.items()
+        if (moment := _modified(artifact.path)) is not None
+    }
+
+    later: dict[str, list[Artifact]] = {}
+    for child in children:
+        if child.id not in dated:
+            continue
+        for parent_id in dict.fromkeys(child.parent_ids):
+            if parent_id in dated and dated[parent_id] > dated[child.id] + REWRITE_SLACK_SECONDS:
+                later.setdefault(parent_id, []).append(child)
+    together: dict[tuple[str, tuple[str, ...]], list[Artifact]] = {}
+    for parent_id, made in later.items():
+        key = (_artifact_label(involved[parent_id]), tuple(child.id for child in made))
+        together.setdefault(key, []).append(involved[parent_id])
+
+    lines = []
+    for (label, made_ids), parents in sorted(
+        together.items(), key=lambda item: min(dated[one] for one in item[0][1])
+    ):
+        times = sorted(dated[parent.id] for parent in parents)
+        if len(parents) == 1:
+            subject = f"the {label}, dated {_when(times[0])}, is"
+            source, versions = "it", "an earlier version than the one"
+        else:
+            subject = f"{len(parents)} {_plural(label)}, dated {_span(times[0], times[-1])}, are"
+            source, versions = "them", "earlier versions than the ones"
+        made = sorted((involved[one] for one in made_ids), key=lambda one: dated[one.id])
+        named = _listed([f"the {_artifact_label(one)} ({_when(dated[one.id])})" for one in made])
+        those = "that was" if len(made) == 1 else "those were"
+        lines.append(
+            f"{subject} newer than {named} made from {source}, so {those} made from "
+            f"{versions} this report reads."
+        )
+    return lines
+
+
+_KIND_LABELS = {
+    ArtifactKind.CORRECTED_PROJECTION: "motion-corrected tilt",
+    ArtifactKind.CTF_MODEL: "CTF fit",
+    ArtifactKind.SEGMENTATION: "membrane segmentation",
+    ArtifactKind.TEMPLATE_MATCH: "template search",
+}
+"""Kinds a report calls otherwise than the registry does."""
+
+_STACK_LABELS = {"fiducial_tracking": "tracking stack", "ctf_corrected": "CTF-corrected stack"}
+
+
+def _artifact_label(artifact: Artifact) -> str:
+    """What a result is called in a sentence: `CTF fit`, `fine alignment`, `aligned stack
+    at bin 2`."""
+
+    parameters = artifact.parameters
+    if artifact.kind is ArtifactKind.QC:
+        qc_type = parameters.get("qc_type")
+        return f"{_lower_first(qc_step(qc_type).label)} QC" if isinstance(qc_type, str) else "QC"
+    if artifact.kind is ArtifactKind.ALIGNMENT and parameters.get("stage") in ("coarse", "fine"):
+        return f"{parameters['stage']} alignment"
+    if artifact.kind is ArtifactKind.TOMOGRAM and parameters.get("alignment_stage") == "coarse":
+        return "coarse tomogram"
+    if artifact.kind is ArtifactKind.ALIGNED_TILT_STACK:
+        purpose = parameters.get("purpose")
+        if isinstance(purpose, str) and purpose in _STACK_LABELS:
+            return _STACK_LABELS[purpose]
+        # The CTF fit's stack and the lane's own are both aligned stacks; their
+        # binnings tell them apart.
+        return "aligned stack" + (f" at bin {artifact.binning}" if artifact.binning else "")
+    return _KIND_LABELS.get(artifact.kind, artifact.kind.value.replace("_", " "))
+
+
+def _lower_first(label: str) -> str:
+    # "Fine alignment" in a sentence, but never "cTF estimation".
+    return label[:1].lower() + label[1:] if label[1:2].islower() else label
+
+
+def _plural(label: str) -> str:
+    return label if label.endswith("s") else label + "s"
+
+
+def _listed(items: Sequence[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _when(moment: float) -> str:
+    """A file's date as the report's own date is written, in this computer's time."""
+
+    return datetime.fromtimestamp(moment).strftime("%Y-%m-%d %H:%M")
+
+
+def _span(first: float, last: float) -> str:
+    start, end = _when(first), _when(last)
+    if start == end:
+        return start
+    return f"{start} to {end[11:] if start[:10] == end[:10] else end}"
+
+
+def _modified(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 def _qc_record(artifact: Artifact, qc_type: str) -> QcRecord:
@@ -834,6 +973,8 @@ class SeriesReport:
     correlation: CorrelationMap | None = None
     alignment: AlignmentInfo | None = None
     timing: SeriesTiming = field(default_factory=SeriesTiming)
+    written_again: list[str] = field(default_factory=list)
+    """What these pages were drawn from that was written again after use, in words."""
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -880,6 +1021,7 @@ def load_series(
     report.timing, timing_problem = series_timing(report.series, shown, report.qc, runs)
     if timing_problem is not None:
         report.problems.append(timing_problem)
+    report.written_again = written_again_after_use(shown, by_id)
 
     def attempt(what: str, load: Any) -> Any:
         try:

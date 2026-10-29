@@ -301,7 +301,8 @@ def picks_per_tomogram_page(rows: Sequence[SummaryRow]) -> Figure:
 
 
 def warning_lines(reports: Sequence[SeriesReport]) -> list[tuple[str, bool]]:
-    """Every warning and loading problem, as (line, is_heading), wrapped for the page."""
+    """Every warning, result written again after use and loading problem, as (line,
+    is_heading), wrapped for the page."""
 
     lines: list[tuple[str, bool]] = []
     for report in reports:
@@ -315,6 +316,7 @@ def warning_lines(reports: Sequence[SeriesReport]) -> list[tuple[str, bool]]:
                 entries.append(f"{label}: {warning}")
             if record.status == "fail" and not record.warnings:
                 entries.append(f"{label}: failed, with no reason recorded")
+        entries.extend(f"Written again after use: {line}" for line in report.written_again)
         entries.extend(f"Not shown: {problem}" for problem in report.problems)
         if not entries:
             continue
@@ -340,7 +342,8 @@ def warning_pages(reports: Sequence[SeriesReport]) -> list[Callable[[], Figure]]
 def _warning_page(lines: list[tuple[str, bool]]) -> Figure:
     figure = style.new_page(
         "Warnings and problems",
-        "What each step's QC warned about, and what this report could not read",
+        "What each step's QC warned about, what was written again after use, and what this "
+        "report could not read",
     )
     y = style.CONTENT_TOP
     for text, heading in lines:

@@ -50,6 +50,7 @@ from cryoet_pipeline.reports.collect import (
     map_agreement,
     per_view_table,
     summary_row,
+    written_again_after_use,
 )
 from cryoet_pipeline.reports.imaging import (
     choose_depths,
@@ -656,7 +657,8 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
                           ArtifactKind.ALIGNED_TILT_STACK, corrected_path, series,
                           parents=[ctf_model.id, alignment.id], variant="bin8",
                           pixel_spacing_angstrom=_VOXEL, binning=8,
-                          parameters={"included_z_values": [4, 3, 2, 1, 0]})
+                          parameters={"purpose": "ctf_corrected",
+                                      "included_z_values": [4, 3, 2, 1, 0]})
     registry.add(corrected)
 
     volume = rng.normal(0.0, 1.0, size=_SHAPE).astype(np.float32)
@@ -992,7 +994,9 @@ def _row(series: str, step: str, start: float, seconds: float, *,
 
 
 def _timed_project(root: Path, *, extra: tuple[dict[str, object], ...] = ()) -> Path:
-    """The synthetic project with its lane's timings, and TS_A's files dated by them."""
+    """The synthetic project with its lane's timings, and TS_A's files dated by them;
+    what no run here wrote, such as the stack the beads were tracked on, by an
+    earlier job an hour before."""
 
     project = _project(root)
     rows = [_row("TS_A", step, start, seconds, variant="bin8")
@@ -1000,6 +1004,9 @@ def _timed_project(root: Path, *, extra: tuple[dict[str, object], ...] = ()) -> 
     with (project / "step_timings.jsonl").open("w") as handle:
         for row in (*rows, *extra):
             handle.write(json.dumps(row) + "\n")
+    earlier = _T0 - 3600.0
+    for path in (project / "TS_A").iterdir():
+        os.utime(path, (earlier, earlier))
     for _, start, seconds, files in _LANE_RUNS:
         for name in files:
             moment = _T0 + start + seconds - 1.0
@@ -1367,3 +1374,103 @@ def test_a_long_picking_warning_points_to_the_warnings_page() -> None:
     lines = figure.axes[0].texts[0].get_text().splitlines()
     assert lines[-2:] == ["QC: WARN", "… more on the warnings page"]
     assert len(lines) <= picking._PANEL_LINES
+
+
+# --- results written again after use ------------------------------------------------------
+
+
+def _dated(root: Path, name: str, kind: ArtifactKind, moment: datetime, *parents: str,
+           **fields: object) -> Artifact:
+    """A result whose file was last written at `moment`, in this computer's time."""
+
+    path = root / name
+    path.write_text("")
+    os.utime(path, (moment.timestamp(), moment.timestamp()))
+    return Artifact(id=name, kind=kind, path=path, parent_ids=list(parents),
+                    **fields)  # type: ignore[arg-type]
+
+
+def test_a_fit_remade_after_a_stack_was_corrected_with_it_is_said(tmp_path: Path) -> None:
+    """Shaped as ryr1's bin4 report was on 2026-10-28: the bin8 lane remade the
+    shared CTF fit, with its stack and its QC, on 18 Oct, after bin4 had corrected
+    its stack with the fit before. The minutes are made up; the order is ryr1's."""
+
+    def on(day: int, hour: int, minute: int) -> datetime:
+        return datetime(2026, 10, day, hour, minute)
+
+    shown = [
+        _dated(tmp_path, "fine.json", ArtifactKind.ALIGNMENT, on(14, 15, 7),
+               parameters={"stage": "fine"}),
+        _dated(tmp_path, "fit.st", ArtifactKind.ALIGNED_TILT_STACK, on(18, 14, 21), "fine.json",
+               binning=2, parameters={"purpose": "final_alignment"}),
+        _dated(tmp_path, "fit.defocus", ArtifactKind.CTF_MODEL, on(18, 14, 22), "fit.st",
+               "fine.json"),
+        _dated(tmp_path, "fit_qc.json", ArtifactKind.QC, on(18, 14, 22), "fit.defocus",
+               parameters={"qc_type": "ctf_estimation"}),
+        _dated(tmp_path, "final.ali", ArtifactKind.ALIGNED_TILT_STACK, on(14, 15, 9),
+               "fine.json", binning=4, variant="bin4", parameters={"purpose": "final_alignment"}),
+        _dated(tmp_path, "corrected.st", ArtifactKind.ALIGNED_TILT_STACK, on(14, 15, 10),
+               "final.ali", "fit.defocus", variant="bin4",
+               parameters={"purpose": "ctf_corrected"}),
+        _dated(tmp_path, "tomogram.mrc", ArtifactKind.TOMOGRAM, on(14, 15, 11), "corrected.st",
+               "fine.json", variant="bin4"),
+    ]
+
+    assert written_again_after_use(shown, {one.id: one for one in shown}) == [
+        "the CTF fit, dated 2026-10-18 14:22, is newer than the CTF-corrected stack "
+        "(2026-10-14 15:10) made from it, so that was made from an earlier version than the "
+        "one this report reads."
+    ]
+
+
+def test_results_written_again_together_are_said_together(tmp_path: Path) -> None:
+    def on(day: int, hour: int, minute: int, second: int = 0) -> datetime:
+        return datetime(2026, 10, day, hour, minute, second)
+
+    # A series motion-corrected again, and its stack not rebuilt.
+    tilts = [_dated(tmp_path, f"tilt{z}.mrc", ArtifactKind.CORRECTED_PROJECTION, on(18, 9, z))
+             for z in range(3)]
+    stack = _dated(tmp_path, "stack.st", ArtifactKind.TILT_STACK, on(14, 8, 0),
+                   *(tilt.id for tilt in tilts))
+    # A tomogram reconstructed again after a template and picks were made from it.
+    tomogram = _dated(tmp_path, "tomogram.mrc", ArtifactKind.TOMOGRAM, on(18, 10, 0), "stack.st")
+    template = _dated(tmp_path, "template.mrc", ArtifactKind.TEMPLATE, on(14, 9, 0),
+                      "tomogram.mrc")
+    # Written by the same step as its template, half a minute before it: not again.
+    mask = _dated(tmp_path, "mask.mrc", ArtifactKind.TEMPLATE_MASK, on(14, 8, 59, 30),
+                  "template.mrc")
+    # A parent whose file is gone has no date to compare.
+    gone = Artifact(id="gone", kind=ArtifactKind.SEGMENTATION, path=tmp_path / "gone.zarr")
+    picks = _dated(tmp_path, "picks.star", ArtifactKind.PICKS, on(14, 12, 30), "tomogram.mrc",
+                   "template.mrc", "mask.mrc", "gone")
+    shown = [picks, mask, template, tomogram, stack]
+
+    assert written_again_after_use(
+        shown, {one.id: one for one in [*shown, *tilts, gone]}
+    ) == [
+        "3 motion-corrected tilts, dated 2026-10-18 09:00 to 09:02, are newer than the tilt "
+        "stack (2026-10-14 08:00) made from them, so that was made from earlier versions than "
+        "the ones this report reads.",
+        "the tomogram, dated 2026-10-18 10:00, is newer than the template (2026-10-14 09:00) "
+        "and the picks (2026-10-14 12:30) made from it, so those were made from an earlier "
+        "version than the one this report reads.",
+    ]
+
+
+def test_the_warnings_page_says_what_was_written_again_after_use(tmp_path: Path) -> None:
+    project = _timed_project(tmp_path)
+    as_run = _timed_reports(project)[0]
+    # As another lane would: the shared CTF fit and its QC remade a day after this
+    # lane corrected its stack with them.
+    later = _T0 + 86400.0
+    for name in ("ctf.defocus", "ctf_estimation_qc.json"):
+        os.utime(project / "TS_A" / name, (later, later))
+
+    report = _timed_reports(project)[0]
+
+    assert as_run.written_again == []
+    [line] = report.written_again
+    assert line.startswith("the CTF fit, dated ")
+    assert ", is newer than the CTF-corrected stack (" in line
+    page = [text for text, _ in front.warning_lines([report])]
+    assert any(text.startswith("• Written again after use: the CTF fit, dated ") for text in page)
