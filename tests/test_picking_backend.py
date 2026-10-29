@@ -16,10 +16,12 @@ from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
     _dilate,
     _extract_candidates_command,
+    _extraction_radius_px,
     _included_z_values,
     _match_template_command,
     _PicksStatistics,
     _read_star_statistics,
+    _searched_depth_px,
     _write_dose_accumulation,
     _z_spread_verdict,
     parse_volume_split,
@@ -853,21 +855,20 @@ def _stats(count: int, z_sd: float | None) -> _PicksStatistics:
 def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
     """The measured case: 385 picks at 80.3 px through a 320 px tomogram.
 
-    Uniform over the 281 px a 39 px box can be centred in spreads 81.1 px, and
-    the sampling error of a standard deviation over 385 picks is 2.9 px, so 80.3
-    sits a third of one standard error below uniform. Nothing about that count
-    says anything — a loose enough threshold always produces plenty — and this is
-    the readout that does.
+    With a 15 px particle radius pytom keeps peaks in the middle 290 px, whose
+    uniform fill spreads 83.7 px, and the sampling error of a standard deviation
+    over 385 picks is 2.9 px, so 80.3 sits 1.2 standard errors below uniform.
+    Nothing about that count says anything — a loose enough threshold always
+    produces plenty — and this is the readout that does.
     """
 
-    uniform, warning = _z_spread_verdict(
-        _stats(385, 80.3), tomogram_shape=(320, 512, 512), template_box_px=39
-    )
+    uniform, warning = _z_spread_verdict(_stats(385, 80.3), depth_px=320, particle_radius_px=15)
 
-    assert uniform == pytest.approx(281 / 12**0.5, rel=1e-3)
+    assert uniform == pytest.approx(290 / 12**0.5, rel=1e-3)
     assert warning is not None
-    assert "not distinguishable from it" in warning
+    assert "1.2 standard errors below uniform, so not distinguishable from it" in warning
     assert "80.3" in warning
+    assert "the 290 px pytom keeps peaks in, 15 px (one particle radius) in from" in warning
     # All three readings named, because this measurement cannot separate them —
     # and one of them, a thickness sized snugly around the specimen, is a good
     # reconstruction rather than a fault.
@@ -878,33 +879,75 @@ def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
 def test_z_spread_is_silent_for_picks_confined_to_a_lamella() -> None:
     """A 177 px lamella in a 320 px volume spreads about 51 px.
 
-    That is thirty standard errors below uniform, which is what a confined
+    That is eighteen standard errors below uniform, which is what a confined
     specimen looks like and what should pass without comment.
     """
 
-    uniform, warning = _z_spread_verdict(
-        _stats(385, 51.0), tomogram_shape=(320, 512, 512), template_box_px=39
-    )
+    uniform, warning = _z_spread_verdict(_stats(385, 51.0), depth_px=320, particle_radius_px=15)
 
-    assert uniform == pytest.approx(281 / 12**0.5, rel=1e-3)
+    assert uniform == pytest.approx(290 / 12**0.5, rel=1e-3)
     assert warning is None
+
+
+def test_z_spread_is_measured_over_the_range_pytom_keeps_peaks_in() -> None:
+    """Picks spread as RyR1 series 039's at bin8 were, 793 at 23.6 px, in a
+    volume 110 px deep: 60 px for a 50 px box to be centred in, as 039 had.
+
+    Against those 60 px, the range until 2026-10-29, they read 10.6 standard
+    errors wider than uniform. pytom keeps peaks one particle radius from each
+    face, 12 px for 340 A at 13.44 A/px, and over the 86 px between the same
+    picks are uniform.
+    """
+
+    uniform, warning = _z_spread_verdict(_stats(793, 23.6), depth_px=110, particle_radius_px=12)
+
+    assert uniform == pytest.approx(86 / 12**0.5, rel=1e-3)
+    assert warning is not None
+    assert "2.1 standard errors below uniform, so not distinguishable from it" in warning
+
+
+def test_z_spread_wider_than_uniform_is_named_as_such() -> None:
+    """Picks gathered at the top and bottom spread wider than any uniform fill.
+
+    Until 2026-10-29 such a spread read "-10.6 standard errors below uniform, so
+    not distinguishable from it": wider than uniform, called the opposite.
+    """
+
+    _, warning = _z_spread_verdict(_stats(800, 33.0), depth_px=110, particle_radius_px=12)
+
+    assert warning is not None
+    assert (
+        "9.9 standard errors wider than uniform: more picks sit near the top and "
+        "bottom of the volume" in warning
+    )
+    assert "below" not in warning
+    assert "not distinguishable" not in warning
+
+    # A little above uniform, within three standard errors, is not
+    # distinguishable from it, and says above.
+    _, close = _z_spread_verdict(_stats(385, 85.0), depth_px=320, particle_radius_px=15)
+    assert close is not None
+    assert "0.4 standard errors above uniform, so not distinguishable from it" in close
 
 
 def test_z_spread_says_nothing_without_the_numbers_to_say_it_with() -> None:
     """Silence rather than a guess when a piece is missing."""
 
     assert _z_spread_verdict(
-        _stats(385, None), tomogram_shape=(320, 512, 512), template_box_px=39
+        _stats(385, None), depth_px=320, particle_radius_px=15
     ) == (None, None)
     assert _z_spread_verdict(
-        _stats(385, 80.3), tomogram_shape=None, template_box_px=39
+        _stats(385, 80.3), depth_px=None, particle_radius_px=15
     ) == (None, None)
     assert _z_spread_verdict(
-        _stats(1, 80.3), tomogram_shape=(320, 512, 512), template_box_px=39
+        _stats(385, 80.3), depth_px=320, particle_radius_px=None
     ) == (None, None)
-    # A box that does not fit leaves nowhere to centre it.
     assert _z_spread_verdict(
-        _stats(385, 80.3), tomogram_shape=(32, 512, 512), template_box_px=39
+        _stats(1, 80.3), depth_px=320, particle_radius_px=15
+    ) == (None, None)
+    # A radius that meets itself in the middle leaves nowhere to keep a peak.
+    assert _z_spread_verdict(
+        _stats(385, 80.3), depth_px=32, particle_radius_px=16
     ) == (None, None)
 
 
@@ -915,15 +958,37 @@ def test_z_spread_scales_with_the_volume_rather_than_a_fixed_number() -> None:
     is why the comparison is computed per tomogram.
     """
 
-    _, thin = _z_spread_verdict(
-        _stats(400, 80.0), tomogram_shape=(320, 512, 512), template_box_px=39
-    )
-    _, thick = _z_spread_verdict(
-        _stats(400, 80.0), tomogram_shape=(800, 512, 512), template_box_px=39
-    )
+    _, thin = _z_spread_verdict(_stats(400, 80.0), depth_px=320, particle_radius_px=15)
+    _, thick = _z_spread_verdict(_stats(400, 80.0), depth_px=800, particle_radius_px=15)
 
     assert thin is not None
     assert thick is None
+
+
+def test_the_spread_reference_is_read_as_pytom_extraction_reads_it(tmp_path: Path) -> None:
+    """The radius is int((diameter / 2) / voxel_size), from the diameter
+    extraction is given and the job's voxel size; the depth is the job's
+    search_z, whose end pytom leaves out, or else the tomogram's thickness."""
+
+    job = tmp_path / "TS_job.json"
+    job.write_text(json.dumps({"voxel_size": 13.44, "search_z": [40, 140]}))
+
+    def context(**parameters: object) -> BackendContext:
+        return BackendContext(
+            output_dir=tmp_path, device=DevicePreference.CUDA, parameters=parameters
+        )
+
+    assert _extraction_radius_px(context(pytom_particle_diameter=340.0), job) == 12
+    # Extraction's own diameter wins over matching's.
+    both = context(pytom_particle_diameter=340.0, pytom_extract_particle_diameter=200.0)
+    assert _extraction_radius_px(both, job) == 7
+    assert _searched_depth_px(job, (320, 512, 512)) == 100
+
+    bare = tmp_path / "bare_job.json"
+    bare.write_text("{}")
+    assert _extraction_radius_px(context(pytom_particle_diameter=340.0), bare) is None
+    assert _searched_depth_px(bare, (320, 512, 512)) == 320
+    assert _searched_depth_px(bare, None) is None
 
 
 def _dose_manifest(doses: list[object]) -> TiltSeriesManifest:

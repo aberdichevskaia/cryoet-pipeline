@@ -391,7 +391,10 @@ Motion correction, then the tilt stack from the corrected sums.
 - QC records how many picks there are, their scores against the noise of the
   search (where one false positive is expected, how many picks sit above that),
   and whether the picks are confined in z or spread through the volume. A
-  doubtful significance or a doubtful z spread gives a warning.
+  doubtful significance or a doubtful z spread gives a warning. The z spread is
+  read against a uniform fill of the depth pytom searched, less one particle
+  radius at each face, where its extraction drops peaks. A spread wider than
+  that is named as such: more picks near the top and bottom of the volume.
 
 ### 15. `visualize-picks`
 

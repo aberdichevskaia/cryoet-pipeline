@@ -254,8 +254,8 @@ class PytomMatchPickBackend:
             )
             uniform_z_sd, spread_warning = _z_spread_verdict(
                 statistics,
-                tomogram_shape=tomogram.shape,
-                template_box_px=_template_box_px(job_json),
+                depth_px=_searched_depth_px(job_json, tomogram.shape),
+                particle_radius_px=_extraction_radius_px(context, job_json),
             )
             search = _search_statistics(job_json)
             significance = _significance_verdict(statistics, search)
@@ -1077,6 +1077,47 @@ def _template_box_px(job_json: Path) -> int | None:
     return max(shape) if shape is not None else None
 
 
+def _pytom_job(job_json: Path) -> dict[str, Any]:
+    """The job JSON pytom wrote, or nothing when it cannot be read."""
+
+    try:
+        payload = json.loads(job_json.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _searched_depth_px(job_json: Path, tomogram_shape: tuple[int, ...] | None) -> int | None:
+    """How deep in Z the volume pytom searched is: its job's `search_z`, whose
+    end pytom leaves out, or the tomogram's thickness for a job without one."""
+
+    search_z = _pytom_job(job_json).get("search_z")
+    if (
+        isinstance(search_z, list)
+        and len(search_z) == 2
+        and all(type(end) is int for end in search_z)
+        and search_z[1] > search_z[0]
+    ):
+        return search_z[1] - search_z[0]
+    if tomogram_shape is None or len(tomogram_shape) != 3:
+        return None
+    # Canonical tomograms are (Z, Y, X), so the thickness is the first axis.
+    return tomogram_shape[0]
+
+
+def _extraction_radius_px(context: BackendContext, job_json: Path) -> int | None:
+    """How near a face of the searched volume pytom's extraction keeps a peak:
+    one particle radius in voxels, computed as extract.py (0.14.0) computes it,
+    `int((diameter / 2) / voxel_size)`, from the diameter extraction is given
+    and the voxel size the job recorded."""
+
+    diameter = _extraction_particle_diameter(context)
+    voxel_size = _pytom_job(job_json).get("voxel_size")
+    if diameter is None or type(voxel_size) not in (int, float) or not voxel_size > 0:
+        return None
+    return int((diameter / 2) / voxel_size)
+
+
 def _preview_slab_thickness_px(
     context: BackendContext, voxel_spacing_angstrom: float, job_json: Path
 ) -> int:
@@ -1122,8 +1163,8 @@ def _write_scores_preview(
 def _z_spread_verdict(
     statistics: _PicksStatistics,
     *,
-    tomogram_shape: tuple[int, ...] | None,
-    template_box_px: int | None,
+    depth_px: int | None,
+    particle_radius_px: int | None,
 ) -> tuple[float | None, str | None]:
     """Are these picks confined to something, or spread through the volume?
 
@@ -1133,11 +1174,21 @@ def _z_spread_verdict(
     and this is the readout that can.
 
     The comparison needs no reference dataset and no assumption about contrast.
-    Uniform picks inside the region where a template box can be centred spread by
-    `(thickness - box) / sqrt(12)`, both numbers being known here. The verdict is
-    whether the observed spread is *significantly* below that, judged by the
-    sampling error of a standard deviation, `sd / sqrt(2n)`, at three sigma —
-    rather than by a fraction picked to look reasonable.
+    pytom's extraction drops every peak within one particle radius of a face of
+    the volume it searched (extract.py, 0.14.0), so uniform picks spread by
+    `(depth - 2 * radius) / sqrt(12)`, both numbers being known here. The
+    verdict is whether the observed spread is *significantly* below that, judged
+    by the sampling error of a standard deviation, `sd / sqrt(2n)`, at three
+    sigma — rather than by a fraction picked to look reasonable. A spread
+    significantly *above* it is named as such: more picks near the top and
+    bottom of the volume than a uniform fill puts there.
+
+    Until 2026-10-29 the range was where a template box can be centred,
+    `depth - box`. A box is wider than its particle, so that range was narrower
+    than the one pytom keeps peaks in, and picks spread evenly over pytom's range
+    read as wider than uniform. All five RyR1 series at bin8 read wider that way,
+    worded then as "-10.6 standard errors below uniform, so not distinguishable
+    from it".
 
     PROVISIONAL. This encodes an expectation that has not been confirmed by
     anyone who reads these tomograms: that a reconstruction places a confined
@@ -1162,17 +1213,13 @@ def _z_spread_verdict(
 
     observed = statistics.coordinate_z_sd
     count = statistics.particle_count
-    if observed is None or count < 2 or tomogram_shape is None or template_box_px is None:
-        return None, None
-    if len(tomogram_shape) != 3:
+    if observed is None or count < 2 or depth_px is None or particle_radius_px is None:
         return None, None
 
-    # Canonical tomograms are (Z, Y, X), so the thickness is the first axis.
-    thickness = tomogram_shape[0]
-    centreable = thickness - template_box_px
-    if centreable <= 0:
+    kept = depth_px - 2 * particle_radius_px
+    if kept <= 0:
         return None, None
-    uniform = centreable / math.sqrt(12.0)
+    uniform = kept / math.sqrt(12.0)
 
     standard_error = observed / math.sqrt(2.0 * count)
     if standard_error <= 0.0:
@@ -1180,10 +1227,20 @@ def _z_spread_verdict(
     shortfall = (uniform - observed) / standard_error
     if shortfall >= 3.0:
         return uniform, None
+    measured = (
+        f"picks spread {observed:.1f} px through Z where uniform over the {kept} px "
+        f"pytom keeps peaks in, {particle_radius_px} px (one particle radius) in from "
+        f"each face, would spread {uniform:.1f} px"
+    )
+    if shortfall <= -3.0:
+        return uniform, (
+            f"{measured} — {-shortfall:.1f} standard errors wider than uniform: more "
+            "picks sit near the top and bottom of the volume than a uniform fill puts "
+            "there. A histogram of the picks' Z shows where"
+        )
+    side = "below" if shortfall >= 0.0 else "above"
     return uniform, (
-        f"picks spread {observed:.1f} px through Z where uniform over the "
-        f"{centreable} px a template box can be centred in would spread "
-        f"{uniform:.1f} px — {shortfall:.1f} standard errors below uniform, so "
+        f"{measured} — {abs(shortfall):.1f} standard errors {side} uniform, so "
         "not distinguishable from it. Three readings, and this cannot tell them "
         "apart: the picks are noise; or the reconstruction does not place the "
         "specimen in a band of Z; or the thickness is snug around the specimen, "

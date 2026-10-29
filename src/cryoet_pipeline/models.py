@@ -736,9 +736,12 @@ class PicksQc(BaseModel):
     coordinate_z_median: float | None = None
     coordinate_z_sd: float | None = None
     uniform_z_sd: float | None = Field(default=None, gt=0.0)
-    """The spread picks would have if they were uniform through the region where
-    a template box can be centred: (thickness - box) / sqrt(12). Recorded so the
-    observed spread can be read against it without knowing either size."""
+    """The spread picks would have if they were uniform through the region pytom
+    keeps peaks in: (depth - 2 * particle radius) / sqrt(12), since its
+    extraction drops peaks within one particle radius of a face of the searched
+    volume. Until 2026-10-29, (thickness - box) / sqrt(12), which is narrower.
+    Recorded so the observed spread can be read against it without knowing
+    either size."""
     search_sigma: float | None = Field(default=None, gt=0.0)
     """The noise scale of the search, as the matcher measured it.
 
