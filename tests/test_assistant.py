@@ -17,13 +17,15 @@ ASSISTANT = ROOT / "assistant"
 SKILLS = sorted((ASSISTANT / "plugin" / "skills").glob("*/SKILL.md"))
 
 # Stands in for claude: answers --version, and otherwise notes its arguments, the
-# directory it runs in and the two CRYOET_ variables, one per line.
+# directory it runs in and the variables the launcher sets, one per line.
 CLAUDE = """#!/bin/bash
 if [[ "$1" == "--version" ]]; then echo "9.9.9 (Claude Code)"; exit 0; fi
 {
     echo "cwd=$PWD"
     echo "CRYOET_ASSISTANT=${CRYOET_ASSISTANT:-}"
     echo "CRYOET_ASSISTANT_MODEL=${CRYOET_ASSISTANT_MODEL:-}"
+    echo "ENABLE_CLAUDEAI_MCP_SERVERS=${ENABLE_CLAUDEAI_MCP_SERVERS:-}"
+    echo "CLAUDE_CODE_AUTO_CONNECT_IDE=${CLAUDE_CODE_AUTO_CONNECT_IDE:-}"
     for arg in "$@"; do printf 'arg=%s\\0' "$arg"; done
 } > "$CLAUDE_CALLS"
 """
@@ -58,7 +60,9 @@ def _noted(calls: Path) -> tuple[dict[str, str], list[str]]:
     return fields, args
 
 
-def test_the_launcher_starts_claude_with_the_assistants_setup(claude, tmp_path):
+def test_the_launcher_starts_claude_with_the_assistants_setup(claude, tmp_path, monkeypatch):
+    # The person's own choice of editor connection does not carry over.
+    monkeypatch.setenv("CLAUDE_CODE_AUTO_CONNECT_IDE", "true")
     # From anywhere: it runs in the repository root, where the scripts' paths start.
     result = _launch("-p", "where do we stand?", cwd=tmp_path)
     assert result.returncode == 0, result.stderr
@@ -67,7 +71,11 @@ def test_the_launcher_starts_claude_with_the_assistants_setup(claude, tmp_path):
         "cwd": str(ROOT),
         "CRYOET_ASSISTANT": "cryoet-assistant; claude-code 9.9.9",
         "CRYOET_ASSISTANT_MODEL": "claude-opus-5-5",
+        "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+        "CLAUDE_CODE_AUTO_CONNECT_IDE": "false",
     }
+    # No MCP server from the person's settings, plugins or account.
+    assert "--strict-mcp-config" in args and "--mcp-config" not in args
     expected = {
         "--model": "claude-opus-5-5",
         "--setting-sources": "user",
@@ -111,6 +119,9 @@ def test_the_journal_names_the_model_the_session_runs(claude, monkeypatch, args,
         ["--plugin-dir", "elsewhere"],
         ["--safe-mode"],
         ["--bare"],
+        ["--mcp-config", "servers.json"],
+        ["--mcp-config=servers.json"],
+        ["--ide"],
         ["--model", "opus"],
     ],
 )
@@ -132,8 +143,16 @@ def test_print_command_runs_nothing(claude):
     result = _launch("--print-command", "-c", cwd=ROOT)
     assert result.returncode == 0 and not claude.exists()
     assert "CRYOET_ASSISTANT_MODEL=claude-opus-5-5" in result.stdout
+    assert "CLAUDE_CODE_AUTO_CONNECT_IDE=false" in result.stdout
+    assert " --strict-mcp-config" in result.stdout
     assert '--append-system-prompt "$(cat assistant/instructions.md)"' in result.stdout
     assert result.stdout.rstrip().endswith(" -c")
+
+
+def test_print_command_adds_no_empty_argument(claude):
+    result = _launch("--print-command", cwd=ROOT)
+    assert result.returncode == 0
+    assert result.stdout.rstrip().endswith("--name cryoet-assistant")
 
 
 def _rules() -> dict[str, list[str]]:
@@ -202,6 +221,9 @@ def _guard(command: str, tool: str = "Bash") -> subprocess.CompletedProcess:
         "rm outputs/ryr1/journal.jsonl",
         "cp edited.jsonl outputs/ryr1/journal.jsonl",
         "echo 'a quote that does not close; sbatch x",
+        "command sbatch x",
+        "command -p sbatch x",
+        "command -v ls && sbatch x",
     ],
 )
 def test_the_guard_blocks_jobs_batch_scripts_and_journal_writes(command):
@@ -219,6 +241,10 @@ def test_the_guard_blocks_jobs_batch_scripts_and_journal_writes(command):
         "grep sbatch scripts/lane.sbatch",
         "squeue -u $USER",
         "sacct -j 3670792 -o JobID,State",
+        # Where sbatch is, which runs nothing; blocked in the first session.
+        "command -v sbatch",
+        "command -V srun",
+        "type sbatch",
     ],
 )
 def test_the_guard_lets_the_rest_through(command):

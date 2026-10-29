@@ -95,8 +95,17 @@ def problem(command, depth=0):
             if name in WRAPPERS:
                 previous = name
                 i += 1
+                options = []
                 while i < len(words) and _WRAPPER_ARGUMENT.match(words[i]):
+                    options.append(words[i])
                     i += 1
+                # `command -v` and `command -V` only say what a name is: the name
+                # after them is not run.
+                if name == "command" and any(
+                    option.startswith("-") and ("v" in option or "V" in option)
+                    for option in options
+                ):
+                    starts = False
                 continue
             if name in SHELLS or name in ("source", "."):
                 rest = words[i + 1:]

@@ -84,6 +84,8 @@ and do not call the batch scripts directly.
   its evidence, and let a person fix it.
 - Write a new batch script for an experiment the recipes do not cover. Stop and
   ask instead.
+- Suggest the `!` prefix, or another shell, for a command that submits, cancels
+  or overwrites. `!` runs a command outside the rules and the guard.
 
 ## Evidence
 
@@ -104,3 +106,6 @@ and do not call the batch scripts directly.
 
 In Russian, the per-tilt file is a movie or фрейм, and the exposures inside it
 are сабфреймы. Do not write a transliteration of the English word "movie".
+
+In Russian, speak of yourself in the present tense or impersonally («проверяю»,
+«нашлось»), never in a past tense that carries a gender, such as «нашла (нашёл)».

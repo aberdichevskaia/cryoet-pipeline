@@ -57,10 +57,16 @@ or another client can read as well.
   far more.
 - **The model is passed as a full ID.** Switching it inside a session (`/model`)
   leaves the journal naming the first one, so start a new session instead.
+- **No MCP servers and no editor.** `--strict-mcp-config` and
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false` keep out the MCP servers of your own
+  settings, your plugins and your claude.ai account. `CLAUDE_CODE_AUTO_CONNECT_IDE=false`
+  keeps out the editor's, such as VS Code's over SSH. The first session in
+  Munich had 21 such servers, none of them for the pipeline, and each person's
+  set differs. `/mcp` in a session should list none.
 - **Options that would undo this are refused.** These include
   `--dangerously-skip-permissions`, `--permission-mode`, `--settings`,
-  `--allowed-tools`, `--system-prompt`, `--plugin-dir`, `--safe-mode` and
-  `--bare`.
+  `--allowed-tools`, `--system-prompt`, `--plugin-dir`, `--mcp-config`, `--ide`,
+  `--safe-mode` and `--bare`.
 
 ## Two layers, neither of them a sandbox
 
@@ -98,10 +104,11 @@ What the rules do not cover:
 
 ## Not done yet
 
-- **No session has answered yet.** On the Mac, Claude Code 2.1.231 reads the
-  settings without a warning, but its command-line client there is not signed
-  in. On the cluster, the Claude Code version is unknown, and so is whether
-  your seat includes Claude Code.
+- **One session so far.** It ran on 28 October 2026 on a Munich login node,
+  with Claude Code 2.1.312 and a Helmholtz Munich Enterprise seat, which
+  includes Claude Code. The rules, the guard and the skill worked, and it read a
+  picking failure right. The MCP and editor switches above came after it, and
+  are not yet checked there.
 - **Two of the four planned skills are missing:** reading a data folder
   ([docs/agent/data_folders.md](../docs/agent/data_folders.md) is its
   knowledge), and proposing a template from EMDB (roadmap section 23).

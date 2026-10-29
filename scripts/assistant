@@ -19,6 +19,13 @@
 #                           assistant/guard.py on every shell command
 #   --plugin-dir            assistant/plugin: the skills
 #   --append-system-prompt  assistant/instructions.md, in every turn
+#   --strict-mcp-config     no MCP servers: none from the person's settings or
+#                           plugins, and (ENABLE_CLAUDEAI_MCP_SERVERS=false) none
+#                           of their claude.ai account's connectors. Each person
+#                           has a different set, and none is the pipeline's
+#   CLAUDE_CODE_AUTO_CONNECT_IDE=false
+#                           no editor either (VS Code over SSH, say): its tools
+#                           are not shell commands, so the guard never sees them
 #
 # Other options pass on to claude, except the ones that would undo the above.
 # Switching the model inside a session (/model) leaves CRYOET_ASSISTANT_MODEL
@@ -56,7 +63,8 @@ while (($#)); do
         --setting-sources | --setting-sources=* | --allowedTools | --allowedTools=* | \
         --allowed-tools | --allowed-tools=* | --tools | --tools=* | \
         --system-prompt | --system-prompt=* | --system-prompt-file | --system-prompt-file=* | \
-        --plugin-dir | --plugin-dir=* | --plugin-url | --plugin-url=* | --safe-mode | --bare)
+        --plugin-dir | --plugin-dir=* | --plugin-url | --plugin-url=* | --safe-mode | --bare | \
+        --mcp-config | --mcp-config=* | --ide)
             echo "scripts/assistant: ${1%%=*} would undo what the assistant is started with" \
                 "(see the header of scripts/assistant); run claude itself for that" >&2
             exit 2
@@ -87,6 +95,8 @@ fi
 version=$("$claude" --version 2>/dev/null | head -n 1 || true)
 export CRYOET_ASSISTANT="cryoet-assistant; claude-code ${version%% *}"
 export CRYOET_ASSISTANT_MODEL=$model
+export ENABLE_CLAUDEAI_MCP_SERVERS=false
+export CLAUDE_CODE_AUTO_CONNECT_IDE=false
 
 cd "$REPO"
 options=(
@@ -94,14 +104,18 @@ options=(
     --setting-sources user
     --settings "$REPO/assistant/settings.json"
     --plugin-dir "$REPO/assistant/plugin"
+    --strict-mcp-config
 )
 if ((print_only)); then
-    printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\ncd %q\n' \
-        "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL" "$REPO"
+    printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
+        "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"
+    printf 'ENABLE_CLAUDEAI_MCP_SERVERS=false\nCLAUDE_CODE_AUTO_CONNECT_IDE=false\ncd %q\n' "$REPO"
     printf '%q' "$claude"
     printf ' %q' "${options[@]}"
     printf ' --append-system-prompt "$(cat assistant/instructions.md)" --name cryoet-assistant'
-    printf ' %q' ${passed[@]+"${passed[@]}"}
+    # printf repeats its format at least once, so with nothing passed on it
+    # would print an empty argument.
+    if ((${#passed[@]})); then printf ' %q' "${passed[@]}"; fi
     printf '\n'
     exit 0
 fi
