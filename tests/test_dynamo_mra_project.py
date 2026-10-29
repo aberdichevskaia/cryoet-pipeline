@@ -177,3 +177,70 @@ def test_the_run_is_written_as_dynamo_writes_a_project(tmp_path: Path) -> None:
     assert (tmp_path / "ours_numpy" / "log.txt").read_text() == "iteration 1 ok\niteration 2 ok\n"
     with pytest.raises(FileExistsError):
         run_mra_project(plan, tmp_path / "ours_numpy", log=lambda _: None)
+
+
+def _files(run: Path) -> dict[str, bytes]:
+    """Every file a run wrote, but its name and times in the cards, and the MAT file,
+    whose header says when it was written."""
+
+    files = {}
+    for path in sorted(run.rglob("*")):
+        if path.is_file() and path.suffix != ".mat":
+            data = path.read_bytes()
+            if path.suffix == ".card":
+                data = b"".join(line for line in data.splitlines(keepends=True) if not line
+                                .startswith((b"name_project", b"file_template", b"time_")))
+            files[str(path.relative_to(run))] = data
+    return files
+
+
+def test_a_run_stopped_part_way_carries_on_and_ends_as_the_unstopped_one(tmp_path: Path) -> None:
+    project, _ = _project(tmp_path)
+    plan = plan_from_dynamo(project)
+    run_mra_project(plan, tmp_path / "whole", log=lambda _: None)
+
+    # Stopped in iteration 2's search, as a job out of time is, after an earlier
+    # attempt at iteration 2 had written part of it.
+    calls = []
+
+    def stopping(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 2:  # a search per channel and iteration
+            raise KeyboardInterrupt
+        return core.search_particles(*args, **kwargs)
+
+    stopped = tmp_path / "stopped"
+    with pytest.raises(KeyboardInterrupt):
+        run_mra_project(plan, stopped, search=stopping, log=lambda _: None)
+    assert (stopped / "log.txt").read_text() == "iteration 1 ok\n"
+    stale = stopped / "results" / "ite_0002" / "averages" / "average_ref_003_ite_0002.em"
+    write_em(stale, np.ones((BOX,) * 3, dtype=np.float32))
+
+    lines: list[str] = []
+    run_mra_project(plan, stopped, log=lines.append, resume=True)
+    assert ("stopped: 1 of 2 iterations finished before, the last by cryoet-pipeline, numpy; "
+            "carrying on from iteration 2") in lines
+    assert not stale.exists()
+    assert _files(stopped) == _files(tmp_path / "whole")
+
+
+def test_a_run_carries_on_into_a_longer_plan_and_not_into_another(tmp_path: Path) -> None:
+    project, _ = _project(tmp_path)
+    run = tmp_path / "ours"
+    run_mra_project(plan_from_dynamo(project, iterations=1), run, log=lambda _: None)
+    lines: list[str] = []
+    run_mra_project(plan_from_dynamo(project, iterations=1), run, log=lines.append, resume=True)
+    assert lines == ["ours: all 1 iterations finished before; nothing to compute"]
+
+    run_mra_project(plan_from_dynamo(project), run, log=lambda _: None, resume=True)
+    assert (run / "log.txt").read_text() == "iteration 1 ok\niteration 2 ok\n"
+    assert '"iterations": 2' in (run / "settings" / "mirrors.json").read_text()
+    run_mra_project(plan_from_dynamo(project), tmp_path / "whole", log=lambda _: None)
+    assert _files(run) == _files(tmp_path / "whole")
+
+    # The source re-planned after the run: its first iteration's band is another.
+    card = project / "cards" / "ite_0001" / "card_ite_ite_0001.card"
+    card.write_text(card.read_text().replace("low=6;", "low=7;"))
+    with pytest.raises(ValueError, match=r"finished 2 iteration\(s\) of another plan .*"
+                                         r"iteration 1's low\); give the run a new name"):
+        run_mra_project(plan_from_dynamo(project), run, log=lambda _: None, resume=True)

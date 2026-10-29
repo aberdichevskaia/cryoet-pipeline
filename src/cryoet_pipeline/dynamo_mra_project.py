@@ -24,6 +24,11 @@ writes a project folder laid out as Dynamo 1.1.511 lays out its own:
   `cards/ite_N/card_ite_ite_N.card` (the iteration's search and its times) and
   `log.txt` with `iteration N ok` after each one.
 
+Each iteration starts from the tables and averages the one before it wrote, as
+Dynamo's iterations start from theirs (the averages float32, as Dynamo writes them
+and reads them back), so a run stopped part-way (a job out of time) carries on from
+its last `iteration N ok` and ends as the unstopped run would have ended.
+
 So the classification report, `compare_dynamo_classes.py` and
 `class_orientations.py` read it as they read Dynamo's, and the two runs differ
 only in the code that searched, assigned and averaged: Dynamo's, or ours on the
@@ -56,6 +61,7 @@ from cryoet_pipeline.reports.dynamo_project import (
     read_card,
     read_em,
     read_map,
+    read_table,
     write_em,
 )
 
@@ -180,10 +186,22 @@ def _particle(folder: Path, tag: int) -> np.ndarray:
     raise FileNotFoundError(f"no particle {tag} in {folder}")
 
 
+def _table_text(rows: np.ndarray) -> str:
+    return "\n".join(" ".join(f"{value:.12g}" for value in row) for row in rows) + "\n"
+
+
 def _write_table(path: Path, rows: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(" ".join(f"{value:.12g}" for value in row) for row in rows)
-                    + "\n")
+    path.write_text(_table_text(rows))
+
+
+def _starting_rows(plan: MraPlan, channel: int) -> np.ndarray:
+    """The starting table as channel `channel`'s copy carries it: its number in column 34."""
+
+    rows = plan.table.copy()
+    if rows.shape[1] > CLASS:
+        rows[:, CLASS] = channel
+    return rows
 
 
 def _card_text(values: dict[str, Any]) -> str:
@@ -242,60 +260,157 @@ def run_mra_project(
     workers: int = 1,
     spacing: float | None = None,
     log: Callable[[str], None] = print,
+    resume: bool = False,
 ) -> None:
     """Run the plan's iterations with the port and write them as a Dynamo project at `out`.
 
     `search` is the kernel, as `dynamo_mra.mra_iteration` takes it; `destination`
     says in the project's cards which one ran. Each iteration is written when it
-    finishes, so a report can read a run that is still going.
+    finishes, so a report can read a run that is still going. With `resume`, a run
+    already at `out` carries on from its last finished iteration, once it is shown
+    to follow this plan (`_finished`); one that finished them all computes nothing.
     """
 
     out = out.resolve()
-    if out.exists():
-        raise FileExistsError(f"{out} exists; give the run a new name")
-    name, base = out.name, out.parent
-    box = plan.soft_mask.shape[0]
-    tags = plan.table[:, TAG].astype(int)
-    log(f"{name}: {len(tags):,} particles from {plan.particles}, channels "
-        f"{sorted(plan.references)}, {len(plan.settings)} iterations, {destination}")
-    particles = [_particle(plan.particles, int(tag)) for tag in tags]
-    tilt_ranges = [(float(row[13]), float(row[14])) for row in plan.table]
-
-    seeds = base / f"{name}_seeds"
-    seeds.mkdir(parents=True)
-    for channel, reference in plan.references.items():
-        write_em(seeds / f"template_initial_ref_{channel:03d}.em", reference)
-        write_em(out / "settings" / f"template_initial_ref_{channel:03d}.em", reference)
-    (seeds / "seed_kinds.txt").write_text("".join(f"{line}\n" for line in plan.reference_notes))
-    write_em(out / "settings" / "mask.em", plan.soft_mask)
-    (out / "settings" / "mirrors.json").write_text(json.dumps(
-        {"source": str(plan.source), "iterations": len(plan.settings)}, indent=1) + "\n")
-    wrote_vpr = _write_vpr(out / "settings" / "virtual_project.mat", plan, name, destination,
-                           box, spacing)
-    starting = out / "results" / "ite_0001" / "starting_values"
-    for channel in plan.references:
-        rows = plan.table.copy()
-        if rows.shape[1] > CLASS:
-            rows[:, CLASS] = channel
-        _write_table(starting / f"starting_table_ref_{channel:03d}_ite_0001.tbl", rows)
-    if not wrote_vpr:
-        log("no scipy: settings/virtual_project.mat not written; the report shows round 1 only")
-
     try:
-        _iterate(plan, out, particles, tilt_ranges, search, destination, workers, log)
+        done = 0
+        if out.exists():
+            if not resume:
+                raise FileExistsError(f"{out} exists; give the run a new name, or resume it")
+            done = _finished(plan, out)
+        name = out.name
+        if done >= len(plan.settings):
+            log(f"{name}: all {len(plan.settings)} iterations finished before; nothing to compute")
+            return
+        tags = plan.table[:, TAG].astype(int)
+        log(f"{name}: {len(tags):,} particles from {plan.particles}, channels "
+            f"{sorted(plan.references)}, {len(plan.settings)} iterations, {destination}")
+        if done:
+            last = read_card(out / "cards" / f"ite_{done:04d}" / f"card_ite_ite_{done:04d}.card")
+            log(f"{name}: {done} of {len(plan.settings)} iterations finished before, the last "
+                f"by {last.get('destination', '?')}; carrying on from iteration {done + 1}")
+        particles = [_particle(plan.particles, int(tag)) for tag in tags]
+        tilt_ranges = [(float(row[13]), float(row[14])) for row in plan.table]
+        if not done:
+            _write_start(plan, out, destination, spacing, log)
+        elif _recorded_iterations(out) != len(plan.settings):
+            _write_record(plan, out, destination, spacing, log)  # a plan grown longer
+        _iterate(plan, out, particles, tilt_ranges, search, destination, workers, log, done + 1)
     finally:
         close = getattr(search, "close", None)
         if callable(close):
             close()
 
 
+def _write_start(plan: MraPlan, out: Path, destination: str, spacing: float | None,
+                 log: Callable[[str], None]) -> None:
+    """What the run starts from: the seeds, the mask, the starting tables, its record."""
+
+    seeds = out.parent / f"{out.name}_seeds"
+    seeds.mkdir(parents=True, exist_ok=True)
+    for channel, reference in plan.references.items():
+        write_em(seeds / f"template_initial_ref_{channel:03d}.em", reference)
+        write_em(out / "settings" / f"template_initial_ref_{channel:03d}.em", reference)
+    (seeds / "seed_kinds.txt").write_text("".join(f"{line}\n" for line in plan.reference_notes))
+    write_em(out / "settings" / "mask.em", plan.soft_mask)
+    starting = out / "results" / "ite_0001" / "starting_values"
+    for channel in plan.references:
+        _write_table(starting / f"starting_table_ref_{channel:03d}_ite_0001.tbl",
+                     _starting_rows(plan, channel))
+    _write_record(plan, out, destination, spacing, log)
+
+
+def _write_record(plan: MraPlan, out: Path, destination: str, spacing: float | None,
+                  log: Callable[[str], None]) -> None:
+    """`settings/mirrors.json`, the source and its length, and the virtual project."""
+
+    (out / "settings" / "mirrors.json").write_text(json.dumps(
+        {"source": str(plan.source), "iterations": len(plan.settings)}, indent=1) + "\n")
+    if not _write_vpr(out / "settings" / "virtual_project.mat", plan, out.name, destination,
+                      plan.soft_mask.shape[0], spacing):
+        log("no scipy: settings/virtual_project.mat not written; the report shows round 1 only")
+
+
+def _recorded_iterations(out: Path) -> int | None:
+    path = out / "settings" / "mirrors.json"
+    return json.loads(path.read_text()).get("iterations") if path.exists() else None
+
+
+def _finished(plan: MraPlan, out: Path) -> int:
+    """How many iterations the run at `out` finished, refused unless it follows `plan`.
+
+    An iteration is finished when `log.txt` says so, its last write. A run that
+    finished none starts again. One that finished some must have started from the
+    plan's seeds, mask and starting table, and searched as the plan's cards say in
+    every iteration it finished; it may stop short of the plan, or run past it.
+    """
+
+    path = out / "log.txt"
+    lines = path.read_text().splitlines() if path.exists() else []
+    done = 0
+    while f"iteration {done + 1} ok" in lines:
+        done += 1
+    if not done:
+        return 0
+    box = plan.soft_mask.shape[0]
+    settings = out / "settings"
+    differ = []
+    seeds = {int(seed.stem.rsplit("_", 1)[1]): seed
+             for seed in sorted(settings.glob("template_initial_ref_*.em"))}
+    if sorted(seeds) != sorted(plan.references):
+        differ.append(f"channels {sorted(seeds)}, the plan's {sorted(plan.references)}")
+    elif any(not np.array_equal(read_em(seed), plan.references[channel].astype(np.float32))
+             for channel, seed in seeds.items()):
+        differ.append("seeds")
+    mask = settings / "mask.em"
+    if not mask.exists() or not np.array_equal(read_em(mask),
+                                                plan.soft_mask.astype(np.float32)):
+        differ.append("mask")
+    starting = out / "results" / "ite_0001" / "starting_values"
+    for channel in plan.references:
+        table = starting / f"starting_table_ref_{channel:03d}_ite_0001.tbl"
+        if not table.exists() or table.read_text() != _table_text(_starting_rows(plan, channel)):
+            differ.append("starting table")
+            break
+    for number, searched in enumerate(plan.settings[:done], 1):
+        card_path = out / "cards" / f"ite_{number:04d}" / f"card_ite_ite_{number:04d}.card"
+        card = read_card(card_path) if card_path.exists() else {}
+        expected = {**_search_fields(searched, box), "mra": int(plan.mra[number - 1]),
+                    "folder_data": plan.particles.name}
+        changed = [key for key, value in expected.items() if card.get(key) != str(value)]
+        if changed:
+            differ.append(f"iteration {number}'s {', '.join(changed)}")
+    if differ:
+        raise ValueError(f"{out} finished {done} iteration(s) of another plan than "
+                         f"{plan.source}'s ({'; '.join(differ)}); give the run a new name")
+    return done
+
+
+def _written(out: Path, number: int) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
+    """The references and tables iteration `number` left the next one, read as written."""
+
+    averages = out / "results" / f"ite_{number:04d}" / "averages"
+    following = (out / "results" / f"ite_{number + 1:04d}"
+                 / f"currently_surviving_references_ite_{number + 1:04d}.txt")
+    channels = [int(token) for token in following.read_text().split()]
+    references, tables = {}, {}
+    for channel in channels:
+        stem = f"ref_{channel:03d}_ite_{number:04d}"
+        references[channel] = read_em(averages / f"average_{stem}.em").astype(float)
+        tables[channel] = read_table(averages / f"refined_table_{stem}.tbl")
+    return references, tables
+
+
 def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
              tilt_ranges: list[tuple[float, float]], search: Callable[..., list],
-             destination: str, workers: int, log: Callable[[str], None]) -> None:
+             destination: str, workers: int, log: Callable[[str], None], first: int) -> None:
     name = out.name
     box = plan.soft_mask.shape[0]
-    references = dict(plan.references)
-    tables = {channel: plan.table.copy() for channel in references}
+    if first == 1:
+        references = dict(plan.references)
+        tables = {channel: plan.table.copy() for channel in references}
+    else:
+        references, tables = _written(out, first - 1)
     searching = 0.0
 
     def timed_search(*args: Any, **kwargs: Any) -> list:
@@ -308,8 +423,11 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
         finally:
             searching += time.perf_counter() - clock
 
-    for number, settings in enumerate(plan.settings, 1):
+    for number, settings in enumerate(plan.settings[first - 1:], first):
         here = out / "results" / f"ite_{number:04d}"
+        averages = here / "averages"
+        for stale in averages.glob(f"*_ite_{number:04d}.*"):  # an attempt stopped part-way
+            stale.unlink()
         here.mkdir(parents=True, exist_ok=True)
         (here / f"currently_surviving_references_ite_{number:04d}.txt").write_text(
             " ".join(str(channel) for channel in sorted(references)) + "\n")
@@ -323,7 +441,6 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
                              assembly="mra" if plan.mra[number - 1] else "project")
         seconds = time.perf_counter() - clock
         finished = datetime.now()
-        averages = here / "averages"
         for channel in step.computed:
             found = step.searches[channel]
             rows = tables[channel].copy()
@@ -332,7 +449,6 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
             rows[:, 3:6], rows[:, 6:9], rows[:, CC] = found.shifts, found.angles, found.correlations
             rows[:, AVERAGED] = (step.assignment == channel).astype(float)
             rows[:, CLASS] = step.assignment
-            tables[channel] = rows
             _write_table(averages / f"refined_table_ref_{channel:03d}_ite_{number:04d}.tbl",
                          rows)
         for channel in step.surviving:
@@ -359,8 +475,9 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
                           for channel in step.surviving)
         log(f"iteration {number}: {sizes}; {seconds / 60:.1f} min, "
             f"{searching / 60:.1f} of it searching")
-        references = {channel: step.averages[channel].average for channel in step.surviving}
-        tables = {channel: tables[channel] for channel in step.surviving}
+        # The next iteration starts from the files, as Dynamo's does and as a run
+        # carried on after a stop must: the averages float32, the tables as written.
+        references, tables = _written(out, number)
 
 
 def torch_search(device: str, dtype: str, chunk: int, devices: int = 1,

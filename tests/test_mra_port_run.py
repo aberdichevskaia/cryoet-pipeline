@@ -34,6 +34,10 @@ def test_a_project_only_set_up_is_computed_with_nothing_to_compare(tmp_path: Pat
                          r"\d+\.\d of it searching$", result.stdout, re.MULTILINE), result.stdout
     again = _run(str(project), "--compare-only")
     assert again.returncode != 0 and "nothing to compare" in again.stderr
+    # Submitted again, as a job out of time is: the run is there, finished.
+    again = _run(str(project), "--device", "numpy")
+    assert again.returncode == 0, again.stderr
+    assert "mra_t_port: all 2 iterations finished before; nothing to compute" in again.stdout
 
 
 def test_a_computed_project_is_run_again_and_compared(tmp_path: Path) -> None:

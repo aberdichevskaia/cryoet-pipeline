@@ -29,6 +29,15 @@ followed, and there is nothing to compare. That is how the pipeline's own runs a
 made. A global round runs at the card's dim, downsampled as Dynamo's CPU path does
 it (GLOBAL_FULL_BOX=1 at the setup searches it at the full box instead).
 
+A run already under --name carries on from its last finished iteration, so a job
+that ran out of time is submitted again as it was; the run must follow the same
+plan (the same seeds, mask, starting table and searches in every iteration it
+finished), or it is refused. Each iteration starts from what the one before it
+wrote, as Dynamo's do, so the run carried on ends as the unstopped one would have,
+bit for bit wherever the kernel repeats itself bit for bit (the numpy one does, and
+so did the two cone5 runs on A40s). A run that finished every iteration computes
+nothing and is compared again.
+
 The comparison of classes alone, with chance levels, is
 scripts/compare_dynamo_classes.py; the report, scripts/dynamo_classification_report.py.
 Disposable, like the rest of scripts/.
@@ -149,7 +158,7 @@ def main() -> int:
             if args.per_gpu > 1:
                 destination += f", {args.per_gpu} processes each"
         run_mra_project(plan, out, search=search, destination=destination,
-                        workers=args.workers, spacing=spacing)
+                        workers=args.workers, spacing=spacing, resume=True)
     if not computed:
         print(f"{project.name} was set up and not computed by Dynamo: nothing to compare")
         return 0
