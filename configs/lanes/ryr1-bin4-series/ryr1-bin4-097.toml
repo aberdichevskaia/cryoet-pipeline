@@ -1,0 +1,263 @@
+# One-series copy of configs/lanes/ryr1-bin4.toml: 097 only, so that the five
+# series pick side by side, one submission each. Its search is estimated at
+# ~18 h (see the gpu stage), hence 36 h.
+# Lane D — RyR1 in native membranes (vm_actmix_ryr1, MDC Berlin), from SerialEM
+# TIFF frames without mdocs, with gold beads and membrane segmentation; tomograms
+# at 6.72 A/px. Aimed at a ~20 A average of 5 tomograms, not at high resolution.
+#
+# What is known about the data, and from where (2026-10-14):
+#   frames  5 series (039 096 097 125 161) x 29 tilts, -42..+42 deg in 3-degree
+#           steps. The tilt number in the names follows the angle, not the
+#           acquisition order, so the dose order is not in them.
+#   files   SerialEM TIFF, K3 super-resolution 11520 x 8184, 10 subframes, bytes,
+#           not gain-normalised. `header` reads 0.84 A/px from the resolution
+#           tags, and init reads the same. Their title says "r/f 6": SerialEM
+#           saved them flipped upside down relative to the camera, so a gain
+#           reference straight from the camera needs that flip too (IMOD
+#           alignframesGuide and man/alignframes). gain.mrc sits with the frames;
+#           the frames pattern does not match it, and init skips it.
+#   scope   most likely the setup of EMD-54612 (Mikirtumov et al., "Ligand-induced
+#           activation of RyR1 in native membranes"): same lab, the same
+#           activating mixture, and its map is at 1.68 A/px. That entry records a
+#           TFS Krios at 300 kV, Cs 2.7 mm, a K3 behind a BioQuantum, 2-7 um
+#           defocus and 4.17 e/A^2 per tilt. Not confirmed for these files.
+#
+# Pixel sizes: movies 0.84 A; MotionCor3 bins the sums 2x ([motion] ftbin), so
+# the tilt stack is at 1.68 A, the physical K3 pixel, and every binning below is
+# relative to that. At 0.84 A the 5 series would need ~110 GB of sums and stacks;
+# at 1.68 A about a quarter of it.
+#
+# Values marked "starting value" are judgement calls for this first run, not
+# measurements.
+
+[lane]
+name = "ryr1-bin4"
+input = "frames"          # movies -> MotionCor3; there are no assembled stacks
+variant = "bin4"
+
+[run]
+project = "outputs/ryr1"
+series = ["097"]
+
+# MDC partitions, from `sinfo` on 2026-10-14: normal (the default, 7 days) and
+# gpu (7 days). gpu mixes T4 (15 GB), V100 (compute 7.0), A40, H100, H200 and B300
+# nodes; both first gpu jobs landed on a V100 and lane.sbatch's preflight refused
+# it, as MemBrain-seg needs >= 7.5. So the GPU stages ask for an A40 (8.6, 45 GB),
+# of which there are over twenty nodes.
+[[run.stage]]
+name = "motion"
+from = "prepare-tilt-series"
+until = "prepare-tilt-series"
+time = "3:00:00"
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
+
+# Done on 2026-10-14 and shared with ryr1-bin8; not to be re-run from this file,
+# because 161 aligned only with tracking_binning = 3 (see [fiducials]).
+[[run.stage]]
+name = "align"
+from = "align-tilt-series"
+until = "fine-align-tilt-series"
+time = "12:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+# The bin2 CTF fit stack and its CTF model carry no variant label, so they are
+# shared with ryr1-bin8, whose rerun from build-ctf-stack rebuilt them uncropped,
+# with CTFFIND 5 and a +-10000 A window. Not to be re-run from this file: its
+# [ctf] has neither, and would replace that model with the one that stopped at
+# ~12 deg.
+[[run.stage]]
+name = "ctf"
+from = "build-ctf-stack"
+until = "estimate-ctf"
+time = "8:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+# The rerun starts here: submit_lanes.py --from-stage cpu --overwrite. The
+# aligned stacks of 2026-10-14 were cropped (1440 x 1023 where the turned frame
+# is 1023 x 1440, see final_stack._output_size_yx), and so were the tomograms
+# made from them. In the bin4 report the aligned stack and the tomogram took
+# under a minute a series.
+[[run.stage]]
+name = "cpu"
+from = "build-final-aligned-stack"
+until = "reconstruct-tomogram"
+time = "4:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+# Measured on 2026-10-14 (the bin4 report), pytom's search on an A40: 039 4 h 49,
+# 096 5 h 21, 097 6 h 9, 125 4 h 23 and 161 7 h 49 min, 28.5 h one after another;
+# MemBrain-seg 4-6 min and the template ~1 min a series. Those searches had
+# 400 A and a 30 A low-pass, 4.30 deg steps, ~49,000 rotations with C4. The
+# values in [pick] now give 2.94 deg and ~148,000, x3.0: ~85 h for all five and
+# ~23 h for 161 alone, scaled from those times, not measured. One job over all
+# five gets 5 days (the gpu partition allows 7). The one-series copies in
+# ryr1-bin4-series/ run side by side at 36 h each.
+[[run.stage]]
+name = "gpu"
+from = "segment-tomogram"
+until = "extract-particles"
+time = "1-12:00:00"
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
+
+[data]
+frames = "/fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5"
+# tomogram_039_001_-42.0.tif ... tomogram_039_029_+42.0.tif. The angle group takes
+# the "+" of the positive tilts and the "-00.0" of the zero one.
+frames_pattern = 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
+# The pixel size comes from the TIFF resolution tags (0.84 A); set
+# pixel_size_angstrom only to override them.
+
+[motion]
+backend = "motioncor3"
+# Starting value: 7 x 5 patches for the K3's 1.4:1 frame (gag-bin8 used 5 x 5 on
+# a nearly square K2 frame).
+patch_x = 7
+patch_y = 5
+gpu = 0
+# MRC rather than the Zarr of "working", so that the stack opens in 3dmod: the
+# tilt axis is read off it by eye (3dmod -b 4 outputs/ryr1/stacks/039/039.st).
+# At 1.68 A the sums and stacks are ~30 GB either way.
+storage_policy = "debug"
+# Super-resolution to the physical pixel: 0.84 -> 1.68 A.
+ftbin = 2
+# Required: without a gain reference MotionCor3 sums unnormalised frames without
+# complaint. It is applied before the binning, so it stays at the
+# super-resolution size.
+gain_reference = "/fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5/gain.mrc"
+# Its orientation, measured 2026-10-14 on tomogram_039_015 with MotionCor3
+# -Align 0 and both flips. The map varies by 12% from pixel to pixel, but it is
+# nearly the same flipped upside down (high-pass correlation with its own flipped
+# copy +0.80, its pattern running mostly along columns), so the choice changes
+# little. -FlipGain 1 gave the flatter sum (pixel-level spread 0.98255 against
+# 0.98368 for 0; same frames, only the flip differs), as "r/f 6" predicts.
+gain_flip = 1
+
+[binning]
+# Relative to the 1.68 A stack.
+#   bin2  3.36 A/px   Nyquist  6.7 A   the CTF fit: Thon rings well past the
+#                                      first zeros, which is what a 20 A
+#                                      average needs corrected       <- fit here
+#   bin4  6.72 A/px   Nyquist 13.4 A   the tomogram: room above the 20 A aim;
+#                                      RyR1's ~400 A diagonal is ~60 px
+ctf_fit = 2
+tomogram = 4
+
+[align]
+binning = 4
+min_std_ratio = 0.2
+# The tilt-axis rotation, in degrees, as IMOD counts it from the Y axis (an mdoc
+# header's "Tilt axis angle", RotationAngle - 90). There are no mdocs. Read by eye
+# on the motion-corrected stack of 039, the beads move vertically, so the axis is
+# horizontal; 039, 096, 097 and 125 were aligned from 90, and tiltalign (RotOption
+# 1) solved 84.0-84.1 on every one of them (2026-10-14). This is that solution,
+# the better start for 161 and any rerun.
+# The sign is NOT known: 84 and -96 are the same line in opposite directions,
+# and they give mirror-image tomograms. Check the hand on the first tomograms
+# (RyR1 is chiral: its template should match better than its mirror image), and
+# if it is wrong, set -96 and rerun from the cpu stage.
+tilt_axis_angle = 84.0
+
+[qc_coarse]
+preview_binning = 8
+residual_warning_px = 2.0
+
+[fiducials]
+# Gold is present. Its size is assumed to be the usual 10 nm: check the seeded
+# beads on the first series. At tracking binning 2 (3.36 A/px) a 10 nm bead is
+# ~30 px, close to the 37 px gag-bin8 tracks.
+seed_backend = "imod-autofidseed"
+track_backend = "imod-beadtrack"
+# 161 is the exception: at tracking binning 2 IMOD 5.1.12's beadtrack, run by
+# autofidseed, segfaults on it (status 139, on two nodes, 2026-10-14), while the
+# other four series track. At binning 3 (5.04 A/px, a ~20 px bead) 161 seeds,
+# tracks and aligns with every QC passing. A lane cannot set a value per series,
+# so 161's cpu stage ran from a copy of this file differing only in that line.
+tracking_binning = 2
+fiducial_diameter_nm = 10.0
+
+[fine_align]
+# Beads on both surfaces: the two-plane fit, as in gag-bin8.
+robust_fitting = true
+auto_prune_outliers = true
+surfaces_to_analyze = 2
+
+[reconstruct]
+# Left to the bead analysis, which measures the sample depth when beads sit on
+# both faces.
+# thickness = 300
+
+[ctf]
+voltage_kv = 300.0
+spherical_aberration_mm = 2.7
+amplitude_contrast = 0.07
+# The wide first pass on the view nearest zero tilt (estimate-ctf seeds the narrow
+# per-view fit from it). EMD-54612 records 2-7 um nominal; 1 um spare each side.
+min_defocus_angstrom = 10000
+max_defocus_angstrom = 80000
+
+[segment]
+# RyR1 spans the SR membrane, so picking is restricted to membranes (see [pick]).
+executable = "$MEMBRAIN_EXE"
+model = "$MEMBRAIN_CKPT"
+sliding_window_size = 160
+test_time_augmentation = true
+
+[template]
+# The consensus subtomogram average of primed-state RyR1 with the activating
+# mixture (Ca2+, ACP, caffeine) in native membranes: 4.88 A, C4, 256 px at
+# 1.68 A (430 A box), rabbit. If these frames are part of that study, the
+# template comes from the same particles: fine for picking, but an average of
+# these picks is then not an independent check of EMD-54612.
+emdb_id = "EMD-54612"
+low_pass_angstrom = 13.4  # the tomogram's Nyquist, as every lane low-passes its template
+# No mask or box here: both follow from [pick] particle_diameter_angstrom by the
+# rule, radius 340 / 2 / 6.72 + 3 = 28.3 px with a 1 px soft edge, and a box of
+# 2 x 340 / 6.72 = 101.2 -> 102 px (the map's own 430 A would be 64 px). The run
+# of 2026-10-14 had a 30 px mask in that 64 px box, set here before the rule.
+
+[pick]
+# The particle where it is widest, which sets the angular sampling and the
+# template's mask and box; the same as ryr1-bin8. Read off this lane's report of
+# 2026-10-14: in the template's central XY section the four corners reach
+# 24-25.5 px from the centre at 6.72 A, so 161-171 A, and 340 A across. The 400 A
+# of that run was the diagonal of the literature's ~280 A square, larger than
+# this map.
+particle_diameter_angstrom = 340.0
+# RyR1 is C4, and EMD-54612 was refined with C4 imposed, which RELION does about
+# the map's z axis through the box centre: a quarter of the rotations then cover
+# every distinct orientation. pytom's step is rad2deg(low-pass / diameter),
+# 17.5 / 340 -> 2.94 deg, so the search is four times longer without this.
+z_axis_symmetry = 4
+number_of_particles = 2000            # a cap for review, not a population size
+number_of_false_positives = 100.0
+tophat_filter = false
+# ~1.3x the bin4 Nyquist of 13.44 A, by the rule (ryr1-bin8: 35 A over 26.9 A).
+# The run of 2026-10-14 had 30 A, set here before the rule.
+low_pass_angstrom = 17.5
+random_phase_correction = true
+per_tilt_weighting = true
+spectral_whitening = true
+gpu_ids = "0"
+# Left whole: a tomogram here is ~1023 x 1440 x ~300, and on gag-bin8 a 1.18 GB
+# volume needed ~20 GB; the A40 has 46. If it runs out, "2,2,1".
+# volume_split = "2,2,1"
+# Starting value: the centre of a membrane-spanning RyR1 lies well within ~10 nm
+# of its membrane; 25 px (16.8 nm) of dilation leaves room for the segmentation
+# missing part of the bilayer.
+use_segmentation_mask = true
+segmentation_mask_dilation_px = 25
+
+[extract]
+box_size_px = 102         # 685 A at 6.72 A/px, 2 x the 340 A particle; even
+# Keep the picks whose box leaves the tomogram, the part outside filled with noise
+# of the box's own statistics, as ryr1-bin8 does: there a box of the same size in
+# A lost 695 of 2384 picks without it (bin8-2x, 2026-10-20), most of them through
+# the top or bottom, and these tomograms are just as thick.
+pad_edges = true
+
+[executables]
+motioncor3 = "$MOTIONCOR3"
+pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
+pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
+pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"
+pytom_extract_candidates = "$PYTOMO_MP_DIR/pytom_extract_candidates.py"

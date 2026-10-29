@@ -49,18 +49,52 @@ until = "prepare-tilt-series"
 time = "3:00:00"
 sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
+# Done on 2026-10-14 and shared with ryr1-bin8; not to be re-run from this file,
+# because 161 aligned only with tracking_binning = 3 (see [fiducials]).
 [[run.stage]]
-name = "cpu"
+name = "align"
 from = "align-tilt-series"
-until = "reconstruct-tomogram"
+until = "fine-align-tilt-series"
 time = "12:00:00"
 sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
 
+# The bin2 CTF fit stack and its CTF model carry no variant label, so they are
+# shared with ryr1-bin8, whose rerun from build-ctf-stack rebuilt them uncropped,
+# with CTFFIND 5 and a +-10000 A window. Not to be re-run from this file: its
+# [ctf] has neither, and would replace that model with the one that stopped at
+# ~12 deg.
+[[run.stage]]
+name = "ctf"
+from = "build-ctf-stack"
+until = "estimate-ctf"
+time = "8:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+# The rerun starts here: submit_lanes.py --from-stage cpu --overwrite. The
+# aligned stacks of 2026-10-14 were cropped (1440 x 1023 where the turned frame
+# is 1023 x 1440, see final_stack._output_size_yx), and so were the tomograms
+# made from them. In the bin4 report the aligned stack and the tomogram took
+# under a minute a series.
+[[run.stage]]
+name = "cpu"
+from = "build-final-aligned-stack"
+until = "reconstruct-tomogram"
+time = "4:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+# Measured on 2026-10-14 (the bin4 report), pytom's search on an A40: 039 4 h 49,
+# 096 5 h 21, 097 6 h 9, 125 4 h 23 and 161 7 h 49 min, 28.5 h one after another;
+# MemBrain-seg 4-6 min and the template ~1 min a series. Those searches had
+# 400 A and a 30 A low-pass, 4.30 deg steps, ~49,000 rotations with C4. The
+# values in [pick] now give 2.94 deg and ~148,000, x3.0: ~85 h for all five and
+# ~23 h for 161 alone, scaled from those times, not measured. One job over all
+# five gets 5 days (the gpu partition allows 7). The one-series copies in
+# ryr1-bin4-series/ run side by side at 36 h each.
 [[run.stage]]
 name = "gpu"
 from = "segment-tomogram"
 until = "extract-particles"
-time = "16:00:00"
+time = "5-00:00:00"
 sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 [data]
@@ -173,35 +207,36 @@ test_time_augmentation = true
 # template comes from the same particles: fine for picking, but an average of
 # these picks is then not an independent check of EMD-54612.
 emdb_id = "EMD-54612"
-low_pass_angstrom = 13.4  # the tomogram's Nyquist, as gag-bin8 low-passes to its own
-# Starting value: ~200 A, to hold the corners of the ~280 A square cytoplasmic
-# shell (half its diagonal); the map resamples to a 64 px box at 6.72 A/px, so
-# 30 px stays inside it. Check it against the map in ChimeraX: a native-membrane
-# average may carry a membrane slab, which a large mask would match along every
-# membrane.
-mask_radius_px = 30
+low_pass_angstrom = 13.4  # the tomogram's Nyquist, as every lane low-passes its template
+# No mask or box here: both follow from [pick] particle_diameter_angstrom by the
+# rule, radius 340 / 2 / 6.72 + 3 = 28.3 px with a 1 px soft edge, and a box of
+# 2 x 340 / 6.72 = 101.2 -> 102 px (the map's own 430 A would be 64 px). The run
+# of 2026-10-14 had a 30 px mask in that 64 px box, set here before the rule.
 
 [pick]
-# Sets the angular sampling only: the ~400 A diagonal, the particle's longest
-# dimension (starting value; RyR1's shell is ~280 A on a side).
-particle_diameter_angstrom = 400.0
+# The particle where it is widest, which sets the angular sampling and the
+# template's mask and box; the same as ryr1-bin8. Read off this lane's report of
+# 2026-10-14: in the template's central XY section the four corners reach
+# 24-25.5 px from the centre at 6.72 A, so 161-171 A, and 340 A across. The 400 A
+# of that run was the diagonal of the literature's ~280 A square, larger than
+# this map.
+particle_diameter_angstrom = 340.0
 # RyR1 is C4, and EMD-54612 was refined with C4 imposed, which RELION does about
 # the map's z axis through the box centre: a quarter of the rotations then cover
-# every distinct orientation. The 400 A diameter makes the angular step fine, so
-# the search is several times Gag's without this.
+# every distinct orientation. pytom's step is rad2deg(low-pass / diameter),
+# 17.5 / 340 -> 2.94 deg, so the search is four times longer without this.
 z_axis_symmetry = 4
 number_of_particles = 2000            # a cap for review, not a population size
 number_of_false_positives = 100.0
 tophat_filter = false
-# Starting value: keeps the shell's square outline and the clamp domains at its
-# corners, drops what is mostly noise at 6.72 A/px (ribo-bin8 uses 35 A for a
-# ribosome of similar size).
-low_pass_angstrom = 30.0
+# ~1.3x the bin4 Nyquist of 13.44 A, by the rule (ryr1-bin8: 35 A over 26.9 A).
+# The run of 2026-10-14 had 30 A, set here before the rule.
+low_pass_angstrom = 17.5
 random_phase_correction = true
 per_tilt_weighting = true
 spectral_whitening = true
 gpu_ids = "0"
-# Left whole: a tomogram here is ~1440 x 1023 x ~300, and on gag-bin8 a 1.18 GB
+# Left whole: a tomogram here is ~1023 x 1440 x ~300, and on gag-bin8 a 1.18 GB
 # volume needed ~20 GB; the A40 has 46. If it runs out, "2,2,1".
 # volume_split = "2,2,1"
 # Starting value: the centre of a membrane-spanning RyR1 lies well within ~10 nm
@@ -211,7 +246,12 @@ use_segmentation_mask = true
 segmentation_mask_dilation_px = 25
 
 [extract]
-box_size_px = 80          # 538 A at 6.72 A/px, ~1.35 x the ~400 A diagonal; even
+box_size_px = 102         # 685 A at 6.72 A/px, 2 x the 340 A particle; even
+# Keep the picks whose box leaves the tomogram, the part outside filled with noise
+# of the box's own statistics, as ryr1-bin8 does: there a box of the same size in
+# A lost 695 of 2384 picks without it (bin8-2x, 2026-10-20), most of them through
+# the top or bottom, and these tomograms are just as thick.
+pad_edges = true
 
 [executables]
 motioncor3 = "$MOTIONCOR3"
