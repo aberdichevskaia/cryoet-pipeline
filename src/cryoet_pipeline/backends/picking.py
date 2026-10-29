@@ -1177,10 +1177,12 @@ def _z_spread_verdict(
     pytom's extraction drops every peak within one particle radius of a face of
     the volume it searched (extract.py, 0.14.0), so uniform picks spread by
     `(depth - 2 * radius) / sqrt(12)`, both numbers being known here. The
-    verdict is whether the observed spread is *significantly* below that, judged
-    by the sampling error of a standard deviation, `sd / sqrt(2n)`, at three
-    sigma — rather than by a fraction picked to look reasonable. A spread
-    significantly *above* it is named as such: more picks near the top and
+    verdict is whether the observed spread is *significantly* below that, at
+    three of its standard errors — rather than by a fraction picked to look
+    reasonable. The standard error is that of a uniform sample's standard
+    deviation, `uniform / sqrt(5n)`: a uniform's kurtosis is 9/5, and a sample
+    standard deviation varies by `sd * sqrt((kurtosis - 1) / 4n)`. A spread
+    significantly *above* uniform is named as such: more picks near the top and
     bottom of the volume than a uniform fill puts there.
 
     Until 2026-10-29 the range was where a template box can be centred,
@@ -1188,7 +1190,9 @@ def _z_spread_verdict(
     than the one pytom keeps peaks in, and picks spread evenly over pytom's range
     read as wider than uniform. All five RyR1 series at bin8 read wider that way,
     worded then as "-10.6 standard errors below uniform, so not distinguishable
-    from it".
+    from it". The standard error was a normal sample's, `sd / sqrt(2n)`, 1.58
+    times a uniform one's; under it no uniform sample in a simulation of 20 000
+    reached three standard errors, so the rule stood nearer 4.7 sigma than 3.
 
     PROVISIONAL. This encodes an expectation that has not been confirmed by
     anyone who reads these tomograms: that a reconstruction places a confined
@@ -1221,9 +1225,9 @@ def _z_spread_verdict(
         return None, None
     uniform = kept / math.sqrt(12.0)
 
-    standard_error = observed / math.sqrt(2.0 * count)
-    if standard_error <= 0.0:
-        return uniform, None
+    # How much the standard deviation of `count` uniform picks varies: the
+    # verdict asks whether these picks could be such a sample.
+    standard_error = uniform / math.sqrt(5.0 * count)
     shortfall = (uniform - observed) / standard_error
     if shortfall >= 3.0:
         return uniform, None

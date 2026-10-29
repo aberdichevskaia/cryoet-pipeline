@@ -856,17 +856,17 @@ def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
     """The measured case: 385 picks at 80.3 px through a 320 px tomogram.
 
     With a 15 px particle radius pytom keeps peaks in the middle 290 px, whose
-    uniform fill spreads 83.7 px, and the sampling error of a standard deviation
-    over 385 picks is 2.9 px, so 80.3 sits 1.2 standard errors below uniform.
-    Nothing about that count says anything — a loose enough threshold always
-    produces plenty — and this is the readout that does.
+    uniform fill spreads 83.7 px, and the standard deviation of 385 uniform picks
+    varies by 1.9 px, so 80.3 sits 1.8 standard errors below uniform. Nothing
+    about that count says anything — a loose enough threshold always produces
+    plenty — and this is the readout that does.
     """
 
     uniform, warning = _z_spread_verdict(_stats(385, 80.3), depth_px=320, particle_radius_px=15)
 
     assert uniform == pytest.approx(290 / 12**0.5, rel=1e-3)
     assert warning is not None
-    assert "1.2 standard errors below uniform, so not distinguishable from it" in warning
+    assert "1.8 standard errors below uniform, so not distinguishable from it" in warning
     assert "80.3" in warning
     assert "the 290 px pytom keeps peaks in, 15 px (one particle radius) in from" in warning
     # All three readings named, because this measurement cannot separate them —
@@ -879,7 +879,7 @@ def test_z_spread_warns_when_picks_fill_the_whole_thickness() -> None:
 def test_z_spread_is_silent_for_picks_confined_to_a_lamella() -> None:
     """A 177 px lamella in a 320 px volume spreads about 51 px.
 
-    That is eighteen standard errors below uniform, which is what a confined
+    That is seventeen standard errors below uniform, which is what a confined
     specimen looks like and what should pass without comment.
     """
 
@@ -890,20 +890,56 @@ def test_z_spread_is_silent_for_picks_confined_to_a_lamella() -> None:
 
 
 def test_z_spread_is_measured_over_the_range_pytom_keeps_peaks_in() -> None:
-    """Picks spread as RyR1 series 039's at bin8 were, 793 at 23.6 px, in a
-    volume 110 px deep: 60 px for a 50 px box to be centred in, as 039 had.
+    """RyR1 series 039 at bin8: about 794 picks (back-solved from its old line)
+    at 23.6 px in a volume 112 px deep, which its 52 px box left 60 px of.
 
-    Against those 60 px, the range until 2026-10-29, they read 10.6 standard
-    errors wider than uniform. pytom keeps peaks one particle radius from each
-    face, 12 px for 340 A at 13.44 A/px, and over the 86 px between the same
-    picks are uniform.
+    Against those 60 px, the range until 2026-10-29, the picks read 10.6
+    standard errors wider than uniform. pytom keeps peaks one particle radius
+    from each face, 12 px for 340 A at 13.44 A/px, and against the 88 px between
+    they are 4.5 standard errors narrower: confined.
     """
 
-    uniform, warning = _z_spread_verdict(_stats(793, 23.6), depth_px=110, particle_radius_px=12)
+    uniform, warning = _z_spread_verdict(_stats(794, 23.6), depth_px=112, particle_radius_px=12)
 
-    assert uniform == pytest.approx(86 / 12**0.5, rel=1e-3)
-    assert warning is not None
-    assert "2.1 standard errors below uniform, so not distinguishable from it" in warning
+    assert uniform == pytest.approx(88 / 12**0.5, rel=1e-3)
+    assert warning is None
+
+
+def test_z_spread_is_judged_by_a_uniform_samples_own_sampling_error() -> None:
+    """RyR1 series 096 at bin8: about 668 picks at 26.9 px in a 123 px volume.
+
+    By a normal sample's sampling error, sd / sqrt(2n), the rule until
+    2026-10-29, that is 2.3 standard errors below uniform, and warned. A uniform
+    sample's standard deviation varies 1.58 times less, uniform / sqrt(5n), and
+    by that it is 3.4 below: confined.
+    """
+
+    uniform, warning = _z_spread_verdict(_stats(668, 26.9), depth_px=123, particle_radius_px=12)
+
+    assert uniform == pytest.approx(99 / 12**0.5, rel=1e-3)
+    assert warning is None
+
+
+def test_z_spread_three_standard_errors_are_three_sigma_for_uniform_picks() -> None:
+    """Uniform picks pass as confined about as rarely as three sigma says.
+
+    One-sided three sigma is 0.13%, and 53 of these 20 000 uniform samples pass,
+    0.27%. Under a normal sample's sampling error none would have passed: the
+    rule stood nearer 4.7 sigma.
+    """
+
+    rng = np.random.default_rng(0)
+    depth, radius, count = 110, 12, 300
+    spreads = rng.uniform(0.0, depth - 2 * radius, size=(20_000, count)).std(axis=1)
+
+    confined = sum(
+        _z_spread_verdict(
+            _stats(count, float(spread)), depth_px=depth, particle_radius_px=radius
+        )[1] is None
+        for spread in spreads
+    )
+
+    assert 0.0005 < confined / len(spreads) < 0.005
 
 
 def test_z_spread_wider_than_uniform_is_named_as_such() -> None:
@@ -917,7 +953,7 @@ def test_z_spread_wider_than_uniform_is_named_as_such() -> None:
 
     assert warning is not None
     assert (
-        "9.9 standard errors wider than uniform: more picks sit near the top and "
+        "20.8 standard errors wider than uniform: more picks sit near the top and "
         "bottom of the volume" in warning
     )
     assert "below" not in warning
@@ -927,7 +963,7 @@ def test_z_spread_wider_than_uniform_is_named_as_such() -> None:
     # distinguishable from it, and says above.
     _, close = _z_spread_verdict(_stats(385, 85.0), depth_px=320, particle_radius_px=15)
     assert close is not None
-    assert "0.4 standard errors above uniform, so not distinguishable from it" in close
+    assert "0.7 standard errors above uniform, so not distinguishable from it" in close
 
 
 def test_z_spread_says_nothing_without_the_numbers_to_say_it_with() -> None:

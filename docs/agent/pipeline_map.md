@@ -393,8 +393,9 @@ Motion correction, then the tilt stack from the corrected sums.
   and whether the picks are confined in z or spread through the volume. A
   doubtful significance or a doubtful z spread gives a warning. The z spread is
   read against a uniform fill of the depth pytom searched, less one particle
-  radius at each face, where its extraction drops peaks. A spread wider than
-  that is named as such: more picks near the top and bottom of the volume.
+  radius at each face, where its extraction drops peaks, and counts as
+  confined three of that fill's own standard errors below it. A spread wider
+  than that is named as such: more picks near the top and bottom of the volume.
 
 ### 15. `visualize-picks`
 
