@@ -108,6 +108,13 @@ def _overwrite_per_call(config: Path) -> list[str]:
     return [line.split("|", 1)[0] for line in path.read_text().splitlines()]
 
 
+def _name_ctffind(lane: Path) -> None:
+    """Have the lane name its CTFFIND as "$CTFFIND5", as ribo-mdc and ryr1-bin8 do."""
+    text = lane.read_text()
+    assert "[executables]\n" in text
+    lane.write_text(text.replace("[executables]\n", '[executables]\nctffind = "$CTFFIND5"\n', 1))
+
+
 def test_overwrite_reaches_the_jobs_only_from_the_flag(lane, capsys):
     assert _run(capsys, lane)[0] == 0
     assert _run(capsys, lane, "--overwrite")[0] == 0
@@ -352,16 +359,13 @@ def test_a_ctffind_4_that_estimate_ctf_would_find_is_refused(lane, capsys, monke
     assert not _overwrite_per_call(lane)
 
 
-def test_a_lane_that_names_its_ctffind_or_fits_no_ctf_is_not_asked(lane, capsys, monkeypatch):
+def test_a_lane_that_fits_no_ctf_is_not_asked(lane, capsys, monkeypatch):
     monkeypatch.setenv("FAKE_CTFFIND_VERSION", "4.1.14")
-    # The GPU stage fits no CTF.
+    # The GPU stage fits no CTF, so neither PATH's CTFFIND nor a named one matters.
     assert "CTFFIND" not in _run(capsys, lane, "--from-stage", "gpu", "--dry-run")[2]
-    # A CTFFIND the lane names is taken at its word, as estimate-ctf takes it.
-    text = lane.read_text()
-    assert "[executables]\n" in text
-    lane.write_text(text.replace("[executables]\n", '[executables]\nctffind = "$CTFFIND5"\n', 1))
+    _name_ctffind(lane)
     monkeypatch.setenv("CTFFIND5", "/opt/ctffind5")
-    assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]
+    assert "CTFFIND" not in _run(capsys, lane, "--from-stage", "gpu", "--dry-run")[2]
 
 
 def test_a_ctffind_that_is_missing_or_silent_is_noted_not_refused(
@@ -415,3 +419,108 @@ def test_ctffind5_is_taken_before_ctffind_as_the_backend_takes_it(lane, capsys, 
     older.write_text('#!/bin/bash\necho "            Version : 4.1.14"\n')
     older.chmod(0o755)
     assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]
+
+
+def test_a_named_ctffind_that_is_a_directory_is_refused_with_the_program_in_it(
+    lane, capsys, monkeypatch, tmp_path
+):
+    # ribo-mdc's cpu job 3789938 (2026-10-29) was given CTFFIND5 as the directory
+    # CTFFIND 5 is installed in, and stopped at estimate-ctf after the queue wait.
+    install = tmp_path / "ctffind-5.0.2"
+    program = install / "cisTEM" / "bin" / "ctffind"
+    program.parent.mkdir(parents=True)
+    program.write_text(CTFFIND)
+    program.chmod(0o755)
+    _name_ctffind(lane)
+    monkeypatch.setenv("CTFFIND5", str(install))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert (
+        f'would refuse: {lane}: [executables] ctffind "$CTFFIND5": {install} is a directory, '
+        "and estimate-ctf would stop on it; name the CTFFIND program in it instead, such as "
+        f"{program}\n"
+    ) in err
+    code, _, err = _run(capsys, lane)
+    assert code == 1 and f"{install} is a directory" in err
+    assert not _overwrite_per_call(lane)
+
+    # Named itself, the program is taken.
+    monkeypatch.setenv("CTFFIND5", str(program))
+    assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]
+
+    # A directory with no CTFFIND where installs put one is refused all the same.
+    program.unlink()
+    monkeypatch.setenv("CTFFIND5", str(install))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert f"{install} is a directory" in err and "such as" not in err
+
+
+def test_a_named_ctffind_that_is_missing_or_not_executable_is_refused(
+    lane, capsys, monkeypatch, tmp_path
+):
+    _name_ctffind(lane)
+    missing = tmp_path / "ctffind-5.0.2" / "ctffind"
+    monkeypatch.setenv("CTFFIND5", str(missing))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert f'would refuse: {lane}: [executables] ctffind "$CTFFIND5": no file {missing},' in err
+    assert _run(capsys, lane)[0] == 1
+
+    unrunnable = tmp_path / "ctffind"
+    unrunnable.write_text(CTFFIND)
+    unrunnable.chmod(0o644)
+    monkeypatch.setenv("CTFFIND5", str(unrunnable))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert (
+        f'would refuse: {lane}: [executables] ctffind "$CTFFIND5": {unrunnable} is not executable,'
+    ) in err
+    assert _run(capsys, lane)[0] == 1
+    assert not _overwrite_per_call(lane)
+
+
+def test_a_named_ctffind_4_is_refused_and_a_named_ctffind_5_taken(
+    lane, capsys, monkeypatch, tmp_path
+):
+    # The CTFFIND the lane names is asked, not the CTFFIND 4.1.14 that MDC has on PATH.
+    (tmp_path / "bin" / "ctffind5").write_text('#!/bin/bash\necho "            Version : 4.1.14"\n')
+    named = tmp_path / "ctffind-5.0.2" / "ctffind"
+    named.parent.mkdir()
+    named.write_text(CTFFIND)
+    named.chmod(0o755)
+    _name_ctffind(lane)
+    monkeypatch.setenv("CTFFIND5", str(named))
+    assert "CTFFIND" not in _run(capsys, lane, "--dry-run")[2]
+
+    monkeypatch.setenv("FAKE_CTFFIND_VERSION", "4.1.14")
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert (
+        f'would refuse: {lane}: [executables] ctffind "$CTFFIND5": {named} is CTFFIND 4.1.14,'
+    ) in err
+    code, _, err = _run(capsys, lane)
+    assert code == 1 and f"{named} is CTFFIND 4.1.14" in err
+    assert not _overwrite_per_call(lane)
+
+
+def test_a_named_ctffind_that_states_no_version_is_noted_not_refused(
+    lane, capsys, monkeypatch, tmp_path
+):
+    silent = tmp_path / "ctffind"
+    silent.write_text("#!/bin/bash\nexec sleep 30\n")
+    silent.chmod(0o755)
+    _name_ctffind(lane)
+    monkeypatch.setenv("CTFFIND5", str(silent))
+    monkeypatch.setattr(submit_lanes, "CTFFIND_PROBE_SECONDS", 0.3)
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0 and "refuse" not in err
+    assert f"not checked which CTFFIND {silent} is: it printed no version within 0.3 s" in err
+
+
+def test_a_named_ctffind_whose_variable_is_not_set_is_refused_once(lane, capsys, monkeypatch):
+    _name_ctffind(lane)
+    monkeypatch.delenv("CTFFIND5", raising=False)
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert f"would refuse: {lane}: $CTFFIND5 is not set (used by stage 'cpu')" in err
+    assert "[executables] ctffind" not in err

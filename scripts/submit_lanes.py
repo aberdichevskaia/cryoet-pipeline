@@ -307,36 +307,95 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
 
 
 def ctffind_problems(cfg: dict[str, Any], steps: set[str]) -> list[str]:
-    """A CTFFIND 4 that estimate-ctf would find on PATH, as a problem.
+    """A CTFFIND that estimate-ctf's backend would refuse after the queue wait,
+    as a problem.
 
-    Only where the config names no CTFFIND of its own ([executables] ctffind):
-    estimate-ctf then takes ctffind5, or else ctffind, from PATH, the job's PATH
-    being this one (--export=ALL), and its backend refuses a CTFFIND 4 after the
-    queue wait. Which one it is, its start-up banner says. A CTFFIND that cannot
-    be found or asked here is noted rather than refused, since the job's
-    environment may still find one.
+    estimate-ctf runs the CTFFIND the config names in [executables] ctffind, or
+    else ctffind5, or else ctffind, from PATH; the job's environment, PATH and
+    the config's $VARs included, is this one (--export=ALL). Its backend refuses
+    a named path that is not a file, and any CTFFIND 4; one it may not execute
+    fails as it starts. Which version it is, its start-up banner says. A CTFFIND
+    that cannot be found on PATH or asked here is noted rather than refused,
+    since the job's environment may still find one.
     """
 
-    if "estimate-ctf" not in steps or (cfg.get("executables") or {}).get("ctffind"):
+    if "estimate-ctf" not in steps:
         return []
+    configured = (cfg.get("executables") or {}).get("ctffind")
+    if configured is not None:
+        return named_ctffind_problems(str(configured))
     # The backend's order (cryoet_pipeline.backends.ctf._resolve_ctffind_executable).
     found = next((path for name in ("ctffind5", "ctffind") if (path := shutil.which(name))), None)
     if found is None:
         print("not checked which CTFFIND estimate-ctf will run: neither ctffind5 nor ctffind "
               "is on PATH here", file=sys.stderr)
         return []
-    version = ctffind_version(found)
-    if version is None:
-        print(f"not checked which CTFFIND {found} is: it printed no version within "
-              f"{CTFFIND_PROBE_SECONDS:g} s", file=sys.stderr)
-        return []
-    if int(version.split(".")[0]) >= 5:
+    if (version := ctffind_before_5(found)) is None:
         return []
     return [
         f"estimate-ctf would run {found}, which is CTFFIND {version}, and its backend answers "
         "CTFFIND 5's questions: name CTFFIND 5 in [executables] ctffind (\"$CTFFIND5\", as "
         "ryr1-bin8 does), or put ctffind5 on PATH ahead of it"
     ]
+
+
+def named_ctffind_problems(configured: str) -> list[str]:
+    """[executables] ctffind as the job will be given it, checked as the backend
+    checks it (cryoet_pipeline.backends.ctf._resolve_ctffind_executable).
+
+    scripts/run_series.py expands its $VARs, the backend its ~, and lane.sbatch
+    runs both from the repo root, so a relative path is from there. The job of
+    2026-10-29 that this catches (ribo-mdc, 3789938) had CTFFIND5 set to the
+    directory CTFFIND 5 was installed in, and stopped 11 minutes in.
+    """
+
+    if any(not os.environ.get(name) for name in _ENV_REFERENCE.findall(configured)):
+        # Refused already in problems(), as not set.
+        return []
+    found = ROOT / Path(os.path.expandvars(configured)).expanduser()
+    where = f'[executables] ctffind "{configured}"'
+    if found.is_dir():
+        inside = ctffind_inside(found)
+        return [
+            f"{where}: {found} is a directory, and estimate-ctf would stop on it; name the "
+            "CTFFIND program in it instead" + (f", such as {inside}" if inside else "")
+        ]
+    if not found.is_file():
+        return [f"{where}: no file {found}, and estimate-ctf would stop on it"]
+    if not os.access(found, os.X_OK):
+        return [f"{where}: {found} is not executable, and estimate-ctf would stop on it"]
+    if (version := ctffind_before_5(str(found))) is None:
+        return []
+    return [
+        f"{where}: {found} is CTFFIND {version}, and estimate-ctf's backend answers "
+        "CTFFIND 5's questions; name a CTFFIND 5 instead"
+    ]
+
+
+def ctffind_inside(directory: Path) -> Path | None:
+    """A CTFFIND program in a directory named in its place, where an install puts
+    it (MDC's is cisTEM/bin/ctffind under ctffind-5.0.2): ctffind5 before ctffind,
+    as on PATH. None if there is none."""
+
+    for name in ("ctffind5", "ctffind"):
+        for pattern in (name, f"bin/{name}", f"*/bin/{name}"):
+            for path in sorted(directory.glob(pattern)):
+                if path.is_file() and os.access(path, os.X_OK):
+                    return path
+    return None
+
+
+def ctffind_before_5(executable: str) -> str | None:
+    """The version of a CTFFIND older than 5, which the backend refuses, as its
+    banner states it; None for a later one, and for one that states none here,
+    which is noted."""
+
+    version = ctffind_version(executable)
+    if version is None:
+        print(f"not checked which CTFFIND {executable} is: it printed no version within "
+              f"{CTFFIND_PROBE_SECONDS:g} s", file=sys.stderr)
+        return None
+    return version if int(version.split(".")[0]) < 5 else None
 
 
 def ctffind_version(executable: str, limit: int = 1 << 16) -> str | None:
