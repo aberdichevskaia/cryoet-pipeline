@@ -6,14 +6,16 @@
 #   lane         the lane config, from the repository root
 #   series       the series that matter; every series of the lane if left out
 #   steps        the steps whose runs, program logs and QC records matter
-#   since/until  the days it happened, in the cluster's time. A file written
-#                after `until` is a later run's. Without days, the case is the
-#                project as it is now
+#   since/until  the days it happened, in the cluster's time; `until` can be a
+#                time of day (2026-10-14T19:15:00) when the fix came the same
+#                day. A file written after `until` is a later run's. Without
+#                days, the case is the project as it is now
 #   jobs         Slurm job IDs, found wherever their logs are
 #   log_pattern  a regular expression: the project's jobs whose log matches it
 #                are listed at any date, to find the IDs not known yet
 #   extras       more files, as globs from the project folder
 #   elsewhere    evidence that is not on the cluster
+#   playbook     its entries in ../playbook.md, which a held-out run removes
 #
 # Days and job IDs not known yet are filled in from the inventory's output.
 
@@ -22,9 +24,15 @@ title = "A crash that reproduces while seeding — RyR1 161"
 cluster = "mdc"
 lane = "configs/lanes/ryr1-bin4.toml"
 steps = ["qc-coarse-alignment", "generate-fiducial-seed"]
+# 161's seeding failed at 17:12, 18:55 and 19:02; 161b passed it at 19:23 with
+# tracking_binning 3, which is the fix the case asks for.
 since = 2026-10-14
-until = 2026-10-14
+until = 2026-10-14T19:15:00
+# The reruns of 161, read off their logs in earlier sessions: max182, max177,
+# then 161b with tracking_binning 3 on max173. The first CPU job's ID is not known.
+jobs = ["3620374", "3620884", "3623086"]
 log_pattern = "Segmentation fault|core dumped|exit 139"
+playbook = ["A-2"]
 
 [E02]
 title = "Coarse QC fails, fine alignment passes — RyR1 097"
@@ -34,6 +42,7 @@ steps = ["qc-coarse-alignment", "track-fiducials", "fine-align-tilt-series",
          "reconstruct-tomogram"]
 since = 2026-10-14
 until = 2026-10-14
+playbook = ["A-1"]
 
 [E03]
 title = "The CTF cliff at high tilt — RyR1 039"
@@ -46,6 +55,7 @@ until = 2026-10-15
 extras = ["ctf/039/039_ctffind5.defocus", "ctf/039/039_ctffind5_ctffind.txt"]
 note = """The window test of 16 October fitted 039 again under labels; ctfw1 is the \
 lane's window on the uncropped stack (scripts/ctf_window_test.sbatch)."""
+playbook = ["C-1"]
 
 [E04]
 title = "Out of GPU memory in template matching — HIV-1 Gag"
@@ -53,22 +63,28 @@ cluster = "munich"
 lane = "configs/lanes/gag-bin8.toml"
 series = ["TS_01"]
 steps = ["pick-particles"]
+# The pick failed at 23:10 on 7 October and passed at 00:45 on the 8th: the case
+# ends with the 7th.
 since = 2026-10-07
-until = 2026-10-08
+until = 2026-10-07
 jobs = ["41075712"]
 log_pattern = "out of memory|OutOfMemory"
 note = """The GPU slice is in sacct's AllocTRES; the log's nvidia-smi line shows the \
 whole card."""
+playbook = ["P-1"]
 
 [E05]
 title = "The wrong CTFFIND at MDC"
 cluster = "mdc"
 lane = "configs/lanes/ribo-mdc.toml"
 steps = ["estimate-ctf"]
+# 3781480 failed at 15:57 on 28 October; 3783610 ran the copy again at 16:55,
+# by then naming CTFFIND 5.
 since = 2026-10-16
-until = 2026-10-28
+until = 2026-10-28T16:30:00
 jobs = ["3670792", "3781480"]
 log_pattern = 'CTFFIND 4\.1|ctffind-4\.'
+playbook = ["C-2"]
 
 [E06]
 title = "MotionCor3 and the GPU generation"
@@ -77,6 +93,7 @@ lane = "configs/lanes/gag-bin8.toml"
 steps = ["prepare-tilt-series"]
 log_pattern = "MotionCor3 has nothing this GPU|no kernel image"
 note = "Its day and job are not known: the pattern looks through every job of the project."
+playbook = ["M-1"]
 
 [E07]
 title = "Stacks with blank borders — a code bug"
@@ -86,6 +103,7 @@ steps = ["build-final-aligned-stack"]
 since = 2026-10-14
 until = 2026-10-15
 extras = ["aligned/*/*", "stacks/*/*"]
+playbook = ["S-1"]
 
 [E08]
 title = "The pixel size disagrees with the published map — EMPIAR-11538"
@@ -95,6 +113,7 @@ steps = []
 since = 2026-10-14
 until = 2026-10-15
 elsewhere = ["EMD-16721 at EMDB, 1.188 Å, fetched where the case is put together"]
+playbook = ["D-1"]
 
 [E09]
 title = "Score maps that do not see the specimen — EMPIAR-11538"
@@ -103,6 +122,7 @@ lane = "configs/lanes/ribo-mdc.toml"
 steps = ["prepare-template", "pick-particles"]
 since = 2026-10-14
 until = 2026-10-15
+playbook = ["P-2"]
 
 [E10]
 title = "HIV-1 Gag through the safety filter"
@@ -139,6 +159,7 @@ since = 2026-10-14
 until = 2026-10-26
 extras = ["fiducials/TS_0306/TS_0306_patch.prexg", "alignments/TS_0306/fine/*"]
 elsewhere = ["the etomo reconstruction of TS_0306, whose path is not recorded here"]
+playbook = ["A-3"]
 
 [E16]
 title = "`track-fiducials` refuses a seed made before the fix"

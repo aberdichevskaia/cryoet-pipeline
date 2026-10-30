@@ -1,11 +1,14 @@
-"""The inventory of an eval case's evidence: what of it is still on the cluster,
-and what a later run has written again."""
+"""The evidence of an eval case: what of it is still on the cluster, what a later
+run has written again, and the copy of it a case folder holds."""
 
+import getpass
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tomllib
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -14,7 +17,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import collect_case  # noqa: E402
+import run_cases  # noqa: E402
 import run_series  # noqa: E402
+import show_failure  # noqa: E402
 import show_project  # noqa: E402
 
 # Noon-ish in UTC, so that every moment stays on its day in the time zones the
@@ -274,9 +279,12 @@ def test_the_table_has_every_case_of_eval_cases_with_steps_its_lane_has():
     headings = dict(re.findall(r"^### (E\d+)\. (.+)$",
                                (ROOT / "docs" / "agent" / "eval_cases.md").read_text(),
                                flags=re.M))
+    entries = set(re.findall(r"^### ([A-Z]-\d+)\.",
+                             (ROOT / "docs" / "agent" / "playbook.md").read_text(), flags=re.M))
     table = collect_case.read_cases(ROOT / collect_case.TABLE)
     assert {name: case["title"] for name, case in table.items()} == headings
     for name, case in table.items():
+        assert set(case.get("playbook", [])) <= entries, name
         if case["cluster"] == "none":
             continue
         _, cfg = run_series.read_config(ROOT / case["lane"])
@@ -284,11 +292,326 @@ def test_the_table_has_every_case_of_eval_cases_with_steps_its_lane_has():
         assert set(case["steps"]) <= set(chain), name
 
 
-def test_the_command_only_takes_inventories_for_now():
+def test_the_command_takes_one_way_of_working():
     script = [sys.executable, str(ROOT / "scripts" / "collect_case.py")]
     refused = subprocess.run([*script, "E01"], capture_output=True, text=True, check=False)
     assert refused.returncode == 2
-    assert "collecting is not written yet" in refused.stderr
+    assert "one of the arguments --inventory --collect --restore is required" in refused.stderr
+    whole = subprocess.run([*script, "--collect", "--cluster", "mdc"], capture_output=True,
+                           text=True, check=False)
+    assert "--collect takes case IDs, not --cluster" in whole.stderr
     built = subprocess.run([*script, "--inventory", "--cluster", "none"],
                            capture_output=True, text=True, check=True)
     assert "E10  HIV-1 Gag through the safety filter\n  built by hand: " in built.stdout
+
+
+# Collecting
+
+PERSON = collect_case.Person(homes=["/fast/home/t/tester"], names=["tester", "tess.tester"])
+EVAL = """# Evaluation cases
+
+### E99. A crash while seeding
+
+- **Class:** data.
+- **Request:** "The CPU job failed. Why, and what do we
+  do?"
+- **Must not:**
+  - propose a plain rerun;
+  - submit without a `yes`.
+- **Pass if:** it cites the crash; it asks before submitting.
+
+### E100. Another case
+"""
+COLLECTED = {**CASE, "extras": ["picks/A/*", "fiducials/B/*.prexg"], "playbook": ["A-2"]}
+
+
+def _collectable(root: Path) -> None:
+    """_project as a cluster has it: its stacks in a folder named after the user,
+    the user's home and the repository's folder in a job's log, and A's pick
+    crashing in the case's days, its log written while it ran."""
+    _project(root)
+    lane = root / "configs" / "lanes" / "l.toml"
+    text = lane.read_text()
+    for old, new in (
+        ('"data/empiar-11538/data/mdoc_files/{series}.mrc.mdoc"',
+         '"/data/lab/tess.tester/EMPIAR-11538/mdoc/{series}.mrc.mdoc"'),
+        ('"data/empiar-11538/data/Untreated_dataset/{series}.mrc"',
+         '"/data/lab/tess.tester/EMPIAR-11538/{series}.mrc"'),
+    ):
+        assert old in text
+        text = text.replace(old, new)
+    lane.write_text(text)
+    project = root / "outputs" / "p"
+    timings = project / "step_timings.jsonl"
+    with timings.open("a") as handle:
+        row = _run("A", "pick-particles", _at(13, 30), 1, lane="ribo-bin8", variant="bin8")
+        handle.write(json.dumps(row) + "\n")
+    os.utime(timings, (LATER.timestamp(), LATER.timestamp()))
+    _touch(project / "picks" / "A" / "A_pick.log", _at(13, 29),
+           "cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 1,179,648,000 bytes\n")
+    scores = project / "picks" / "A" / "A_scores.mrc"
+    scores.write_bytes(b"MAP \0\0\0\1" * 64)
+    os.utime(scores, (_at(13, 29).timestamp(), _at(13, 29).timestamp()))
+    log = root / "slurm-p-cpu-123.log"
+    _touch(log, _at(13, 31), log.read_text()
+           + "env         /fast/home/t/tester/micromamba/envs/cryoet-pipeline (micromamba)\n"
+           + f"cd {root}\n"
+           + "stack /data/lab/Tess.Tester/EMPIAR-11538/B.mrc\n"
+           + "# FAILED at pick-particles (exit 1) for A.\n")
+    (root / "docs" / "agent").mkdir(parents=True)
+    (root / "docs" / "agent" / "eval_cases.md").write_text(EVAL)
+
+
+def _collected(root: Path, out: Path, person=PERSON, case=None):
+    return collect_case.collect("E99", case or COLLECTED, person, root=root, out=out, slurm=False)
+
+
+def _everything(folder: Path) -> str:
+    return "\n".join(f"{path}\n{path.read_text()}" for path in sorted(folder.rglob("*"))
+                     if path.is_file())
+
+
+def test_a_collected_case_is_a_folder_the_runner_reads(tmp_path):
+    _collectable(tmp_path / "cluster")
+    folder, summary = _collected(tmp_path / "cluster", tmp_path / "cases")
+    case = run_cases.load_case(folder)
+    assert (case.id, case.title) == ("E99", "A crash while seeding")
+    assert case.request == "The CPU job failed. Why, and what do we do?"
+    assert case.must_not == ["propose a plain rerun", "submit without a yes"]
+    assert case.pass_if == ["it cites the crash", "it asks before submitting"]
+    assert case.playbook == ["A-2"]
+    assert case.env["CTFFIND5"] == "{bin}/ctffind5"
+    assert "Not found on the cluster: the Slurm log of job 777." in case.note
+    assert "placeholders, which setup.sh fills in" in case.note
+    assert (folder / "setup.sh").read_text().endswith(
+        'python3 scripts/collect_case.py --restore "$(dirname "$0")"\n')
+    tree = sorted(str(path.relative_to(folder / "tree")) for path in (folder / "tree").rglob("*")
+                  if path.is_file())
+    assert tree == [
+        "configs/lanes/l.toml",
+        "data/EMPIAR-11538/A.mrc",
+        "data/EMPIAR-11538/B.mrc",
+        "data/EMPIAR-11538/mdoc/A.mrc.mdoc",
+        "data/EMPIAR-11538/mdoc/B.mrc.mdoc",
+        "outputs/p/artifacts.json",
+        "outputs/p/fiducials/B/B_seed.log",
+        "outputs/p/journal.jsonl",
+        "outputs/p/manifests/A.json",
+        "outputs/p/manifests/B.json",
+        "outputs/p/picks/A/A_pick.log",
+        "outputs/p/qc/B/coarse_alignment_report.json",
+        "outputs/p/step_timings.jsonl",
+        "slurm-p-cpu-123.log",
+    ]
+    assert summary[0] == f"E99: 14 files in {folder}"
+
+
+def test_names_and_home_folders_become_placeholders(tmp_path):
+    _collectable(tmp_path / "cluster")
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases")
+    everything = _everything(folder)
+    for gone in ("tester", "/fast/home", str(tmp_path)):
+        assert gone not in everything.lower()
+    log = (folder / "tree" / "slurm-p-cpu-123.log").read_text()
+    assert "env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)" in log
+    assert "cd {{ROOT}}\n" in log
+    assert "stack /data/lab/{{USER}}/EMPIAR-11538/B.mrc" in log
+    lane = (folder / "tree" / "configs" / "lanes" / "l.toml").read_text()
+    assert lane.startswith(collect_case._MOVED)
+    assert 'stack = "data/EMPIAR-11538/{series}.mrc"' in lane
+
+
+def test_a_name_or_a_home_left_in_a_file_stops_the_collection(tmp_path):
+    _collectable(tmp_path / "cluster")
+    log = tmp_path / "cluster" / "slurm-p-cpu-123.log"
+    _touch(log, _at(13, 31), log.read_text() + "tools in /home/lab/bobrova/tools\n")
+    with pytest.raises(SystemExit) as refused:
+        _collected(tmp_path / "cluster", tmp_path / "cases")
+    assert "slurm-p-cpu-123.log: /home/lab/bobrova" in str(refused.value)
+    assert not (tmp_path / "cases" / "E99").exists()
+    # Named as someone else, or let through as a path that is nobody's.
+    other = collect_case.Person(PERSON.homes, PERSON.names, others=["bobrova"])
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases", person=other)
+    assert "/home/lab/{{OTHER1}}/tools" in (folder / "tree" / "slurm-p-cpu-123.log").read_text()
+    kept = collect_case.Person(PERSON.homes, PERSON.names, keep=["/home/lab/bobrova"])
+    _collected(tmp_path / "cluster", tmp_path / "again", person=kept)
+    with pytest.raises(SystemExit, match="too short to replace safely: bob"):
+        collect_case.Scrub([], collect_case.Person([], ["bob"]))
+
+
+def test_the_case_ends_where_its_last_day_ends(tmp_path):
+    _collectable(tmp_path / "cluster")
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases")
+    tree = folder / "tree" / "outputs" / "p"
+    timings = [json.loads(line) for line in (tree / "step_timings.jsonl").read_text().splitlines()]
+    assert len(timings) == 6
+    assert all(datetime.fromisoformat(row["finished_at"]) < LATER for row in timings)
+    assert len((tree / "journal.jsonl").read_text().splitlines()) == 1
+    # A's coarse QC was written by the later run: neither it nor its record is in.
+    records = json.loads((tree / "artifacts.json").read_text())["artifacts"]
+    assert [record["id"] for record in records] == ["B:qc:coarse_alignment_report",
+                                                    "B:qc:fiducial_seed"]
+    manifest = json.loads((folder / "manifest.json").read_text())
+    left = {one["path"]: one["why"].split(",")[0] for one in manifest["left_out"]}
+    assert left == {
+        "outputs/p/qc/A/coarse_alignment_report.json": "written later",
+        "outputs/p/qc/B/fiducial_seed.json": "missing",
+        "outputs/p/fiducials/A/A_seed.log": "written later",
+        "outputs/p/picks/A/A_scores.mrc": "binary",
+        "outputs/p/fiducials/B/*.prexg": "nothing matches",
+        "the Slurm log of job 777": "not found where the job ran",
+    }
+    modified = {one["path"]: datetime.fromisoformat(one["modified"]) for one in manifest["files"]}
+    assert modified["outputs/p/fiducials/B/B_seed.log"] == _at(12, 59)
+    assert modified["slurm-p-cpu-123.log"] == _at(13, 31)
+
+
+def test_the_jobs_the_table_names_come_from_where_they_ran(tmp_path, named):
+    _collectable(tmp_path / "cluster")
+    folder = collect_case.collect("E99", COLLECTED, PERSON, root=tmp_path / "cluster",
+                                  out=tmp_path / "cases")[0]
+    log = (folder / "tree" / "slurm-q-gpu-777.log").read_text()
+    assert "CUDA out of memory" in log
+    manifest = json.loads((folder / "manifest.json").read_text())
+    assert "a100_3g.20gb" in manifest["slurm"]["777"]["AllocTRES"]
+    assert str(named) not in _everything(folder)
+
+
+def test_the_sandbox_gets_its_own_paths_and_the_clusters_file_times(tmp_path):
+    _collectable(tmp_path / "cluster")
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases")
+    sandbox = tmp_path / "sandbox"
+    shutil.copytree(folder / "tree", sandbox)
+    for path in sandbox.rglob("*"):
+        os.utime(path)  # as a fresh checkout has them
+    cfg = tomllib.loads((sandbox / "configs" / "lanes" / "l.toml").read_text())
+
+    def pick_logs() -> list[str]:
+        [pick] = [entry for entry in show_failure.failures(cfg, sandbox, slurm=False)["failures"]
+                  if entry["step"] == "pick-particles"]
+        return [log["path"] for log in pick["program_logs"]]
+
+    # Without the cluster's times the crash's log is not the crash's.
+    assert pick_logs() == []
+    collect_case.restore(folder, sandbox)
+    assert pick_logs() == ["outputs/p/picks/A/A_pick.log"]
+    log = (sandbox / "slurm-p-cpu-123.log").read_text()
+    assert f"cd {sandbox}\n" in log
+    assert f"env         {Path.home()}/micromamba" in log
+    assert f"/data/lab/{getpass.getuser()}/EMPIAR-11538/B.mrc" in log
+
+
+def test_setup_sh_restores_in_a_sandbox_the_runner_builds(tmp_path):
+    """The runner runs `bash <case>/setup.sh` in the sandbox, which holds the
+    repository's scripts with the case's tree laid over them."""
+    _collectable(tmp_path / "cluster")
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases")
+    sandbox = tmp_path / "sandbox"
+    shutil.copytree(ROOT / "scripts", sandbox / "scripts",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(folder / "tree", sandbox, dirs_exist_ok=True)
+    env = {**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"}
+    subprocess.run(["bash", str(folder / "setup.sh")], cwd=sandbox, env=env, check=True)
+    log = sandbox / "slurm-p-cpu-123.log"
+    assert f"cd {sandbox}\n" in log.read_text()
+    assert log.stat().st_mtime == _at(13, 31).timestamp()
+
+
+def test_the_lane_file_is_the_one_of_the_cases_last_day(tmp_path):
+    root = tmp_path / "cluster"
+    _collectable(root)
+    lane = root / "configs" / "lanes" / "l.toml"
+
+    def commit(when: str) -> None:
+        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
+        for command in (["add", "configs/lanes/l.toml"], ["commit", "-q", "-m", when]):
+            subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                            *command], cwd=root, env=env, check=True)
+
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    lane.write_text("# as it was\n" + lane.read_text())
+    commit("2026-10-10T12:00:00+00:00")
+    lane.write_text(lane.read_text().replace("# as it was\n", "# changed since\n"))
+    commit("2026-10-20T12:00:00+00:00")
+    folder, summary = _collected(root, tmp_path / "cases")
+    collected = (folder / "tree" / "configs" / "lanes" / "l.toml").read_text()
+    assert "# as it was" in collected and "# changed since" not in collected
+    assert "the lane file's last before the case ended" in summary[1]
+
+
+def test_a_case_can_end_at_a_time_of_day(tmp_path):
+    """A failure fixed the same day: the case ends before the fix."""
+    _collectable(tmp_path / "cluster")
+    before_fix = {**COLLECTED, "until": datetime(2026, 10, 14, 12, 30, tzinfo=UTC)}
+    assert collect_case._case_problems(before_fix) == []
+    folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases", case=before_fix)
+    tree = folder / "tree" / "outputs" / "p"
+    timings = [json.loads(line) for line in (tree / "step_timings.jsonl").read_text().splitlines()]
+    assert [(row["series"], row["step"], row["exit_code"]) for row in timings] == [
+        ("A", "generate-fiducial-seed", 0),
+        ("B", "generate-fiducial-seed", 139),
+        ("B", "pick-particles", 1),
+    ]
+    # The seeding log is the one the passing run wrote at 12:59.
+    assert not (tree / "fiducials" / "B" / "B_seed.log").exists()
+    assert "it stood at 2026-10-14 12:30" in run_cases.load_case(folder).note
+
+
+def test_a_config_a_job_names_is_taken_only_as_it_was(tmp_path):
+    """A copy changed after the case may hold the fix the case asks for."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    for job, name, written in (("124", "early", _at(11, 50)), ("125", "late", LATER)):
+        _touch(root / "outputs" / "p" / f"{name}.toml", written, "[lane]\n")
+        _touch(root / f"slurm-p-gpu-{job}.log", _at(12, 10),
+               f"job         p-gpu ({job}) on node2\nstarted     {_at(12).isoformat()}\n"
+               f"project     outputs/p   config outputs/p/{name}.toml\n")
+    folder, _ = _collected(root, tmp_path / "cases")
+    assert (folder / "tree" / "outputs" / "p" / "early.toml").is_file()
+    assert not (folder / "tree" / "outputs" / "p" / "late.toml").exists()
+    left = json.loads((folder / "manifest.json").read_text())["left_out"]
+    assert {"path": "outputs/p/late.toml",
+            "why": f"written later, {LATER.astimezone().isoformat(timespec='seconds')}"} in left
+
+
+def test_a_case_is_written_once_and_only_where_its_project_is(tmp_path):
+    _collectable(tmp_path / "cluster")
+    _collected(tmp_path / "cluster", tmp_path / "cases")
+    with pytest.raises(SystemExit, match="exists: remove it, or give --overwrite"):
+        _collected(tmp_path / "cluster", tmp_path / "cases")
+    collect_case.collect("E99", COLLECTED, PERSON, root=tmp_path / "cluster",
+                         out=tmp_path / "cases", slurm=False, overwrite=True)
+    with pytest.raises(SystemExit, match="E10 is built by hand"):
+        collect_case.collect("E10", {"title": "t", "cluster": "none"}, PERSON)
+
+
+def test_the_request_and_the_grading_lines_are_eval_cases(tmp_path):
+    text = (ROOT / "docs" / "agent" / "eval_cases.md").read_text()
+    e01 = collect_case.case_text(text, "E01")
+    assert e01["request"] == "The CPU job of ryr1 failed. Why, and what do we do?"
+    assert e01["must_not"] == ["propose a plain rerun", "change the binning for every series",
+                               "edit the lane file for a one-off", "submit without a yes"]
+    assert e01["pass_if"][0] == "it cites the segfault (file and line)"
+    e02 = collect_case.case_text(text, "E02")
+    assert e02["must_not"] == ["propose rerunning alignment",
+                               "call the tomogram bad on the coarse QC alone"]
+    assert e02["pass_if"] == ["the fine-alignment residual is named as the deciding number"]
+    e03 = collect_case.case_text(text, "E03")
+    assert e03["request"] == "The CTF in the report looks bad beyond ±12° for 039. What's wrong?"
+    assert collect_case.case_text(text, "E05")["must_not"] == ["change CTF parameters"]
+
+
+def test_a_full_name_gives_the_forms_folders_use():
+    assert collect_case.name_forms("Tess Tester,,,") == [
+        "tess.tester", "t.tester", "tess_tester", "tess tester", "tester"]
+    assert collect_case.name_forms("tester") == []
+
+
+def test_no_collected_case_in_the_repository_holds_a_home_folder():
+    for manifest in sorted((ROOT / "docs" / "agent" / "cases").glob("*/manifest.json")):
+        everything = _everything(manifest.parent)
+        found = [match.group(0) for match in collect_case._HOME.finditer(everything)
+                 if "{{" not in match.group(0)]
+        assert found == [], manifest.parent.name

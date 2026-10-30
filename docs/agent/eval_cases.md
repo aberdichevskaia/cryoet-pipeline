@@ -46,6 +46,12 @@ client, which is what makes it the instrument for deciding about either (see
     of it is still on that cluster, and copies nothing. A later run of a step
     writes its files again, so a file written after the case's last day is not
     the case's any more.
+  - `scripts/collect_case.py --collect E02 E05` writes those cases as folders in
+    that shape, the project as it stood when each ended, under `~/cases`. User
+    names and home paths are placeholders in them, and nothing is written while
+    one is left. Their `setup.sh` fills the placeholders in and gives the files
+    their times on the cluster back, which git does not keep and `show_failure.py`
+    needs.
 
 ## From history
 
