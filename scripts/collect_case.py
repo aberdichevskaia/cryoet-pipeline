@@ -893,7 +893,12 @@ def collect(
 
     for file_name, key in (("step_timings.jsonl", "finished_at"), ("journal.jsonl", "at")):
         rows = _trimmed_rows(project / file_name, key, end)
-        if rows is not None:
+        if rows is not None and rows[1] == 0 and rows[2] > 0:
+            # Every row came after: the file was not there yet. An empty one was
+            # read in the runs of 30 October 2026 as a journal that lost its rows.
+            left.append({"path": f"{project_name}/{file_name}",
+                         "why": "no row from before the case ended"})
+        elif rows is not None:
             files[f"{project_name}/{file_name}"] = Evidence(
                 f"{project_name}/{file_name}", rows[0],
                 until_case((project / file_name).stat().st_mtime),

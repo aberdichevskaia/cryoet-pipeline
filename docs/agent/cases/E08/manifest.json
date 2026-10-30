@@ -19,11 +19,6 @@
       "source": "111 of its 206 rows"
     },
     {
-      "path": "outputs/ribo-mdc/journal.jsonl",
-      "modified": "2026-10-15T23:59:59+02:00",
-      "source": "0 of its 20 rows"
-    },
-    {
       "path": "outputs/ribo-mdc/artifacts.json",
       "modified": "2026-10-15T23:59:59+02:00",
       "source": "the registry, 67 of its 254 records"
@@ -309,6 +304,10 @@
     {
       "path": "outputs/ribo-mdc/qc/TS_0623/particle_extraction/TS_0623_cubic-crop_bin8_qc.json",
       "why": "written later, 2026-10-28T22:11:07+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/journal.jsonl",
+      "why": "no row from before the case ended"
     }
   ],
   "slurm": {}

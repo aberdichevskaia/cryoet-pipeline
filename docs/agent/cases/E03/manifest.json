@@ -34,11 +34,6 @@
       "source": "91 of its 187 rows"
     },
     {
-      "path": "outputs/ryr1/journal.jsonl",
-      "modified": "2026-10-15T23:59:59+02:00",
-      "source": "0 of its 28 rows"
-    },
-    {
       "path": "outputs/ryr1/artifacts.json",
       "modified": "2026-10-15T23:59:59+02:00",
       "source": "the registry, 205 of its 452 records, and the two records of the ctfw1 fit under the lane's own ids (restored)"
@@ -178,6 +173,10 @@
     {
       "path": "outputs/ryr1/ctf/039/039_ctffind5_ctffind.txt",
       "why": "written later, 2026-10-18T23:14:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/journal.jsonl",
+      "why": "no row from before the case ended"
     }
   ],
   "slurm": {}

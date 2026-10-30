@@ -468,6 +468,18 @@ def test_the_case_ends_where_its_last_day_ends(tmp_path):
     assert modified["slurm-p-cpu-123.log"] == _at(13, 31)
 
 
+def test_a_journal_begun_after_the_case_is_left_out_not_emptied(tmp_path):
+    """The projects' journals began on 28 October 2026: a case before then had none."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    _touch(root / "outputs" / "p" / "journal.jsonl", LATER,
+           json.dumps({"at": "2026-10-21T12:00:00+00:00"}) + "\n")
+    folder, _ = _collected(root, tmp_path / "cases")
+    assert not (folder / "tree" / "outputs" / "p" / "journal.jsonl").exists()
+    left = json.loads((folder / "manifest.json").read_text())["left_out"]
+    assert {"path": "outputs/p/journal.jsonl", "why": "no row from before the case ended"} in left
+
+
 def test_a_job_the_table_names_is_left_out_if_it_started_after_the_case(tmp_path):
     """E01's table once named 161b, the run that held the fix."""
     root = tmp_path / "cluster"
