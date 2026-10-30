@@ -58,6 +58,13 @@
 # command that moves it aside, found before Dynamo starts; or the setup's own
 # reason and the path to its log.
 #
+# One job at a time on a project. The job holds a lock on $EXPORT/$NAME.lock from
+# the setup to the report (scripts/hold_run_lock.py). A second job of the same
+# project, started while the first is on it, stops at once with REFUSED, the first
+# job's number, node and start, having run nothing; one that waited in the queue
+# and starts after the first has ended carries the project on. The setup that
+# scripts/mra_port_run.sbatch runs takes the same lock while it makes the project.
+#
 # Dynamo is the group's shared installation, activated with its shipped MATLAB
 # Runtime 9.9. dynamo_activate_linux.sh alone tries to compile OpenMP wrappers
 # inside the read-only installation and fails, and without those wrappers only
@@ -75,6 +82,10 @@
 
 set -euo pipefail
 
+# This script, to run again under the project's lock below: SLURM runs a copy of it,
+# by an absolute path in its spool; run by hand, it is found from here.
+script=$0
+[[ "$script" = /* ]] || script=$PWD/$script
 : "${EXPORT:?set EXPORT to the export folder (particles/, initial.tbl)}"
 : "${NAME:?set NAME to the project name}"
 REPO=${SLURM_SUBMIT_DIR:-$PWD}
@@ -92,6 +103,17 @@ fi
 if [[ -n "${REFERENCE:-}" ]]; then
     [[ "$REFERENCE" = /* ]] || REFERENCE=$REPO/$REFERENCE
     [[ -f "$REFERENCE" ]] || { echo "no REFERENCE $REFERENCE" >&2; exit 1; }
+fi
+# The rest of the job runs again under the project's lock, the setup, Dynamo and
+# the report: a second job of the same project stops here, naming the first. The
+# pipeline's env only gives the lock its python; Dynamo runs in the job's own
+# environment, as it did before.
+lock=$EXPORT/$NAME.lock
+if [[ "${DYNAMO_PROJECT_LOCK:-}" != "$lock" ]]; then
+    export DYNAMO_PROJECT_LOCK=$lock
+    holder=$(source "$REPO/scripts/activate_env.sh" > /dev/null && command -v python) \
+        || { echo "REFUSED: no pipeline env found to hold $lock with" >&2; exit 1; }
+    exec "$holder" "$REPO/scripts/hold_run_lock.py" "$lock" -- bash "$script"
 fi
 
 export MCR_CACHE_ROOT=$JOB_DIR/mcr_cache

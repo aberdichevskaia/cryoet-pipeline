@@ -93,23 +93,28 @@ else
     name=${NAME:-$(basename "$PROJECT")_port}
 fi
 run=$(dirname "$PROJECT")/$name
-source scripts/activate_env.sh
 # The rest of the job runs again under the run's lock, the setup, the port and the
-# report: a second job of the same run stops here, naming the first.
+# report: a second job of the same run stops here, naming the first. The pipeline's
+# env only gives the lock its python here: the setup runs Dynamo in the job's own
+# environment, and the env is activated after it.
 if [[ "${MRA_PORT_RUN_LOCK:-}" != "$run.lock" ]]; then
     export MRA_PORT_RUN_LOCK=$run.lock
-    exec python scripts/hold_run_lock.py "$run.lock" -- bash "$script"
+    holder=$(source scripts/activate_env.sh > /dev/null && command -v python) \
+        || { echo "REFUSED: no pipeline env found to hold $run.lock with" >&2; exit 1; }
+    exec "$holder" scripts/hold_run_lock.py "$run.lock" -- bash "$script"
 fi
 if [[ -n "${EXPORT:-}" ]]; then
     if [[ ! -f "$PROJECT/cards/ite_0001/card_ite_ite_0001.card" ]]; then
         # Made for 32 cores, which the setup reads from SLURM_CPUS_PER_TASK, whatever
-        # this job has; a refusal of the setup ends this job, on this log.
+        # this job has; a refusal of the setup ends this job, on this log, as does a
+        # Dynamo job of the same project holding its lock (scripts/dynamo_mra_mdc.sbatch).
         SETUP_ONLY=1 SLURM_CPUS_PER_TASK=32 bash scripts/dynamo_mra_mdc.sbatch
     else
         echo "set up      $PROJECT was made before: the port follows its cards, and the" \
              "setup's variables are not read"
     fi
 fi
+source scripts/activate_env.sh
 echo "lock        $run.lock, held by this job to its end"
 echo "node        $(hostname)"
 echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
