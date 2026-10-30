@@ -1,6 +1,6 @@
 # One-series copy of configs/lanes/ryr1-bin4.toml: 039 only, so that the five
-# series pick side by side, one submission each. Its search is estimated at
-# ~14 h (see the gpu stage), hence 36 h.
+# series pick side by side, one submission each. Its gpu stage took 5 h 44 on
+# 2026-10-29; each copy gets 16 h, 1.8 times the longest (161's 8 h 51).
 # Lane D — RyR1 in native membranes (vm_actmix_ryr1, MDC Berlin), from SerialEM
 # TIFF frames without mdocs, with gold beads and membrane segmentation; tomograms
 # at 6.72 A/px. Aimed at a ~20 A average of 5 tomograms, not at high resolution.
@@ -84,19 +84,20 @@ until = "reconstruct-tomogram"
 time = "4:00:00"
 sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
 
-# Measured on 2026-10-14 (the bin4 report), pytom's search on an A40: 039 4 h 49,
-# 096 5 h 21, 097 6 h 9, 125 4 h 23 and 161 7 h 49 min, 28.5 h one after another;
-# MemBrain-seg 4-6 min and the template ~1 min a series. Those searches had
-# 400 A and a 30 A low-pass, 4.30 deg steps, ~49,000 rotations with C4. The
-# values in [pick] now give 2.94 deg and ~148,000, x3.0: ~85 h for all five and
-# ~23 h for 161 alone, scaled from those times, not measured. One job over all
-# five gets 5 days (the gpu partition allows 7). The one-series copies in
-# ryr1-bin4-series/ run side by side at 36 h each.
+# Measured in the 2026-10-29 rerun with the values in [pick] (2.949 deg steps,
+# 147,600 rotations with C4, as pytom's job files give them), one series a job
+# on an A40: pytom's search took 125 5.0 h, 039 5.5 h, 096 5.9 h, 097 6.9 h and
+# 161 8.6 h, and the whole stage 5 h 14 to 8 h 51 a series, 33.2 h one after
+# another. Three times the rotations of 2026-10-14 (400 A, 30 A low-pass,
+# 4.30 deg, ~49,000) took only 1.1 times as long, so size the limits from these
+# times, not by the rotation count. One job over all five gets 2 days (the gpu
+# partition allows 7). The one-series copies in ryr1-bin4-series/ run side by
+# side at 16 h each.
 [[run.stage]]
 name = "gpu"
 from = "segment-tomogram"
 until = "extract-particles"
-time = "1-12:00:00"
+time = "16:00:00"
 sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 [data]
