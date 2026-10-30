@@ -1,0 +1,88 @@
+job         hiv-motion (41074288) on gpusrv30.scidom.de
+started     2026-10-07T20:58:07+02:00
+project     outputs/hiv   config configs/lanes/gag-bin8.toml
+series      TS_01 TS_43
+steps       prepare-tilt-series
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/hiv/manifests/TS_01.json --registry outputs/hiv/artifacts.json --out outputs/hiv --motion-backend motioncor3 --storage-policy working --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 5 --motioncor3-patch-y 5 --motioncor3-pixel-size 0.675 --overwrite
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/cli.py:478 in prepare_tilt_series                           │
+│                                                                              │
+│    475 │   │   },                                                            │
+│    476 │   )                                                                 │
+│    477 │                                                                     │
+│ ❱  478 │   corrected_artifacts = correct_and_register(                       │
+│    479 │   │   selected_motion_backend,                                      │
+│    480 │   │   tilt_series_manifest,                                         │
+│    481 │   │   context,                                                      │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/motion.py:381 in correct_and_register              │
+│                                                                              │
+│   378 ) -> list[Artifact]:                                                   │
+│   379 │   """Run motion correction and add the returned artifacts to the     │
+│       registry."""                                                           │
+│   380 │                                                                      │
+│ ❱ 381 │   artifacts = backend.correct(manifest, context)                     │
+│   382 │   registry.extend(artifacts, replace=replace_existing)               │
+│   383 │   return artifacts                                                   │
+│   384                                                                        │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/motion.py:81 in correct                            │
+│                                                                              │
+│    78 │   │   _retention_policy_parameter(context)                           │
+│    79 │   │   _bool_parameter(context, "can_recompute", default=True)        │
+│    80 │   │   try:                                                           │
+│ ❱  81 │   │   │   return [                                                   │
+│    82 │   │   │   │   self._correct_image(                                   │
+│    83 │   │   │   │   │   image,                                             │
+│    84 │   │   │   │   │   manifest,                                          │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/motion.py:82 in <listcomp>                         │
+│                                                                              │
+│    79 │   │   _bool_parameter(context, "can_recompute", default=True)        │
+│    80 │   │   try:                                                           │
+│    81 │   │   │   return [                                                   │
+│ ❱  82 │   │   │   │   self._correct_image(                                   │
+│    83 │   │   │   │   │   image,                                             │
+│    84 │   │   │   │   │   manifest,                                          │
+│    85 │   │   │   │   │   context,                                           │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/motion.py:151 in _correct_image                    │
+│                                                                              │
+│   148 │   │   │   write_command_log(command_log_path, (command, result))     │
+│   149 │   │   │   if result.returncode != 0:                                 │
+│   150 │   │   │   │   detail = (result.stderr or result.stdout or "no        │
+│       process output").strip()                                               │
+│ ❱ 151 │   │   │   │   raise RuntimeError(                                    │
+│   152 │   │   │   │   │   f"MotionCor3 failed for {image.local_frame_file}   │
+│       with exit code "                                                       │
+│   153 │   │   │   │   │   f"{result.returncode}: {detail}; see               │
+│       {command_log_path}"                                                    │
+│   154 │   │   │   │   )                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: MotionCor3 failed for 
+data/empiar-10164/data/frames/TS_01_000_0.0.mrc with exit code 127: 
+/ictstr01/groups/shared/users/peng_marr/{{USER}}/MotionCor3/MotionCor3: 
+error while loading shared libraries: libnvToolsExt.so.1: cannot open shared 
+object file: No such file or directory; see 
+outputs/hiv/logs/motioncor3/TS_01/TS_01_000_mc3.runner.log
+# prepare-tilt-series: 0.3 min, +0.00 GB
+
+# FAILED at prepare-tilt-series (exit 1) for TS_01.
+# Fix it, then resume with:
+#   --series TS_01 --from prepare-tilt-series

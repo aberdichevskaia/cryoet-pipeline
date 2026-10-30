@@ -1,0 +1,203 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr -input {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097_aligned.st -output {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097_residual.xf -tiltfile {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097.tlt -rotation 90.000000 -verbose 1
+
+[stdout]
+
+ RO image file on unit   1 : {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097_aligned.st     Size=      41679 K
+
+ Number of columns, rows, sections .....     720     511      29
+ Map mode ..............................    2   (32-bit float)             
+ Start cols, rows, sects, grid x,y,z ...    0     0     0     720    511     29
+ Pixel spacing (Angstroms)..............   13.44      13.44      13.44    
+ Cell angles ...........................   90.000   90.000   90.000
+ Fast, medium, slow axes ...............    X    Y    Z
+ Origin on x,y,z .......................    0.000       0.000       0.000    
+ Minimum density .......................  0.35192E-01
+ Maximum density .......................   2.0698    
+ Mean density ..........................  0.93879    
+ tilt angles (original,current) ........   0.0   0.0   0.0   0.0   0.0   0.0
+ Space group,# extra bytes,idtype,lens .        1        0        0        0
+
+     2 Titles :
+Created by mrcfile.py                                       2026-10-14 17:06:47
+NEWSTACK: Images copied, transformed                    14-Oct-26  17:06:49    
+
+
+ FORMATTED  ro  file opened: {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097.tlt
+
+ Binning is      1;  padded, reduced size is   864 by   616
+ idir, stretch, ivRef, ivCur           1   1.001372              15          16
+ Box offsets           1           0           0           0           0
+  1   -0.02    0.17    1.48018       -0.02    0.17   -0.02    0.17
+ peak usdx,usdy,xpeak,ypeak -2.3817748E-02  0.1680363     -2.3817748E-02
+  0.1682669    
+View  16, shifts     -0.02      0.17      peak    1.48018    
+ idir, stretch, ivRef, ivCur           1   1.004130              16          17
+ Box offsets           1           0           0           0           0
+  1   -0.05   -0.17    1.37175       -0.05   -0.17   -0.05   -0.17
+ peak usdx,usdy,xpeak,ypeak -5.0078537E-02 -0.1671547     -5.0078537E-02
+ -0.1678450    
+View  17, shifts     -0.07      0.00      peak    1.37175    
+ idir, stretch, ivRef, ivCur           1   1.006919              17          18
+ Box offsets           1           0           0           0           0
+  1   -0.03   -0.36    1.30273       -0.03   -0.36   -0.03   -0.36
+ peak usdx,usdy,xpeak,ypeak -3.1786349E-02 -0.3580320     -3.1786349E-02
+ -0.3605091    
+View  18, shifts     -0.11     -0.36      peak    1.30273    
+ idir, stretch, ivRef, ivCur           1   1.009754              18          19
+ Box offsets           1           0           0           0           0
+  1   -0.05   -0.19    1.24871       -0.05   -0.19   -0.05   -0.19
+ peak usdx,usdy,xpeak,ypeak -5.4418888E-02 -0.1832680     -5.4418888E-02
+ -0.1850556    
+View  19, shifts     -0.16     -0.54      peak    1.24871    
+ idir, stretch, ivRef, ivCur           1   1.012653              19          20
+ Box offsets           1           0           0           0           0
+  1    0.02    0.06    1.21327        0.02    0.06    0.02    0.06
+ peak usdx,usdy,xpeak,ypeak  2.0462630E-02  5.9895530E-02  2.0462630E-02
+  6.0653389E-02
+View  20, shifts     -0.14     -0.47      peak    1.21327    
+ idir, stretch, ivRef, ivCur           1   1.015635              20          21
+ Box offsets           1           0           0           0           0
+  1   -0.02   -0.20    1.12970       -0.02   -0.20   -0.02   -0.20
+ peak usdx,usdy,xpeak,ypeak -2.3871824E-02 -0.1926434     -2.3871824E-02
+ -0.1956553    
+View  21, shifts     -0.16     -0.66      peak    1.12970    
+ idir, stretch, ivRef, ivCur           1   1.018719              21          22
+ Box offsets           1           0           0           0           0
+  1   -0.03    0.09    1.19543       -0.03    0.09   -0.03    0.09
+ peak usdx,usdy,xpeak,ypeak -3.4412853E-02  9.2832901E-02 -3.4412853E-02
+  9.4570681E-02
+View  22, shifts     -0.20     -0.55      peak    1.19543    
+ idir, stretch, ivRef, ivCur           1   1.021931              22          23
+ Box offsets           1           0           0           0           0
+  1   -0.00   -0.26    1.02803       -0.00   -0.26   -0.00   -0.26
+ peak usdx,usdy,xpeak,ypeak -5.2380929E-04 -0.2577118     -5.2380929E-04
+ -0.2633637    
+View  23, shifts     -0.20     -0.80      peak    1.02803    
+ idir, stretch, ivRef, ivCur           1   1.025296              23          24
+ Box offsets           1           0           0           0           0
+  1   -0.05   -0.15    1.01993       -0.05   -0.15   -0.05   -0.15
+ peak usdx,usdy,xpeak,ypeak -5.2792639E-02 -0.1486163     -5.2792639E-02
+ -0.1523757    
+View  24, shifts     -0.25     -0.93      peak    1.01993    
+ idir, stretch, ivRef, ivCur           1   1.028846              24          25
+ Box offsets           1           0           0           0           0
+  1    0.01   -0.18   0.974394        0.01   -0.18    0.01   -0.18
+ peak usdx,usdy,xpeak,ypeak  6.6577382E-03 -0.1716463      6.6577382E-03
+ -0.1765976    
+View  25, shifts     -0.24     -1.07      peak   0.974394    
+ idir, stretch, ivRef, ivCur           1   1.032617              25          26
+ Box offsets           1           0           0           0           0
+  1   -0.07    0.19   0.873577       -0.07    0.19   -0.07    0.19
+ peak usdx,usdy,xpeak,ypeak -7.0512749E-02  0.1877069     -7.0512749E-02
+  0.1938293    
+View  26, shifts     -0.32     -0.85      peak   0.873577    
+ idir, stretch, ivRef, ivCur           1   1.036654              26          27
+ Box offsets           1           0           0           0           0
+  1   -0.01   -0.03   0.937209       -0.01   -0.03   -0.01   -0.03
+ peak usdx,usdy,xpeak,ypeak -6.3555092E-03 -3.1412266E-02 -6.3555092E-03
+ -3.2563645E-02
+View  27, shifts     -0.32     -0.85      peak   0.937209    
+ idir, stretch, ivRef, ivCur           1   1.041010              27          28
+ Box offsets           1           0           0           0           0
+  1   -0.20   -0.57   0.866735       -0.20    0.43   -0.20    0.43
+ peak usdx,usdy,xpeak,ypeak -0.2016939     -0.5464380     -0.2016939    
+ -0.5688477    
+View  28, shifts     -0.52     -1.36      peak   0.866735    
+ idir, stretch, ivRef, ivCur           1   1.045753              28          29
+ Box offsets           1           0           0           0           0
+  1   22.69  148.25    1.29173       -0.31    0.25   -0.31    0.25
+ peak usdx,usdy,xpeak,ypeak   22.69313       141.7658       22.69313    
+   148.2521    
+View  29, shifts     22.17    140.46      peak    1.29173    
+ idir, stretch, ivRef, ivCur           1   1.001372              15          14
+ Box offsets           1           0           0           0           0
+  1    0.01    0.39    1.68444        0.01    0.39    0.01    0.39
+ peak usdx,usdy,xpeak,ypeak  8.5313460E-03  0.3935391      8.5313460E-03
+  0.3940791    
+View  14, shifts      0.01      0.39      peak    1.68444    
+ idir, stretch, ivRef, ivCur           1   1.004130              14          13
+ Box offsets           1           0           0           0           0
+  1   -0.00   -0.84    1.71985       -0.00    0.16   -0.00    0.16
+ peak usdx,usdy,xpeak,ypeak -9.9770888E-04 -0.8365716     -9.9770888E-04
+ -0.8400269    
+View  13, shifts      0.01     -0.44      peak    1.71985    
+ idir, stretch, ivRef, ivCur           1   1.006919              13          12
+ Box offsets           1           0           0           0           0
+  1   -0.06   -0.22    1.63121       -0.06   -0.22   -0.06   -0.22
+ peak usdx,usdy,xpeak,ypeak -6.2672310E-02 -0.2140070     -6.2672310E-02
+ -0.2154877    
+View  12, shifts     -0.06     -0.66      peak    1.63121    
+ idir, stretch, ivRef, ivCur           1   1.009754              12          11
+ Box offsets           1           0           0           0           0
+  1   -0.09   -0.53    1.68418       -0.09    0.47   -0.09    0.47
+ peak usdx,usdy,xpeak,ypeak -8.5455805E-02 -0.5224311     -8.5455805E-02
+ -0.5275269    
+View  11, shifts     -0.14     -1.17      peak    1.68418    
+ idir, stretch, ivRef, ivCur           1   1.012653              11          10
+ Box offsets           1           0           0           0           0
+  1    0.01    0.06    1.61248        0.01    0.06    0.01    0.06
+ peak usdx,usdy,xpeak,ypeak  7.3644659E-03  6.3754201E-02  7.3644659E-03
+  6.4560883E-02
+View  10, shifts     -0.13     -1.09      peak    1.61248    
+ idir, stretch, ivRef, ivCur           1   1.015635              10           9
+ Box offsets           1           0           0           0           0
+  1    0.05    0.10    1.63401        0.05    0.10    0.05    0.10
+ peak usdx,usdy,xpeak,ypeak  4.7171123E-02  9.5628180E-02  4.7171123E-02
+  9.7123280E-02
+View   9, shifts     -0.09     -0.98      peak    1.63401    
+ idir, stretch, ivRef, ivCur           1   1.018719               9           8
+ Box offsets           1           0           0           0           0
+  1    0.01    0.10    1.49457        0.01    0.10    0.01    0.10
+ peak usdx,usdy,xpeak,ypeak  1.1461906E-02  9.7466297E-02  1.1461906E-02
+  9.9290811E-02
+View   8, shifts     -0.07     -0.87      peak    1.49457    
+ idir, stretch, ivRef, ivCur           1   1.021931               8           7
+ Box offsets           1           0           0           0           0
+  1   -0.02    0.14    1.45551       -0.02    0.14   -0.02    0.14
+ peak usdx,usdy,xpeak,ypeak -2.4350578E-02  0.1345456     -2.4350578E-02
+  0.1374964    
+View   7, shifts     -0.10     -0.71      peak    1.45551    
+ idir, stretch, ivRef, ivCur           1   1.025296               7           6
+ Box offsets           1           0           0           0           0
+  1    0.04   -0.02    1.48490        0.04   -0.02    0.04   -0.02
+ peak usdx,usdy,xpeak,ypeak  3.8423132E-02 -1.5750492E-02  3.8423132E-02
+ -1.6148916E-02
+View   6, shifts     -0.06     -0.71      peak    1.48490    
+ idir, stretch, ivRef, ivCur           1   1.028846               6           5
+ Box offsets           1           0           0           0           0
+  1   -0.09    0.25    1.45837       -0.09    0.25   -0.09    0.25
+ peak usdx,usdy,xpeak,ypeak -9.3202069E-02  0.2420576     -9.3202069E-02
+  0.2490399    
+View   5, shifts     -0.15     -0.45      peak    1.45837    
+ idir, stretch, ivRef, ivCur           1   1.032617               5           4
+ Box offsets           1           0           0           0           0
+  1    0.06   -0.18    2.04531        0.06   -0.18    0.06   -0.18
+ peak usdx,usdy,xpeak,ypeak  6.0431305E-02 -0.1718733      6.0431305E-02
+ -0.1774793    
+View   4, shifts     -0.09     -0.61      peak    2.04531    
+ idir, stretch, ivRef, ivCur           1   1.036654               4           3
+ Box offsets           1           0           0           0           0
+  1   -0.09    0.23    2.07895       -0.09    0.23   -0.09    0.23
+ peak usdx,usdy,xpeak,ypeak -8.7348856E-02  0.2259434     -8.7348856E-02
+  0.2342250    
+View   3, shifts     -0.18     -0.36      peak    2.07895    
+ idir, stretch, ivRef, ivCur           1   1.041010               3           2
+ Box offsets           1           0           0           0           0
+  1    0.08   -0.05    2.19203        0.08   -0.05    0.08   -0.05
+ peak usdx,usdy,xpeak,ypeak  7.8646109E-02 -4.6350751E-02  7.8646109E-02
+ -4.8251614E-02
+View   2, shifts     -0.10     -0.39      peak    2.19203    
+ idir, stretch, ivRef, ivCur           1   1.045753               2           1
+ Box offsets           1           0           0           0           0
+  1    0.04    0.08    2.23916        0.04    0.08    0.04    0.08
+ peak usdx,usdy,xpeak,ypeak  3.7527643E-02  7.7898309E-02  3.7527643E-02
+  8.1462398E-02
+View   1, shifts     -0.06     -0.30      peak    2.23916    
+
+ FORMATTED  new  file opened: {{ROOT}}/outputs/ryr1/qc/097/coarse_alignment/.097-coarse-qc-o1m6i6de/097_residual.xf
+ PROGRAM EXECUTED TO END.
+
+[stderr]
+
+[exit_code]
+0

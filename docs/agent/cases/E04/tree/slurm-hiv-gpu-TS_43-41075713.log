@@ -1,0 +1,73 @@
+job         hiv-gpu-TS_43 (41075713) on gpusrv30.scidom.de
+started     2026-10-07T23:11:31+02:00
+project     {{ROOT}}/outputs/hiv   config {{ROOT}}/gag-bin8-prune006.toml
+series      TS_43
+steps       segment-tomogram prepare-template pick-particles visualize-picks extract-particles
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight   ok
+
+
+# ---- TS_43 (gag-bin8) ----
+
+# segment-tomogram
+cryoet segment-tomogram --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --membrain-executable $MEMBRAIN_EXE --membrain-model $MEMBRAIN_CKPT --membrain-sliding-window-size 160 --membrain-test-time-augmentation --variant bin8 --overwrite
+wrote segmentation: {{ROOT}}/outputs/hiv/segmentations/TS_43/TS_43_full_membrain-seg_bin8.zarr
+wrote segmentation QC: {{ROOT}}/outputs/hiv/qc/TS_43/segmentation/TS_43_full_membrain-seg_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# segment-tomogram: 4.4 min, +0.00 GB
+
+# prepare-template
+cryoet prepare-template --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --emdb-id EMD-2638 --template-low-pass-angstrom 10.8 --template-mask-radius-px 12 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map {{ROOT}}/outputs/hiv/emdb-cache/emd_2638.map
+wrote template: {{ROOT}}/outputs/hiv/templates/TS_43/TS_43_pytom_bin8_template.mrc
+wrote template mask: {{ROOT}}/outputs/hiv/templates/TS_43/TS_43_pytom_bin8_mask.mrc
+box size: 28 px
+voxel size: 5.4 A
+density extent: 28.0/26.0/24.0 px (151/140/130 A)
+mask radius: 12.0 px (65 A)
+wrote template QC: {{ROOT}}/outputs/hiv/qc/TS_43/template/TS_43_pytom_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# prepare-template: 1.1 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --pytom-particle-diameter 130.0 --pytom-extract-particle-diameter 80.0 --pytom-number-of-particles 3000 --pytom-number-of-false-positives 100.0 --pytom-low-pass 20.0 --pytom-random-phase-correction --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --use-segmentation-mask --segmentation-mask-dilation-px 40 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_43:template_match:pytom-match-pick:bin8
+wrote picks: {{ROOT}}/outputs/hiv/picks/TS_43/TS_43_full_pytom-match-pick_bin8_particles.star
+particles found: 431
+score: 0.3436 min, 0.3682 mean, 0.4489 max
+z spread: 28.7 px sd about z=88, against 43.0 px for a uniform fill
+wrote picking QC: {{ROOT}}/outputs/hiv/qc/TS_43/picking/TS_43_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# pick-particles: 36.5 min, +0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --variant bin8 --overwrite
+wrote tomogram: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43.mrc
+wrote picks: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_particles.star
+wrote template: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_template.mrc
+wrote segmentation: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_segmentation.mrc
+wrote ChimeraX script: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_open_in_chimerax.cxc
+wrote IMOD model: {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_picks.mod
+  431 picks, drawn as spheres of 12 px — the template mask radius, 12.0 px
+open with: chimerax {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_open_in_chimerax.cxc
+open with: 3dmod {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43.mrc {{ROOT}}/outputs/hiv/picks_view/TS_43/TS_43_picks.mod
+# visualize-picks: 1.7 min, +1.26 GB
+
+# extract-particles
+cryoet extract-particles --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --box-size-px 64 --variant bin8 --overwrite
+wrote particle stack: {{ROOT}}/outputs/hiv/particles/TS_43/TS_43_cubic-crop_bin8_particles.zarr
+particles extracted: 408 of 431
+  dropped: 23 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: {{ROOT}}/outputs/hiv/qc/TS_43/particle_extraction/TS_43_cubic-crop_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# extract-particles: 0.3 min, +0.40 GB
+
+finished    2026-10-07T23:57:27+02:00

@@ -1,0 +1,109 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/imodinfo -a {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/tracking.seed
+
+[stdout]
+# MODEL {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/tracking.seed
+# NAME  IMOD-NewModel
+# PIX SCALE:  x = 1
+#             y = 1
+#             z = 50
+# PIX SIZE      = 0.336
+# UNITS: nm
+# Model to Image index coords:
+#      SCALE  = ( 3.36, 3.36, 3.36)
+#      OFFSET = ( -0, -0, -0)
+#      ANGLES = ( 0, 0, 0)
+
+
+# imod ascii file version 2.0
+
+imod 1
+max 2880 2046 29
+offsets 0 0 0
+angles 0 0 0
+scale 1 1 50
+mousemode  2
+drawmode   1
+b&w_level  0,255
+resolution 3
+threshold  128
+pixsize    0.336
+units      nm
+flipped    0
+refcurscale 3.36 3.36 3.36
+refcurtrans -0 -0 -0
+refcurrot 0 0 0
+refoldtrans -0 -0 -0
+currentview  0
+
+object 0 20 0
+name 
+color 0 1 0 0
+open
+usevalue
+linewidth 1
+surfsize  0
+pointsize 0
+axis      0
+drawmode  1
+width2D   1
+symbol    0
+symsize   7
+symflags  0
+ambient   102
+diffuse   255
+specular  127
+shininess 4
+obquality 0
+valblack  0
+valwhite  255
+meshthick 0
+matflags2 4
+valminmax 1.17351 4.98891
+contour 0 0 1 2.71359
+221.499 475.483 14
+contour 1 0 1 2.64812
+503.295 323.018 14
+contour 2 0 1 2.80555
+1447.36 517.079 14
+contour 3 0 1 2.2046
+1369.28 168.039 14
+contour 4 0 1 1.82927
+1830.99 188.208 14
+contour 5 0 1 4.18658
+822.784 1271.65 14
+contour 6 0 1 2.52379
+638.943 802.073 14
+contour 7 0 1 3.9313
+1546.12 880.065 14
+contour 8 0 1 3.21206
+1390.27 1257.7 14
+contour 9 0 1 4.12122
+1801.09 985.711 14
+contour 10 0 1 3.97792
+2207 1024.19 14
+contour 11 0 1 3.38019
+1840.06 1227.04 14
+contour 12 0 1 2.86998
+2094.99 794.316 14
+contour 13 0 1 3.39137
+1878.51 1351.27 14
+contour 14 0 1 2.99969
+1849.99 1169.1 14
+contour 15 0 1 2.34866
+2455.16 1107.85 14
+contour 16 0 1 2.56832
+1624.97 1456.86 14
+contour 17 0 1 4.98891
+1770.24 1434.93 14
+contour 18 0 1 3.06876
+1729.18 1418.15 14
+contour 19 0 1 1.17351
+2314.26 1913.96 14
+# end of IMOD model
+
+
+
+[stderr]
+
+[exit_code]
+0

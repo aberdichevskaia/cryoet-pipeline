@@ -1,0 +1,61 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/newstack -input {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_input.st -output {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_aligned.st -xform {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_bin.xf -mode 2
+
+[stdout]
+
+ FORMATTED  ro  file opened: {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_bin.xf
+
+ RO image file on unit   1 : {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_input.st     Size=      41679 K
+
+ Number of columns, rows, sections .....     720     511      29
+ Map mode ..............................    2   (32-bit float)             
+ Start cols, rows, sects, grid x,y,z ...    0     0     0     720    511     29
+ Pixel spacing (Angstroms)..............   13.44      13.44      13.44    
+ Cell angles ...........................   90.000   90.000   90.000
+ Fast, medium, slow axes ...............    X    Y    Z
+ Origin on x,y,z .......................    0.000       0.000       0.000    
+ Minimum density .....(undetermined)....   0.0000    
+ Maximum density .....(undetermined)....  -1.0000    
+ Mean density ........(undetermined)....  -2.0000    
+ tilt angles (original,current) ........   0.0   0.0   0.0   0.0   0.0   0.0
+ Space group,# extra bytes,idtype,lens .        1        0        0        0
+
+     1 Titles :
+Created by mrcfile.py                                       2026-10-14 17:11:59
+
+
+ NEW image file on unit   2 : {{ROOT}}/outputs/ryr1/qc/161/coarse_alignment/.161-coarse-qc-3k9aclwh/161_aligned.st
+ section   input min&max       output min&max  &  mean
+       0      0.14      1.26      0.14      1.26      0.71
+       1      0.18      1.23      0.18      1.23      0.73
+       2      0.17      1.28      0.17      1.28      0.80
+       3      0.21      1.35      0.21      1.35      0.80
+       4      0.18      1.38      0.18      1.38      0.84
+       5      0.18      1.36      0.18      1.36      0.86
+       6      0.21      1.51      0.21      1.51      0.88
+       7      0.20      1.45      0.20      1.45      0.90
+       8      0.20      1.43      0.20      1.43      0.92
+       9      0.17      1.51      0.17      1.51      0.93
+      10      0.22      1.73      0.22      1.73      0.94
+      11      0.24      1.55      0.24      1.55      0.95
+      12      0.23      1.56      0.23      1.56      0.95
+      13      0.20      1.58      0.20      1.58      0.95
+      14      0.13      1.52      0.13      1.52      0.95
+      15      0.19      1.63      0.19      1.63      0.95
+      16      0.17      1.47      0.17      1.47      0.95
+      17      0.18      1.46      0.18      1.46      0.94
+      18      0.21      1.52      0.21      1.52      0.93
+      19      0.18      1.47      0.18      1.47      0.93
+      20      0.20      1.49      0.20      1.49      0.91
+      21      0.17      1.38      0.17      1.38      0.90
+      22      0.20      1.38      0.20      1.38      0.88
+      23      0.19      1.46      0.19      1.46      0.86
+      24      0.16      1.32      0.16      1.32      0.83
+      25      0.18      1.35      0.18      1.35      0.81
+      26      0.19      1.21      0.19      1.21      0.77
+      27      0.20      1.16      0.20      1.16      0.76
+      28      0.12      1.12      0.12      1.12      0.70
+
+[stderr]
+
+[exit_code]
+0

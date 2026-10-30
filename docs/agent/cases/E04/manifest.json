@@ -1,0 +1,191 @@
+{
+  "case": "E04",
+  "cluster": "munich",
+  "days": [
+    "2026-10-07",
+    "2026-10-07"
+  ],
+  "collected": "2026-10-30T13:17:12+01:00",
+  "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
+  "files": [
+    {
+      "path": "slurm-hiv-gpu-TS_01-41075712.log",
+      "modified": "2026-10-07T23:10:56+02:00",
+      "source": "Slurm log of job 41075712, named in the table"
+    },
+    {
+      "path": "slurm-hiv-cpu-41074765.log",
+      "modified": "2026-10-07T21:31:57+02:00",
+      "source": "Slurm log of job 41074765, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-cpu-TS_01-41075008.log",
+      "modified": "2026-10-07T21:47:33+02:00",
+      "source": "Slurm log of job 41075008, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-cpu-TS_43-41075009.log",
+      "modified": "2026-10-07T21:52:24+02:00",
+      "source": "Slurm log of job 41075009, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-gpu-TS_01-41075010.log",
+      "modified": "2026-10-07T21:52:49+02:00",
+      "source": "Slurm log of job 41075010, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-gpu-TS_43-41075011.log",
+      "modified": "2026-10-07T21:53:18+02:00",
+      "source": "Slurm log of job 41075011, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-gpu-TS_43-41075713.log",
+      "modified": "2026-10-07T23:57:27+02:00",
+      "source": "Slurm log of job 41075713, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-motion-41051519.log",
+      "modified": "2026-10-07T17:58:04+02:00",
+      "source": "Slurm log of job 41051519, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-motion-41065633.log",
+      "modified": "2026-10-07T20:00:43+02:00",
+      "source": "Slurm log of job 41065633, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-motion-41074288.log",
+      "modified": "2026-10-07T20:58:27+02:00",
+      "source": "Slurm log of job 41074288, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-motion-41074613.log",
+      "modified": "2026-10-07T21:02:58+02:00",
+      "source": "Slurm log of job 41074613, started in the case's days"
+    },
+    {
+      "path": "slurm-hiv-motion-41074764.log",
+      "modified": "2026-10-07T21:26:15+02:00",
+      "source": "Slurm log of job 41074764, started in the case's days"
+    },
+    {
+      "path": "configs/lanes/gag-bin8.toml",
+      "modified": "2026-10-07T16:53:41+02:00",
+      "source": "commit fc0c31d03, the lane file's last before the case ended"
+    },
+    {
+      "path": "outputs/hiv/step_timings.jsonl",
+      "modified": "2026-10-07T23:59:59+02:00",
+      "source": "35 of its 46 rows"
+    },
+    {
+      "path": "outputs/hiv/artifacts.json",
+      "modified": "2026-10-07T23:59:59+02:00",
+      "source": "the registry, 132 of its 160 records"
+    },
+    {
+      "path": "outputs/hiv/manifests/TS_01.json",
+      "modified": "2026-10-07T21:14:20+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/hiv/manifests/TS_43.json",
+      "modified": "2026-10-07T21:14:20+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/coarse_alignment/TS_01_coarse_alignment_qc.json",
+      "modified": "2026-10-07T21:30:10+02:00",
+      "source": "the coarse_alignment_report QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/fiducials/TS_01/TS_01_seed_qc.json",
+      "modified": "2026-10-07T21:31:05+02:00",
+      "source": "the fiducial_seed QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/fiducials/TS_01/TS_01_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-07T21:31:30+02:00",
+      "source": "the fiducial_tracking QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/alignments/TS_01/fine/TS_01_fine_alignment_qc.json",
+      "modified": "2026-10-07T21:45:00+02:00",
+      "source": "the fine_alignment QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/ctf/TS_01_ctffind5_estimation_qc.json",
+      "modified": "2026-10-07T21:46:28+02:00",
+      "source": "the ctf_estimation QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/ctf/TS_01_imod-ctfphaseflip_bin8_correction_qc.json",
+      "modified": "2026-10-07T21:47:06+02:00",
+      "source": "the ctf_correction QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/reconstruction/TS_01_fine_bin8_bin8_qc.json",
+      "modified": "2026-10-07T21:47:30+02:00",
+      "source": "the fine_reconstruction QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/segmentation/TS_01_full_membrain-seg_bin8_qc.json",
+      "modified": "2026-10-07T23:07:21+02:00",
+      "source": "the tomogram_segmentation QC record of TS_01"
+    },
+    {
+      "path": "outputs/hiv/qc/TS_01/template/TS_01_pytom_bin8_qc.json",
+      "modified": "2026-10-07T23:09:01+02:00",
+      "source": "the template_preparation QC record of TS_01"
+    }
+  ],
+  "left_out": [
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/gag-bin8-prune006.toml",
+      "why": "written later, 2026-10-08T09:50:07+02:00"
+    },
+    {
+      "path": "{{ROOT}}/outputs/hiv/qc/TS_01/picking/TS_01_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-08T10:32:11+02:00"
+    },
+    {
+      "path": "{{ROOT}}/outputs/hiv/qc/TS_01/particle_extraction/TS_01_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-08T10:36:00+02:00"
+    },
+    {
+      "path": "outputs/hiv/picks/TS_01/TS_01_full_pytom-match-pick_bin8.log",
+      "why": "written later, 2026-10-08T10:32:09+02:00"
+    }
+  ],
+  "slurm": {
+    "41075712": {
+      "JobName": "hiv-gpu-TS_01",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T22:58:21",
+      "Elapsed": "00:12:35",
+      "NodeList": "gpusrv50",
+      "AllocTRES": "billing=8,cpu=8,energy=472800,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    }
+  }
+}

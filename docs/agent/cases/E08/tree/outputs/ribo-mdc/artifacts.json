@@ -1,0 +1,2946 @@
+{
+  "artifacts": [
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0306:tilt_angles",
+      "kind": "tilt_angles",
+      "parameters": {
+        "format": "imod_tlt",
+        "num_tilts": 61,
+        "source_frames_pattern": null,
+        "source_mdoc": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0306.mrc.mdoc",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0306/TS_0306.tlt",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61
+      ],
+      "size_bytes": 627,
+      "software_versions": {},
+      "storage_role": "export",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": "external_stack_import",
+      "binning": null,
+      "can_recompute": false,
+      "dtype": "int16",
+      "id": "TS_0306:tilt_stack",
+      "kind": "tilt_stack",
+      "parameters": {
+        "artifact_format": "mrc",
+        "backend": "external_stack_import",
+        "num_tilts": 61,
+        "source_mdoc_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0306.mrc.mdoc",
+        "source_stack_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/TS_0306.mrc",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0306/TS_0306.st",
+      "pixel_spacing_angstrom": 1.2230000495910645,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        4096,
+        4096
+      ],
+      "size_bytes": 2046821376,
+      "software_versions": {
+        "mrcfile": "1.5.4"
+      },
+      "storage_role": "source",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "imod-xcorr",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0306:alignment:coarse",
+      "kind": "alignment",
+      "parameters": {
+        "alignment_order": "tilt_angle_ascending",
+        "backend": "imod-xcorr",
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          56,
+          57,
+          58,
+          59,
+          60
+        ],
+        "filter_radius2": 0.25,
+        "filter_sigma1": 0.03,
+        "filter_sigma2": 0.05,
+        "imod_xf_path": "outputs/ribo-mdc/alignments/TS_0306/TS_0306_coarse.xf",
+        "input_binning": 8,
+        "min_std_ratio": 0.84,
+        "stage": "coarse",
+        "tilt_axis_angle_deg": 83.60000000000002,
+        "tilt_series_id": "TS_0306",
+        "tiltxcorr_log_path": "outputs/ribo-mdc/alignments/TS_0306/TS_0306_coarse_tiltxcorr.log",
+        "transform_semantics": "global",
+        "translation_units": "full_resolution_pixels",
+        "xftoxg_log_path": "outputs/ribo-mdc/alignments/TS_0306/TS_0306_coarse_xftoxg.log"
+      },
+      "parent_ids": [
+        "TS_0306:tilt_stack"
+      ],
+      "path": "outputs/ribo-mdc/alignments/TS_0306/TS_0306_coarse_alignment.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        6
+      ],
+      "size_bytes": 38847,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": null,
+      "binning": 16,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0306:qc:coarse_alignment:preview",
+      "kind": "aligned_tilt_stack",
+      "parameters": {
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          56,
+          57,
+          58,
+          59,
+          60
+        ],
+        "included_z_values": [
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55
+        ],
+        "order": "tilt_angle_ascending",
+        "qc_type": "coarse_alignment_preview",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [
+        "TS_0306:tilt_stack",
+        "TS_0306:alignment:coarse"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/coarse_alignment/TS_0306_coarse_aligned_bin16.st",
+      "pixel_spacing_angstrom": 19.56800079345703,
+      "retention_policy": "keep",
+      "shape": [
+        50,
+        256,
+        256
+      ],
+      "size_bytes": 13108224,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:coarse_alignment:report",
+      "kind": "qc",
+      "parameters": {
+        "newstack_log_path": "outputs/ribo-mdc/qc/TS_0306/coarse_alignment/TS_0306_coarse_newstack.log",
+        "qc_type": "coarse_alignment_report",
+        "residual_log_path": "outputs/ribo-mdc/qc/TS_0306/coarse_alignment/TS_0306_coarse_residual_tiltxcorr.log",
+        "status": "warning",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [
+        "TS_0306:tilt_stack",
+        "TS_0306:alignment:coarse",
+        "TS_0306:qc:coarse_alignment:preview"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/coarse_alignment/TS_0306_coarse_alignment_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 27810,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0463:tilt_angles",
+      "kind": "tilt_angles",
+      "parameters": {
+        "format": "imod_tlt",
+        "num_tilts": 60,
+        "source_frames_pattern": null,
+        "source_mdoc": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0463.mrc.mdoc",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0463/TS_0463.tlt",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        60
+      ],
+      "size_bytes": 617,
+      "software_versions": {},
+      "storage_role": "export",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": "external_stack_import",
+      "binning": null,
+      "can_recompute": false,
+      "dtype": "int16",
+      "id": "TS_0463:tilt_stack",
+      "kind": "tilt_stack",
+      "parameters": {
+        "artifact_format": "mrc",
+        "backend": "external_stack_import",
+        "num_tilts": 60,
+        "source_mdoc_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0463.mrc.mdoc",
+        "source_stack_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/TS_0463.mrc",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0463/TS_0463.st",
+      "pixel_spacing_angstrom": 1.2230000495910645,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        4096,
+        4096
+      ],
+      "size_bytes": 2013266944,
+      "software_versions": {
+        "mrcfile": "1.5.4"
+      },
+      "storage_role": "source",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "imod-xcorr",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0463:alignment:coarse",
+      "kind": "alignment",
+      "parameters": {
+        "alignment_order": "tilt_angle_ascending",
+        "backend": "imod-xcorr",
+        "excluded_z_values": [],
+        "filter_radius2": 0.25,
+        "filter_sigma1": 0.03,
+        "filter_sigma2": 0.05,
+        "imod_xf_path": "outputs/ribo-mdc/alignments/TS_0463/TS_0463_coarse.xf",
+        "input_binning": 8,
+        "min_std_ratio": 0.84,
+        "stage": "coarse",
+        "tilt_axis_angle_deg": 83.60000000000002,
+        "tilt_series_id": "TS_0463",
+        "tiltxcorr_log_path": "outputs/ribo-mdc/alignments/TS_0463/TS_0463_coarse_tiltxcorr.log",
+        "transform_semantics": "global",
+        "translation_units": "full_resolution_pixels",
+        "xftoxg_log_path": "outputs/ribo-mdc/alignments/TS_0463/TS_0463_coarse_xftoxg.log"
+      },
+      "parent_ids": [
+        "TS_0463:tilt_stack"
+      ],
+      "path": "outputs/ribo-mdc/alignments/TS_0463/TS_0463_coarse_alignment.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        6
+      ],
+      "size_bytes": 42073,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": null,
+      "binning": 16,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0463:qc:coarse_alignment:preview",
+      "kind": "aligned_tilt_stack",
+      "parameters": {
+        "excluded_z_values": [],
+        "included_z_values": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59
+        ],
+        "order": "tilt_angle_ascending",
+        "qc_type": "coarse_alignment_preview",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [
+        "TS_0463:tilt_stack",
+        "TS_0463:alignment:coarse"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/coarse_alignment/TS_0463_coarse_aligned_bin16.st",
+      "pixel_spacing_angstrom": 19.56800079345703,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        256,
+        256
+      ],
+      "size_bytes": 15729664,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:coarse_alignment:report",
+      "kind": "qc",
+      "parameters": {
+        "newstack_log_path": "outputs/ribo-mdc/qc/TS_0463/coarse_alignment/TS_0463_coarse_newstack.log",
+        "qc_type": "coarse_alignment_report",
+        "residual_log_path": "outputs/ribo-mdc/qc/TS_0463/coarse_alignment/TS_0463_coarse_residual_tiltxcorr.log",
+        "status": "pass",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [
+        "TS_0463:tilt_stack",
+        "TS_0463:alignment:coarse",
+        "TS_0463:qc:coarse_alignment:preview"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/coarse_alignment/TS_0463_coarse_alignment_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 32220,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0493:tilt_angles",
+      "kind": "tilt_angles",
+      "parameters": {
+        "format": "imod_tlt",
+        "num_tilts": 58,
+        "source_frames_pattern": null,
+        "source_mdoc": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0493.mrc.mdoc",
+        "tilt_series_id": "TS_0493"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0493/TS_0493.tlt",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        58
+      ],
+      "size_bytes": 597,
+      "software_versions": {},
+      "storage_role": "export",
+      "tilt_series_ids": [
+        "TS_0493"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": "external_stack_import",
+      "binning": null,
+      "can_recompute": false,
+      "dtype": "int16",
+      "id": "TS_0493:tilt_stack",
+      "kind": "tilt_stack",
+      "parameters": {
+        "artifact_format": "mrc",
+        "backend": "external_stack_import",
+        "num_tilts": 58,
+        "source_mdoc_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0493.mrc.mdoc",
+        "source_stack_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/TS_0493.mrc",
+        "tilt_series_id": "TS_0493"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0493/TS_0493.st",
+      "pixel_spacing_angstrom": 1.2230000495910645,
+      "retention_policy": "keep",
+      "shape": [
+        58,
+        4096,
+        4096
+      ],
+      "size_bytes": 1946158080,
+      "software_versions": {
+        "mrcfile": "1.5.4"
+      },
+      "storage_role": "source",
+      "tilt_series_ids": [
+        "TS_0493"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "imod-xcorr",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0493:alignment:coarse",
+      "kind": "alignment",
+      "parameters": {
+        "alignment_order": "tilt_angle_ascending",
+        "backend": "imod-xcorr",
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "filter_radius2": 0.25,
+        "filter_sigma1": 0.03,
+        "filter_sigma2": 0.05,
+        "imod_xf_path": "outputs/ribo-mdc/alignments/TS_0493/TS_0493_coarse.xf",
+        "input_binning": 8,
+        "min_std_ratio": 0.84,
+        "stage": "coarse",
+        "tilt_axis_angle_deg": 83.60000000000002,
+        "tilt_series_id": "TS_0493",
+        "tiltxcorr_log_path": "outputs/ribo-mdc/alignments/TS_0493/TS_0493_coarse_tiltxcorr.log",
+        "transform_semantics": "global",
+        "translation_units": "full_resolution_pixels",
+        "xftoxg_log_path": "outputs/ribo-mdc/alignments/TS_0493/TS_0493_coarse_xftoxg.log"
+      },
+      "parent_ids": [
+        "TS_0493:tilt_stack"
+      ],
+      "path": "outputs/ribo-mdc/alignments/TS_0493/TS_0493_coarse_alignment.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        58,
+        6
+      ],
+      "size_bytes": 39320,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0493"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": null,
+      "binning": 16,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0493:qc:coarse_alignment:preview",
+      "kind": "aligned_tilt_stack",
+      "parameters": {
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "included_z_values": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57
+        ],
+        "order": "tilt_angle_ascending",
+        "qc_type": "coarse_alignment_preview",
+        "tilt_series_id": "TS_0493"
+      },
+      "parent_ids": [
+        "TS_0493:tilt_stack",
+        "TS_0493:alignment:coarse"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0493/coarse_alignment/TS_0493_coarse_aligned_bin16.st",
+      "pixel_spacing_angstrom": 19.56800079345703,
+      "retention_policy": "keep",
+      "shape": [
+        54,
+        256,
+        256
+      ],
+      "size_bytes": 14156800,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0493"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0493:qc:coarse_alignment:report",
+      "kind": "qc",
+      "parameters": {
+        "newstack_log_path": "outputs/ribo-mdc/qc/TS_0493/coarse_alignment/TS_0493_coarse_newstack.log",
+        "qc_type": "coarse_alignment_report",
+        "residual_log_path": "outputs/ribo-mdc/qc/TS_0493/coarse_alignment/TS_0493_coarse_residual_tiltxcorr.log",
+        "status": "warning",
+        "tilt_series_id": "TS_0493"
+      },
+      "parent_ids": [
+        "TS_0493:tilt_stack",
+        "TS_0493:alignment:coarse",
+        "TS_0493:qc:coarse_alignment:preview"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0493/coarse_alignment/TS_0493_coarse_alignment_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 29574,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0493"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0564:tilt_angles",
+      "kind": "tilt_angles",
+      "parameters": {
+        "format": "imod_tlt",
+        "num_tilts": 61,
+        "source_frames_pattern": null,
+        "source_mdoc": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0564.mrc.mdoc",
+        "tilt_series_id": "TS_0564"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0564/TS_0564.tlt",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61
+      ],
+      "size_bytes": 627,
+      "software_versions": {},
+      "storage_role": "export",
+      "tilt_series_ids": [
+        "TS_0564"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": "external_stack_import",
+      "binning": null,
+      "can_recompute": false,
+      "dtype": "int16",
+      "id": "TS_0564:tilt_stack",
+      "kind": "tilt_stack",
+      "parameters": {
+        "artifact_format": "mrc",
+        "backend": "external_stack_import",
+        "num_tilts": 61,
+        "source_mdoc_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0564.mrc.mdoc",
+        "source_stack_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/TS_0564.mrc",
+        "tilt_series_id": "TS_0564"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0564/TS_0564.st",
+      "pixel_spacing_angstrom": 1.2230000495910645,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        4096,
+        4096
+      ],
+      "size_bytes": 2046821376,
+      "software_versions": {
+        "mrcfile": "1.5.4"
+      },
+      "storage_role": "source",
+      "tilt_series_ids": [
+        "TS_0564"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "imod-xcorr",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0564:alignment:coarse",
+      "kind": "alignment",
+      "parameters": {
+        "alignment_order": "tilt_angle_ascending",
+        "backend": "imod-xcorr",
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3,
+          60
+        ],
+        "filter_radius2": 0.25,
+        "filter_sigma1": 0.03,
+        "filter_sigma2": 0.05,
+        "imod_xf_path": "outputs/ribo-mdc/alignments/TS_0564/TS_0564_coarse.xf",
+        "input_binning": 8,
+        "min_std_ratio": 0.84,
+        "stage": "coarse",
+        "tilt_axis_angle_deg": 83.60000000000002,
+        "tilt_series_id": "TS_0564",
+        "tiltxcorr_log_path": "outputs/ribo-mdc/alignments/TS_0564/TS_0564_coarse_tiltxcorr.log",
+        "transform_semantics": "global",
+        "translation_units": "full_resolution_pixels",
+        "xftoxg_log_path": "outputs/ribo-mdc/alignments/TS_0564/TS_0564_coarse_xftoxg.log"
+      },
+      "parent_ids": [
+        "TS_0564:tilt_stack"
+      ],
+      "path": "outputs/ribo-mdc/alignments/TS_0564/TS_0564_coarse_alignment.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        6
+      ],
+      "size_bytes": 40919,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0564"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": null,
+      "binning": 16,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0564:qc:coarse_alignment:preview",
+      "kind": "aligned_tilt_stack",
+      "parameters": {
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          3,
+          60
+        ],
+        "included_z_values": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59
+        ],
+        "order": "tilt_angle_ascending",
+        "qc_type": "coarse_alignment_preview",
+        "tilt_series_id": "TS_0564"
+      },
+      "parent_ids": [
+        "TS_0564:tilt_stack",
+        "TS_0564:alignment:coarse"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0564/coarse_alignment/TS_0564_coarse_aligned_bin16.st",
+      "pixel_spacing_angstrom": 19.56800079345703,
+      "retention_policy": "keep",
+      "shape": [
+        56,
+        256,
+        256
+      ],
+      "size_bytes": 14681088,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0564"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0564:qc:coarse_alignment:report",
+      "kind": "qc",
+      "parameters": {
+        "newstack_log_path": "outputs/ribo-mdc/qc/TS_0564/coarse_alignment/TS_0564_coarse_newstack.log",
+        "qc_type": "coarse_alignment_report",
+        "residual_log_path": "outputs/ribo-mdc/qc/TS_0564/coarse_alignment/TS_0564_coarse_residual_tiltxcorr.log",
+        "status": "warning",
+        "tilt_series_id": "TS_0564"
+      },
+      "parent_ids": [
+        "TS_0564:tilt_stack",
+        "TS_0564:alignment:coarse",
+        "TS_0564:qc:coarse_alignment:preview"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0564/coarse_alignment/TS_0564_coarse_alignment_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 30487,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0564"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0623:tilt_angles",
+      "kind": "tilt_angles",
+      "parameters": {
+        "format": "imod_tlt",
+        "num_tilts": 61,
+        "source_frames_pattern": null,
+        "source_mdoc": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0623.mrc.mdoc",
+        "tilt_series_id": "TS_0623"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0623/TS_0623.tlt",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61
+      ],
+      "size_bytes": 627,
+      "software_versions": {},
+      "storage_role": "export",
+      "tilt_series_ids": [
+        "TS_0623"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": "external_stack_import",
+      "binning": null,
+      "can_recompute": false,
+      "dtype": "int16",
+      "id": "TS_0623:tilt_stack",
+      "kind": "tilt_stack",
+      "parameters": {
+        "artifact_format": "mrc",
+        "backend": "external_stack_import",
+        "num_tilts": 61,
+        "source_mdoc_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/mdoc/TS_0623.mrc.mdoc",
+        "source_stack_path": "/fast/AG_Kudryashev/{{USER}}/EMPIAR-11538/TS_0623.mrc",
+        "tilt_series_id": "TS_0623"
+      },
+      "parent_ids": [],
+      "path": "outputs/ribo-mdc/stacks/TS_0623/TS_0623.st",
+      "pixel_spacing_angstrom": 1.2230000495910645,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        4096,
+        4096
+      ],
+      "size_bytes": 2046821376,
+      "software_versions": {
+        "mrcfile": "1.5.4"
+      },
+      "storage_role": "source",
+      "tilt_series_ids": [
+        "TS_0623"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "imod-xcorr",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float64",
+      "id": "TS_0623:alignment:coarse",
+      "kind": "alignment",
+      "parameters": {
+        "alignment_order": "tilt_angle_ascending",
+        "backend": "imod-xcorr",
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          59,
+          60
+        ],
+        "filter_radius2": 0.25,
+        "filter_sigma1": 0.03,
+        "filter_sigma2": 0.05,
+        "imod_xf_path": "outputs/ribo-mdc/alignments/TS_0623/TS_0623_coarse.xf",
+        "input_binning": 8,
+        "min_std_ratio": 0.84,
+        "stage": "coarse",
+        "tilt_axis_angle_deg": 83.60000000000002,
+        "tilt_series_id": "TS_0623",
+        "tiltxcorr_log_path": "outputs/ribo-mdc/alignments/TS_0623/TS_0623_coarse_tiltxcorr.log",
+        "transform_semantics": "global",
+        "translation_units": "full_resolution_pixels",
+        "xftoxg_log_path": "outputs/ribo-mdc/alignments/TS_0623/TS_0623_coarse_xftoxg.log"
+      },
+      "parent_ids": [
+        "TS_0623:tilt_stack"
+      ],
+      "path": "outputs/ribo-mdc/alignments/TS_0623/TS_0623_coarse_alignment.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": [
+        61,
+        6
+      ],
+      "size_bytes": 40959,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0623"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "tyx",
+      "backend": null,
+      "binning": 16,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0623:qc:coarse_alignment:preview",
+      "kind": "aligned_tilt_stack",
+      "parameters": {
+        "excluded_z_values": [
+          0,
+          1,
+          2,
+          59,
+          60
+        ],
+        "included_z_values": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58
+        ],
+        "order": "tilt_angle_ascending",
+        "qc_type": "coarse_alignment_preview",
+        "tilt_series_id": "TS_0623"
+      },
+      "parent_ids": [
+        "TS_0623:tilt_stack",
+        "TS_0623:alignment:coarse"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0623/coarse_alignment/TS_0623_coarse_aligned_bin16.st",
+      "pixel_spacing_angstrom": 19.56800079345703,
+      "retention_policy": "keep",
+      "shape": [
+        56,
+        256,
+        256
+      ],
+      "size_bytes": 14681088,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0623"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": null,
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0623:qc:coarse_alignment:report",
+      "kind": "qc",
+      "parameters": {
+        "newstack_log_path": "outputs/ribo-mdc/qc/TS_0623/coarse_alignment/TS_0623_coarse_newstack.log",
+        "qc_type": "coarse_alignment_report",
+        "residual_log_path": "outputs/ribo-mdc/qc/TS_0623/coarse_alignment/TS_0623_coarse_residual_tiltxcorr.log",
+        "status": "warning",
+        "tilt_series_id": "TS_0623"
+      },
+      "parent_ids": [
+        "TS_0623:tilt_stack",
+        "TS_0623:alignment:coarse",
+        "TS_0623:qc:coarse_alignment:preview"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0623/coarse_alignment/TS_0623_coarse_alignment_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 30492,
+      "software_versions": {
+        "imod": "external"
+      },
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0623"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0463:template:pytom:bin8-abl-tpl39",
+      "kind": "template",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 39,
+        "centered": false,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39.log",
+        "density_extent_px": [
+          30.0,
+          32.0,
+          31.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "low_pass_angstrom": 19.6,
+        "mirrored": false,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl39_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "tilt_series_id": "TS_0463",
+        "tomogram_id": "TS_0463:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39_template.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        39,
+        39,
+        39
+      ],
+      "size_bytes": 238300,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0463:template_mask:pytom:bin8-abl-tpl39",
+      "kind": "template_mask",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 39,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39.log",
+        "density_extent_px": [
+          30.0,
+          32.0,
+          31.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "mask_is_spherical": true,
+        "mask_radius_px": 17.0,
+        "mask_radius_y_px": 17.0,
+        "mask_radius_z_px": 17.0,
+        "mask_sigma_px": null,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl39_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "template_id": "TS_0463:template:pytom:bin8-abl-tpl39",
+        "tilt_series_id": "TS_0463",
+        "tomogram_id": "TS_0463:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0463:template:pytom:bin8-abl-tpl39"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39_mask.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        39,
+        39,
+        39
+      ],
+      "size_bytes": 238300,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:template_preparation:pytom:bin8-abl-tpl39",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom",
+        "qc_type": "template_preparation",
+        "status": "pass",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [
+        "TS_0463:template:pytom:bin8-abl-tpl39"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl39_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 913,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0306:template:pytom:bin8-abl-tpl39",
+      "kind": "template",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 39,
+        "centered": false,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39.log",
+        "density_extent_px": [
+          30.0,
+          32.0,
+          31.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "low_pass_angstrom": 19.6,
+        "mirrored": false,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl39_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "tilt_series_id": "TS_0306",
+        "tomogram_id": "TS_0306:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39_template.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        39,
+        39,
+        39
+      ],
+      "size_bytes": 238300,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0306:template_mask:pytom:bin8-abl-tpl39",
+      "kind": "template_mask",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 39,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39.log",
+        "density_extent_px": [
+          30.0,
+          32.0,
+          31.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "mask_is_spherical": true,
+        "mask_radius_px": 17.0,
+        "mask_radius_y_px": 17.0,
+        "mask_radius_z_px": 17.0,
+        "mask_sigma_px": null,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl39_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "template_id": "TS_0306:template:pytom:bin8-abl-tpl39",
+        "tilt_series_id": "TS_0306",
+        "tomogram_id": "TS_0306:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0306:template:pytom:bin8-abl-tpl39"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39_mask.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        39,
+        39,
+        39
+      ],
+      "size_bytes": 238300,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:template_preparation:pytom:bin8-abl-tpl39",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom",
+        "qc_type": "template_preparation",
+        "status": "pass",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [
+        "TS_0306:template:pytom:bin8-abl-tpl39"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl39_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 913,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl39"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:template_match:pytom-match-pick:bin8-abl-lane",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-lane_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_scores.mrc",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675185301,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:picks:full:pytom-match-pick:bin8-abl-lane",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-lane_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-lane_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl39_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-lane_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0463:template_match:pytom-match-pick:bin8-abl-lane"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-lane_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 77659,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:picking:pytom-match-pick:bin8-abl-lane",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0463:picks:full:pytom-match-pick:bin8-abl-lane"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-lane_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 805,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0463:template:pytom:bin8-abl-tpl60",
+      "kind": "template",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 60,
+        "centered": false,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60.log",
+        "density_extent_px": [
+          31.0,
+          32.0,
+          30.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "low_pass_angstrom": 19.6,
+        "mirrored": false,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl60_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "tilt_series_id": "TS_0463",
+        "tomogram_id": "TS_0463:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_template.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        60,
+        60
+      ],
+      "size_bytes": 865024,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0463:template_mask:pytom:bin8-abl-tpl60",
+      "kind": "template_mask",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 60,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60.log",
+        "density_extent_px": [
+          31.0,
+          32.0,
+          30.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "mask_is_spherical": true,
+        "mask_radius_px": 18.0,
+        "mask_radius_y_px": 18.0,
+        "mask_radius_z_px": 18.0,
+        "mask_sigma_px": 1.0,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl60_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "template_id": "TS_0463:template:pytom:bin8-abl-tpl60",
+        "tilt_series_id": "TS_0463",
+        "tomogram_id": "TS_0463:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0463:template:pytom:bin8-abl-tpl60"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_mask.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        60,
+        60
+      ],
+      "size_bytes": 865024,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:template_preparation:pytom:bin8-abl-tpl60",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom",
+        "qc_type": "template_preparation",
+        "status": "pass",
+        "tilt_series_id": "TS_0463"
+      },
+      "parent_ids": [
+        "TS_0463:template:pytom:bin8-abl-tpl60"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8-abl-tpl60_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 914,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:template_match:pytom-match-pick:bin8-abl-lane",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-lane_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_scores.mrc",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675182621,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:picks:full:pytom-match-pick:bin8-abl-lane",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-lane_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-lane_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl39_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-lane_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0306:template_match:pytom-match-pick:bin8-abl-lane"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-lane_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 74414,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:picking:pytom-match-pick:bin8-abl-lane",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0306:picks:full:pytom-match-pick:bin8-abl-lane"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-lane_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 1334,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-lane"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0306:template:pytom:bin8-abl-tpl60",
+      "kind": "template",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 60,
+        "centered": false,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60.log",
+        "density_extent_px": [
+          31.0,
+          32.0,
+          30.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "low_pass_angstrom": 19.6,
+        "mirrored": false,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl60_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "tilt_series_id": "TS_0306",
+        "tomogram_id": "TS_0306:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_template.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        60,
+        60
+      ],
+      "size_bytes": 865024,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": "zyx",
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": "float32",
+      "id": "TS_0306:template_mask:pytom:bin8-abl-tpl60",
+      "kind": "template_mask",
+      "parameters": {
+        "backend": "pytom",
+        "box_size_px": 60,
+        "command_log_path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60.log",
+        "density_extent_px": [
+          31.0,
+          32.0,
+          30.0
+        ],
+        "emdb_id": "16721",
+        "inverted": true,
+        "mask_is_spherical": true,
+        "mask_radius_px": 18.0,
+        "mask_radius_y_px": 18.0,
+        "mask_radius_z_px": 18.0,
+        "mask_sigma_px": 1.0,
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl60_qc.json",
+        "source_map_path": "{{ROOT}}/outputs/ribo-mdc/emdb-cache/emd_16721.map",
+        "template_id": "TS_0306:template:pytom:bin8-abl-tpl60",
+        "tilt_series_id": "TS_0306",
+        "tomogram_id": "TS_0306:tomogram:fine:bin8"
+      },
+      "parent_ids": [
+        "TS_0306:template:pytom:bin8-abl-tpl60"
+      ],
+      "path": "outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_mask.mrc",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        60,
+        60,
+        60
+      ],
+      "size_bytes": 865024,
+      "software_versions": {
+        "pytom-match-pick": "external"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:template_preparation:pytom:bin8-abl-tpl60",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom",
+        "qc_type": "template_preparation",
+        "status": "pass",
+        "tilt_series_id": "TS_0306"
+      },
+      "parent_ids": [
+        "TS_0306:template:pytom:bin8-abl-tpl60"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8-abl-tpl60_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 914,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-tpl60"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:template_match:pytom-match-pick:bin8-abl-new25",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_scores.mrc",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675026406,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0463:template_match:pytom-match-pick:bin8-abl-new25"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 77598,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:picking:pytom-match-pick:bin8-abl-new25",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 808,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:template_match:pytom-match-pick:bin8-abl-new25",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_scores.mrc",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 674992983,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0306:template_match:pytom-match-pick:bin8-abl-new25"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 74448,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:picking:pytom-match-pick:bin8-abl-new25",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 1340,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:template_match:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_scores.mrc",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675014289,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0463:template_match:pytom-match-pick:bin8-abl-new25-nr"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 77725,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:picking:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25-nr"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-nr_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 808,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:template_match:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_scores.mrc",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 674983105,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0306:template_match:pytom-match-pick:bin8-abl-new25-nr"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 74401,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:picking:pytom-match-pick:bin8-abl-new25-nr",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25-nr"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-nr_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 1351,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-nr"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:template_match:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_scores.mrc",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675543664,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0463:template_match:pytom-match-pick:bin8-abl-new25-pl"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 58625,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:picking:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0463:picks:full:pytom-match-pick:bin8-abl-new25-pl"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new25-pl_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 804,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:template_match:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_scores.mrc",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0463:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675607147,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:picks:full:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0463:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0463:template_match:pytom-match-pick:bin8-abl-new35-pl"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 58678,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0463:qc:picking:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0463",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0463:picks:full:pytom-match-pick:bin8-abl-new35-pl"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8-abl-new35-pl_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 812,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0463"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:template_match:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_scores.mrc",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675587879,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0306:template_match:pytom-match-pick:bin8-abl-new25-pl"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 58581,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:picking:pytom-match-pick:bin8-abl-new25-pl",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0306:picks:full:pytom-match-pick:bin8-abl-new25-pl"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new25-pl_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 1343,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new25-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:template_match:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "template_match",
+      "parameters": {
+        "angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_angles.mrc",
+        "backend": "pytom-match-pick",
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_scores_preview.npz",
+        "scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_scores.mrc",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "volumes_retained": true
+      },
+      "parent_ids": [
+        "TS_0306:tomogram:fine:bin8"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_job.json",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 675630118,
+      "software_versions": {},
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": 8,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:picks:full:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "picks",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "command_log_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl.log",
+        "dose_weighted": true,
+        "input_tomogram_id": "TS_0306:tomogram:fine:bin8",
+        "per_tilt_weighting": true,
+        "picking_method": "template_matching",
+        "pytom_angles_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_angles.mrc",
+        "pytom_extraction_graph_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_extraction_graph.svg",
+        "pytom_job_json_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_job.json",
+        "pytom_scores_preview_error": null,
+        "pytom_scores_preview_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_scores_preview.npz",
+        "pytom_scores_volume_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_scores.mrc",
+        "pytom_template_mask_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_mask.mrc",
+        "pytom_template_path": "{{ROOT}}/outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8-abl-tpl60_template.mrc",
+        "pytom_volume_split": [
+          1,
+          1,
+          1
+        ],
+        "pytom_whitening_filter_path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_whitening_filter.npy",
+        "qc_path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_qc.json",
+        "segmentation_id": null,
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full",
+        "tomogram_mask_coverage": null
+      },
+      "parent_ids": [
+        "TS_0306:template_match:pytom-match-pick:bin8-abl-new35-pl"
+      ],
+      "path": "outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_particles.star",
+      "pixel_spacing_angstrom": 9.784000396728516,
+      "retention_policy": "keep",
+      "shape": [
+        600
+      ],
+      "size_bytes": 58143,
+      "software_versions": {
+        "pytom-match-pick": "external",
+        "zarr": "3.4.1"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    },
+    {
+      "axis_order": null,
+      "backend": "pytom-match-pick",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "TS_0306:qc:picking:pytom-match-pick:bin8-abl-new35-pl",
+      "kind": "qc",
+      "parameters": {
+        "backend": "pytom-match-pick",
+        "qc_type": "particle_picking",
+        "status": "pass",
+        "tilt_series_id": "TS_0306",
+        "tomogram_branch": "full"
+      },
+      "parent_ids": [
+        "TS_0306:picks:full:pytom-match-pick:bin8-abl-new35-pl"
+      ],
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8-abl-new35-pl_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 811,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "TS_0306"
+      ],
+      "variant": "bin8-abl-new35-pl"
+    }
+  ],
+  "schema_version": 1
+}

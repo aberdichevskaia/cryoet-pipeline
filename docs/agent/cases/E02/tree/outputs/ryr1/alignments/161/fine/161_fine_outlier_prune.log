@@ -1,0 +1,21 @@
+Pruned 10/1364 points above 5.000000 tracking pixels.
+
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/model2point -object -zero -zcoord {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/alignment_input.fid {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fiducial_points.txt
+[stdout]
+
+ FORMATTED  new  file opened: {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fiducial_points.txt
+        1364  points output to file
+
+[stderr]
+
+[exit_code]
+0
+
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/point2model -open -zero -zcoord -image {{ROOT}}/outputs/ryr1/fiducials/161/161_fiducial_bin3_preali.mrc {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fiducial_points_cleaned.txt {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/alignment_input_cleaned.fid
+[stdout]
+Model created with 1 objects, 49 contours, 1354 points
+
+[stderr]
+
+[exit_code]
+0

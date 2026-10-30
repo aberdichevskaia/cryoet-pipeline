@@ -15,7 +15,9 @@ client, which is what makes it the instrument for deciding about either (see
 ## How the cases are run
 
 - **When:** each case runs three times after any change of model, client, skill,
-  playbook, or prompt. Headless, with the case's request as the prompt.
+  playbook, or prompt. Headless, with the case's request as the prompt. A case can
+  add the person's next messages (`follow_up` in its case.toml), which go to the
+  same session in order, so that a run that ends on a question can go on.
 - **Where:** in a sandbox holding the case's evidence laid out as a project, with
   no Slurm. A proposed submission is graded on the dry run and the question it
   shows. Edits, such as a config copy, go through as a person who approves them
@@ -37,9 +39,12 @@ client, which is what makes it the instrument for deciding about either (see
 - **Evidence:** each case's goes in `docs/agent/cases/<id>/`
   ([cases/README.md](cases/README.md)), and `scripts/run_cases.py` runs the cases
   that have a folder. Since 29 October 2026 the constructed cases E11–E14 and
-  E16–E18 have one, with made-up evidence. None from history has one yet: theirs
-  is on the cluster, and goes in as trimmed copies with user names and home paths
-  replaced by placeholders first (decided 29 October 2026).
+  E16–E18 have one, with made-up evidence. Since 30 October the cases from
+  history E01–E05 and E08 have one too: trimmed copies from the clusters, with
+  user names and home paths replaced by placeholders (decided 29 October 2026).
+  Each one's note says what of its evidence is missing. E07, E09 and E15 have
+  none, since later runs wrote their files again, and E06's failure was not
+  found among the jobs.
   - [cases/cases.toml](cases/cases.toml) says where each case's evidence is: the
     lane, the days, the steps, the jobs and the files.
   - `scripts/collect_case.py --inventory --cluster mdc` (or `munich`) lists what

@@ -1,0 +1,522 @@
+{
+  "case": "E01",
+  "cluster": "mdc",
+  "days": [
+    "2026-10-14",
+    "2026-10-14T19:15:00"
+  ],
+  "collected": "2026-10-30T13:16:33+01:00",
+  "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
+  "files": [
+    {
+      "path": "slurm-ryr1-motion-3609935.log",
+      "modified": "2026-10-14T16:22:40+02:00",
+      "source": "Slurm log of job 3609935, started in the case's days"
+    },
+    {
+      "path": "slurm-ryr1-motion-3611148.log",
+      "modified": "2026-10-14T16:46:01+02:00",
+      "source": "Slurm log of job 3611148, started in the case's days"
+    },
+    {
+      "path": "slurm-ryr1-motion-3611180.log",
+      "modified": "2026-10-14T17:00:25+02:00",
+      "source": "Slurm log of job 3611180, started in the case's days"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4.toml",
+      "modified": "2026-10-14T16:17:32+02:00",
+      "source": "commit da50ef536, the lane file's last before the case ended"
+    },
+    {
+      "path": "outputs/ryr1/step_timings.jsonl",
+      "modified": "2026-10-14T19:14:59+02:00",
+      "source": "52 of its 187 rows"
+    },
+    {
+      "path": "outputs/ryr1/journal.jsonl",
+      "modified": "2026-10-14T19:14:59+02:00",
+      "source": "0 of its 28 rows"
+    },
+    {
+      "path": "outputs/ryr1/artifacts.json",
+      "modified": "2026-10-14T19:14:59+02:00",
+      "source": "the registry, 198 of its 452 records"
+    },
+    {
+      "path": "outputs/ryr1/manifests/039.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/096.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/097.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/125.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/161.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/coarse_alignment/039_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:01:31+02:00",
+      "source": "the coarse_alignment_report QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_seed_qc.json",
+      "modified": "2026-10-14T17:02:03+02:00",
+      "source": "the fiducial_seed QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-14T17:02:09+02:00",
+      "source": "the fiducial_tracking QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/alignments/039/fine/039_fine_alignment_qc.json",
+      "modified": "2026-10-14T17:02:23+02:00",
+      "source": "the fine_alignment QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/coarse_alignment/096_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:04:17+02:00",
+      "source": "the coarse_alignment_report QC record of 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_seed_qc.json",
+      "modified": "2026-10-14T17:04:42+02:00",
+      "source": "the fiducial_seed QC record of 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-14T17:04:47+02:00",
+      "source": "the fiducial_tracking QC record of 096"
+    },
+    {
+      "path": "outputs/ryr1/alignments/096/fine/096_fine_alignment_qc.json",
+      "modified": "2026-10-14T17:05:05+02:00",
+      "source": "the fine_alignment QC record of 096"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/coarse_alignment/097_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:06:49+02:00",
+      "source": "the coarse_alignment_report QC record of 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_seed_qc.json",
+      "modified": "2026-10-14T17:07:14+02:00",
+      "source": "the fiducial_seed QC record of 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-14T17:07:19+02:00",
+      "source": "the fiducial_tracking QC record of 097"
+    },
+    {
+      "path": "outputs/ryr1/alignments/097/fine/097_fine_alignment_qc.json",
+      "modified": "2026-10-14T17:07:26+02:00",
+      "source": "the fine_alignment QC record of 097"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/coarse_alignment/125_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:09:18+02:00",
+      "source": "the coarse_alignment_report QC record of 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_seed_qc.json",
+      "modified": "2026-10-14T17:09:46+02:00",
+      "source": "the fiducial_seed QC record of 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-14T17:09:52+02:00",
+      "source": "the fiducial_tracking QC record of 125"
+    },
+    {
+      "path": "outputs/ryr1/alignments/125/fine/125_fine_alignment_qc.json",
+      "modified": "2026-10-14T17:10:10+02:00",
+      "source": "the fine_alignment QC record of 125"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/coarse_alignment/161_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:12:01+02:00",
+      "source": "the coarse_alignment_report QC record of 161"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/coarse_alignment/039_coarse_residual_tiltxcorr.log",
+      "modified": "2026-10-14T17:01:31+02:00",
+      "source": "a log of qc-coarse-alignment for 039"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/coarse_alignment/039_coarse_newstack.log",
+      "modified": "2026-10-14T17:01:31+02:00",
+      "source": "a log of qc-coarse-alignment for 039"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/coarse_alignment/096_coarse_residual_tiltxcorr.log",
+      "modified": "2026-10-14T17:04:17+02:00",
+      "source": "a log of qc-coarse-alignment for 096"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/coarse_alignment/096_coarse_newstack.log",
+      "modified": "2026-10-14T17:04:16+02:00",
+      "source": "a log of qc-coarse-alignment for 096"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/coarse_alignment/097_coarse_residual_tiltxcorr.log",
+      "modified": "2026-10-14T17:06:49+02:00",
+      "source": "a log of qc-coarse-alignment for 097"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/coarse_alignment/097_coarse_newstack.log",
+      "modified": "2026-10-14T17:06:49+02:00",
+      "source": "a log of qc-coarse-alignment for 097"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/coarse_alignment/125_coarse_residual_tiltxcorr.log",
+      "modified": "2026-10-14T17:09:18+02:00",
+      "source": "a log of qc-coarse-alignment for 125"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/coarse_alignment/125_coarse_newstack.log",
+      "modified": "2026-10-14T17:09:17+02:00",
+      "source": "a log of qc-coarse-alignment for 125"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/coarse_alignment/161_coarse_residual_tiltxcorr.log",
+      "modified": "2026-10-14T17:12:01+02:00",
+      "source": "a log of qc-coarse-alignment for 161"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/coarse_alignment/161_coarse_newstack.log",
+      "modified": "2026-10-14T17:12:01+02:00",
+      "source": "a log of qc-coarse-alignment for 161"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_imod-beadtrack_fiducial_imodinfo.log",
+      "modified": "2026-10-14T17:02:08+02:00",
+      "source": "a log of generate-fiducial-seed for 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_imod-beadtrack_beadtrack.log",
+      "modified": "2026-10-14T17:02:08+02:00",
+      "source": "a log of generate-fiducial-seed for 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_seed_imodinfo.log",
+      "modified": "2026-10-14T17:02:02+02:00",
+      "source": "a log of generate-fiducial-seed for 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_autofidseed.log",
+      "modified": "2026-10-14T17:02:02+02:00",
+      "source": "a log of generate-fiducial-seed for 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_fiducial_newstack.log",
+      "modified": "2026-10-14T17:01:47+02:00",
+      "source": "a log of generate-fiducial-seed for 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_imod-beadtrack_fiducial_imodinfo.log",
+      "modified": "2026-10-14T17:04:47+02:00",
+      "source": "a log of generate-fiducial-seed for 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_imod-beadtrack_beadtrack.log",
+      "modified": "2026-10-14T17:04:47+02:00",
+      "source": "a log of generate-fiducial-seed for 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_seed_imodinfo.log",
+      "modified": "2026-10-14T17:04:42+02:00",
+      "source": "a log of generate-fiducial-seed for 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_autofidseed.log",
+      "modified": "2026-10-14T17:04:42+02:00",
+      "source": "a log of generate-fiducial-seed for 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/096/096_fiducial_newstack.log",
+      "modified": "2026-10-14T17:04:32+02:00",
+      "source": "a log of generate-fiducial-seed for 096"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_imod-beadtrack_fiducial_imodinfo.log",
+      "modified": "2026-10-14T17:07:19+02:00",
+      "source": "a log of generate-fiducial-seed for 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_imod-beadtrack_beadtrack.log",
+      "modified": "2026-10-14T17:07:19+02:00",
+      "source": "a log of generate-fiducial-seed for 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_seed_imodinfo.log",
+      "modified": "2026-10-14T17:07:14+02:00",
+      "source": "a log of generate-fiducial-seed for 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_autofidseed.log",
+      "modified": "2026-10-14T17:07:14+02:00",
+      "source": "a log of generate-fiducial-seed for 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/097/097_fiducial_newstack.log",
+      "modified": "2026-10-14T17:07:04+02:00",
+      "source": "a log of generate-fiducial-seed for 097"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_imod-beadtrack_fiducial_imodinfo.log",
+      "modified": "2026-10-14T17:09:52+02:00",
+      "source": "a log of generate-fiducial-seed for 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_imod-beadtrack_beadtrack.log",
+      "modified": "2026-10-14T17:09:52+02:00",
+      "source": "a log of generate-fiducial-seed for 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_seed_imodinfo.log",
+      "modified": "2026-10-14T17:09:46+02:00",
+      "source": "a log of generate-fiducial-seed for 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_autofidseed.log",
+      "modified": "2026-10-14T17:09:46+02:00",
+      "source": "a log of generate-fiducial-seed for 125"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/125/125_fiducial_newstack.log",
+      "modified": "2026-10-14T17:09:35+02:00",
+      "source": "a log of generate-fiducial-seed for 125"
+    }
+  ],
+  "left_out": [
+    {
+      "path": "the Slurm log of job 3620374",
+      "why": "not found where the job ran"
+    },
+    {
+      "path": "the Slurm log of job 3620884",
+      "why": "not found where the job ran"
+    },
+    {
+      "path": "the Slurm log of job 3623086",
+      "why": "not found where the job ran"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/ctf/039_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:14:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/ctf/039_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T15:01:09+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/reconstruction/039_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:04:06+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/ctf/096_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:15:01+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/ctf/096_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T17:27:04+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/reconstruction/096_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:30:29+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/ctf/097_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:16:01+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/ctf/097_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T17:27:55+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/reconstruction/097_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:31:21+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/ctf/125_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:17:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/ctf/125_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T15:01:08+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/reconstruction/125_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:04:10+01:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_seed_qc.json",
+      "why": "written later, 2026-10-14T19:23:42+02:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_imod-beadtrack_tracking_qc.json",
+      "why": "written later, 2026-10-14T19:23:52+02:00"
+    },
+    {
+      "path": "outputs/ryr1/alignments/161/fine/161_fine_alignment_qc.json",
+      "why": "written later, 2026-10-14T19:24:16+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/ctf/161_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:18:03+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/ctf/161_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T17:27:55+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/reconstruction/161_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:31:27+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/segmentation/039_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:10:21+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/segmentation/125_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:10:32+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/template/039_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:13:13+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/segmentation/096_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:39:49+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/template/125_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:13:50+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/segmentation/097_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:39:55+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/segmentation/161_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:39:54+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/template/161_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:42:56+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/template/096_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:42:39+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/template/097_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T17:42:56+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/picking/125_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:16:01+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/125/particle_extraction/125_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:19:27+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/picking/039_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:43:24+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/particle_extraction/039_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:48:14+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/picking/096_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-29T23:40:32+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/096/particle_extraction/096_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-29T23:44:46+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/picking/097_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-30T00:40:50+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/097/particle_extraction/097_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-30T00:44:38+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/picking/161_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-30T02:19:22+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/161/particle_extraction/161_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-30T02:23:32+01:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_imod-beadtrack_fiducial_imodinfo.log",
+      "why": "written later, 2026-10-14T19:23:52+02:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_imod-beadtrack_beadtrack.log",
+      "why": "written later, 2026-10-14T19:23:52+02:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_seed_imodinfo.log",
+      "why": "written later, 2026-10-14T19:23:41+02:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_autofidseed.log",
+      "why": "written later, 2026-10-14T19:23:41+02:00"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_fiducial_newstack.log",
+      "why": "written later, 2026-10-14T19:23:22+02:00"
+    }
+  ],
+  "slurm": {
+    "3620374": {
+      "JobName": "ryr1-cpu161",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-14T18:54:46",
+      "Elapsed": "00:00:51",
+      "NodeList": "max182",
+      "AllocTRES": "billing=16,cpu=16,energy=7427,mem=32G,node=1"
+    },
+    "3620884": {
+      "JobName": "ryr1-cpu161",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-14T19:01:47",
+      "Elapsed": "00:00:45",
+      "NodeList": "max177",
+      "AllocTRES": "billing=16,cpu=16,energy=5522,mem=32G,node=1"
+    },
+    "3623086": {
+      "JobName": "ryr1-cpu161b",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-14T19:22:21",
+      "Elapsed": "00:03:48",
+      "NodeList": "max173",
+      "AllocTRES": "billing=16,cpu=16,energy=28824,mem=32G,node=1"
+    }
+  }
+}

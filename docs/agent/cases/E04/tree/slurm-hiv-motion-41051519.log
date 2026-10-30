@@ -1,0 +1,62 @@
+job         hiv-motion (41051519) on gpusrv44.scidom.de
+started     2026-10-07T17:56:12+02:00
+project     outputs/hiv   config configs/lanes/gag-bin8.toml
+series      TS_01 TS_43
+steps       prepare-tilt-series
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/hiv/manifests/TS_01.json --registry outputs/hiv/artifacts.json --out outputs/hiv --motion-backend motioncor3 --storage-policy working --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 5 --motioncor3-patch-y 5 --motioncor3-pixel-size 0.675
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/cli.py:454 in prepare_tilt_series                           │
+│                                                                              │
+│    451 │   except ValueError as exc:                                         │
+│    452 │   │   raise typer.BadParameter(str(exc),                            │
+│        param_hint="storage-policy") from exc                                 │
+│    453 │                                                                     │
+│ ❱  454 │   tilt_series_manifest =                                            │
+│        TiltSeriesManifest.model_validate_json(manifest.read_text())          │
+│    455 │   artifact_registry = ArtifactRegistry.load(registry)               │
+│    456 │   context = BackendContext(                                         │
+│    457 │   │   output_dir=out,                                               │
+│                                                                              │
+│ /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pi │
+│ peline/lib/python3.11/pathlib.py:1058 in read_text                           │
+│                                                                              │
+│   1055 │   │   Open the file in text mode, read it, and close the file.      │
+│   1056 │   │   """                                                           │
+│   1057 │   │   encoding = io.text_encoding(encoding)                         │
+│ ❱ 1058 │   │   with self.open(mode='r', encoding=encoding, errors=errors) as │
+│        f:                                                                    │
+│   1059 │   │   │   return f.read()                                           │
+│   1060 │                                                                     │
+│   1061 │   def write_bytes(self, data):                                      │
+│                                                                              │
+│ /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pi │
+│ peline/lib/python3.11/pathlib.py:1044 in open                                │
+│                                                                              │
+│   1041 │   │   """                                                           │
+│   1042 │   │   if "b" not in mode:                                           │
+│   1043 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱ 1044 │   │   return io.open(self, mode, buffering, encoding, errors,       │
+│        newline)                                                              │
+│   1045 │                                                                     │
+│   1046 │   def read_bytes(self):                                             │
+│   1047 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+FileNotFoundError: [Errno 2] No such file or directory: 
+'outputs/hiv/manifests/TS_01.json'
+# prepare-tilt-series: 1.9 min, +0.00 GB
+
+# FAILED at prepare-tilt-series (exit 1) for TS_01.
+# Fix it, then resume with:
+#   --series TS_01 --from prepare-tilt-series

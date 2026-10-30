@@ -1,0 +1,36 @@
+job         hiv-motion (41074764) on gpusrv40.scidom.de
+started     2026-10-07T21:15:54+02:00
+project     {{ROOT}}/outputs/hiv   config configs/lanes/gag-bin8.toml
+series      TS_01 TS_43
+steps       prepare-tilt-series
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --motion-backend motioncor3 --storage-policy working --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 5 --motioncor3-patch-y 5 --motioncor3-pixel-size 0.675 --overwrite
+wrote 41 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated {{ROOT}}/outputs/hiv/artifacts.json
+storage policy: working
+registered size: 13448580246 bytes
+# prepare-tilt-series: 4.8 min, +13.45 GB
+
+# ---- TS_43 (gag-bin8) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --motion-backend motioncor3 --storage-policy working --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 5 --motioncor3-patch-y 5 --motioncor3-pixel-size 0.675 --overwrite
+wrote 41 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated {{ROOT}}/outputs/hiv/artifacts.json
+storage policy: working
+registered size: 27524601425 bytes
+# prepare-tilt-series: 5.5 min, +14.08 GB
+
+finished    2026-10-07T21:26:15+02:00

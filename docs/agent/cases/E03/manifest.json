@@ -1,0 +1,159 @@
+{
+  "case": "E03",
+  "cluster": "mdc",
+  "days": [
+    "2026-10-14",
+    "2026-10-15"
+  ],
+  "collected": "2026-10-30T13:16:35+01:00",
+  "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
+  "files": [
+    {
+      "path": "slurm-ryr1-motion-3609935.log",
+      "modified": "2026-10-14T16:22:40+02:00",
+      "source": "Slurm log of job 3609935, started in the case's days"
+    },
+    {
+      "path": "slurm-ryr1-motion-3611148.log",
+      "modified": "2026-10-14T16:46:01+02:00",
+      "source": "Slurm log of job 3611148, started in the case's days"
+    },
+    {
+      "path": "slurm-ryr1-motion-3611180.log",
+      "modified": "2026-10-14T17:00:25+02:00",
+      "source": "Slurm log of job 3611180, started in the case's days"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4.toml",
+      "modified": "2026-10-14T19:34:12+02:00",
+      "source": "commit 89e45cb79, the lane file's last before the case ended"
+    },
+    {
+      "path": "outputs/ryr1/step_timings.jsonl",
+      "modified": "2026-10-15T23:59:59+02:00",
+      "source": "91 of its 187 rows"
+    },
+    {
+      "path": "outputs/ryr1/journal.jsonl",
+      "modified": "2026-10-15T23:59:59+02:00",
+      "source": "0 of its 28 rows"
+    },
+    {
+      "path": "outputs/ryr1/artifacts.json",
+      "modified": "2026-10-15T23:59:59+02:00",
+      "source": "the registry, 205 of its 452 records"
+    },
+    {
+      "path": "outputs/ryr1/manifests/039.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/096.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/097.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/125.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/manifests/161.json",
+      "modified": "2026-10-14T15:44:03+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/coarse_alignment/039_coarse_alignment_qc.json",
+      "modified": "2026-10-14T17:01:31+02:00",
+      "source": "the coarse_alignment_report QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_seed_qc.json",
+      "modified": "2026-10-14T17:02:03+02:00",
+      "source": "the fiducial_seed QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/039/039_imod-beadtrack_tracking_qc.json",
+      "modified": "2026-10-14T17:02:09+02:00",
+      "source": "the fiducial_tracking QC record of 039"
+    },
+    {
+      "path": "outputs/ryr1/alignments/039/fine/039_fine_alignment_qc.json",
+      "modified": "2026-10-14T17:02:23+02:00",
+      "source": "the fine_alignment QC record of 039"
+    }
+  ],
+  "left_out": [
+    {
+      "path": "outputs/ryr1/qc/039/ctf/039_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-18T23:14:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/ctf/039_imod-ctfphaseflip_bin4_correction_qc.json",
+      "why": "written later, 2026-10-29T15:01:09+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/reconstruction/039_fine_bin4_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:04:06+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/segmentation/039_full_membrain-seg_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:10:21+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/template/039_pytom_bin4_qc.json",
+      "why": "written later, 2026-10-29T15:13:13+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/picking/039_full_pytom-match-pick_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:43:24+01:00"
+    },
+    {
+      "path": "outputs/ryr1/qc/039/particle_extraction/039_cubic-crop_bin4_qc.json",
+      "why": "written later, 2026-10-29T20:48:14+01:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_imod-ctfphaseflip_bin4.log",
+      "why": "written later, 2026-10-29T15:01:09+01:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-18T23:14:14+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5.log",
+      "why": "written later, 2026-10-18T23:14:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw5-tilt.log",
+      "why": "written later, 2026-10-16T19:02:43+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw10.log",
+      "why": "written later, 2026-10-16T17:17:44+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw5.log",
+      "why": "written later, 2026-10-16T17:17:09+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw1.log",
+      "why": "written later, 2026-10-16T17:16:34+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5.defocus",
+      "why": "written later, 2026-10-18T23:14:02+02:00"
+    },
+    {
+      "path": "outputs/ryr1/ctf/039/039_ctffind5_ctffind.txt",
+      "why": "written later, 2026-10-18T23:14:02+02:00"
+    }
+  ],
+  "slurm": {}
+}

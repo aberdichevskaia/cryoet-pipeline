@@ -513,7 +513,7 @@ PLACEHOLDER = re.compile(r"\{\{(ROOT|HOME|USER|OTHER(\d+))\}\}")
 # placeholder.
 _HOME = re.compile(r"(?:/fast/home|/ictstr01/home|/lustre/home|/home|/Users)(?:/[^/\s'\"`]+){1,2}")
 # A path's first three folders, for the person to look over.
-_PREFIX = re.compile(r"(?<![\w.~{}-])/[\w.-]+(?:/[\w.-]+){0,2}")
+_PREFIX = re.compile(r"(?<![\w.~{}:/-])/[\w.-]+(?:/[\w.-]+){0,2}")
 # What [env] gives a case, as the constructed cases set them: the first three
 # always, the others when the lane's commands name them, and /opt/<name> for any
 # variable not listed. {bin} is the runner's folder of stand-ins, which holds a
@@ -819,8 +819,8 @@ def collect(
              limit: int | None = MAX_BYTES) -> None:
         """One file into the case, if it is as of the case and text. A job's log is
         the job's whenever it was last written, and says so."""
-        if target in files:
-            return
+        if target in files or any(one["path"] == _shown(root, path) for one in left):
+            return  # several jobs can name one config
         try:
             modified = path.stat().st_mtime
         except OSError:
@@ -902,8 +902,17 @@ def collect(
     for path in sorted((project / "manifests").glob("*.json")):
         take(path, _shown(root, path), "a manifest")
     for record in show_project.qc_records(root, project, set(series), cfg["lane"]["variant"]):
+        # A project run from another folder has its registry name files by their
+        # absolute paths there (Munich's cryoet-runs); in tree/ they go by the
+        # path from that folder, as the sandbox will have them.
         path = _resolve(root, record["path"])
-        take(path, _shown(root, path), f"the {record['qc_type']} QC record of {record['series']}")
+        target = _shown(root, path)
+        if Path(target).is_absolute():
+            target = _inside(path, sorted(roots)) or target
+        if Path(target).is_absolute():
+            left.append({"path": target, "why": "outside the folders the jobs ran in"})
+        else:
+            take(path, target, f"the {record['qc_type']} QC record of {record['series']}")
     for step in case["steps"]:
         for one in series:
             for path, _ in show_failure.step_logs(project, one, step, None, None):
@@ -928,6 +937,9 @@ def collect(
         except tomllib.TOMLDecodeError:
             continue
         refused += [f"{evidence.path}: {key}" for key in run_series.unknown_keys(config)]
+        if evidence.path == case["lane"] and not (config.get("run") or {}).get("project"):
+            # A lane file from before [run] (12 October 2026): the tools need it.
+            refused.append(f"{evidence.path}: no [run] project, which the tools need")
         here = moved_data(config)
         if here:
             for old, new in here.items():

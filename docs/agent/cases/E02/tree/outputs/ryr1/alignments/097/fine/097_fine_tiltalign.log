@@ -1,0 +1,182 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltalign -ModelFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/alignment_input.fid -ImageFile {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial_bin2_preali.mrc -ImagesAreBinned 2 -UnbinnedPixelSize 0.16800000 -OutputModelFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fiducials.3dmod -OutputResidualFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.resid -OutputFilledInModel {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/filled.fid -OutputFidXYZFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fiducials.xyz -OutputTiltFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.tlt -OutputXAxisTiltFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.xtilt -OutputTransformFile {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.tltxf -RotationAngle 90.000000 -TiltFile {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.rawtlt -AngleOffset 3.270000 -NoSeparateTiltGroups 1 -BeamTiltOption 0 -RotOption 1 -RotDefaultGrouping 5 -TiltOption 5 -TiltDefaultGrouping 5 -MagReferenceView 1 -MagOption 1 -MagDefaultGrouping 4 -XStretchOption 0 -SkewOption 0 -XTiltOption 0 -ResidualReportCriterion 3.0 -SurfacesToAnalyze 2 -MetroFactor 0.25 -MaximumCycles 1000 -AxisZShift 199.700000 -ShiftZFromOriginal -KFactorScaling 1.0 -MinFidsTotalAndEachSurface 10,4 -CrossValidate 1 -RobustFitting -WarnOnRobustFailure
+
+[stdout]
+
+Opened NEW file: {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.tlt
+
+Opened NEW file: {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.xtilt
+
+Opened NEW file: {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.tltxf
+
+Opened OLD file: {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.rawtlt
+
+                        Variable mappings 
+ View  Rotation     Tilt  (+ incr.)      Mag       Comp      Dmag      Skew
+   1   rot    1   tilt   1              fixed      fixed      fixed      fixed 
+   2   rot    2   t  1+  5            mag    2     fixed      fixed      fixed 
+   3   rot    3   t  1+  5            mag    3     fixed      fixed      fixed 
+   4   rot    4   t  1+  5            mag    4     fixed      fixed      fixed 
+   5   rot    5   tilt   5            mag    5     fixed      fixed      fixed 
+   6   rot    6   t  5+ 10            mag    6     fixed      fixed      fixed 
+   7   rot    7   t  5+ 10            mag    7     fixed      fixed      fixed 
+   8   rot    8   t  5+ 10            mag    8     fixed      fixed      fixed 
+   9   rot    9   t  5+ 10            mag    9     fixed      fixed      fixed 
+  10   rot   10   tilt  10            mag   10     fixed      fixed      fixed 
+  11   rot   11   t 10+fix            mag   11     fixed      fixed      fixed 
+  12   rot   12   t 10+fix            mag   12     fixed      fixed      fixed 
+  13   rot   13   t 10+fix            mag   13     fixed      fixed      fixed 
+  14   rot   14   t 10+fix            mag   14     fixed      fixed      fixed 
+  15   rot   15     fixed             mag   15     fixed      fixed      fixed 
+  16   rot   16   t 21+fix            mag   16     fixed      fixed      fixed 
+  17   rot   17   t 21+fix            mag   17     fixed      fixed      fixed 
+  18   rot   18   t 21+fix            mag   18     fixed      fixed      fixed 
+  19   rot   19   t 21+fix            mag   19     fixed      fixed      fixed 
+  20   rot   20   t 21+fix            mag   20     fixed      fixed      fixed 
+  21   rot   21   tilt  21            mag   21     fixed      fixed      fixed 
+  22   rot   22   t 21+ 25            mag   22     fixed      fixed      fixed 
+  23   rot   23   t 21+ 25            mag   23     fixed      fixed      fixed 
+  24   rot   24   t 21+ 25            mag   24     fixed      fixed      fixed 
+  25   rot   25   tilt  25            mag   25     fixed      fixed      fixed 
+  26   rot   26   t 25+ 29            mag   26     fixed      fixed      fixed 
+  27   rot   27   t 25+ 29            mag   27     fixed      fixed      fixed 
+  28   rot   28   t 25+ 29            mag   28     fixed      fixed      fixed 
+  29   rot   29   tilt  29            mag   29     fixed      fixed      fixed 
+
+
+ Variable Metric minimization                  Initial F:        12.657755
+                                               Cycle   10         9.352801
+                                               Cycle   20         3.225460
+                                               Cycle   30         2.456529
+                                               Cycle   40         1.429431
+                                               Cycle   50         1.094522
+                                               Cycle   60         0.986585
+                                               Cycle   70         0.984284
+
+ Number of cycles :    74                      Final   F :        0.984248
+
+Starting robust fitting with    3 weight groups:   3 view groups in  1 rings
+ Total cycles for robust fitting:  163         Final   F :        0.847906
+ Final mean and max weight change  0.0022  0.0046
+   412 weights:    3 are 0,    6 are < .1,    6 are < .2,    15 ( 3.6%) are < .5
+
+  29 views,   63 geometric variables,   15 3-D points,   412 projection points
+  Ratio of total measured values to all unknowns =   824/ 161 =   5.12
+
+ At minimum tilt, rotation angle is   83.97
+
+ view   rotation    tilt    deltilt     mag      dmag      skew    resid-nm
+   1      84.1     -38.7      0.01    1.0000    0.0000      0.00      0.39
+   2      84.0     -35.7      0.02    1.0004    0.0000      0.00      0.35
+   3      84.0     -32.7      0.02    1.0001    0.0000      0.00      0.32
+   4      84.0     -29.7      0.02    1.0003    0.0000      0.00      0.33
+   5      84.0     -26.7      0.03    1.0000    0.0000      0.00      0.22
+   6      84.0     -23.7     -0.00    1.0003    0.0000      0.00      0.21
+   7      84.0     -20.8     -0.03    1.0001    0.0000      0.00      0.20
+   8      84.0     -17.8     -0.06    1.0001    0.0000      0.00      0.20
+   9      84.0     -14.8     -0.09    0.9995    0.0000      0.00      0.21
+  10      84.0     -11.9     -0.12    0.9993    0.0000      0.00      0.22
+  11      84.0      -8.8     -0.10    0.9990    0.0000      0.00      0.28
+  12      84.0      -5.8     -0.07    0.9988    0.0000      0.00      0.29
+  13      84.0      -2.8     -0.05    0.9983    0.0000      0.00      0.40
+  14      84.0       0.2     -0.02    0.9979    0.0000      0.00      0.48
+  15      84.0       3.3     -0.00    0.9983    0.0000      0.00      0.39
+  16      84.0       6.3      0.02    0.9991    0.0000      0.00      0.37
+  17      84.0       9.3      0.03    0.9987    0.0000      0.00      0.33
+  18      84.0      12.3      0.05    0.9982    0.0000      0.00      0.27
+  19      84.0      15.3      0.07    0.9981    0.0000      0.00      0.30
+  20      84.0      18.4      0.08    0.9982    0.0000      0.00      0.24
+  21      84.0      21.4      0.10    0.9983    0.0000      0.00      0.19
+  22      84.1      24.4      0.08    0.9984    0.0000      0.00      0.23
+  23      84.1      27.3      0.07    0.9981    0.0000      0.00      0.22
+  24      84.1      30.3      0.05    0.9983    0.0000      0.00      0.30
+  25      84.1      33.3      0.04    0.9980    0.0000      0.00      0.20
+  26      84.1      36.3      0.06    0.9980    0.0000      0.00      0.21
+  27      84.1      39.3      0.07    0.9979    0.0000      0.00      0.24
+  28      84.2      42.4      0.09    0.9979    0.0000      0.00      0.29
+  29      84.2      45.4      0.10    0.9978    0.0000      0.00      0.36
+
+
+                     3-D point coordinates (with centroid zero)
+   #       X         Y         Z      obj  cont  resid-nm
+   1   -393.14    580.54   -118.32      1    1      0.2764
+   2   -890.71    935.85    421.87      1    2      0.2731
+   3   -983.96    800.79   -130.58      1    3      0.3699
+   4   -391.78    -52.12    319.47      1    4      0.3372
+   5   -444.62  -1241.27     10.50      1    5      0.2914
+   6   -641.04  -1303.84   -352.02      1    6      0.4408
+   7    -38.69    719.61    266.07      1    7      0.3107
+   8   -312.63    521.19     47.58      1    8      0.1875
+   9    338.61   -437.51   -229.37      1    9      0.2874
+  10    364.50   -956.58    109.28      1   10      0.2334
+  11    604.16    402.76   -137.20      1   11      0.2071
+  12    984.83    260.08    262.96      1   12      0.3908
+  13    520.99    474.56   -125.48      1   13      0.2368
+  14    700.29   -297.54   -153.01      1   14      0.2234
+  15    583.20   -406.55   -191.76      1   15      0.2422
+
+ Midpoint of Z range relative to centroid in Z:   34.92
+
+Opened NEW file: {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fine.resid
+
+ Residual error mean and sd:    0.2829   0.190 nm
+ Residual error weighted mean:  0.2629         nm
+
+         Projection points with large residuals (in pixels)
+ obj  cont  view   index coordinates      residuals        # of
+   #     #     #      X         Y        X        Y        S.D.   Weights
+   1     6    16   2394.35    188.02     2.28    -3.72     6.21   0.0000
+   1     3    14    278.25     95.98    -3.68     0.71     5.12   0.0000
+   1     6    17   2394.79    179.17     1.41    -3.15     4.60   0.0000
+   1     6    15   2398.12    204.93    -0.30    -3.36     4.46   0.0148
+   1    12    12   1011.26   1964.44     1.72     2.59     3.99   0.0050
+   1     1    29    567.19    737.79     2.93    -0.17     3.70   1.0000
+   1     1    16    555.45    651.52    -2.73     0.37     3.37   0.2356
+
+Opened NEW file: {{ROOT}}/outputs/ryr1/alignments/097/fine/.097-tiltalign-argwu2le/fiducials.xyz
+
+ SURFACE ANALYSIS:
+
+ The following parameters are appropriate if fiducials are NOT on two surfaces:
+
+ Fit of one plane to all fiducials:
+ # of points =               15
+ Mean residual =         188.83
+ Adjusted slope =       -0.0333
+ X axis tilt needed =     -6.76
+ Incremental tilt angle change =   1.91
+ Total tilt angle change =         5.18
+ 
+ The following parameters are appropriate if fiducials ARE on two surfaces,
+ based on fit of two parallel planes to fiducials sorted onto two surfaces:
+
+ On bottom surface:
+ # of points =            9
+ Mean residual =      45.87
+ Z axis intercept =  -159.7
+
+ On top surface:
+ # of points =            6
+ Mean residual =      47.70
+ Z axis intercept =   239.5
+
+ Overall mean residual =          46.60
+ Thickness at Z intercepts =      399.2
+ Adjusted slope =                0.0010
+ X axis tilt needed =             -7.94
+ Incremental tilt angle change =  -0.06
+ Total tilt angle change =         3.21
+ 
+ Unbinned thickness needed to contain centers of all fiducials =        1137
+ Incremental unbinned shift needed to center range of fiducials in Z =    -0.6
+ Total unbinned shift needed to center range of fiducials in Z =         199.1
+
+Running 83 searches with points left out
+
+ Global non-robust leave-out error (1942 pts): 0.4013 nm  weighted 0.3331 nm
+ Global     robust leave-out error (1942 pts): 0.4039 nm  weighted 0.3333 nm
+        Benefit from robust fitting: unweighted -0.0026   *weighted -0.0001 nm*
+
+[stderr]
+
+[exit_code]
+0

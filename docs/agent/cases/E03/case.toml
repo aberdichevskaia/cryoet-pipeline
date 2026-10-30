@@ -1,0 +1,15 @@
+id = "E03"
+title = "The CTF cliff at high tilt — RyR1 039"
+request = "The CTF in the report looks bad beyond ±12° for 039. What's wrong?"
+note = "Collected at mdc on 2026-10-30: the project as it stood at the end of 2026-10-15. The window test of 16 October fitted 039 again under labels; ctfw1 is the lane's window on the uncropped stack (scripts/ctf_window_test.sbatch). Left out as written after the case: 16 files, which manifest.json lists. Neither the CTF QC record nor the CTF model of 14 October is here: both were written again on 18 October. The case cannot be graded on this evidence until a stand-in for them is chosen, such as ctfw1. User names and home paths are placeholders, which setup.sh fills in."
+playbook = ["C-1"]
+pass_if = ["it names the window per view and its default", "it proposes the variant test on one series", "it names the alternative cause"]
+must_not = ["rerun the lane", "widen the overall defocus range instead of the window per view", "claim the cause without the trend"]
+
+[env]
+CTFFIND5 = "{bin}/ctffind5"
+IMOD_DIR = "/opt/imod_5.1.12"
+MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
+MEMBRAIN_EXE = "/opt/membrain/membrain"
+MOTIONCOR3 = "/opt/motioncor3"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

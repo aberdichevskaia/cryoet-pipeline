@@ -1,0 +1,71 @@
+job         ryr1-motion (3611180) on maxg05.mdc-berlin.net
+started     2026-10-14T16:48:41+02:00
+project     outputs/ryr1   config configs/lanes/ryr1-bin4.toml
+series      039 096 097 125 161
+steps       prepare-tilt-series
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind
+Tesla V100-SXM2-32GB, 7.0, 32768 MiB
+GPU 0: Tesla V100-SXM2-32GB (UUID: GPU-c32ad537-bac8-9249-cdcd-7257678e902e)
+
+preflight   ok
+
+
+# ---- 039 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/039.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2 --overwrite
+wrote 29 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated outputs/ryr1/artifacts.json
+storage policy: debug
+registered size: 27341262290 bytes
+# prepare-tilt-series: 2.3 min, +0.00 GB
+
+# ---- 096 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/096.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2 --overwrite
+wrote 29 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated outputs/ryr1/artifacts.json
+storage policy: debug
+registered size: 27341262290 bytes
+# prepare-tilt-series: 2.2 min, +0.00 GB
+
+# ---- 097 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/097.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2 --overwrite
+wrote 29 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated outputs/ryr1/artifacts.json
+storage policy: debug
+registered size: 27341262290 bytes
+# prepare-tilt-series: 2.4 min, +0.00 GB
+
+# ---- 125 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/125.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2 --overwrite
+wrote 29 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated outputs/ryr1/artifacts.json
+storage policy: debug
+registered size: 27341262290 bytes
+# prepare-tilt-series: 2.7 min, +0.00 GB
+
+# ---- 161 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/161.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2 --overwrite
+wrote 29 corrected projections
+wrote 2 tilt-series preparation artifacts
+updated outputs/ryr1/artifacts.json
+storage policy: debug
+registered size: 27341262290 bytes
+# prepare-tilt-series: 2.2 min, -0.00 GB
+
+finished    2026-10-14T17:00:25+02:00

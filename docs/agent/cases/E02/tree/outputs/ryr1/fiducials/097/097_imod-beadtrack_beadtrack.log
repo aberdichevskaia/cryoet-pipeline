@@ -1,0 +1,402 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/beadtrack -ImageFile {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial_bin2_preali.mrc -ImagesAreBinned 2 -InputSeedModel {{ROOT}}/outputs/ryr1/fiducials/097/097.seed -OutputModel {{ROOT}}/outputs/ryr1/fiducials/097/.097-beadtrack-fdsoeabz/097.fid -PrealignTransformFile {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.prexg -RotationAngle 90.000000 -PixelSize 0.16800000 -TiltFile {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.rawtlt -TiltDefaultGrouping 7 -MagDefaultGrouping 5 -RotDefaultGrouping 1 -BeadDiameter 59.523808 -BoxSizeXandY 198,198 -FillGaps -MaxGapSize 5 -RoundsOfTracking 2 -LocalAreaTracking -LocalAreaTargetSize 1000 -MinBeadsInArea 8 -MinOverlapBeads 5 -MinViewsForTiltalign 4 -MinTiltRangeToFindAxis 10.0 -MinTiltRangeToFindAngles 20.0 -MaxBeadsToAverage 4
+
+[stdout]
+
+Input image file:: {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial_bin2_preali.mrc
+ Dimensions:   2880   2046     29   Pixel size:      3.36       3.36       3.36
+Mode:  2               Min, max, mean:     -0.15362       3.0799      0.93917
+Created by mrcfile.py                                       2026-10-14 17:06:54
+NEWSTACK: Images copied, transformed                    14-Oct-26  17:07:02
+
+Opened OLD file: {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.rawtlt
+Box size in X and Y adjusted for binning to: 100 100
+Opened OLD file: {{ROOT}}/outputs/ryr1/fiducials/097/097_fiducial.prexg
+To compensate for larger tilt increment, residual change criteria for deletion
+  were scaled by 1.390: to  0.056   2.78
+ First round of tracking will be split in two
+ Local area number, size, overlap - X: 11 984 794,  Y: 7 985 807
+Area   1, X:   620 to  2264, Y:   204 to  1849,    8 points,    8 new
+Area   2, X:   620 to  2264, Y:   738 to  2383,    8 points,    1 new
+Area   3, X:   105 to  1639, Y:   259 to  1794,    8 points,    2 new
+Area   4, X:   895 to  3129, Y:  -269 to  1966,    8 points,    2 new
+Area   5, X:  -345 to  1709, Y:  -535 to  1520,    8 points,    2 new
+Starting area     1, round  1,   8 contours
+  9   4  15  14  10  11   8  13
+view  14, pass 1,   8 points (-  0), mean, sd, max dev:    7.45    3.86   14.82
+view  13, pass 1,   8 points (-  0), mean, sd, max dev:    6.47    4.88   15.23
+view  12, pass 1,   8 points (-  0), mean, sd, max dev:    1.49    0.54    2.20
+   4 views,   18 cycles, F =     0.643885, mean residual =    0.56
+view  11, pass 1,   8 points (-  2), mean, sd, max dev:    0.78    0.51    1.53
+   5 views,   72 cycles, F =     0.439780, mean residual =    0.38
+view  10, pass 1,   8 points (-  0), mean, sd, max dev:    0.95    0.34    1.33
+   6 views,   57 cycles, F =     0.518743, mean residual =    0.44
+view   9, pass 1,   8 points (-  0), mean, sd, max dev:    0.32    0.18    0.52
+   7 views,   89 cycles, F =     0.497379, mean residual =    0.42
+view   8, pass 1,   8 points (-  0), mean, sd, max dev:    0.71    0.54    1.44
+   8 views,   23 cycles, F =     0.566383, mean residual =    0.49
+   8 views,    1 cycles, F =     0.566411, mean residual =    0.49
+view  16, pass 1,   8 points (-  0), mean, sd, max dev:    0.85    0.52    1.69
+   9 views,   77 cycles, F =     0.559217, mean residual =    0.48
+view  17, pass 1,   8 points (-  0), mean, sd, max dev:    0.55    0.33    1.25
+  10 views,   72 cycles, F =     0.546580, mean residual =    0.47
+view  18, pass 1,   8 points (-  0), mean, sd, max dev:    0.54    0.34    1.26
+  11 views,   71 cycles, F =     0.550622, mean residual =    0.47
+view  19, pass 1,   8 points (-  0), mean, sd, max dev:    0.83    0.57    1.65
+  12 views,   65 cycles, F =     0.589876, mean residual =    0.50
+view  20, pass 1,   8 points (-  0), mean, sd, max dev:    0.86    0.49    1.56
+  13 views,   69 cycles, F =     0.594865, mean residual =    0.50
+view  21, pass 1,   8 points (-  0), mean, sd, max dev:    0.53    0.34    0.96
+  14 views,   68 cycles, F =     0.602916, mean residual =    0.52
+view  22, pass 1,   8 points (-  0), mean, sd, max dev:    0.83    0.29    1.30
+  15 views,   67 cycles, F =     0.629099, mean residual =    0.54
+Starting area     2, round  1,   8 contours
+  9  15  14  10  11   8  13  12
+  15 views,    2 cycles, F =     0.597544, mean residual =    0.52
+view  14, pass 1,   7 points (-  0), mean, sd, max dev:    0.49    0.20    0.75
+view  13, pass 1,   7 points (-  0), mean, sd, max dev:    0.73    0.30    1.33
+view  11, pass 1,   8 points (-  0), mean, sd, max dev:    6.82    4.63   16.22
+  15 views,    1 cycles, F =     0.597489, mean residual =    0.52
+view  10, pass 1,   8 points (-  0), mean, sd, max dev:    5.26    5.02   12.96
+  15 views,  117 cycles, F =     0.591914, mean residual =    0.51
+view   9, pass 1,   8 points (-  0), mean, sd, max dev:    0.44    0.32    1.08
+  15 views,   12 cycles, F =     0.592969, mean residual =    0.51
+view   8, pass 1,   8 points (-  0), mean, sd, max dev:    0.56    0.34    1.12
+  15 views,   10 cycles, F =     0.592627, mean residual =    0.51
+  15 views,    1 cycles, F =     0.592625, mean residual =    0.51
+view  15, pass 1,   7 points (-  0), mean, sd, max dev:    0.69    0.35    1.21
+view  16, pass 1,   7 points (-  0), mean, sd, max dev:    0.53    0.35    1.19
+view  17, pass 1,   7 points (-  0), mean, sd, max dev:    0.44    0.16    0.66
+Starting area     3, round  1,   8 contours
+  4  15  14  11   8  13   1   7
+  15 views,   28 cycles, F =     0.600518, mean residual =    0.52
+view  14, pass 1,   8 points (-  0), mean, sd, max dev:    7.28    4.79   14.88
+  15 views,    1 cycles, F =     0.600327, mean residual =    0.52
+view  13, pass 1,   8 points (-  0), mean, sd, max dev:   10.83    6.90   21.65
+  15 views,    2 cycles, F =     0.585538, mean residual =    0.50
+view  12, pass 1,   8 points (-  0), mean, sd, max dev:    0.60    0.48    1.46
+  15 views,   11 cycles, F =     0.597557, mean residual =    0.52
+view  11, pass 1,   8 points (-  0), mean, sd, max dev:    0.69    0.31    1.23
+  15 views,   33 cycles, F =     0.605173, mean residual =    0.52
+view  10, pass 1,   8 points (-  0), mean, sd, max dev:    0.58    0.28    0.97
+  15 views,    6 cycles, F =     0.608015, mean residual =    0.53
+view   9, pass 1,   8 points (-  0), mean, sd, max dev:    0.37    0.27    0.97
+  15 views,   10 cycles, F =     0.609353, mean residual =    0.53
+view   8, pass 1,   8 points (-  0), mean, sd, max dev:    0.39    0.21    0.66
+  15 views,    1 cycles, F =     0.608355, mean residual =    0.53
+  15 views,    1 cycles, F =     0.608219, mean residual =    0.53
+view  16, pass 1,   8 points (-  0), mean, sd, max dev:    0.83    0.47    1.51
+  15 views,   33 cycles, F =     0.619603, mean residual =    0.54
+view  17, pass 1,   8 points (-  0), mean, sd, max dev:    0.37    0.25    0.70
+  15 views,    1 cycles, F =     0.616105, mean residual =    0.54
+view  18, pass 1,   8 points (-  0), mean, sd, max dev:    0.39    0.20    0.64
+  15 views,    8 cycles, F =     0.613442, mean residual =    0.53
+view  19, pass 1,   8 points (-  0), mean, sd, max dev:    0.50    0.32    0.94
+  15 views,    1 cycles, F =     0.615221, mean residual =    0.54
+view  20, pass 1,   8 points (-  0), mean, sd, max dev:    0.94    0.48    1.85
+  15 views,   27 cycles, F =     0.630356, mean residual =    0.54
+view  21, pass 1,   8 points (-  0), mean, sd, max dev:    0.66    0.58    1.71
+  15 views,    3 cycles, F =     0.654578, mean residual =    0.56
+view  22, pass 1,   8 points (-  0), mean, sd, max dev:    0.84    0.51    1.75
+  15 views,    3 cycles, F =     0.674938, mean residual =    0.58
+Starting area     4, round  1,   8 contours
+  9   4  15  14  10  12   5   6
+  15 views,   17 cycles, F =     0.607410, mean residual =    0.51
+view  14, pass 1,   7 points (-  0), mean, sd, max dev:    3.53    3.71    9.59
+  15 views,    1 cycles, F =     0.607416, mean residual =    0.51
+   0 pts added on pass 2, conts:
+view  14, pass 2,   7 points (-  0), mean, sd, max dev:    0.39    0.25    0.73
+view  13, pass 1,   7 points (-  0), mean, sd, max dev:    5.43    5.49   14.67
+  15 views,    2 cycles, F =     0.596327, mean residual =    0.50
+   0 pts added on pass 2, conts:
+view  13, pass 2,   7 points (-  0), mean, sd, max dev:    0.53    0.42    1.27
+view  12, pass 1,   8 points (-  0), mean, sd, max dev:    0.49    0.14    0.67
+  15 views,    3 cycles, F =     0.597603, mean residual =    0.50
+view  11, pass 1,   8 points (-  0), mean, sd, max dev:    0.66    0.37    1.11
+  15 views,   50 cycles, F =     0.594110, mean residual =    0.51
+view  10, pass 1,   8 points (-  0), mean, sd, max dev:    0.53    0.37    1.21
+  15 views,   11 cycles, F =     0.600663, mean residual =    0.51
+view   9, pass 1,   8 points (-  0), mean, sd, max dev:    0.46    0.27    0.93
+  15 views,   16 cycles, F =     0.606494, mean residual =    0.52
+view   8, pass 1,   8 points (-  0), mean, sd, max dev:    0.63    0.45    1.33
+  15 views,   42 cycles, F =     0.617583, mean residual =    0.53
+  15 views,    1 cycles, F =     0.617597, mean residual =    0.53
+view  15, pass 1,   7 points (-  0), mean, sd, max dev:    0.52    0.37    1.23
+view  16, pass 1,   7 points (-  0), mean, sd, max dev:    0.80    0.44    1.39
+  15 views,   41 cycles, F =     0.629761, mean residual =    0.55
+   0 pts added on pass 2, conts:
+view  16, pass 2,   7 points (-  0), mean, sd, max dev:    0.74    0.38    1.37
+view  17, pass 1,   7 points (-  0), mean, sd, max dev:    0.62    0.33    1.04
+  15 views,   17 cycles, F =     0.635447, mean residual =    0.55
+   0 pts added on pass 2, conts:
+view  17, pass 2,   7 points (-  0), mean, sd, max dev:    0.52    0.31    0.98
+view  18, pass 1,   7 points (-  0), mean, sd, max dev:    1.13    0.79    2.54
+  15 views,   38 cycles, F =     0.676781, mean residual =    0.59
+view  19, pass 1,   7 points (-  0), mean, sd, max dev:    0.92    0.57    1.56
+  15 views,    4 cycles, F =     0.698711, mean residual =    0.61
+view  20, pass 1,   7 points (-  0), mean, sd, max dev:    1.04    0.40    1.53
+  15 views,   38 cycles, F =     0.707590, mean residual =    0.63
+view  21, pass 1,   7 points (-  0), mean, sd, max dev:    0.76    0.39    1.33
+  15 views,   22 cycles, F =     0.720932, mean residual =    0.64
+view  22, pass 1,   7 points (-  0), mean, sd, max dev:    0.72    0.20    0.90
+  15 views,   37 cycles, F =     0.721250, mean residual =    0.63
+Starting area     5, round  1,   8 contours
+  9   4  15   8   1   7   3   2
+  15 views,   26 cycles, F =     0.670103, mean residual =    0.59
+view  14, pass 1,   8 points (-  0), mean, sd, max dev:    9.62    5.45   16.78
+  15 views,    1 cycles, F =     0.669606, mean residual =    0.59
+view  13, pass 1,   8 points (-  0), mean, sd, max dev:   14.90    8.22   24.73
+  15 views,    2 cycles, F =     0.676318, mean residual =    0.59
+view  12, pass 1,   8 points (-  0), mean, sd, max dev:    1.02    0.71    2.70
+  15 views,   14 cycles, F =     0.732164, mean residual =    0.63
+view  11, pass 1,   8 points (-  0), mean, sd, max dev:    0.56    0.31    1.05
+  15 views,    6 cycles, F =     0.729182, mean residual =    0.62
+view  10, pass 1,   8 points (-  0), mean, sd, max dev:    0.42    0.32    0.89
+  15 views,    5 cycles, F =     0.729508, mean residual =    0.62
+view   9, pass 1,   8 points (-  0), mean, sd, max dev:    0.57    0.37    1.08
+  15 views,   33 cycles, F =     0.727244, mean residual =    0.62
+view   8, pass 1,   8 points (-  0), mean, sd, max dev:    0.74    0.56    2.01
+  15 views,   28 cycles, F =     0.750358, mean residual =    0.64
+  15 views,    1 cycles, F =     0.750336, mean residual =    0.64
+view  16, pass 1,   7 points (-  2), mean, sd, max dev:    0.45    0.24    0.72
+  15 views,   21 cycles, F =     0.767020, mean residual =    0.65
+   0 pts added on pass 2, conts:
+view  16, pass 2,   7 points (-  0), mean, sd, max dev:    0.73    0.69    1.96
+view  17, pass 1,   8 points (-  0), mean, sd, max dev:    0.56    0.21    0.88
+  15 views,    7 cycles, F =     0.768184, mean residual =    0.65
+view  18, pass 1,   8 points (-  0), mean, sd, max dev:    0.46    0.16    0.66
+  15 views,    1 cycles, F =     0.762193, mean residual =    0.64
+view  19, pass 1,   8 points (-  0), mean, sd, max dev:    0.81    0.41    1.52
+  15 views,   17 cycles, F =     0.766132, mean residual =    0.65
+view  20, pass 1,   8 points (-  0), mean, sd, max dev:    0.86    0.18    1.12
+  15 views,    1 cycles, F =     0.770575, mean residual =    0.65
+view  21, pass 1,   8 points (-  0), mean, sd, max dev:    0.69    0.41    1.25
+  15 views,   27 cycles, F =     0.766244, mean residual =    0.65
+view  22, pass 1,   8 points (-  0), mean, sd, max dev:    0.72    0.24    0.98
+  15 views,   17 cycles, F =     0.769341, mean residual =    0.65
+Starting area     1, round  1,   8 contours
+  9   4  15  14  10  11   8  13
+  15 views,   24 cycles, F =     0.629428, mean residual =    0.54
+view   7, pass 1,   8 points (-  0), mean, sd, max dev:    0.71    0.42    1.39
+  16 views,   29 cycles, F =     0.647822, mean residual =    0.56
+view   6, pass 1,   8 points (-  0), mean, sd, max dev:    0.65    0.33    1.14
+  17 views,   70 cycles, F =     0.642800, mean residual =    0.56
+view   5, pass 1,   8 points (-  0), mean, sd, max dev:    0.76    0.56    1.69
+  18 views,   67 cycles, F =     0.654568, mean residual =    0.57
+view   4, pass 1,   8 points (-  0), mean, sd, max dev:    0.90    0.35    1.42
+  19 views,   62 cycles, F =     0.664970, mean residual =    0.59
+view   3, pass 1,   8 points (-  0), mean, sd, max dev:    0.78    0.28    1.26
+  20 views,   65 cycles, F =     0.671741, mean residual =    0.60
+view   2, pass 1,   8 points (-  0), mean, sd, max dev:    0.78    0.28    1.23
+  21 views,   56 cycles, F =     0.678520, mean residual =    0.61
+view   1, pass 1,   8 points (-  2), mean, sd, max dev:    0.58    0.38    1.05
+  22 views,   52 cycles, F =     0.702863, mean residual =    0.63
+  22 views,    1 cycles, F =     0.702872, mean residual =    0.63
+view  23, pass 1,   8 points (-  0), mean, sd, max dev:    0.63    0.38    1.09
+  23 views,   55 cycles, F =     0.702279, mean residual =    0.62
+view  24, pass 1,   8 points (-  0), mean, sd, max dev:    0.85    0.27    1.36
+  24 views,   47 cycles, F =     0.709967, mean residual =    0.63
+view  25, pass 1,   8 points (-  0), mean, sd, max dev:    1.02    0.41    1.46
+  25 views,   52 cycles, F =     0.714281, mean residual =    0.63
+view  26, pass 1,   8 points (-  0), mean, sd, max dev:    0.78    0.40    1.24
+  26 views,   51 cycles, F =     0.717497, mean residual =    0.64
+view  27, pass 1,   8 points (-  0), mean, sd, max dev:    0.72    0.52    1.53
+  27 views,   53 cycles, F =     0.725808, mean residual =    0.64
+view  28, pass 1,   8 points (-  0), mean, sd, max dev:    0.74    0.30    1.15
+  28 views,   44 cycles, F =     0.728067, mean residual =    0.65
+view  29, pass 1,   8 points (-  0), mean, sd, max dev:    0.51    0.28    0.87
+  29 views,   44 cycles, F =     0.723416, mean residual =    0.64
+For area    1, round  1:  8 contours, points missing =    0
+Starting area     2, round  1,   8 contours
+  9  15  14  10  11   8  13  12
+  29 views,   41 cycles, F =     0.666207, mean residual =    0.59
+view   7, pass 1,   8 points (-  0), mean, sd, max dev:    0.41    0.17    0.77
+  29 views,    1 cycles, F =     0.664946, mean residual =    0.59
+view   6, pass 1,   8 points (-  0), mean, sd, max dev:    0.56    0.20    0.79
+  29 views,    2 cycles, F =     0.664686, mean residual =    0.59
+view   5, pass 1,   8 points (-  0), mean, sd, max dev:    0.51    0.21    0.98
+  29 views,    5 cycles, F =     0.666834, mean residual =    0.59
+view   4, pass 1,   8 points (-  0), mean, sd, max dev:    0.68    0.43    1.25
+  29 views,    5 cycles, F =     0.671703, mean residual =    0.60
+view   3, pass 1,   8 points (-  0), mean, sd, max dev:    0.84    0.36    1.40
+  29 views,   35 cycles, F =     0.675280, mean residual =    0.60
+view   2, pass 1,   8 points (-  0), mean, sd, max dev:    0.72    0.31    1.24
+  29 views,    2 cycles, F =     0.677384, mean residual =    0.60
+view   1, pass 1,   8 points (-  0), mean, sd, max dev:    0.81    0.54    1.97
+  29 views,    1 cycles, F =     0.678364, mean residual =    0.60
+For area    2, round  1:  8 contours, points missing =   17
+Starting area     3, round  1,   8 contours
+  4  15  14  11   8  13   1   7
+  29 views,   41 cycles, F =     0.679048, mean residual =    0.59
+view   7, pass 1,   8 points (-  0), mean, sd, max dev:    0.54    0.16    0.82
+  29 views,    1 cycles, F =     0.678533, mean residual =    0.59
+view   6, pass 1,   8 points (-  0), mean, sd, max dev:    0.56    0.24    0.84
+  29 views,    1 cycles, F =     0.678565, mean residual =    0.59
+view   5, pass 1,   8 points (-  0), mean, sd, max dev:    0.71    0.43    1.44
+  29 views,    3 cycles, F =     0.680569, mean residual =    0.60
+view   4, pass 1,   8 points (-  0), mean, sd, max dev:    0.99    0.55    1.62
+  29 views,   25 cycles, F =     0.695564, mean residual =    0.61
+view   3, pass 1,   8 points (-  0), mean, sd, max dev:    0.77    0.36    1.63
+  29 views,    3 cycles, F =     0.705119, mean residual =    0.61
+view   2, pass 1,   8 points (-  0), mean, sd, max dev:    0.88    0.56    1.84
+  29 views,   37 cycles, F =     0.718991, mean residual =    0.62
+view   1, pass 1,   8 points (-  0), mean, sd, max dev:    0.71    0.47    1.40
+  29 views,    1 cycles, F =     0.718738, mean residual =    0.62
+  29 views,    1 cycles, F =     0.718686, mean residual =    0.62
+view  23, pass 1,   8 points (-  0), mean, sd, max dev:    0.70    0.55    1.72
+  29 views,    3 cycles, F =     0.730350, mean residual =    0.63
+view  24, pass 1,   8 points (-  0), mean, sd, max dev:    1.04    0.61    2.20
+  29 views,    3 cycles, F =     0.750728, mean residual =    0.65
+view  25, pass 1,   8 points (-  0), mean, sd, max dev:    0.71    0.48    1.70
+  29 views,    1 cycles, F =     0.759187, mean residual =    0.65
+view  26, pass 1,   8 points (-  0), mean, sd, max dev:    0.63    0.39    1.35
+  29 views,    1 cycles, F =     0.764902, mean residual =    0.66
+view  27, pass 1,   8 points (-  0), mean, sd, max dev:    0.76    0.65    1.86
+  29 views,   39 cycles, F =     0.764023, mean residual =    0.66
+view  28, pass 1,   8 points (-  0), mean, sd, max dev:    0.68    0.42    1.54
+  29 views,    1 cycles, F =     0.773992, mean residual =    0.67
+view  29, pass 1,   8 points (-  0), mean, sd, max dev:    0.81    0.73    2.24
+  29 views,   30 cycles, F =     0.788155, mean residual =    0.68
+For area    3, round  1:  8 contours, points missing =    0
+Starting area     4, round  1,   8 contours
+  9   4  15  14  10  12   5   6
+  29 views,   46 cycles, F =     0.727625, mean residual =    0.64
+view   7, pass 1,   8 points (-  0), mean, sd, max dev:    0.89    0.62    2.13
+  29 views,   23 cycles, F =     0.747751, mean residual =    0.66
+view   6, pass 1,   8 points (-  0), mean, sd, max dev:    0.82    0.52    1.98
+  29 views,   40 cycles, F =     0.761364, mean residual =    0.67
+view   5, pass 1,   8 points (-  0), mean, sd, max dev:    0.80    0.61    1.85
+  29 views,    7 cycles, F =     0.774902, mean residual =    0.69
+view   4, pass 1,   8 points (-  0), mean, sd, max dev:    1.08    0.82    2.73
+  29 views,   35 cycles, F =     0.809957, mean residual =    0.72
+   1 pts deleted for pass 2, conts:   6
+  29 views,   42 cycles, F =     0.773417, mean residual =    0.69
+   1 pts added on pass 2, conts:   6
+view   4, pass 2,   8 points (-  0), mean, sd, max dev:    0.95    0.66    2.21
+  29 views,   39 cycles, F =     0.796212, mean residual =    0.71
+view   3, pass 1,   8 points (-  0), mean, sd, max dev:    1.01    0.52    2.14
+  29 views,   23 cycles, F =     0.813607, mean residual =    0.73
+view   2, pass 1,   8 points (-  0), mean, sd, max dev:    0.76    0.44    1.46
+  29 views,   38 cycles, F =     0.821020, mean residual =    0.74
+view   1, pass 1,   8 points (-  0), mean, sd, max dev:    1.10    0.73    2.32
+  29 views,   21 cycles, F =     0.836502, mean residual =    0.75
+  29 views,    1 cycles, F =     0.836526, mean residual =    0.75
+view  23, pass 1,   7 points (-  0), mean, sd, max dev:    0.82    0.43    1.30
+  29 views,   23 cycles, F =     0.845262, mean residual =    0.76
+view  24, pass 1,   7 points (-  0), mean, sd, max dev:    0.75    0.36    1.07
+  29 views,    1 cycles, F =     0.847434, mean residual =    0.76
+view  25, pass 1,   7 points (-  0), mean, sd, max dev:    0.83    0.30    1.24
+  29 views,   10 cycles, F =     0.846759, mean residual =    0.76
+view  26, pass 1,   7 points (-  0), mean, sd, max dev:    0.84    0.26    1.21
+  29 views,    1 cycles, F =     0.856082, mean residual =    0.77
+view  27, pass 1,   7 points (-  0), mean, sd, max dev:    0.81    0.26    1.15
+  29 views,   36 cycles, F =     0.846997, mean residual =    0.76
+view  28, pass 1,   7 points (-  0), mean, sd, max dev:    0.79    0.36    1.35
+  29 views,   15 cycles, F =     0.851929, mean residual =    0.76
+view  29, pass 1,   7 points (-  2), mean, sd, max dev:    0.62    0.32    0.96
+  29 views,   38 cycles, F =     0.858684, mean residual =    0.77
+For area    4, round  1:  8 contours, points missing =   17
+Starting area     5, round  1,   8 contours
+  9   4  15   8   1   7   3   2
+  29 views,   46 cycles, F =     0.897483, mean residual =    0.77
+view   7, pass 1,   8 points (-  0), mean, sd, max dev:    0.65    0.35    0.96
+  29 views,   15 cycles, F =     0.899475, mean residual =    0.78
+view   6, pass 1,   8 points (-  0), mean, sd, max dev:    0.77    0.38    1.35
+  29 views,   19 cycles, F =     0.905084, mean residual =    0.78
+view   5, pass 1,   8 points (-  0), mean, sd, max dev:    0.69    0.45    1.57
+  29 views,    1 cycles, F =     0.902571, mean residual =    0.78
+view   4, pass 1,   7 points (-  0), mean, sd, max dev:    1.05    0.62    1.82
+  29 views,   20 cycles, F =     0.909262, mean residual =    0.78
+   0 pts added on pass 2, conts:
+view   4, pass 2,   7 points (-  0), mean, sd, max dev:    0.99    0.52    1.75
+view   3, pass 1,   7 points (-  0), mean, sd, max dev:    0.74    0.68    2.00
+  29 views,    2 cycles, F =     0.912369, mean residual =    0.78
+   0 pts added on pass 2, conts:
+view   3, pass 2,   7 points (-  0), mean, sd, max dev:    0.73    0.66    1.97
+view   2, pass 1,   7 points (-  0), mean, sd, max dev:    0.94    0.61    1.98
+  29 views,   27 cycles, F =     0.910476, mean residual =    0.78
+   0 pts added on pass 2, conts:
+view   2, pass 2,   7 points (-  0), mean, sd, max dev:    0.89    0.60    1.95
+view   1, pass 1,   7 points (-  0), mean, sd, max dev:    1.02    0.59    2.21
+  29 views,    2 cycles, F =     0.909800, mean residual =    0.78
+   0 pts added on pass 2, conts:
+view   1, pass 2,   7 points (-  0), mean, sd, max dev:    1.01    0.59    2.20
+  29 views,    1 cycles, F =     0.909776, mean residual =    0.78
+view  23, pass 1,   8 points (-  0), mean, sd, max dev:    0.80    0.60    1.78
+  29 views,    3 cycles, F =     0.920331, mean residual =    0.79
+   1 pts deleted for pass 2, conts:   2
+  29 views,   18 cycles, F =     0.911645, mean residual =    0.78
+   1 pts added on pass 2, conts:   2
+view  23, pass 2,   8 points (-  0), mean, sd, max dev:    0.80    0.59    1.72
+  29 views,    3 cycles, F =     0.920792, mean residual =    0.79
+   1 pts deleted, big mean residual, conts:   2
+  29 views,    3 cycles, F =     0.911663, mean residual =    0.78
+view  24, pass 1,   8 points (-  0), mean, sd, max dev:    1.03    0.38    1.56
+  29 views,    3 cycles, F =     0.918288, mean residual =    0.78
+view  25, pass 1,   8 points (-  0), mean, sd, max dev:    0.79    0.32    1.34
+  29 views,    1 cycles, F =     0.925452, mean residual =    0.79
+view  26, pass 1,   8 points (-  2), mean, sd, max dev:    0.60    0.39    1.11
+  29 views,    3 cycles, F =     0.940582, mean residual =    0.80
+   1 pts deleted for pass 2, conts:   2
+  29 views,   35 cycles, F =     0.923522, mean residual =    0.79
+   1 pts added on pass 2, conts:   2
+view  26, pass 2,   8 points (-  0), mean, sd, max dev:    0.75    0.41    1.23
+  29 views,    1 cycles, F =     0.925340, mean residual =    0.79
+view  27, pass 1,   8 points (-  0), mean, sd, max dev:    0.68    0.28    1.12
+  29 views,   10 cycles, F =     0.926329, mean residual =    0.79
+view  28, pass 1,   7 points (-  0), mean, sd, max dev:    0.80    0.25    1.16
+  29 views,    2 cycles, F =     0.929151, mean residual =    0.79
+   0 pts added on pass 2, conts:
+view  28, pass 2,   7 points (-  0), mean, sd, max dev:    0.79    0.24    1.16
+view  29, pass 1,   8 points (-  2), mean, sd, max dev:    0.82    0.45    1.37
+  29 views,   36 cycles, F =     0.941624, mean residual =    0.79
+For area    5, round  1:  8 contours, points missing =    7
+Starting area     1, round  2,   8 contours
+  9   4  15  14  10  11   8  13
+For area    1, round  2:  8 contours, points missing =    0
+Starting area     2, round  2,   8 contours
+  9  15  14  10  11   8  13  12
+  29 views,   44 cycles, F =     0.677359, mean residual =    0.60
+view  13, pass 1,   7 points (-  0), mean, sd, max dev:    0.81    0.28    1.30
+view  14, pass 1,   7 points (-  0), mean, sd, max dev:    0.56    0.19    0.92
+  29 views,    1 cycles, F =     0.677351, mean residual =    0.60
+view  17, pass 1,   7 points (-  0), mean, sd, max dev:    0.48    0.30    1.02
+view  16, pass 1,   7 points (-  0), mean, sd, max dev:    0.62    0.36    1.26
+view  15, pass 1,   7 points (-  0), mean, sd, max dev:    0.77    0.27    1.05
+For area    2, round  2:  8 contours, points missing =   17
+Starting area     3, round  2,   8 contours
+  4  15  14  11   8  13   1   7
+For area    3, round  2:  8 contours, points missing =    0
+Starting area     4, round  2,   8 contours
+  9   4  15  14  10  12   5   6
+  29 views,   46 cycles, F =     0.858846, mean residual =    0.77
+view  13, pass 1,   7 points (-  0), mean, sd, max dev:    0.99    0.22    1.32
+view  14, pass 1,   7 points (-  0), mean, sd, max dev:    1.03    0.55    1.73
+  29 views,    1 cycles, F =     0.858838, mean residual =    0.77
+view  17, pass 1,   7 points (-  0), mean, sd, max dev:    0.86    0.49    1.64
+view  16, pass 1,   7 points (-  2), mean, sd, max dev:    0.48    0.22    0.80
+view  15, pass 1,   7 points (-  0), mean, sd, max dev:    1.07    0.29    1.65
+For area    4, round  2:  8 contours, points missing =   17
+Starting area     5, round  2,   8 contours
+  9   4  15   8   1   7   3   2
+  29 views,   31 cycles, F =     0.942001, mean residual =    0.79
+view   1, pass 1,   7 points (-  0), mean, sd, max dev:    1.03    0.62    2.24
+view   2, pass 1,   7 points (-  0), mean, sd, max dev:    0.96    0.70    2.24
+view   3, pass 1,   7 points (-  0), mean, sd, max dev:    0.80    0.71    2.19
+view   4, pass 1,   7 points (-  0), mean, sd, max dev:    0.98    0.52    1.88
+  29 views,    1 cycles, F =     0.941953, mean residual =    0.79
+view  28, pass 1,   7 points (-  0), mean, sd, max dev:    0.74    0.22    1.09
+view  23, pass 1,   8 points (-  0), mean, sd, max dev:    0.66    0.44    1.34
+  29 views,    1 cycles, F =     0.946726, mean residual =    0.80
+view  16, pass 1,   7 points (-  0), mean, sd, max dev:    0.97    0.83    2.54
+For area    5, round  2:  8 contours, points missing =    6
+
+Obj cont:  Views on which points are missing
+ 1   2: 1-4,28
+ 1   3: 16
+ 1  12: 13-29
+ Total points missing = 23
+
+[stderr]
+
+[exit_code]
+0

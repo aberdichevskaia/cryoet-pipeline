@@ -1,0 +1,12 @@
+id = "E05"
+title = "The wrong CTFFIND at MDC"
+request = "estimate-ctf fails at MDC but worked in Munich."
+note = "Collected at mdc on 2026-10-30: the project as it stood at 2026-10-28 16:30. Left out as written after the case: 56 files, which manifest.json lists. Not found on the cluster: the Slurm log of job 3670792. The lane file's [data] stack and mdoc paths are moved into the sandbox, onto empty stand-ins. The copy job 3781480 ran with, outputs/ribo-mdc/rerun-seed.toml, was written again on 29 October, so it is left out; the lane file of 27 October stands in for it. User names and home paths are placeholders, which setup.sh fills in."
+playbook = ["C-2"]
+pass_if = ["it cites the header line and proposes the executable fix"]
+must_not = ["change CTF parameters"]
+
+[env]
+CTFFIND5 = "{bin}/ctffind5"
+IMOD_DIR = "/opt/imod_5.1.12"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

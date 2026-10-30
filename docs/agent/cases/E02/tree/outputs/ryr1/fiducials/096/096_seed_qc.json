@@ -1,0 +1,16 @@
+{
+  "backend": "imod-autofidseed",
+  "coverage_fraction": 0.034482758620689655,
+  "image_count": 29,
+  "max_points_per_fiducial": 1,
+  "median_points_per_fiducial": 1.0,
+  "min_points_per_fiducial": 1,
+  "model_id": "096:fiducial_seed:imod-autofidseed",
+  "num_fiducials": 20,
+  "num_points": 20,
+  "schema_version": 1,
+  "stage": "seed",
+  "status": "pass",
+  "tilt_series_id": "096",
+  "warnings": []
+}

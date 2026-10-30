@@ -1,0 +1,16 @@
+{
+  "backend": "imod-beadtrack",
+  "coverage_fraction": 0.9913793103448276,
+  "image_count": 29,
+  "max_points_per_fiducial": 29,
+  "median_points_per_fiducial": 29.0,
+  "min_points_per_fiducial": 27,
+  "model_id": "096:fiducial_model:imod-beadtrack",
+  "num_fiducials": 20,
+  "num_points": 575,
+  "schema_version": 1,
+  "stage": "tracked",
+  "status": "pass",
+  "tilt_series_id": "096",
+  "warnings": []
+}

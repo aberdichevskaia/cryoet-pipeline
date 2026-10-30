@@ -1,0 +1,11 @@
+job         hiv-gpu-TS_43 (41075011) on gpusrv39.scidom.de
+started     2026-10-07T21:53:18+02:00
+project     {{ROOT}}/outputs/hiv   config {{ROOT}}/gag-bin8-prune006.toml
+series      TS_43
+steps       segment-tomogram prepare-template pick-particles visualize-picks extract-particles
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight: MEMBRAIN_CKPT is not a file: 'lustre/groups/shared/users/peng_marr/{{USER}}/MemBrain-v2/membrain_v10_alpha.ckpt'

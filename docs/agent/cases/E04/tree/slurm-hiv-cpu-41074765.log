@@ -1,0 +1,107 @@
+job         hiv-cpu (41074765) on cpusrv18.scidom.de
+started     2026-10-07T21:26:40+02:00
+project     {{ROOT}}/outputs/hiv   config configs/lanes/gag-bin8.toml
+series      TS_01 TS_43
+steps       align-tilt-series qc-coarse-alignment generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# align-tilt-series
+cryoet align-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --binning 8 --min-std-ratio 0.2 --overwrite
+wrote coarse alignment: {{ROOT}}/outputs/hiv/alignments/TS_01/TS_01_coarse_alignment.json
+wrote IMOD transforms: {{ROOT}}/outputs/hiv/alignments/TS_01/TS_01_coarse.xf
+excluded z values: [39]
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# align-tilt-series: 3.0 min, +0.00 GB
+
+# qc-coarse-alignment
+cryoet qc-coarse-alignment --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --preview-binning 16 --residual-warning-px 2.0 --overwrite
+wrote coarse-alignment preview: {{ROOT}}/outputs/hiv/qc/TS_01/coarse_alignment/TS_01_coarse_aligned_bin16.st
+wrote coarse-alignment QC: {{ROOT}}/outputs/hiv/qc/TS_01/coarse_alignment/TS_01_coarse_alignment_qc.json
+QC status: warning
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# qc-coarse-alignment: 0.3 min, +0.04 GB
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --backend imod-autofidseed --tracking-binning 4 --fiducial-diameter-nm 10.0 --raw-pixel-spacing 0.675 --overwrite
+wrote fiducial tracking stack: {{ROOT}}/outputs/hiv/fiducials/TS_01/TS_01_fiducial_bin4_preali.mrc
+wrote fiducial seed model: {{ROOT}}/outputs/hiv/fiducials/TS_01/TS_01.seed
+wrote fiducial seed QC: {{ROOT}}/outputs/hiv/fiducials/TS_01/TS_01_seed_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# generate-fiducial-seed: 0.9 min, +0.57 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --backend imod-beadtrack --overwrite
+wrote tracked fiducial model: {{ROOT}}/outputs/hiv/fiducials/TS_01/TS_01_imod-beadtrack.fid
+wrote fiducial tracking QC: {{ROOT}}/outputs/hiv/fiducials/TS_01/TS_01_imod-beadtrack_tracking_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# track-fiducials: 0.4 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --robust-fitting --auto-prune-outliers --surfaces-to-analyze 2 --overwrite
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/cli.py:1097 in fine_align_tilt_series                       │
+│                                                                              │
+│   1094 │   │   device=resolve_device(device),                                │
+│   1095 │   │   parameters=parameters,                                        │
+│   1096 │   )                                                                 │
+│ ❱ 1097 │   artifacts = fine_align_and_register(                              │
+│   1098 │   │   selected_backend,                                             │
+│   1099 │   │   tracking_stack,                                               │
+│   1100 │   │   fiducial_model,                                               │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/fine_alignment.py:708 in fine_align_and_register   │
+│                                                                              │
+│    705 ) -> list[Artifact]:                                                  │
+│    706 │   """Run fine alignment and register canonical alignment then       │
+│        QC."""                                                                │
+│    707 │                                                                     │
+│ ❱  708 │   artifacts = backend.align(                                        │
+│    709 │   │   tracking_stack,                                               │
+│    710 │   │   fiducial_model,                                               │
+│    711 │   │   manifest,                                                     │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/fine_alignment.py:373 in align                     │
+│                                                                              │
+│    370 │   │   │   ):                                                        │
+│    371 │   │   │   │   model2point = resolve_imod_executable("model2point",  │
+│        context)                                                              │
+│    372 │   │   │   │   point2model = resolve_imod_executable("point2model",  │
+│        context)                                                              │
+│ ❱  373 │   │   │   │   pruned_point_count = _prune_fiducial_model(           │
+│    374 │   │   │   │   │   input_model=alignment_input_model,                │
+│    375 │   │   │   │   │   output_model=cleaned_model,                       │
+│    376 │   │   │   │   │   image_file=tracking_stack.path,                   │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/fine_alignment.py:1405 in _prune_fiducial_model    │
+│                                                                              │
+│   1402 │   if pruned_count < 1:                                              │
+│   1403 │   │   raise ValueError("outlier pruning was requested but found no  │
+│        points to prune")                                                     │
+│   1404 │   if pruned_count / len(keep_mask) > max_pruned_fraction:           │
+│ ❱ 1405 │   │   raise ValueError(                                             │
+│   1406 │   │   │   f"refusing to prune {pruned_count}/{len(keep_mask)}       │
+│        fiducial points; "                                                    │
+│   1407 │   │   │   f"configured maximum fraction is                          │
+│        {max_pruned_fraction:.4f}"                                            │
+│   1408 │   │   )                                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: refusing to prune 49/1485 fiducial points; configured maximum 
+fraction is 0.0200
+# fine-align-tilt-series: 0.4 min, +0.00 GB
+
+# FAILED at fine-align-tilt-series (exit 1) for TS_01.
+# Fix it, then resume with:
+#   --series TS_01 --from fine-align-tilt-series

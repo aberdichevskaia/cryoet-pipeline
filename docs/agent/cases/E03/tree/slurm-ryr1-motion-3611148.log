@@ -1,0 +1,101 @@
+job         ryr1-motion (3611148) on maxg05.mdc-berlin.net
+started     2026-10-14T16:45:54+02:00
+project     outputs/ryr1   config configs/lanes/ryr1-bin4.toml
+series      039 096 097 125 161
+steps       prepare-tilt-series
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind
+Tesla V100-SXM2-32GB, 7.0, 32768 MiB
+GPU 0: Tesla V100-SXM2-32GB (UUID: GPU-c32ad537-bac8-9249-cdcd-7257678e902e)
+
+preflight   ok
+
+
+# ---- 039 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/039.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --device cuda --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ cli.py:553 in prepare_tilt_series                                            │
+│                                                                              │
+│    550 │   │   },                                                            │
+│    551 │   )                                                                 │
+│    552 │                                                                     │
+│ ❱  553 │   corrected_artifacts = correct_and_register(                       │
+│    554 │   │   selected_motion_backend,                                      │
+│    555 │   │   tilt_series_manifest,                                         │
+│    556 │   │   context,                                                      │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:392 in correct_and_register                               │
+│                                                                              │
+│   389 ) -> list[Artifact]:                                                   │
+│   390 │   """Run motion correction and add the returned artifacts to the     │
+│       registry."""                                                           │
+│   391 │                                                                      │
+│ ❱ 392 │   artifacts = backend.correct(manifest, context)                     │
+│   393 │   registry.extend(artifacts, replace=replace_existing)               │
+│   394 │   return artifacts                                                   │
+│   395                                                                        │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:83 in correct                                             │
+│                                                                              │
+│    80 │   │   │   )                                                          │
+│    81 │   │   │   for image in manifest.images                               │
+│    82 │   │   ]                                                              │
+│ ❱  83 │   │   _require_available_paths(output_paths, overwrite=overwrite)    │
+│    84 │   │                                                                  │
+│    85 │   │   _storage_role_parameter(context)                               │
+│    86 │   │   _retention_policy_parameter(context)                           │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:648 in _require_available_paths                           │
+│                                                                              │
+│   645 │   existing = [path for path in paths if path.exists()]               │
+│   646 │   if existing:                                                       │
+│   647 │   │   formatted = "\n".join(f"- {path}" for path in existing)        │
+│ ❱ 648 │   │   raise FileExistsError(                                         │
+│   649 │   │   │   f"corrected projection output already                      │
+│       exists:\n{formatted}"                                                  │
+│   650 │   │   )                                                              │
+│   651                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+FileExistsError: corrected projection output already exists:
+- outputs/ryr1/corrected/039/039_000_mc3.mrc
+- outputs/ryr1/corrected/039/039_001_mc3.mrc
+- outputs/ryr1/corrected/039/039_002_mc3.mrc
+- outputs/ryr1/corrected/039/039_003_mc3.mrc
+- outputs/ryr1/corrected/039/039_004_mc3.mrc
+- outputs/ryr1/corrected/039/039_005_mc3.mrc
+- outputs/ryr1/corrected/039/039_006_mc3.mrc
+- outputs/ryr1/corrected/039/039_007_mc3.mrc
+- outputs/ryr1/corrected/039/039_008_mc3.mrc
+- outputs/ryr1/corrected/039/039_009_mc3.mrc
+- outputs/ryr1/corrected/039/039_010_mc3.mrc
+- outputs/ryr1/corrected/039/039_011_mc3.mrc
+- outputs/ryr1/corrected/039/039_012_mc3.mrc
+- outputs/ryr1/corrected/039/039_013_mc3.mrc
+- outputs/ryr1/corrected/039/039_014_mc3.mrc
+- outputs/ryr1/corrected/039/039_015_mc3.mrc
+- outputs/ryr1/corrected/039/039_016_mc3.mrc
+- outputs/ryr1/corrected/039/039_017_mc3.mrc
+- outputs/ryr1/corrected/039/039_018_mc3.mrc
+- outputs/ryr1/corrected/039/039_019_mc3.mrc
+- outputs/ryr1/corrected/039/039_020_mc3.mrc
+- outputs/ryr1/corrected/039/039_021_mc3.mrc
+- outputs/ryr1/corrected/039/039_022_mc3.mrc
+- outputs/ryr1/corrected/039/039_023_mc3.mrc
+- outputs/ryr1/corrected/039/039_024_mc3.mrc
+- outputs/ryr1/corrected/039/039_025_mc3.mrc
+- outputs/ryr1/corrected/039/039_026_mc3.mrc
+- outputs/ryr1/corrected/039/039_027_mc3.mrc
+- outputs/ryr1/corrected/039/039_028_mc3.mrc
+# prepare-tilt-series: 0.1 min, +0.00 GB
+
+# FAILED at prepare-tilt-series (exit 1) for 039.
+# Fix it, then resume with:
+#   --series 039 --from prepare-tilt-series

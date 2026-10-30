@@ -1,0 +1,107 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/imodinfo -a {{ROOT}}/outputs/ryr1/fiducials/039/.039-fiducial-seed-__l7l__t/tracking.seed
+
+[stdout]
+# MODEL {{ROOT}}/outputs/ryr1/fiducials/039/.039-fiducial-seed-__l7l__t/tracking.seed
+# NAME  IMOD-NewModel
+# PIX SCALE:  x = 1
+#             y = 1
+#             z = 50
+# PIX SIZE      = 0.336
+# UNITS: nm
+# Model to Image index coords:
+#      SCALE  = ( 3.36, 3.36, 3.36)
+#      OFFSET = ( -0, -0, -0)
+#      ANGLES = ( 0, 0, 0)
+
+
+# imod ascii file version 2.0
+
+imod 1
+max 2880 2046 29
+offsets 0 0 0
+angles 0 0 0
+scale 1 1 50
+mousemode  2
+drawmode   1
+b&w_level  0,255
+resolution 3
+threshold  128
+pixsize    0.336
+units      nm
+flipped    0
+refcurscale 3.36 3.36 3.36
+refcurtrans -0 -0 -0
+refcurrot 0 0 0
+refoldtrans -0 -0 -0
+currentview  0
+
+object 0 19 0
+name 
+color 0 1 0 0
+open
+usevalue
+linewidth 1
+surfsize  0
+pointsize 0
+axis      0
+drawmode  1
+width2D   1
+symbol    0
+symsize   7
+symflags  0
+ambient   102
+diffuse   255
+specular  127
+shininess 4
+obquality 0
+valblack  0
+valwhite  255
+meshthick 0
+matflags2 4
+valminmax 0.848601 6.25699
+contour 0 0 1 6.13255
+1245.74 425.674 14
+contour 1 0 1 3.2525
+1291.73 391.652 14
+contour 2 0 1 3.74272
+2555.12 434.945 14
+contour 3 0 1 5.72624
+760.6 1138.03 14
+contour 4 0 1 6.25699
+1788.05 754.434 14
+contour 5 0 1 2.69478
+2293.01 728.969 14
+contour 6 0 1 4.56314
+2793.28 1177.53 14
+contour 7 0 1 2.41057
+2790.3 1079.98 14
+contour 8 0 1 2.52668
+2771.41 1308.11 14
+contour 9 0 1 5.10024
+539.304 1449.64 14
+contour 10 0 1 0.848601
+1698.39 1962.34 17
+contour 11 0 1 5.06307
+2221.15 1563.95 14
+contour 12 0 1 4.13207
+2277.98 1489.93 14
+contour 13 0 1 4.86223
+2236.58 1507 14
+contour 14 0 1 5.00271
+2192.09 1617.63 14
+contour 15 0 1 4.14673
+2579.3 1837.33 14
+contour 16 0 1 3.58733
+2415.36 1783.62 14
+contour 17 0 1 2.48998
+2780.25 1912.81 14
+contour 18 0 1 1.9925
+2424.27 1720.3 14
+# end of IMOD model
+
+
+
+[stderr]
+
+[exit_code]
+0

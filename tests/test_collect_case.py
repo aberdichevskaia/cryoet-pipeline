@@ -367,8 +367,9 @@ def _collected(root: Path, out: Path, person=PERSON, case=None):
 
 
 def _everything(folder: Path) -> str:
-    return "\n".join(f"{path}\n{path.read_text()}" for path in sorted(folder.rglob("*"))
-                     if path.is_file())
+    """A case folder's paths, from the folder, and texts: what goes anywhere."""
+    return "\n".join(f"{path.relative_to(folder)}\n{path.read_text()}"
+                     for path in sorted(folder.rglob("*")) if path.is_file())
 
 
 def test_a_collected_case_is_a_folder_the_runner_reads(tmp_path):
@@ -410,8 +411,9 @@ def test_names_and_home_folders_become_placeholders(tmp_path):
     _collectable(tmp_path / "cluster")
     folder, _ = _collected(tmp_path / "cluster", tmp_path / "cases")
     everything = _everything(folder)
-    for gone in ("tester", "/fast/home", str(tmp_path)):
-        assert gone not in everything.lower()
+    assert "tester" not in everything.lower()
+    for gone in ("/fast/home", str(tmp_path)):
+        assert gone not in everything
     log = (folder / "tree" / "slurm-p-cpu-123.log").read_text()
     assert "env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)" in log
     assert "cd {{ROOT}}\n" in log
@@ -464,6 +466,32 @@ def test_the_case_ends_where_its_last_day_ends(tmp_path):
     modified = {one["path"]: datetime.fromisoformat(one["modified"]) for one in manifest["files"]}
     assert modified["outputs/p/fiducials/B/B_seed.log"] == _at(12, 59)
     assert modified["slurm-p-cpu-123.log"] == _at(13, 31)
+
+
+def test_a_registry_naming_files_by_absolute_paths_puts_them_where_the_sandbox_looks(tmp_path):
+    """As Munich's does: the clone's outputs/p is a link into the folder the jobs
+    run from, and the registry names files by their paths there."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    runs = tmp_path / "runs"
+    (runs / "outputs").mkdir(parents=True)
+    (root / "outputs" / "p").rename(runs / "outputs" / "p")
+    (root / "outputs" / "p").symlink_to(runs / "outputs" / "p")
+    registry = runs / "outputs" / "p" / "artifacts.json"
+    payload = json.loads(registry.read_text())
+    for record in payload["artifacts"]:
+        record["path"] = str(runs / record["path"])
+    registry.write_text(json.dumps(payload))
+    folder, _ = _collected(root, tmp_path / "cases")
+    assert (folder / "tree" / "outputs/p/qc/B/coarse_alignment_report.json").is_file()
+    assert not (folder / "tree" / "{{ROOT}}").exists()
+    sandbox = tmp_path / "sandbox"
+    shutil.copytree(folder / "tree", sandbox)
+    collect_case.restore(folder, sandbox)
+    [record] = show_project.qc_records(sandbox, sandbox / "outputs" / "p", {"B"}, "bin8")[:1]
+    assert record["path"] == str(sandbox / "outputs/p/qc/B/coarse_alignment_report.json")
+    # The document was found: its status, not the registry's copy, is the verdict.
+    assert record["status"] == "pass"
 
 
 def test_the_jobs_the_table_names_come_from_where_they_ran(tmp_path, named):
@@ -563,7 +591,8 @@ def test_a_config_a_job_names_is_taken_only_as_it_was(tmp_path):
     """A copy changed after the case may hold the fix the case asks for."""
     root = tmp_path / "cluster"
     _collectable(root)
-    for job, name, written in (("124", "early", _at(11, 50)), ("125", "late", LATER)):
+    for job, name, written in (("124", "early", _at(11, 50)), ("125", "late", LATER),
+                               ("126", "late", LATER)):
         _touch(root / "outputs" / "p" / f"{name}.toml", written, "[lane]\n")
         _touch(root / f"slurm-p-gpu-{job}.log", _at(12, 10),
                f"job         p-gpu ({job}) on node2\nstarted     {_at(12).isoformat()}\n"
@@ -572,8 +601,39 @@ def test_a_config_a_job_names_is_taken_only_as_it_was(tmp_path):
     assert (folder / "tree" / "outputs" / "p" / "early.toml").is_file()
     assert not (folder / "tree" / "outputs" / "p" / "late.toml").exists()
     left = json.loads((folder / "manifest.json").read_text())["left_out"]
-    assert {"path": "outputs/p/late.toml",
-            "why": f"written later, {LATER.astimezone().isoformat(timespec='seconds')}"} in left
+    # Once, though two jobs name it.
+    assert [one for one in left if one["path"] == "outputs/p/late.toml"] == [
+        {"path": "outputs/p/late.toml",
+         "why": f"written later, {LATER.astimezone().isoformat(timespec='seconds')}"}]
+
+
+def test_a_lane_file_from_before_its_run_section_is_said_to_need_one(tmp_path):
+    root = tmp_path / "cluster"
+    _collectable(root)
+    lane = root / "configs" / "lanes" / "l.toml"
+    current = lane.read_text()
+    kept, dropping = [], False
+    for line in current.splitlines(keepends=True):
+        if line.startswith("["):
+            dropping = line.startswith(("[run]", "[[run."))
+        if not dropping:
+            kept.append(line)
+    before = "".join(kept)
+    assert "run" not in tomllib.loads(before)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2026-10-10T12:00:00+00:00",
+           "GIT_COMMITTER_DATE": "2026-10-10T12:00:00+00:00", "GIT_AUTHOR_NAME": "t",
+           "GIT_AUTHOR_EMAIL": "t@example.org", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@example.org"}
+    lane.write_text(before)
+    for command in (["add", "configs/lanes/l.toml"], ["commit", "-q", "-m", "before [run]"]):
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                        *command], cwd=root, env=env, check=True)
+    lane.write_text(current)  # the project is found from the lane file as it is now
+    folder, summary = _collected(root, tmp_path / "cases")
+    assert "  refused by the code now: configs/lanes/l.toml: no [run] project, which the " \
+           "tools need" in summary
+    assert "no [run] project, which the tools need" in run_cases.load_case(folder).note
 
 
 def test_a_case_is_written_once_and_only_where_its_project_is(tmp_path):

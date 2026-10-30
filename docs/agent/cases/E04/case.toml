@@ -1,0 +1,12 @@
+id = "E04"
+title = "Out of GPU memory in template matching — HIV-1 Gag"
+request = "Picking crashed on the HIV data."
+note = "Collected at munich on 2026-10-30: the project as it stood at the end of 2026-10-07. The GPU slice is in sacct's AllocTRES; the log's nvidia-smi line shows the whole card. Left out as written after the case: 9 files, which manifest.json lists. The lane file of 7 October said [lane] chain = \"frames\"; here it says input = \"frames\", as the code now reads it, and carries the lane's first [run], of 12 October (commit 780d5e6), since on 7 October the stages lived in scripts/submit_lanes.sh. The config the jobs ran with, gag-bin8-prune006.toml, was changed on 8 October, after the case, so it is left out. User names and home paths are placeholders, which setup.sh fills in."
+playbook = ["P-1"]
+pass_if = ["it names the slice size and proposes the split"]
+must_not = ["say the job had 40 GB", "shrink the angular search or the box", "rerun unchanged"]
+
+[env]
+CTFFIND5 = "{bin}/ctffind5"
+IMOD_DIR = "/opt/imod_5.1.12"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

@@ -1,0 +1,119 @@
+job         ribo-mdc-cpu (3781480) on max190.mdc-berlin.net
+started     2026-10-28T15:48:55+01:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/rerun-seed.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+overwrite   yes
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 1.2 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.0 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine_alignment_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.1 min, +0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 2.0 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --overwrite
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ cli.py:1637 in estimate_ctf                                                  │
+│                                                                              │
+│   1634 │   │   device=resolve_device(device),                                │
+│   1635 │   │   parameters=parameters,                                        │
+│   1636 │   )                                                                 │
+│ ❱ 1637 │   artifacts = estimate_ctf_and_register(                            │
+│   1638 │   │   selected_backend,                                             │
+│   1639 │   │   aligned_stack,                                                │
+│   1640 │   │   alignment,                                                    │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/ctf.py:926 in estimate_ctf_and_register                             │
+│                                                                              │
+│    923 ) -> list[Artifact]:                                                  │
+│    924 │   """Estimate CTF and register the model plus QC artifacts."""      │
+│    925 │                                                                     │
+│ ❱  926 │   artifacts = backend.estimate(tilt_stack, alignment, manifest,     │
+│        context)                                                              │
+│    927 │   registry.extend(artifacts, replace=replace_existing)              │
+│    928 │   return artifacts                                                  │
+│    929                                                                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/ctf.py:131 in estimate                                              │
+│                                                                              │
+│    128 │   │   try:                                                          │
+│    129 │   │   │   hint_defocus_angstrom =                                   │
+│        _explicit_expected_defocus_angstrom(context)                          │
+│    130 │   │   │   if hint_defocus_angstrom is None:                         │
+│ ❱  131 │   │   │   │   hint_defocus_angstrom = self._fit_zero_tilt_hint(     │
+│    132 │   │   │   │   │   tilt_stack,                                       │
+│    133 │   │   │   │   │   tilt_angles_deg,                                  │
+│    134 │   │   │   │   │   context=context,                                  │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/ctf.py:328 in _fit_zero_tilt_hint                                   │
+│                                                                              │
+│    325 │   │   │   temporary_root=temporary_root,                            │
+│    326 │   │   │   command_log=command_log,                                  │
+│    327 │   │   )                                                             │
+│ ❱  328 │   │   summary_path, _ = self._run_ctffind(                          │
+│    329 │   │   │   input_path=view_path,                                     │
+│    330 │   │   │   output_stem=temporary_root / "zero_tilt_ctffind",         │
+│    331 │   │   │   executable=executable,                                    │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/ctf.py:419 in _run_ctffind                                          │
+│                                                                              │
+│    416 │   │   # blame the sequence. The banner names the real cause.        │
+│    417 │   │   version = ctffind_version(result.stdout or "")                │
+│    418 │   │   if version is not None and int(version.split(".")[0]) < 5:    │
+│ ❱  419 │   │   │   raise RuntimeError(                                       │
+│    420 │   │   │   │   f"{executable} is CTFFIND {version}, and this backend │
+│        answers CTFFIND "                                                     │
+│    421 │   │   │   │   "5's questions; put ctffind5 on PATH ahead of it, or  │
+│        pass "                                                                │
+│    422 │   │   │   │   "--ctffind-executable"                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind is
+CTFFIND 4.1.14, and this backend answers CTFFIND 5's questions; put ctffind5 on 
+PATH ahead of it, or pass --ctffind-executable
+# estimate-ctf: 1.0 min, +0.02 GB
+
+# FAILED at estimate-ctf (exit 1) for TS_0306.
+# Fix it, then resume with:
+#   --series TS_0306 --from estimate-ctf

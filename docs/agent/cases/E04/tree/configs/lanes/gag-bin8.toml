@@ -1,0 +1,171 @@
+# Lane C — HIV-1 Gag on EMPIAR-10164, from frames, with membrane segmentation, bin8.
+#
+# PARAMETER VALUES only, as in ribo-bin8.toml; the step order is the `frames`
+# chain in scripts/run_series.py. `init` is project-level and runs once, before
+# the chain, for every series of the project together: it writes a fresh, EMPTY
+# registry, so running it again for a second series would wipe the first.
+#
+# Values marked "starting value" are judgement calls for this first run, not
+# measurements. Read them against visualize-picks and the score plots.
+
+[lane]
+name = "gag-bin8"
+input = "frames"          # frames -> motion correction -> beads; not import-tilt-stack
+variant = "bin8"          # label applied from the tomogram stack onward
+
+[data]
+# For `init`, which takes directories, not per-series paths.
+frames = "data/empiar-10164/data/frames"
+mdocs = "data/empiar-10164/data/mdoc-files"
+
+[motion]
+backend = "motioncor3"
+# The deposited frames are K2 super-resolution, 7676 x 7420, while their MRC
+# header says 1.35 A, the physical pixel. The TS_01 run that worked was built at
+# 0.675 A (bin8 = 5.4 A/px), so the super-resolution size is given explicitly
+# here and again to the bead seed below. Dose weighting is disabled in the
+# backend (-FmDose 0), so MotionCor3 uses the pixel size for little else.
+pixel_size_angstrom = 0.675
+patch_x = 5
+patch_y = 5
+gpu = 0
+storage_policy = "working"
+
+[binning]
+# CTF is fitted on a finer stack and transferred, as in lane B: lane A fitted at
+# 2.7 A/px and saw a 5.4 A/px fit diverge on a high-tilt view.
+#
+#   bin4  2.7 A/px   Nyquist  5.4 A   finer than a real 6-8 A fit   <- fit here
+#   bin8  5.4 A/px   Nyquist 10.8 A   the tomogram
+ctf_fit = 4
+tomogram = 8              # 5.4 A/px; Gag hexamers ~7.5-8 nm apart = ~14 px
+
+[align]
+binning = 8
+min_std_ratio = 0.2
+
+[qc_coarse]
+preview_binning = 16
+residual_warning_px = 2.0
+
+[fiducials]
+# 10 nm gold, tracked as beads. TS_01's run: imod-autofidseed then
+# imod-beadtrack, tracking binning 4, 150 target beads, and the raw pixel given
+# as 0.675 A, which makes the bead 148 unbinned px.
+seed_backend = "imod-autofidseed"
+track_backend = "imod-beadtrack"
+tracking_binning = 4
+fiducial_diameter_nm = 10.0
+raw_pixel_spacing_angstrom = 0.675
+
+[fine_align]
+# Beads sit on two surfaces, so the two-plane fit is right here (lane B uses
+# one plane for coplanar patches). The 0.02 prune limit was set for beads.
+robust_fitting = true
+auto_prune_outliers = true
+surfaces_to_analyze = 2
+
+[ctf]
+voltage_kv = 300.0
+spherical_aberration_mm = 2.7
+amplitude_contrast = 0.07
+# The mdoc reads ~2.7 um at TargetDefocus -4 um; searched over 1-6 um.
+min_defocus_angstrom = 10000
+max_defocus_angstrom = 60000
+
+[reconstruct]
+# Left to the bead analysis on purpose: beads on two faces DO measure specimen
+# depth (TS_01: 2366 unbinned px = 160 nm, 296 at bin8), unlike lane B's patches.
+# thickness = 300
+
+[segment]
+# MemBrain-seg needs a GPU of compute capability >= 7.5 (not V100).
+executable = "$MEMBRAIN_EXE"
+model = "$MEMBRAIN_CKPT"
+sliding_window_size = 160
+test_time_augmentation = true
+
+[template]
+emdb_id = "EMD-2638"      # immature HIV-1 Gag lattice, 9.4 A helical reconstruction
+# The map is a ~153 A box filled with lattice, 28 px at 5.4 A/px, so nothing in
+# it says where one particle ends: a mask derived from the density does not fit,
+# and a 250 A one is refused for the same reason. 12 px is a 130 A sphere, inside
+# the box with room for how the resampled box rounds.
+mask_radius_px = 12
+low_pass_angstrom = 10.8  # bin8 Nyquist, as lane B low-passes to its Nyquist
+
+[pick]
+# Sets the angular sampling only (Crowther, docs/backends.md "Two different
+# diameters"): 130 A is what the template's mask holds. The step is
+# degrees(resolution / 130), 8.8 deg at the 20 A low-pass or 4.8 deg at the bin8
+# Nyquist, whichever resolution pytom takes; 250 A would cost (250/130)^3 = 7x
+# the rotations for a size the template does not have.
+particle_diameter_angstrom = 130.0
+# Starting value. pytom suppresses peaks within half this diameter of a better
+# one; at the 250 A default it would keep about one hexamer in three of a
+# lattice whose hexamers are ~75-80 A apart. 80 A lets lattice neighbours through.
+extract_particle_diameter_angstrom = 80.0
+# Starting value: a cap for review, not a population size. A tomogram of VLPs
+# holds thousands of hexamers.
+number_of_particles = 3000
+number_of_false_positives = 100.0
+tophat_filter = false
+# Starting value: keeps the hexamer's shape at 5.4 A/px and drops the detail
+# that is mostly noise there; lane B used 35 A for a 290 A ribosome.
+low_pass_angstrom = 20.0
+random_phase_correction = true
+per_tilt_weighting = true
+spectral_whitening = true
+gpu_ids = "0"
+# Picks are restricted to the membrane segmentation, dilated. Starting value:
+# the CA layer lies ~15-20 nm inside the membrane, so 40 px (21.6 nm) reaches it.
+use_segmentation_mask = true
+segmentation_mask_dilation_px = 40
+
+[extract]
+box_size_px = 64          # 346 A at 5.4 A/px, ~1.4x the 250 A particle; even, for dynamo-search
+
+[executables]
+motioncor3 = "$MOTIONCOR3"
+# $PYTOMO_MP_DIR — note the O.
+pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
+pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
+pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"
+pytom_extract_candidates = "$PYTOMO_MP_DIR/pytom_extract_candidates.py"
+
+# Added for the evaluation case: on 7 October the stages lived in
+# scripts/submit_lanes.sh, not in the lane file. This [run] is the lane's first,
+# from 12 October (commit 780d5e6), with the same three jobs.
+[run]
+# What scripts/submit_lanes.py submits; see ribo-bin8.toml. `init` is not a
+# stage: it must have run for the project before the first submission, and the
+# submitter refuses while a series has no manifest.
+project = "outputs/hiv"
+series = ["TS_01", "TS_43"]
+
+# Motion correction has a job of its own so that its GPU can differ from the
+# picking one: the cluster's MotionCor3 was once rebuilt for sm_61 alone, which
+# an A100 cannot run, and lane.sbatch refuses such a build at its preflight.
+[[run.stage]]
+name = "motion"
+from = "prepare-tilt-series"
+until = "prepare-tilt-series"
+time = "3:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+
+[[run.stage]]
+name = "cpu"
+from = "align-tilt-series"
+until = "reconstruct-tomogram"
+time = "8:00:00"
+sbatch = ["--partition=cpu_p", "--qos=cpu_normal", "--cpus-per-task=8", "--mem=32G"]
+
+[[run.stage]]
+name = "gpu"
+from = "segment-tomogram"
+until = "extract-particles"
+time = "16:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+

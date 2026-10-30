@@ -1,0 +1,61 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/newstack -input {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/input_bin.mrc -output {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/tracking_preali.mrc -xform {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/scaled.prexg -mode 2
+
+[stdout]
+
+ FORMATTED  ro  file opened: {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/scaled.prexg
+
+ RO image file on unit   1 : {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/input_bin.mrc     Size=     667508 K
+
+ Number of columns, rows, sections .....    2880    2046      29
+ Map mode ..............................    2   (32-bit float)             
+ Start cols, rows, sects, grid x,y,z ...    0     0     0    2880   2046     29
+ Pixel spacing (Angstroms)..............   3.360      3.360      3.360    
+ Cell angles ...........................   90.000   90.000   90.000
+ Fast, medium, slow axes ...............    X    Y    Z
+ Origin on x,y,z .......................    0.000       0.000       0.000    
+ Minimum density .....(undetermined)....   0.0000    
+ Maximum density .....(undetermined)....  -1.0000    
+ Mean density ........(undetermined)....  -2.0000    
+ tilt angles (original,current) ........   0.0   0.0   0.0   0.0   0.0   0.0
+ Space group,# extra bytes,idtype,lens .        1        0        0        0
+
+     1 Titles :
+Created by mrcfile.py                                       2026-10-14 17:04:21
+
+
+ NEW image file on unit   2 : {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/tracking_preali.mrc
+ section   input min&max       output min&max  &  mean
+       0     -0.04      2.37     -0.04      2.37      0.83
+       1     -0.06      2.72     -0.06      2.72      0.86
+       2     -0.11      2.37     -0.11      2.37      0.90
+       3     -0.06      2.26     -0.06      2.26      0.93
+       4     -0.05      2.84     -0.05      2.84      0.95
+       5     -0.00      2.94     -0.00      2.94      0.98
+       6     -0.04      2.32     -0.04      2.32      1.00
+       7      0.01      3.19      0.01      3.19      1.01
+       8     -0.02      2.63     -0.02      2.63      1.03
+       9     -0.03      2.69     -0.03      2.69      1.04
+      10     -0.02      2.71     -0.02      2.71      1.05
+      11      0.01      3.49      0.01      3.49      1.06
+      12     -0.01      3.01     -0.01      3.01      1.06
+      13     -0.04      2.96     -0.04      2.96      1.06
+      14     -0.02      3.11     -0.02      3.11      1.07
+      15     -0.03      2.86     -0.03      2.86      1.07
+      16     -0.02      2.59     -0.02      2.59      1.06
+      17      0.01      2.67      0.01      2.67      1.05
+      18      0.01      3.09      0.01      3.09      1.04
+      19      0.02      2.61      0.02      2.61      1.03
+      20     -0.04      2.68     -0.04      2.68      1.01
+      21     -0.13      3.11     -0.13      3.11      0.99
+      22     -0.06      2.53     -0.06      2.53      0.96
+      23     -0.13      2.55     -0.13      2.55      0.95
+      24     -0.04      2.64     -0.04      2.64      0.91
+      25     -0.13      2.47     -0.13      2.47      0.89
+      26     -0.08      2.32     -0.08      2.32      0.84
+      27     -0.03      2.33     -0.03      2.33      0.82
+      28     -0.08      2.16     -0.08      2.16      0.74
+
+[stderr]
+
+[exit_code]
+0

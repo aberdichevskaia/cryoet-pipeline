@@ -1,0 +1,24 @@
+{
+  "backend": "membrain-seg",
+  "command_log_path": "{{ROOT}}/outputs/hiv/segmentations/TS_01/TS_01_full_membrain-seg_bin8.log",
+  "dtype": "int8",
+  "finite": true,
+  "foreground_fraction": 0.02598227934542903,
+  "foreground_voxel_count": 6967275,
+  "input_tomogram_id": "TS_01:tomogram:fine:bin8",
+  "maximum": 1.0,
+  "mean": 0.02598227934542903,
+  "minimum": 0.0,
+  "schema_version": 1,
+  "segmentation_id": "TS_01:segmentation:full:membrain-seg:bin8",
+  "shape": [
+    301,
+    960,
+    928
+  ],
+  "standard_deviation": 0.1590823701905699,
+  "status": "pass",
+  "tilt_series_id": "TS_01",
+  "tomogram_branch": "full",
+  "voxel_spacing_angstrom": 5.4
+}

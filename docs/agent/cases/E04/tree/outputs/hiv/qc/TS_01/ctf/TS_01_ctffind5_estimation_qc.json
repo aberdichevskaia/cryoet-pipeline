@@ -1,0 +1,22 @@
+{
+  "amplitude_contrast": 0.07,
+  "axis_angle_deg": null,
+  "backend": "ctffind5",
+  "ctf_model_id": "TS_01:ctf_model:ctffind5",
+  "hint_defocus_um": 3.9020185546499997,
+  "input_stack_id": "TS_01:aligned_tilt_stack:final",
+  "max_resolution_angstrom": 5.4,
+  "maximum_defocus_um": 4.37860683595,
+  "mean_astigmatism_um": 0.06837565917874999,
+  "mean_defocus_um": 3.9252223681612484,
+  "minimum_defocus_um": 3.76536835935,
+  "num_tilts": 40,
+  "nyquist_angstrom": 5.4,
+  "pixel_spacing_angstrom": 2.7,
+  "schema_version": 2,
+  "spherical_aberration_mm": 2.7,
+  "status": "pass",
+  "tilt_series_id": "TS_01",
+  "voltage_kv": 300.0,
+  "warnings": []
+}

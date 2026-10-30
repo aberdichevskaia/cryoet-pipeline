@@ -1,0 +1,65 @@
+job         hiv-cpu-TS_01 (41075008) on cpusrv23.scidom.de
+started     2026-10-07T21:42:43+02:00
+project     {{ROOT}}/outputs/hiv   config {{ROOT}}/gag-bin8-prune006.toml
+series      TS_01
+steps       fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.06 --surfaces-to-analyze 2 --overwrite
+wrote fine alignment: {{ROOT}}/outputs/hiv/alignments/TS_01/fine/TS_01_fine_alignment.json
+wrote final IMOD transforms: {{ROOT}}/outputs/hiv/alignments/TS_01/fine/TS_01_fine.xf
+wrote fine-alignment QC: {{ROOT}}/outputs/hiv/alignments/TS_01/fine/TS_01_fine_alignment_qc.json
+QC status: warning
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# fine-align-tilt-series: 2.3 min, +0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --output-binning 4 --overwrite
+wrote final aligned stack: {{ROOT}}/outputs/hiv/aligned/TS_01/TS_01_final_bin4.st
+wrote solved tilt angles: {{ROOT}}/outputs/hiv/aligned/TS_01/TS_01_final_bin4.tlt
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# build-ctf-stack: 0.6 min, +0.57 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 60000 --overwrite
+wrote CTF model: {{ROOT}}/outputs/hiv/ctf/TS_01/TS_01_ctffind5.defocus
+wrote CTF diagnostic image: {{ROOT}}/outputs/hiv/ctf/TS_01/TS_01_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: {{ROOT}}/outputs/hiv/qc/TS_01/ctf/TS_01_ctffind5_estimation_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# estimate-ctf: 0.8 min, +0.04 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: {{ROOT}}/outputs/hiv/aligned/TS_01/TS_01_final_bin8_bin8.st
+wrote solved tilt angles: {{ROOT}}/outputs/hiv/aligned/TS_01/TS_01_final_bin8_bin8.tlt
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# build-final-aligned-stack: 0.3 min, +0.14 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --variant bin8 --overwrite
+used CTF model: {{ROOT}}/outputs/hiv/ctf/TS_01/TS_01_ctffind5.defocus
+wrote CTF-corrected stack: {{ROOT}}/outputs/hiv/ctf/TS_01/TS_01_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: {{ROOT}}/outputs/hiv/qc/TS_01/ctf/TS_01_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# correct-ctf: 0.2 min, +0.14 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --variant bin8 --overwrite
+wrote canonical tomogram: {{ROOT}}/outputs/hiv/tomograms/TS_01/TS_01_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: {{ROOT}}/outputs/hiv/tomograms/TS_01/TS_01_fine_bin8_bin8.rec
+wrote reconstruction QC: {{ROOT}}/outputs/hiv/qc/TS_01/reconstruction/TS_01_fine_bin8_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# reconstruct-tomogram: 0.4 min, +2.07 GB
+
+finished    2026-10-07T21:47:33+02:00

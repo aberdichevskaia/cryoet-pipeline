@@ -1,0 +1,474 @@
+{
+  "images": [
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_001_-42.0.tif",
+      "metadata": {
+        "tilt_number": 1
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_001_-42.0.tif",
+      "tilt_angle_deg": -42.0,
+      "z_value": 0
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_002_-39.0.tif",
+      "metadata": {
+        "tilt_number": 2
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_002_-39.0.tif",
+      "tilt_angle_deg": -39.0,
+      "z_value": 1
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_003_-36.0.tif",
+      "metadata": {
+        "tilt_number": 3
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_003_-36.0.tif",
+      "tilt_angle_deg": -36.0,
+      "z_value": 2
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_004_-33.0.tif",
+      "metadata": {
+        "tilt_number": 4
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_004_-33.0.tif",
+      "tilt_angle_deg": -33.0,
+      "z_value": 3
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_005_-30.0.tif",
+      "metadata": {
+        "tilt_number": 5
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_005_-30.0.tif",
+      "tilt_angle_deg": -30.0,
+      "z_value": 4
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_006_-27.0.tif",
+      "metadata": {
+        "tilt_number": 6
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_006_-27.0.tif",
+      "tilt_angle_deg": -27.0,
+      "z_value": 5
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_007_-24.0.tif",
+      "metadata": {
+        "tilt_number": 7
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_007_-24.0.tif",
+      "tilt_angle_deg": -24.0,
+      "z_value": 6
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_008_-21.0.tif",
+      "metadata": {
+        "tilt_number": 8
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_008_-21.0.tif",
+      "tilt_angle_deg": -21.0,
+      "z_value": 7
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_009_-18.0.tif",
+      "metadata": {
+        "tilt_number": 9
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_009_-18.0.tif",
+      "tilt_angle_deg": -18.0,
+      "z_value": 8
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_010_-15.0.tif",
+      "metadata": {
+        "tilt_number": 10
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_010_-15.0.tif",
+      "tilt_angle_deg": -15.0,
+      "z_value": 9
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_011_-12.0.tif",
+      "metadata": {
+        "tilt_number": 11
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_011_-12.0.tif",
+      "tilt_angle_deg": -12.0,
+      "z_value": 10
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_012_-09.0.tif",
+      "metadata": {
+        "tilt_number": 12
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_012_-09.0.tif",
+      "tilt_angle_deg": -9.0,
+      "z_value": 11
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_013_-06.0.tif",
+      "metadata": {
+        "tilt_number": 13
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_013_-06.0.tif",
+      "tilt_angle_deg": -6.0,
+      "z_value": 12
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_014_-03.0.tif",
+      "metadata": {
+        "tilt_number": 14
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_014_-03.0.tif",
+      "tilt_angle_deg": -3.0,
+      "z_value": 13
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_015_-00.0.tif",
+      "metadata": {
+        "tilt_number": 15
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_015_-00.0.tif",
+      "tilt_angle_deg": -0.0,
+      "z_value": 14
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_016_+03.0.tif",
+      "metadata": {
+        "tilt_number": 16
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_016_+03.0.tif",
+      "tilt_angle_deg": 3.0,
+      "z_value": 15
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_017_+06.0.tif",
+      "metadata": {
+        "tilt_number": 17
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_017_+06.0.tif",
+      "tilt_angle_deg": 6.0,
+      "z_value": 16
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_018_+09.0.tif",
+      "metadata": {
+        "tilt_number": 18
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_018_+09.0.tif",
+      "tilt_angle_deg": 9.0,
+      "z_value": 17
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_019_+12.0.tif",
+      "metadata": {
+        "tilt_number": 19
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_019_+12.0.tif",
+      "tilt_angle_deg": 12.0,
+      "z_value": 18
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_020_+15.0.tif",
+      "metadata": {
+        "tilt_number": 20
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_020_+15.0.tif",
+      "tilt_angle_deg": 15.0,
+      "z_value": 19
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_021_+18.0.tif",
+      "metadata": {
+        "tilt_number": 21
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_021_+18.0.tif",
+      "tilt_angle_deg": 18.0,
+      "z_value": 20
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_022_+21.0.tif",
+      "metadata": {
+        "tilt_number": 22
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_022_+21.0.tif",
+      "tilt_angle_deg": 21.0,
+      "z_value": 21
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_023_+24.0.tif",
+      "metadata": {
+        "tilt_number": 23
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_023_+24.0.tif",
+      "tilt_angle_deg": 24.0,
+      "z_value": 22
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_024_+27.0.tif",
+      "metadata": {
+        "tilt_number": 24
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_024_+27.0.tif",
+      "tilt_angle_deg": 27.0,
+      "z_value": 23
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_025_+30.0.tif",
+      "metadata": {
+        "tilt_number": 25
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_025_+30.0.tif",
+      "tilt_angle_deg": 30.0,
+      "z_value": 24
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_026_+33.0.tif",
+      "metadata": {
+        "tilt_number": 26
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_026_+33.0.tif",
+      "tilt_angle_deg": 33.0,
+      "z_value": 25
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_027_+36.0.tif",
+      "metadata": {
+        "tilt_number": 27
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_027_+36.0.tif",
+      "tilt_angle_deg": 36.0,
+      "z_value": 26
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_028_+39.0.tif",
+      "metadata": {
+        "tilt_number": 28
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_028_+39.0.tif",
+      "tilt_angle_deg": 39.0,
+      "z_value": 27
+    },
+    {
+      "binning": 1,
+      "defocus_um": null,
+      "exposure_dose": null,
+      "exposure_time_s": null,
+      "local_frame_file": "/fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/tomogram_039_029_+42.0.tif",
+      "metadata": {
+        "tilt_number": 29
+      },
+      "num_subframes": 10,
+      "pixel_spacing_angstrom": 0.8400000215040005,
+      "rotation_angle_deg": null,
+      "subframe_path": "tomogram_039_029_+42.0.tif",
+      "tilt_angle_deg": 42.0,
+      "z_value": 28
+    }
+  ],
+  "mdoc_pixel_spacing_angstrom": null,
+  "notes": [],
+  "raw_pixel_spacing_angstrom": 0.8400000215040005,
+  "source_frames_pattern": "tomogram_(?P<series>\\d+)_(?P<tilt>\\d+)_(?P<angle>[-+]?\\d+(?:\\.\\d+)?)\\.tif",
+  "source_mdoc": null,
+  "tilt_series_id": "039"
+}

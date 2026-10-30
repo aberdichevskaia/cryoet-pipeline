@@ -1,0 +1,64 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/autofidseed -track {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/track.com -number 150 -spacing 0.85 -peak 1.0 -elongated 1 -output {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/tracking.seed -info {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/autofidseed.info -tempdir {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/autofidseed.dir
+
+[stdout]
+RUNNING IMODFINDBEADS on views 14, 15, and 16
+ 
+Scaling down by 3.72 for Sobel filter; box size = 106, scaled size = 28
+
+Analyzing group of sections starting with 13, ending with 15
+Dips found in 3 groups based on bkg mean, means 1.068 to 1.1226
+Pass 1: 11970 peaks found. 7337 eliminated as too weak, 837 too close, 3796 remaining
+Histogram smoothed with H = 0.200 has dip at 0.389, peaks at 0.082 and 0.715
+Histogram smoothed with H = 0.050 has lowest dip at 0.424
+Threshold for averaging set to 0.497
+Diameter of average bead at zero-crossing = 30.91
+Dips found in 3 groups based on bkg mean, means 1.0695 to 1.1227
+Pass 2: 19902 peaks found. 12463 eliminated as too weak, 2348 too close, 5091 remaining
+Histogram smoothed with H = 0.200 has dip at 0.400, peaks at 0.080 and 0.707
+Histogram smoothed with H = 0.050 has lowest dip at 0.451
+81 peaks are above histogram dip at 0.451
+81 total peaks being stored in model down to value of 0.501
+ 
+REDOING IMODFINDBEADS with more views to try to get more points
+RUNNING IMODFINDBEADS on views 12, 13, 14, 15, 16, 17, and 18
+ 
+Scaling down by 3.72 for Sobel filter; box size = 106, scaled size = 28
+
+Analyzing group of sections starting with 11, ending with 17
+Dips found in 4 groups based on bkg mean, means 1.0232 to 1.1172
+Pass 1: 28422 peaks found. 17738 eliminated as too weak, 1881 too close, 8803 remaining
+Histogram smoothed with H = 0.200 has dip at 0.395, peaks at 0.081 and 0.716
+Histogram smoothed with H = 0.050 has lowest dip at 0.424
+Threshold for averaging set to 0.498
+Diameter of average bead at zero-crossing = 30.98
+Dips found in 4 groups based on bkg mean, means 1.0253 to 1.1176
+Pass 2: 45042 peaks found. 28607 eliminated as too weak, 4886 too close, 11549 remaining
+Histogram smoothed with H = 0.200 has dip at 0.410, peaks at 0.079 and 0.713
+Histogram smoothed with H = 0.050 has lowest dip at 0.438
+190 peaks are above histogram dip at 0.438
+190 total peaks being stored in model down to value of 0.488
+ 
+RUNNING BEADTRACK with seed from view 12
+RUNNING BEADTRACK with seed from view 13
+RUNNING BEADTRACK with seed from view 14
+RUNNING BEADTRACK with seed from view 15
+RUNNING BEADTRACK with seed from view 16
+RUNNING BEADTRACK with seed from view 17
+RUNNING BEADTRACK with seed from view 18
+ 
+RUNNING PICKBESTSEED
+ 
+Total area = 5.32 megapixels
+25 candidate points, including 3 clustered and 2 elongated
+Phase 1: total points accepted = 16
+Phase 2: total points accepted = 20
+Phase 4: total points accepted = 20
+Phase 5: total points accepted = 20
+Final:   total points accepted = 20
+Number in candidate model surfaces:   20   0   0   1   3   1   0   0
+Some temporary files left as {{ROOT}}/outputs/ryr1/fiducials/096/.096-fiducial-seed-38sabhxk/autofidseed.dir/afs3347542.*
+
+[stderr]
+
+[exit_code]
+0

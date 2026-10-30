@@ -1,0 +1,26 @@
+{
+  "alignment_stage": "fine",
+  "backend": "imod-tilt",
+  "central_slice_paths": {
+    "xy": "{{ROOT}}/outputs/hiv/qc/TS_01/reconstruction/TS_01_fine_bin8_bin8_central_xy.mrc",
+    "xz": "{{ROOT}}/outputs/hiv/qc/TS_01/reconstruction/TS_01_fine_bin8_bin8_central_xz.mrc",
+    "yz": "{{ROOT}}/outputs/hiv/qc/TS_01/reconstruction/TS_01_fine_bin8_bin8_central_yz.mrc"
+  },
+  "ctf_corrected": true,
+  "finite": true,
+  "maximum": 251.12905883789062,
+  "mean": 1.7944482173641891,
+  "minimum": -327.5519714355469,
+  "schema_version": 1,
+  "shape": [
+    301,
+    960,
+    928
+  ],
+  "standard_deviation": 26.154031077544637,
+  "status": "pass",
+  "tilt_series_id": "TS_01",
+  "tomogram_id": "TS_01:tomogram:fine:bin8",
+  "voxel_spacing_angstrom": 5.4,
+  "warnings": []
+}

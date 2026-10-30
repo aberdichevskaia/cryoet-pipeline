@@ -1,0 +1,172 @@
+job         hiv-gpu-TS_01 (41075712) on gpusrv50.scidom.de
+started     2026-10-07T22:58:42+02:00
+project     {{ROOT}}/outputs/hiv   config {{ROOT}}/gag-bin8-prune006.toml
+series      TS_01
+steps       segment-tomogram prepare-template pick-particles visualize-picks extract-particles
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+NVIDIA A100-PCIE-40GB, 8.0, 40960 MiB
+
+preflight   ok
+
+
+# ---- TS_01 (gag-bin8) ----
+
+# segment-tomogram
+cryoet segment-tomogram --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --membrain-executable $MEMBRAIN_EXE --membrain-model $MEMBRAIN_CKPT --membrain-sliding-window-size 160 --membrain-test-time-augmentation --variant bin8 --overwrite
+wrote segmentation: {{ROOT}}/outputs/hiv/segmentations/TS_01/TS_01_full_membrain-seg_bin8.zarr
+wrote segmentation QC: {{ROOT}}/outputs/hiv/qc/TS_01/segmentation/TS_01_full_membrain-seg_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# segment-tomogram: 8.7 min, +0.00 GB
+
+# prepare-template
+cryoet prepare-template --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --emdb-id EMD-2638 --template-low-pass-angstrom 10.8 --template-mask-radius-px 12 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map {{ROOT}}/outputs/hiv/emdb-cache/emd_2638.map
+wrote template: {{ROOT}}/outputs/hiv/templates/TS_01/TS_01_pytom_bin8_template.mrc
+wrote template mask: {{ROOT}}/outputs/hiv/templates/TS_01/TS_01_pytom_bin8_mask.mrc
+box size: 28 px
+voxel size: 5.4 A
+density extent: 28.0/26.0/24.0 px (151/140/130 A)
+mask radius: 12.0 px (65 A)
+wrote template QC: {{ROOT}}/outputs/hiv/qc/TS_01/template/TS_01_pytom_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# prepare-template: 1.6 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest {{ROOT}}/outputs/hiv/manifests/TS_01.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --pytom-particle-diameter 130.0 --pytom-extract-particle-diameter 80.0 --pytom-number-of-particles 3000 --pytom-number-of-false-positives 100.0 --pytom-low-pass 20.0 --pytom-random-phase-correction --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --use-segmentation-mask --segmentation-mask-dilation-px 40 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/cli.py:2704 in pick_particles                               │
+│                                                                              │
+│   2701 │   │   device=resolve_device(device),                                │
+│   2702 │   │   parameters=parameters,                                        │
+│   2703 │   )                                                                 │
+│ ❱ 2704 │   artifacts = pick_and_register(                                    │
+│   2705 │   │   selected_backend,                                             │
+│   2706 │   │   tomogram,                                                     │
+│   2707 │   │   tilt_series_manifest,                                         │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/picking.py:393 in pick_and_register                │
+│                                                                              │
+│    390 ) -> list[Artifact]:                                                  │
+│    391 │   """Pick particles and register picks plus QC artifacts."""        │
+│    392 │                                                                     │
+│ ❱  393 │   picks = backend.pick(tomogram, manifest, context,                 │
+│        supporting_artifacts=supporting_artifacts)                            │
+│    394 │   match = _template_match_artifact(picks, manifest, context,        │
+│        tomogram=tomogram)                                                    │
+│    395 │   if match is not None:                                             │
+│    396 │   │   # Picks descend from the search, and the search from the      │
+│        tomogram. Before                                                      │
+│                                                                              │
+│ {{ROOT}}/src │
+│ /cryoet_pipeline/backends/picking.py:162 in pick                             │
+│                                                                              │
+│    159 │   │   │   │   *[(match_command, match_result)],                     │
+│    160 │   │   │   )                                                         │
+│    161 │   │   │   │   detail = (match_result.stderr or match_result.stdout  │
+│        or "no process output").strip()                                       │
+│ ❱  162 │   │   │   │   raise RuntimeError(                                   │
+│    163 │   │   │   │   │   f"pytom_match_template.py failed with exit code   │
+│        {match_result.returncode}: "                                          │
+│    164 │   │   │   │   │   f"{detail}; see {paths.log}"                      │
+│    165 │   │   │   │   )                                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: pytom_match_template.py failed with exit code 1: 
+INFO:pytom_tm.angles:Will generate an angle list with a maximum increment of 
+8.814735309704973
+INFO:pytom_tm.angles:Using an angle difference of 8.3760 for Z1 and X
+INFO:pytom_tm.angles:Using an angle difference of 8.7805 for Z2
+INFO:pytom_tm.tmjob:Estimating whitening filter...
+Traceback (most recent call last):
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/bin
+/pytom_match_template.py", line 6, in <module>
+    sys.exit(match_template())
+             ~~~~~~~~~~~~~~^^
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/pytom_tm/entry_points.py", line 1160, in 
+match_template
+    score_volume, angle_volume = run_job_parallel(
+                                 ~~~~~~~~~~~~~~~~^
+        job, tuple(args.volume_split), args.gpu_ids
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/pytom_tm/parallel.py", line 143, in run_job_parallel
+    return main_job.start_job(gpu_ids[0], return_volumes=True)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/pytom_tm/tmjob.py", line 1040, in start_job
+    results = tm.run()
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/pytom_tm/matching.py", line 254, in run
+    std_under_mask_convolution(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.plan.volume_rft_conj,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        self.plan.mask_weight,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/pytom_tm/matching.py", line 420, in 
+std_under_mask_convolution
+    - (irfftn(volume_rft_conj * padded_mask_rft, s=padded_mask.shape) / 
+mask_weight)
+       ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/cupyx/scipy/fft/_fft.py", line 510, in irfftn
+    return func(x, s, axes, norm, cufft.CUFFT_INVERSE, 'C2R',
+                overwrite_x=overwrite_x, plan=plan)
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/cupy/fft/_fft.py", line 620, in _fftn
+    a = _exec_fftn(a, direction, value_type, norm=norm, axes=axes_sorted,
+                   overwrite_x=overwrite_x, plan=plan, out=out,
+                   out_size=out_size)
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/cupy/fft/_fft.py", line 555, in _exec_fftn
+    out = plan.get_output_array(a, order=order)
+  File "cupy/cuda/cufft.pyx", line 881, in 
+cupy.cuda.cufft.PlanNd.get_output_array
+  File 
+"/ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/pytom_tm/lib
+/python3.14/site-packages/cupy/_creation/basic.py", line 32, in empty
+    return cupy.ndarray(shape, dtype, order=order)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "cupy/_core/core.pyx", line 167, in cupy._core.core.ndarray.__new__
+  File "cupy/_core/core.pyx", line 254, in cupy._core.core._ndarray_base._init
+  File "cupy/cuda/memory.pyx", line 875, in cupy.cuda.memory.alloc
+  File "cupy/cuda/memory.pyx", line 1579, in cupy.cuda.memory.MemoryPool.malloc
+  File "cupy/cuda/memory.pyx", line 1600, in cupy.cuda.memory.MemoryPool.malloc
+  File "cupy/cuda/memory.pyx", line 1271, in 
+cupy.cuda.memory.SingleDeviceMemoryPool.malloc
+  File "cupy/cuda/memory.pyx", line 1292, in 
+cupy.cuda.memory.SingleDeviceMemoryPool._malloc
+  File "cupy/cuda/memory.pyx", line 1537, in 
+cupy.cuda.memory.SingleDeviceMemoryPool._try_malloc
+  File "cupy/cuda/memory.pyx", line 1540, in 
+cupy.cuda.memory.SingleDeviceMemoryPool._try_malloc
+cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 1,179,648,000 bytes 
+(allocated so far: 20,112,998,400 bytes).; see 
+{{ROOT}}/outputs/hiv/picks/TS_01/TS_
+01_full_pytom-match-pick_bin8.log
+# pick-particles: 1.8 min, +0.00 GB
+
+# FAILED at pick-particles (exit 1) for TS_01.
+# Fix it, then resume with:
+#   --series TS_01 --from pick-particles

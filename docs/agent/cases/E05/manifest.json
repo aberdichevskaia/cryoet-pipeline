@@ -1,0 +1,387 @@
+{
+  "case": "E05",
+  "cluster": "mdc",
+  "days": [
+    "2026-10-16",
+    "2026-10-28T16:30:00"
+  ],
+  "collected": "2026-10-30T13:16:35+01:00",
+  "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
+  "files": [
+    {
+      "path": "slurm-ribo-mdc-cpu-3781480.log",
+      "modified": "2026-10-28T15:57:18+01:00",
+      "source": "Slurm log of job 3781480, named in the table"
+    },
+    {
+      "path": "configs/lanes/ribo-mdc.toml",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "commit 734220976, the lane file's last before the case ended"
+    },
+    {
+      "path": "outputs/ribo-mdc/step_timings.jsonl",
+      "modified": "2026-10-28T16:29:59+01:00",
+      "source": "136 of its 206 rows"
+    },
+    {
+      "path": "outputs/ribo-mdc/journal.jsonl",
+      "modified": "2026-10-28T16:29:59+01:00",
+      "source": "7 of its 20 rows"
+    },
+    {
+      "path": "outputs/ribo-mdc/artifacts.json",
+      "modified": "2026-10-28T16:29:59+01:00",
+      "source": "the registry, 139 of its 254 records"
+    },
+    {
+      "path": "outputs/ribo-mdc/manifests/TS_0306.json",
+      "modified": "2026-10-14T15:43:06+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ribo-mdc/manifests/TS_0463.json",
+      "modified": "2026-10-14T15:47:01+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ribo-mdc/manifests/TS_0493.json",
+      "modified": "2026-10-14T15:51:16+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ribo-mdc/manifests/TS_0564.json",
+      "modified": "2026-10-14T15:55:18+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ribo-mdc/manifests/TS_0623.json",
+      "modified": "2026-10-14T15:59:19+02:00",
+      "source": "a manifest"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/coarse_alignment/TS_0306_coarse_alignment_qc.json",
+      "modified": "2026-10-14T15:43:34+02:00",
+      "source": "the coarse_alignment_report QC record of TS_0306"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/coarse_alignment/TS_0463_coarse_alignment_qc.json",
+      "modified": "2026-10-14T15:47:24+02:00",
+      "source": "the coarse_alignment_report QC record of TS_0463"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/coarse_alignment/TS_0493_coarse_alignment_qc.json",
+      "modified": "2026-10-14T15:51:38+02:00",
+      "source": "the coarse_alignment_report QC record of TS_0493"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/coarse_alignment/TS_0564_coarse_alignment_qc.json",
+      "modified": "2026-10-14T15:55:40+02:00",
+      "source": "the coarse_alignment_report QC record of TS_0564"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/coarse_alignment/TS_0623_coarse_alignment_qc.json",
+      "modified": "2026-10-14T15:59:40+02:00",
+      "source": "the coarse_alignment_report QC record of TS_0623"
+    },
+    {
+      "path": "data/EMPIAR-11538/mdoc/TS_0306.mrc.mdoc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/mdoc/TS_0463.mrc.mdoc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/mdoc/TS_0493.mrc.mdoc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/mdoc/TS_0564.mrc.mdoc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/mdoc/TS_0623.mrc.mdoc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/TS_0306.mrc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/TS_0463.mrc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/TS_0493.mrc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/TS_0564.mrc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    },
+    {
+      "path": "data/EMPIAR-11538/TS_0623.mrc",
+      "modified": "2026-10-27T21:18:25+01:00",
+      "source": "an empty stand-in for a stack or mdoc"
+    }
+  ],
+  "left_out": [
+    {
+      "path": "the Slurm log of job 3670792",
+      "why": "not found where the job ran"
+    },
+    {
+      "path": "outputs/ribo-mdc/rerun-seed.toml",
+      "why": "written later, 2026-10-29T17:44:01+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_seed_qc.json",
+      "why": "written later, 2026-10-29T17:47:06+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0306/TS_0306_imod-patch-track_tracking_qc.json",
+      "why": "written later, 2026-10-29T17:48:32+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine_alignment_qc.json",
+      "why": "written later, 2026-10-29T17:51:10+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-30T13:08:57+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_imod-ctfphaseflip_bin8_correction_qc.json",
+      "why": "written later, 2026-10-30T13:11:10+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/reconstruction/TS_0306_fine_bin8_bin8_qc.json",
+      "why": "written later, 2026-10-30T13:12:18+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0463/TS_0463_patch_seed_qc.json",
+      "why": "written later, 2026-10-28T17:14:34+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0463/TS_0463_imod-patch-track_tracking_qc.json",
+      "why": "written later, 2026-10-28T17:16:12+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/alignments/TS_0463/fine/TS_0463_fine_alignment_qc.json",
+      "why": "written later, 2026-10-28T17:18:46+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/ctf/TS_0463_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-28T17:23:20+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/ctf/TS_0463_imod-ctfphaseflip_bin8_correction_qc.json",
+      "why": "written later, 2026-10-28T17:26:34+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/reconstruction/TS_0463_fine_bin8_bin8_qc.json",
+      "why": "written later, 2026-10-28T17:28:14+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0493/TS_0493_patch_seed_qc.json",
+      "why": "written later, 2026-10-28T17:29:57+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0493/TS_0493_imod-patch-track_tracking_qc.json",
+      "why": "written later, 2026-10-28T17:31:35+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/alignments/TS_0493/fine/TS_0493_fine_alignment_qc.json",
+      "why": "written later, 2026-10-28T17:34:36+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/ctf/TS_0493_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-28T17:39:05+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/ctf/TS_0493_imod-ctfphaseflip_bin8_correction_qc.json",
+      "why": "written later, 2026-10-28T17:42:29+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/reconstruction/TS_0493_fine_bin8_bin8_qc.json",
+      "why": "written later, 2026-10-28T17:44:10+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0564/TS_0564_patch_seed_qc.json",
+      "why": "written later, 2026-10-28T17:45:54+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0564/TS_0564_imod-patch-track_tracking_qc.json",
+      "why": "written later, 2026-10-28T17:47:31+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/alignments/TS_0564/fine/TS_0564_fine_alignment_qc.json",
+      "why": "written later, 2026-10-28T17:50:24+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/ctf/TS_0564_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-28T17:54:44+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/ctf/TS_0564_imod-ctfphaseflip_bin8_correction_qc.json",
+      "why": "written later, 2026-10-28T17:58:01+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/reconstruction/TS_0564_fine_bin8_bin8_qc.json",
+      "why": "written later, 2026-10-28T17:59:43+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0623/TS_0623_patch_seed_qc.json",
+      "why": "written later, 2026-10-28T18:01:26+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/fiducials/TS_0623/TS_0623_imod-patch-track_tracking_qc.json",
+      "why": "written later, 2026-10-28T18:03:02+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/alignments/TS_0623/fine/TS_0623_fine_alignment_qc.json",
+      "why": "written later, 2026-10-28T18:06:13+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/ctf/TS_0623_ctffind5_estimation_qc.json",
+      "why": "written later, 2026-10-28T18:10:36+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/ctf/TS_0623_imod-ctfphaseflip_bin8_correction_qc.json",
+      "why": "written later, 2026-10-28T18:14:01+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/reconstruction/TS_0623_fine_bin8_bin8_qc.json",
+      "why": "written later, 2026-10-28T18:15:42+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8_qc.json",
+      "why": "written later, 2026-10-30T13:14:46+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:03:52+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0306/particle_extraction/TS_0306_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:06:47+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:08:42+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:50:06+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0463/particle_extraction/TS_0463_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:53:45+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/template/TS_0493_pytom_bin8_qc.json",
+      "why": "written later, 2026-10-28T19:55:54+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/picking/TS_0493_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-28T20:37:12+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0493/particle_extraction/TS_0493_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-28T20:39:51+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/template/TS_0564_pytom_bin8_qc.json",
+      "why": "written later, 2026-10-28T20:41:44+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/picking/TS_0564_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-28T21:23:02+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0564/particle_extraction/TS_0564_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-28T21:25:49+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/template/TS_0623_pytom_bin8_qc.json",
+      "why": "written later, 2026-10-28T21:27:37+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/picking/TS_0623_full_pytom-match-pick_bin8_qc.json",
+      "why": "written later, 2026-10-28T22:08:49+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/qc/TS_0623/particle_extraction/TS_0623_cubic-crop_bin8_qc.json",
+      "why": "written later, 2026-10-28T22:11:07+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0306/TS_0306_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-30T13:11:10+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5.log",
+      "why": "written later, 2026-10-30T13:08:57+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0463/TS_0463_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-28T17:26:34+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0463/TS_0463_ctffind5.log",
+      "why": "written later, 2026-10-28T17:23:20+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0493/TS_0493_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-28T17:42:29+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0493/TS_0493_ctffind5.log",
+      "why": "written later, 2026-10-28T17:39:05+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0564/TS_0564_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-28T17:58:01+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0564/TS_0564_ctffind5.log",
+      "why": "written later, 2026-10-28T17:54:44+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0623/TS_0623_imod-ctfphaseflip_bin8.log",
+      "why": "written later, 2026-10-28T18:14:01+01:00"
+    },
+    {
+      "path": "outputs/ribo-mdc/ctf/TS_0623/TS_0623_ctffind5.log",
+      "why": "written later, 2026-10-28T18:10:36+01:00"
+    }
+  ],
+  "slurm": {
+    "3670792": {
+      "JobName": "ctf-window",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-16T16:56:58",
+      "Elapsed": "00:01:12",
+      "NodeList": "max224",
+      "AllocTRES": "billing=16,cpu=16,energy=8014,mem=32G,node=1"
+    },
+    "3781480": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-28T15:48:53",
+      "Elapsed": "00:08:25",
+      "NodeList": "max190",
+      "AllocTRES": "billing=16,cpu=16,energy=58187,mem=32G,node=1"
+    }
+  }
+}

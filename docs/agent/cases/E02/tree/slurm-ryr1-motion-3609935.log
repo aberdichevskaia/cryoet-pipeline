@@ -1,0 +1,77 @@
+job         ryr1-motion (3609935) on maxg05.mdc-berlin.net
+started     2026-10-14T16:21:40+02:00
+project     outputs/ryr1   config configs/lanes/ryr1-bin4.toml
+series      039 096 097 125 161
+steps       prepare-tilt-series
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind
+Tesla V100-SXM2-32GB, 7.0, 32768 MiB
+GPU 0: Tesla V100-SXM2-32GB (UUID: GPU-c32ad537-bac8-9249-cdcd-7257678e902e)
+
+preflight   ok
+
+
+# ---- 039 (ryr1-bin4) ----
+
+# prepare-tilt-series
+cryoet prepare-tilt-series --manifest outputs/ryr1/manifests/039.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --motion-backend motioncor3 --storage-policy debug --motioncor3-executable $MOTIONCOR3 --motioncor3-gpu 0 --motioncor3-patch-x 7 --motioncor3-patch-y 5 --motioncor3-gain /fast/AG_Kudryashev/{{USER}}/frames.renamed.top1to5/gain.mrc --motioncor3-gain-flip 1 --motioncor3-ftbin 2
+{{HOME}}/micromamba/envs/cryoet-pipeline/lib/python3.13/site-packages/torch/cuda/__init__.py:228: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12090). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /__w/pytorch/pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return torch._C._cuda_getDeviceCount() > 0
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ cli.py:553 in prepare_tilt_series                                            │
+│                                                                              │
+│    550 │   │   },                                                            │
+│    551 │   )                                                                 │
+│    552 │                                                                     │
+│ ❱  553 │   corrected_artifacts = correct_and_register(                       │
+│    554 │   │   selected_motion_backend,                                      │
+│    555 │   │   tilt_series_manifest,                                         │
+│    556 │   │   context,                                                      │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:392 in correct_and_register                               │
+│                                                                              │
+│   389 ) -> list[Artifact]:                                                   │
+│   390 │   """Run motion correction and add the returned artifacts to the     │
+│       registry."""                                                           │
+│   391 │                                                                      │
+│ ❱ 392 │   artifacts = backend.correct(manifest, context)                     │
+│   393 │   registry.extend(artifacts, replace=replace_existing)               │
+│   394 │   return artifacts                                                   │
+│   395                                                                        │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:70 in correct                                             │
+│                                                                              │
+│    67 │   │   """Correct every movie with MotionCor3 and canonicalize its    │
+│       frame sum."""                                                          │
+│    68 │   │                                                                  │
+│    69 │   │   _validate_manifest_movies(manifest)                            │
+│ ❱  70 │   │   settings = _motioncor3_settings(manifest, context)             │
+│    71 │   │   artifact_format = _artifact_format_parameter(context)          │
+│    72 │   │   overwrite = _bool_parameter(context, "overwrite",              │
+│       default=False)                                                         │
+│    73 │   │   output_paths = [                                               │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/motion.py:402 in _motioncor3_settings                               │
+│                                                                              │
+│   399 │   context: BackendContext,                                           │
+│   400 ) -> _MotionCor3Settings:                                              │
+│   401 │   if context.device is not DevicePreference.CUDA:                    │
+│ ❱ 402 │   │   raise ValueError(                                              │
+│   403 │   │   │   "MotionCor3 requires an NVIDIA CUDA device; run it on a    │
+│       Linux/CUDA host "                                                      │
+│   404 │   │   │   "with --device cuda"                                       │
+│   405 │   │   )                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: MotionCor3 requires an NVIDIA CUDA device; run it on a Linux/CUDA 
+host with --device cuda
+# prepare-tilt-series: 0.9 min, +0.00 GB
+
+# FAILED at prepare-tilt-series (exit 1) for 039.
+# Fix it, then resume with:
+#   --series 039 --from prepare-tilt-series

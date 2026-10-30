@@ -1,0 +1,17 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/xfproduct -in1 {{ROOT}}/outputs/ryr1/fiducials/161/161_fiducial.prexg -in2 {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fine.tltxf -ScaleShifts 1.0,3.000000 -output {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fine.xf
+
+[stdout]
+
+ FORMATTED  ro  file opened: {{ROOT}}/outputs/ryr1/fiducials/161/161_fiducial.prexg
+
+ FORMATTED  ro  file opened: {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fine.tltxf
+          29  transforms in first file
+          29  transforms in second file
+
+ FORMATTED  new  file opened: {{ROOT}}/outputs/ryr1/alignments/161/fine/.161-tiltalign-_takdda0/fine.xf
+          29  new transforms written
+
+[stderr]
+
+[exit_code]
+0

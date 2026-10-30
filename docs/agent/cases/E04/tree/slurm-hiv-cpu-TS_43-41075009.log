@@ -1,0 +1,98 @@
+job         hiv-cpu-TS_43 (41075009) on cpusrv23.scidom.de
+started     2026-10-07T21:47:37+02:00
+project     {{ROOT}}/outputs/hiv   config {{ROOT}}/gag-bin8-prune006.toml
+series      TS_43
+steps       align-tilt-series qc-coarse-alignment generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+cryoet      /ictstr01/groups/aih/{{USER}}/tools/apps/miniforge/envs/cryoet-pipeline/bin/cryoet
+imod        /ictstr01/groups/shared/users/peng_marr/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /lustre/groups/shared/users/peng_marr/{{USER}}/apps/cisTEM/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_43 (gag-bin8) ----
+
+# align-tilt-series
+cryoet align-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --binning 8 --min-std-ratio 0.2 --overwrite
+wrote coarse alignment: {{ROOT}}/outputs/hiv/alignments/TS_43/TS_43_coarse_alignment.json
+wrote IMOD transforms: {{ROOT}}/outputs/hiv/alignments/TS_43/TS_43_coarse.xf
+excluded z values: []
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# align-tilt-series: 0.6 min, +0.00 GB
+
+# qc-coarse-alignment
+cryoet qc-coarse-alignment --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --preview-binning 16 --residual-warning-px 2.0 --overwrite
+wrote coarse-alignment preview: {{ROOT}}/outputs/hiv/qc/TS_43/coarse_alignment/TS_43_coarse_aligned_bin16.st
+wrote coarse-alignment QC: {{ROOT}}/outputs/hiv/qc/TS_43/coarse_alignment/TS_43_coarse_alignment_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# qc-coarse-alignment: 0.4 min, +0.04 GB
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --backend imod-autofidseed --tracking-binning 4 --fiducial-diameter-nm 10.0 --raw-pixel-spacing 0.675 --overwrite
+wrote fiducial tracking stack: {{ROOT}}/outputs/hiv/fiducials/TS_43/TS_43_fiducial_bin4_preali.mrc
+wrote fiducial seed model: {{ROOT}}/outputs/hiv/fiducials/TS_43/TS_43.seed
+wrote fiducial seed QC: {{ROOT}}/outputs/hiv/fiducials/TS_43/TS_43_seed_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# generate-fiducial-seed: 0.6 min, +0.58 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --backend imod-beadtrack --overwrite
+wrote tracked fiducial model: {{ROOT}}/outputs/hiv/fiducials/TS_43/TS_43_imod-beadtrack.fid
+wrote fiducial tracking QC: {{ROOT}}/outputs/hiv/fiducials/TS_43/TS_43_imod-beadtrack_tracking_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# track-fiducials: 0.2 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.06 --surfaces-to-analyze 2 --overwrite
+wrote fine alignment: {{ROOT}}/outputs/hiv/alignments/TS_43/fine/TS_43_fine_alignment.json
+wrote final IMOD transforms: {{ROOT}}/outputs/hiv/alignments/TS_43/fine/TS_43_fine.xf
+wrote fine-alignment QC: {{ROOT}}/outputs/hiv/alignments/TS_43/fine/TS_43_fine_alignment_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# fine-align-tilt-series: 0.3 min, +0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --output-binning 4 --overwrite
+wrote final aligned stack: {{ROOT}}/outputs/hiv/aligned/TS_43/TS_43_final_bin4.st
+wrote solved tilt angles: {{ROOT}}/outputs/hiv/aligned/TS_43/TS_43_final_bin4.tlt
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# build-ctf-stack: 0.5 min, +0.58 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 60000 --overwrite
+wrote CTF model: {{ROOT}}/outputs/hiv/ctf/TS_43/TS_43_ctffind5.defocus
+wrote CTF diagnostic image: {{ROOT}}/outputs/hiv/ctf/TS_43/TS_43_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: {{ROOT}}/outputs/hiv/qc/TS_43/ctf/TS_43_ctffind5_estimation_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# estimate-ctf: 0.8 min, +0.04 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: {{ROOT}}/outputs/hiv/aligned/TS_43/TS_43_final_bin8_bin8.st
+wrote solved tilt angles: {{ROOT}}/outputs/hiv/aligned/TS_43/TS_43_final_bin8_bin8.tlt
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# build-final-aligned-stack: 0.3 min, +0.15 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --variant bin8 --overwrite
+used CTF model: {{ROOT}}/outputs/hiv/ctf/TS_43/TS_43_ctffind5.defocus
+wrote CTF-corrected stack: {{ROOT}}/outputs/hiv/ctf/TS_43/TS_43_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: {{ROOT}}/outputs/hiv/qc/TS_43/ctf/TS_43_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# correct-ctf: 0.4 min, +0.15 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest {{ROOT}}/outputs/hiv/manifests/TS_43.json --registry {{ROOT}}/outputs/hiv/artifacts.json --out {{ROOT}}/outputs/hiv --variant bin8 --overwrite
+wrote canonical tomogram: {{ROOT}}/outputs/hiv/tomograms/TS_43/TS_43_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: {{ROOT}}/outputs/hiv/tomograms/TS_43/TS_43_fine_bin8_bin8.rec
+wrote reconstruction QC: {{ROOT}}/outputs/hiv/qc/TS_43/reconstruction/TS_43_fine_bin8_bin8_qc.json
+QC status: pass
+updated {{ROOT}}/outputs/hiv/artifacts.json
+# reconstruct-tomogram: 0.4 min, +1.22 GB
+
+finished    2026-10-07T21:52:24+02:00
