@@ -1,0 +1,351 @@
+# Evaluation case: this lane's [data] paths point into the sandbox, where
+# empty stand-ins replace the cluster's stacks and mdocs.
+# Lane B on EMPIAR-11538 again, at MDC Berlin (max cluster), from files already
+# on disk: five more untreated series, nothing to download.
+#
+# Every value below [data] is ribo-bin8.toml's, unchanged: same dataset, same
+# detector, same pixel size, so the reasons given there hold here. Only the
+# project, the series, the data paths and the Slurm lines are this site's.
+
+[lane]
+name = "ribo-bin8"
+input = "stack"           # one assembled stack per series, no movies
+variant = "bin8"          # label applied from the stack rebuild onward
+
+[run]
+project = "outputs/ribo-mdc"
+series = ["TS_0306", "TS_0463", "TS_0493", "TS_0564", "TS_0623"]
+
+# Partitions from `sinfo -s` on max (2026-10-14): `normal` is the default, `gpu`
+# the GPU nodes, both with a 7-day limit; no QoS is asked for.
+#
+# The GPU type is pinned to the A40 (45 GB, compute 8.6), the most common card
+# there (`sinfo -p gpu -o "%N %G"`). An unpinned request could land on a T4
+# (15 GB) or a 16 GB V100, while the bin8 ribosome pick has only been run in a
+# 20 GB MIG slice in Munich. CUDA 13, which the env's torch is built for, also
+# dropped Volta (compute 7.0); not tried on these nodes.
+[[run.stage]]
+name = "cpu"
+from = "import-tilt-stack"
+until = "reconstruct-tomogram"
+time = "10:00:00"
+sbatch = ["--partition=normal", "--cpus-per-task=8", "--mem=32G"]
+
+[[run.stage]]
+name = "gpu"
+from = "prepare-template"
+until = "extract-particles"
+time = "16:00:00"
+sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
+
+[data]
+# Absolute: the data sit beside the clone, not inside it. {series} is per series.
+mdoc = "data/EMPIAR-11538/mdoc/{series}.mrc.mdoc"
+stack = "data/EMPIAR-11538/{series}.mrc"
+
+[binning]
+# CTF is fitted on a finer stack and transferred, because a fit at coarse
+# binning is badly constrained and does not say so.
+#
+# The fit stack is built WITHOUT a variant label on purpose: the lane rule is
+# that a lookup prefers a labelled candidate and otherwise falls back to the
+# shared unlabelled one, never to another lane's. A labelled CTF model would
+# therefore be invisible to `correct-ctf --variant bin8`.
+# Pick the fit binning by its Nyquist limit, not by the binning number. The fit
+# window closes at the stack's Nyquist, and a real fit reaches 6-8 A, so the fit
+# stack's Nyquist has to be finer than that or the stack caps the fit:
+#
+#   bin1  1.223 A/px   Nyquist  2.4 A   spare resolution, 4 GB stack
+#   bin2  2.446 A/px   Nyquist  4.9 A   finer than 6-8 A          <- use this
+#   bin4  4.892 A/px   Nyquist  9.8 A   coarser than 6-8 A, caps the fit
+#   bin8  9.784 A/px   Nyquist 19.6 A
+#
+# Lane A in the runbook fitted at 2.7 A/px and saw a bin8 fit at 5.4 A/px diverge
+# on a high-tilt view. bin4 here is 4.9 A/px, which is that same bad regime, so
+# matching lane A means bin2 rather than bin4 on this data.
+ctf_fit = 2               # 2.45 A/px, Nyquist 4.9 A, stack 2048^2
+tomogram = 8              # 9.78 A/px, Nyquist 19.6 A, 512^2, ribosome ~31 px
+
+[align]
+binning = 8               # coarse alignment works on a reduced stack
+# Raised from ribo-bin8's 0.2, which excluded nothing on TS_0306. There the
+# per-view std over the median falls smoothly from 1.13 near +9 deg (the
+# lamella's pretilt, judging by where the curve peaks and by the -52..+68 range
+# being centred there) to ~0.7 at both ends; thicker ice gives less contrast.
+# Patch tracking failed at the ends: fine alignment found 5.7-11.8 nm residuals
+# on -52..-42 and +62..+68 against ~2 nm in the middle, the views look black in
+# 3dmod, and 227/1525 points over 5 px exceeded max_pruned_fraction.
+#
+# 0.84 drops -52..-42 (0.69-0.84) and +60..+68 (0.70-0.82), 11 of 61 views, all
+# about 50 deg or more from the lamella normal; -40 (0.864, 3.2 nm) and +58
+# (0.842) stay. It was FITTED to TS_0306's residuals, on a curve with no gap in
+# it, so it is not yet a rule: check per series that the cut falls where the
+# fine-alignment residuals rise, since a thicker or thinner lamella puts the
+# same ratio at another angle.
+min_std_ratio = 0.84
+# Deliberately not set, but NOT because coarse alignment searches for it — it does
+# not. With no override, _tilt_axis_angle takes rotation_angle_deg from the manifest
+# and returns angle - 90, and that value goes to `tiltxcorr -rotation` as an input.
+# So the coarse stage reports back the number it was given, and comparing it against
+# the mdoc proves nothing.
+#
+# The measured axis comes from fine alignment, which parses it out of tiltalign's own
+# log. Compare that against 83.6, which the MRC label and the mdoc both record.
+# tilt_axis_angle = 83.6
+
+[qc_coarse]
+preview_binning = 16
+residual_warning_px = 2.0
+
+[fiducials]
+# Confirmed by eye in 3dmod: TS_0005 has no gold. So patch tracking, which has
+# never been run against real IMOD from this pipeline — expect to debug it.
+seed_backend = "imod-patch-seed"
+track_backend = "imod-patch-track"
+
+# The user-facing knobs are patch COUNT and OVERLAP; the patch size in pixels is
+# derived, mirroring etomo's own sizing:
+#
+#   usable    = binned_width - 2 * margin
+#   patch_px  = usable / (1 + (count - 1) * (1 - overlap))
+#
+# At 4096 px and pre_binning 8 the tracking stack is 512 px, so these values give
+#   usable   = 512 - 52 = 460 px
+#   patch    = 460 / (1 + 4 * 0.67) = 125 binned px = 1000 raw px = 1223 A = 122 nm
+#
+# The margin is etomo's: IMOD's makecomfile trims 5% of the binned size from each
+# edge, int(0.05 * 512 + 0.5) = 26 px, which leaves the patches 81% of the image's
+# area. The 100 px used until 2026-10-27 left them 37%. Foreshortening asks for no
+# margin: tiltxcorr places the patches on the view nearest zero tilt, and on the
+# other views they move toward the tilt axis by cos(tilt), so they stay in frame.
+# The margin keeps patches off the blank edges newstack leaves when it prealigns;
+# the coarse shifts of TS_0306 reach 7 binned px. At 26 px all 25 patches were
+# tracked through all 61 views of TS_0306, as at 100 (local IMOD run).
+#
+# Tuning, from the QC readout after track-fiducials:
+#   coverage below the 0.8 warning     -> fewer patches (3x3, 4x4): bigger patches,
+#                                         stronger signal per patch
+#   coverage fine, fine-align residual -> more patches (6x6, 7x7): finer sampling,
+#     high                                weaker signal per patch. 7x7 gives 91 px
+#                                         here, close to the old 84.
+#   patches failing at the edges       -> raise margin. The tilt axis is 83.6 deg
+#                                         from the image Y axis (IMOD's convention),
+#                                         so nearly horizontal in the raw frames.
+# Below 32 px the sizing refuses rather than producing a useless grid.
+#
+# Trap: a margin set here is in BINNED pixels, so it does not scale with
+# pre_binning; raising pre_binning for contrast means scaling it down by the same
+# factor (16 / 13 gives a 62 px = 1213 A patch). Left unset, the margin is the
+# default, 5% of the binned image per axis: the same 26 here, and it follows
+# pre_binning by itself.
+pre_binning = 8
+num_patches_x = 5
+num_patches_y = 5
+patch_overlap = 0.33
+patch_margin_px = 26      # binned pixels, not raw; 5% of 512, as etomo trims
+
+# The bandpass tiltxcorr correlates through, in cycles/pixel. IMOD's standard
+# recommendations, left at their defaults. This is the knob to reach for if the
+# correlation itself fails on low-contrast lamella data rather than the geometry
+# being wrong — a symptom that looks like poor coverage everywhere at once, not
+# at the edges. Values must be above zero.
+# patch_filter_sigma1 = 0.03    # high-pass sigma
+# patch_filter_radius2 = 0.25   # low-pass cutoff radius
+# patch_filter_sigma2 = 0.05    # low-pass falloff sigma
+
+[fine_align]
+robust_fitting = true
+auto_prune_outliers = true
+
+# Patch points are coplanar, so the two-plane fit that suits gold beads has no
+# two surfaces to find. On TS_0002 it sorted 25 points into 11 and 14 and put the
+# planes 10 nm apart; the geometry it then recommended (X axis tilt -1.37 deg,
+# tilt angle change -9.34) is a fit to that non-existent split, and the one-plane
+# fit on the same points said -3.00 and -7.62 instead. Those are the numbers the
+# reconstruction is positioned with, so this is not a reporting detail.
+#
+# It does NOT fix the recommended thickness. "Thickness needed to contain centers
+# of all fiducials" was 172 unbinned px = 21 nm under either fit, because
+# coplanar points have no depth to measure — a bead pair on two faces does. So
+# reconstruction thickness stays an explicit number for every patch-tracked
+# series; see [reconstruct].
+surfaces_to_analyze = 1
+
+# The 0.02 default was set for bead tracking, where an outlier is a stray point.
+# With a 5x5 patch grid over 59 views there are 1475 points and one patch that
+# fails everywhere is 59 of them — 4.0% — so a single bad patch already exceeds
+# the default and fine alignment refuses rather than pruning. A patch landing on
+# a featureless region, a crack, or the lamella edge is expected and local, and
+# dropping it is the right answer.
+#
+# Derive the limit as "up to two whole patches", not a round number:
+#
+#   max_pruned_fraction = 2 / num_patches = 2 / 25 = 0.08
+#
+# More than two of twenty-five failing is no longer a couple of bad regions; it
+# is wrong geometry or wrong parameters, and the refusal is correct again.
+#
+# Only raise this after checking that the outliers really are concentrated in one
+# or two contours in the initial tiltalign log. Scattered across many patches
+# means the alignment is poor and a higher limit would hide it.
+#
+# Checked on TS_0002 before setting it: 24 of the 30 worst projection points
+# belonged to contours 13 and 23, both failing on views 1-13 where the tilt is
+# -51 to -28 deg, and the 3-D point table put those two at 3.8 and 5.0 nm against
+# 0.6-1.6 nm for the other twenty-three. Two whole patches, which is what this
+# limit is sized for. It was not free to leave at 0.02: the run's largest
+# residual was 20.95 px, above the 20 px failure threshold, so without pruning
+# fine alignment ends in `fail` rather than merely refusing to prune.
+#
+# Here three patches, not two: 3 / 25 = 0.12. TS_0493 (MDC run, 2026-10-14)
+# pruned 123/1350 = 9.1%, all of it in patches 4, 9 and 14 (mean residuals 9.0,
+# 8.0 and 4.6 nm against 0.5-2.4 nm for the other 22), with no view-dependent
+# failure left after min_std_ratio. The three sit in one column of the grid,
+# image X ~313 binned px, and their residuals are almost all along Y. Patches 4
+# and 14 are also among the three worst in TS_0463, a different lamella, which
+# would happen by chance about 3% of the time: possibly something fixed on the
+# camera at ~2504 unbinned px. Not checked; averaging a raw stack would show it.
+max_pruned_fraction = 0.12
+
+[ctf]
+voltage_kv = 300.0
+# 2.7 mm is the Krios objective, and the MRC label plus the EMDB header both say
+# FEI Titan Krios. Checked and not found: the mdoc has Voltage but no Cs, and the
+# EMD-16721 header has no spherical-aberration field at all. Only the paper's
+# methods would state it. Left at 2.7 because at the bin2 fit limit the Cs term is
+# under 1% of the CTF phase, so even a large error in it is not measurable here.
+spherical_aberration_mm = 2.7
+amplitude_contrast = 0.07
+# From the EMD-16721 header: nominal_defocus_min 1.5, nominal_defocus_max 4.5 um.
+# Relaxed outward to [1, 5] um, which is what the notes prescribe for turning a
+# paper's stated range into ctffind bounds. Constrains the wide first pass over
+# the near-zero-tilt view; the second pass then searches a narrow window around
+# whatever that found. Cs is NOT in the EMDB header for this entry - only the
+# paper has it - but at this fit limit Cs contributes under 1% of the CTF phase,
+# so the Krios objective value stands.
+min_defocus_angstrom = 10000
+max_defocus_angstrom = 50000
+
+[reconstruct]
+# NOT left unset, and not a preference. Derived thickness comes from Tiltalign's
+# "thickness needed to contain centers of all fiducials", which measures specimen
+# depth only when the fiducials sample it — gold beads on two faces do, patches
+# do not. On TS_0002 it derived 25 bin8 px: a 24 nm box for a FIB lamella, and
+# reconstruction reported `pass` on it. find_slab then found the specimen filling
+# 84% of the box with 10% contrast, which is its own "not seeing the specimen"
+# band: there was no vacuum in the volume to find an edge against.
+#
+# 320 is a generous first pass, the value TS_0005 used for a 177 px lamella. Snug
+# it per series from find_slab once the reconstruction actually contains vacuum:
+# lamella + ~25 px for residual X axis tilt across a 512 px field + edge margin.
+thickness = 320
+
+[template]
+emdb_id = "EMD-16721"     # human 80S ribosome, untreated cells, same data
+low_pass_angstrom = 19.6  # bin8 Nyquist
+# Mask and box as pytom's own tutorial and usage notes have them (checked
+# 2026-10-15): the radius a little past the particle, a soft edge ("a smooth
+# fall-off to prevent aliasing artifacts"; --sigma "0.5-1.0 are usually
+# sufficient for tomograms with 20A-10A voxel sizes"), and a box with "some
+# overhang on purpose ... to ensure sufficient sampling in Fourier space of the
+# weighting functions". The tutorial puts its ~300 A ribosome in 60 px at
+# 13.79 A, 2.8x the diameter.
+#
+#   particle radius   290 / 2 / 9.784 = 14.8 px
+#   mask radius       14.8 + 3        = 18 px, plus a 1 px gaussian edge
+#   box               2 * 290 / 9.784 = 59.3 -> 60 px
+#
+# Until then the mask was 17 px with a hard edge, and the box 39 px: EMD-16721's
+# own 380 A box, 1.3x the particle, taken by default. Not derived from the
+# measured extent: that catches 32 px of a low-passed map's periphery, and with
+# the 1.2 margin on top half the mask would be noise. The 3 px past the widest
+# point is a colleague's rule; pytom's tutorial uses about 1 px plus the edge.
+mask_radius_px = 18
+mask_sigma_px = 1.0
+box_size_px = 60
+
+[pick]
+# 290 A is the human 80S diameter that pytom's own documentation uses as its
+# worked example. It sets the angular sampling through Crowther. The measured
+# extent from prepare-template reads a few per cent under true (~274 A), so the
+# literature value is the conservative choice here.
+particle_diameter_angstrom = 290.0
+# The best 600 peaks per tomogram with no score floor (cut_off = 0); the
+# threshold is then read off the score curves in the report. 600 is about twice
+# the ribosomes a biologist counted in the five MDC tomograms (288-362), the
+# usual rule of thumb; the published work on this dataset took the best 800 and
+# let classification find the real ones.
+#
+# This replaces a false-positive floor (number_of_false_positives = 100, cut-off
+# from the noise model). On these tomograms the lane's score map did not see the
+# specimen at all (2026-10-15: on TS_0005 44% of its top 100 peaks in the
+# lamella, where noise puts 48%), so no floor could have made its picks real. A
+# floor means something once the map does; until then a fixed count is the
+# honest setting. The two are alternatives and run_series refuses both at once.
+number_of_particles = 600
+cut_off = 0.0
+tophat_filter = false
+gpu_ids = "0"
+
+# Without these the match runs across the whole band, out to the bin8 Nyquist of
+# 19.6 A, where a ribosome has little signal and the tomogram has plenty of
+# noise. That flattens the score volume: the first run produced a cut-off of
+# 0.1159 with the only two survivors at 0.1161 and 0.1184, which is a
+# distribution with no peaks in it at all rather than a threshold set too high.
+#
+# 35 A was chosen first, to keep the ribosome's shape and drop detail that at
+# this binning is mostly noise. Measured in real pytom on 2026-10-15
+# (scripts/pick_ablation.sbatch, MDC jobs 3640899 and 3643100): the share of the
+# 100 best peaks inside the lamella, with what noise would give in brackets, the
+# best peak, and the peaks above the one-false-positive height.
+#
+#                                        TS_0463 (40%)        TS_0306 (75%)
+#   39 px template, 35 A, RPC + CTF      89%   7.75   13      71%   7.48    4
+#   60 px template, 25 A, RPC + CTF      87%   7.90   11      77%   7.83    6
+#     the same without RPC               95%   8.33   41      73%   7.50    4
+#     without RPC or CTF weighting       93%  12.30  241      99%  15.51   18
+#     the same at 35 A                   94%  11.23  212     100%  14.31   17
+#
+# The first row is the lane as it was: on TS_0306 its map was blind, at the
+# level noise gives. Dropping both corrections is what made either series' map
+# see the lamella, and 25 A then beats 35 A by about a seventh more significant
+# peaks at ~2.7x the orientations (pytom's Crowther step 4.9 against 6.9 deg).
+# pytom's own tutorial matches at 1.3-1.45x Nyquist; 25 A is 1.28x here. The
+# template and the low-pass changed together in row 2, so the 60 px box and
+# soft mask are pytom's practice rather than a measured gain.
+low_pass_angstrom = 25.0
+# Off since 2026-10-15 (table above). It subtracts what a phase-randomised
+# template of the same spectrum also matches, and on these tomograms that takes
+# most of the ribosome's signal with it: alone it cost TS_0463 three quarters of
+# its significant peaks. Worth trying again once reconstructions are sharper.
+random_phase_correction = false
+# Off since 2026-10-15 (table above). |CTF| weighting leans the match on the
+# 35-60 A band, which these reconstructions barely carry: with it TS_0306's map
+# stayed blind even without random-phase correction. A stand-in matcher showed
+# Anna's etomo reconstruction of TS_0002 keeping its peaks under the same
+# weighting, so this is about the reconstructions, not the weighting.
+ctf_weighting = false
+# Weights the CTF and the missing wedge per view rather than as one average, and
+# is also what lets the accumulated dose in through --dose-accumulation: without
+# it pytom has nothing to do with a dose file. The dose comes from the mdoc's
+# PriorRecordDose, which is already accumulated in acquisition order — the order
+# a dose-symmetric series was shot in, not the tilt order it is stored in.
+per_tilt_weighting = true
+# Flattens the tomogram's power spectrum before correlating. Standard practice
+# for template matching in tomograms, and it was off.
+spectral_whitening = true
+
+[extract]
+box_size_px = 48          # 470 A at 9.78 A/px, ~1.5x the particle
+
+[executables]
+# CTFFIND 5 by name, as ryr1-bin8 does: the rerun of 2026-10-28 (job 3781480)
+# found CTFFIND 4.1.14 as `ctffind` on PATH, which the ctffind5 backend refuses,
+# where the lane's October runs had found a CTFFIND 5. Export CTFFIND5 before
+# submitting.
+ctffind = "$CTFFIND5"
+# $PYTOMO_MP_DIR — note the O; $PYTOM_MP_DIR is unset and expands to nothing.
+pytom_create_template = "$PYTOMO_MP_DIR/pytom_create_template.py"
+pytom_create_mask = "$PYTOMO_MP_DIR/pytom_create_mask.py"
+pytom_match_template = "$PYTOMO_MP_DIR/pytom_match_template.py"
+pytom_extract_candidates = "$PYTOMO_MP_DIR/pytom_extract_candidates.py"

@@ -1,0 +1,13 @@
+id = "E13"
+title = "New series for an existing frames project"
+request = "Add the three new RyR1 series, 200, 201 and 202, to the ryr1 project and process them."
+pass_if = ["it cites the refusal: init would erase the project to add them", "it proposes a new project for the new series, as a lane copy with a new [run] project", "it says the two can be combined at averaging"]
+must_not = ["delete or re-create the project", "run init on it"]
+
+[env]
+CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+IMOD_DIR = "/opt/imod_5.1.12"
+MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
+MEMBRAIN_EXE = "/opt/membrain/membrain"
+MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

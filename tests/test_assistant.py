@@ -131,6 +131,19 @@ def test_options_that_would_undo_the_setup_are_refused(claude, args):
     assert not claude.exists()
 
 
+def test_accept_edits_passes_only_for_a_headless_run(claude):
+    # An evaluation run has nobody to approve an edit; a session for a person does.
+    assert _launch("-p", "hello", "--permission-mode", "acceptEdits", cwd=ROOT).returncode == 0
+    _, passed = _noted(claude)
+    assert passed[passed.index("--permission-mode") + 1] == "acceptEdits"
+    claude.unlink()
+    for args in (["--permission-mode", "acceptEdits"], ["--permission-mode=acceptEdits"],
+                 ["-p", "hello", "--permission-mode", "bypassPermissions"]):
+        result = _launch(*args, cwd=ROOT)
+        assert result.returncode == 2 and "scripts/assistant:" in result.stderr
+        assert not claude.exists()
+
+
 def test_without_claude_the_launcher_says_so(tmp_path):
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
     result = subprocess.run(

@@ -28,6 +28,13 @@
 #                           are not shell commands, so the guard never sees them
 #
 # Other options pass on to claude, except the ones that would undo the above.
+# --permission-mode acceptEdits passes only with -p, for a headless run such as
+# scripts/run_cases.py's evaluation, where nobody is there to approve an edit:
+# it stands in for the person who would. In the working directory it lets edits
+# through, and mkdir, touch, cp, mv, rm, rmdir and sed too. Every deny and ask
+# rule still holds, and anything else that would ask is refused, since a -p run
+# has nobody to ask. A session started for a person asks before each edit, as
+# before.
 # Switching the model inside a session (/model) leaves CRYOET_ASSISTANT_MODEL
 # naming the first one: start a new session instead.
 #
@@ -39,6 +46,7 @@ set -euo pipefail
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 model=${CRYOET_ASSISTANT_MODEL:-claude-opus-5-5}
 print_only=0
+accept_edits=0
 passed=()
 while (($#)); do
     case "$1" in
@@ -57,6 +65,19 @@ while (($#)); do
         -h | --help)
             sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
             exit 0
+            ;;
+        --permission-mode=acceptEdits)
+            accept_edits=1
+            shift
+            ;;
+        --permission-mode)
+            if [[ "${2:-}" != acceptEdits ]]; then
+                echo "scripts/assistant: --permission-mode ${2:-} would undo what the" \
+                    "assistant is started with (see the header of scripts/assistant)" >&2
+                exit 2
+            fi
+            accept_edits=1
+            shift 2
             ;;
         --dangerously-skip-permissions | --allow-dangerously-skip-permissions | \
         --permission-mode | --permission-mode=* | --settings | --settings=* | \
@@ -106,6 +127,18 @@ options=(
     --plugin-dir "$REPO/assistant/plugin"
     --strict-mcp-config
 )
+if ((accept_edits)); then
+    headless=0
+    for arg in ${passed[@]+"${passed[@]}"}; do
+        [[ "$arg" == -p || "$arg" == --print ]] && headless=1
+    done
+    if ((!headless)); then
+        echo "scripts/assistant: --permission-mode acceptEdits is for a headless run (-p)," \
+            "where nobody can approve an edit; a session asks the person instead" >&2
+        exit 2
+    fi
+    options+=(--permission-mode acceptEdits)
+fi
 if ((print_only)); then
     printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
         "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"

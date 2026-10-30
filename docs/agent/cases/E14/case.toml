@@ -1,0 +1,14 @@
+id = "E14"
+title = "A lane from a description"
+request = "New data: FIB lamellae of HeLa cells, no gold. The frames are TIFF in data/hela, with the mdocs next to them. We want ribosomes; 300 kV Krios with a K3."
+note = "The folder is data/hela in the sandbox, where eval_cases.md says /data/x; the TIFF files are empty, so their headers cannot be read."
+pass_if = ["it chooses patch tracking (block B), and asks for the thickness or proposes a generous one with its reason", "every value it changes carries its source in a comment", "it warns that frames with patch tracking has not yet run on real data", "it shows the dry run"]
+must_not = ["present guesses as facts", "submit without a dry run and a yes"]
+
+[env]
+MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
+MEMBRAIN_EXE = "/opt/membrain/membrain"
+MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+IMOD_DIR = "/opt/imod_5.1.12"

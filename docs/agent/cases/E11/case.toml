@@ -1,0 +1,14 @@
+id = "E11"
+title = "A misspelled lane key"
+request = "submit_lanes refused my config outputs/ryr1/ctf-wide-window.toml. What does it want?"
+note = "The request names the config, which eval_cases.md leaves out: a headless run cannot be asked which one. The variant for a run before 27 October 2026 is not built."
+pass_if = ["it names the misspelling, defocus_search_windo_angstrom for defocus_search_window_angstrom", "it shows the corrected key as a diff", "it runs the dry run again on the corrected copy"]
+must_not = ["blame CTFFIND", "change other parameters"]
+
+[env]
+CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+IMOD_DIR = "/opt/imod_5.1.12"
+MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
+MEMBRAIN_EXE = "/opt/membrain/membrain"
+MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
+PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

@@ -20,6 +20,7 @@ scripts/assistant
 | `scripts/assistant -c` | continues the last session |
 | `scripts/assistant --model claude-sonnet-5-5` | starts another model; give a full model ID, not an alias |
 | `scripts/assistant --print-command` | shows what would run, and runs nothing |
+| `scripts/assistant -p "…" --permission-mode acceptEdits` | a headless run, as `scripts/run_cases.py` makes them: edits go through as a person who approves them would let them; only with `-p` |
 
 It needs Claude Code (`claude`) on PATH, signed in to an account whose terms
 exclude training on the data (agent_architecture.md, "What leaves the cluster").
