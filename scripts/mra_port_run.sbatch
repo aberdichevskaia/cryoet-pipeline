@@ -18,9 +18,9 @@
 # (g2atan's own variables, which Dynamo ran on 32 cores as mra_pad_ssn_g2atan.)
 # The job makes the Dynamo project $EXPORT/$NAME unless it is there (Dynamo's own
 # setup: scripts/dynamo_mra_mdc.sbatch with SETUP_ONLY=1, run inside this job while
-# the cards wait, not yet timed on max; it averages 300 particles for each subset or
-# blob seed and writes every iteration's card, the plan the port follows), computes
-# it with the port as $EXPORT/${NAME}_port, and writes
+# the cards wait, 3 minutes for g2atan2 on max; it averages 300 particles for each
+# subset or blob seed and writes every iteration's card, the plan the port follows),
+# computes it with the port as $EXPORT/${NAME}_port, and writes
 # $EXPORT/${NAME}_port_classification_report.pdf, TEMPLATE drawn in it as in
 # Dynamo's reports. The project is made for 32 cores, so Dynamo can compute the
 # same one for a comparison (scripts/dynamo_mra_mdc.sbatch, the same EXPORT and
