@@ -28,9 +28,11 @@ steps = ["qc-coarse-alignment", "generate-fiducial-seed"]
 # tracking_binning 3, which is the fix the case asks for.
 since = 2026-10-14
 until = 2026-10-14T19:15:00
-# The reruns of 161, read off their logs in earlier sessions: max182, max177,
-# then 161b with tracking_binning 3 on max173. The first CPU job's ID is not known.
-jobs = ["3620374", "3620884", "3623086"]
+# The first CPU job, then the reruns of 161 on max182 and max177, read off their
+# logs in the session records of that day. 161b (3623086, max173) passed with
+# tracking_binning 3 after the case ends. None of their logs is left on the cluster:
+# the case folder holds them as restored from those records.
+jobs = ["3611181", "3620374", "3620884"]
 log_pattern = "Segmentation fault|core dumped|exit 139"
 playbook = ["A-2"]
 
@@ -54,7 +56,9 @@ since = 2026-10-14
 until = 2026-10-15
 extras = ["ctf/039/039_ctffind5.defocus", "ctf/039/039_ctffind5_ctffind.txt"]
 note = """The window test of 16 October fitted 039 again under labels; ctfw1 is the \
-lane's window on the uncropped stack (scripts/ctf_window_test.sbatch)."""
+lane's window on the uncropped stack (scripts/ctf_window_test.sbatch). The fit of \
+14 October was written again on 18 October, so the case folder holds ctfw1 under the \
+lane's own names in its place, restored from the cluster."""
 playbook = ["C-1"]
 
 [E04]

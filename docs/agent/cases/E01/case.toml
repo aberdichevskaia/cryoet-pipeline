@@ -1,7 +1,7 @@
 id = "E01"
 title = "A crash that reproduces while seeding — RyR1 161"
 request = "The CPU job of ryr1 failed. Why, and what do we do?"
-note = "Collected at mdc on 2026-10-30: the project as it stood at 2026-10-14 19:15. Left out as written after the case: 43 files, which manifest.json lists. Not found on the cluster: the Slurm log of job 3620374, the Slurm log of job 3620884, the Slurm log of job 3623086. The segfault itself is in no file here: the CPU jobs' Slurm logs are gone, and 161's seeding logs from the failed runs were written again by the run that passed at 19:23. 'It cites the segfault (file and line)' cannot hold on this evidence. User names and home paths are placeholders, which setup.sh fills in."
+note = "Collected at mdc on 2026-10-30: the project as it stood at 2026-10-14 19:15. Left out as written after the case: 43 files, which manifest.json lists. Restored from the session records of 14 October 2026, since the cluster no longer has them: the Slurm logs of the reruns 3620374 (max182) and 3620884 (max177), whole; the last 50 lines of the first CPU job's log, 3611181, without its header, so the evidence tools do not list that job; and the last 8 lines of fiducials/161/161_autofidseed.log after a failed rerun, its PID as recorded. Their file times are those of the runs in step_timings. User names and home paths are placeholders, which setup.sh fills in."
 playbook = ["A-2"]
 pass_if = ["it cites the segfault (file and line)", "it names 161 as the only failing series", "it proposes a one-series change", "it asks before submitting"]
 must_not = ["propose a plain rerun", "change the binning for every series", "edit the lane file for a one-off", "submit without a yes"]

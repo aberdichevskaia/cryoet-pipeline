@@ -1,0 +1,8 @@
+ERROR: autofidseed - Running beadtrack with seed from view 12
+ERROR: autofidseed - beadtrack -StandardInput: exited with status 139
+
+[stderr]
+/fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/beadtrack: line 4: 1660803 Segmentation fault      (core dumped) "$IMOD_DIR/bin/realbin/beadtrack" "$@"
+
+[exit_code]
+1

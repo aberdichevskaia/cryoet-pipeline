@@ -1,0 +1,50 @@
+│    872 │   )                                                                 │
+│ ❱  873 │   artifacts = generate_seed_and_register(                           │
+│    874 │   │   selected_backend,                                             │
+│    875 │   │   tilt_stack,                                                   │
+│    876 │   │   alignment,                                                    │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1318 in generate_seed_and_register                     │
+│                                                                              │
+│   1315 ) -> list[Artifact]:                                                  │
+│   1316 │   """Generate and register tracking-stack, seed-model, and QC       │
+│        artifacts."""                                                         │
+│   1317 │                                                                     │
+│ ❱ 1318 │   artifacts = backend.generate(tilt_stack, alignment, manifest,     │
+│        context)                                                              │
+│   1319 │   registry.extend(artifacts, replace=replace_existing)              │
+│   1320 │   return artifacts                                                  │
+│   1321                                                                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:265 in generate                                        │
+│                                                                              │
+│    262 │   │   │   │   env=imod_environment(autofidseed, context),           │
+│    263 │   │   │   )                                                         │
+│    264 │   │   │   write_command_log(paths.autofidseed_log,                  │
+│        (autofidseed_command, autofidseed_result))                            │
+│ ❱  265 │   │   │   _require_success(                                         │
+│    266 │   │   │   │   autofidseed_result,                                   │
+│    267 │   │   │   │   program="IMOD autofidseed",                           │
+│    268 │   │   │   │   log_path=paths.autofidseed_log,                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1924 in _require_success                               │
+│                                                                              │
+│   1921 │   log_path: Path,                                                   │
+│   1922 ) -> None:                                                            │
+│   1923 │   if result.returncode != 0:                                        │
+│ ❱ 1924 │   │   raise RuntimeError(                                           │
+│   1925 │   │   │   f"{program} failed with exit code {result.returncode};    │
+│        see {log_path}"                                                       │
+│   1926 │   │   )                                                             │
+│   1927                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: IMOD autofidseed failed with exit code 1; see 
+outputs/ryr1/fiducials/161/161_autofidseed.log
+# generate-fiducial-seed: 0.4 min, +0.00 GB
+
+# FAILED at generate-fiducial-seed (exit 1) for 161.
+# Fix it, then resume with:
+#   --series 161 --from generate-fiducial-seed

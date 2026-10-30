@@ -846,6 +846,11 @@ def collect(
             left.append({"path": f"the Slurm log of job {job_id}",
                          "why": "not found where the job ran"})
         for path in paths:
+            # A job the table names that started after the case may be its fix.
+            started = _time((show_project.read_job_log(path, root) or {}).get("started"))
+            if end is not None and started is not None and started >= end:
+                left.append({"path": _shown(root, path), "why": "started after the case ended"})
+                continue
             logs.setdefault(path.resolve(),
                             (path, f"Slurm log of job {job_id}, named in the table"))
     if start is not None and end is not None:

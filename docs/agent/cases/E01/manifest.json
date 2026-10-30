@@ -302,17 +302,29 @@
       "path": "outputs/ryr1/fiducials/125/125_fiducial_newstack.log",
       "modified": "2026-10-14T17:09:35+02:00",
       "source": "a log of generate-fiducial-seed for 125"
+    },
+    {
+      "path": "slurm-ryr1-cpu161-3620374.log",
+      "modified": "2026-10-14T18:55:38+02:00",
+      "source": "restored from a session record of 2026-10-14 (tail -n 100 printed it from its first line: the whole log)"
+    },
+    {
+      "path": "slurm-ryr1-cpu161-3620884.log",
+      "modified": "2026-10-14T19:02:33+02:00",
+      "source": "restored from a session record of 2026-10-14 (tail -n 100 printed it from its first line: the whole log)"
+    },
+    {
+      "path": "slurm-ryr1-cpu-3611181.log",
+      "modified": "2026-10-14T17:12:25+02:00",
+      "source": "restored from a session record of 2026-10-14: its last 50 lines only, without the header"
+    },
+    {
+      "path": "outputs/ryr1/fiducials/161/161_autofidseed.log",
+      "modified": "2026-10-14T19:02:31+02:00",
+      "source": "restored from a session record of 2026-10-14: its last 8 lines after a failed rerun, as recorded"
     }
   ],
   "left_out": [
-    {
-      "path": "the Slurm log of job 3620374",
-      "why": "not found where the job ran"
-    },
-    {
-      "path": "the Slurm log of job 3620884",
-      "why": "not found where the job ran"
-    },
     {
       "path": "the Slurm log of job 3623086",
       "why": "not found where the job ran"

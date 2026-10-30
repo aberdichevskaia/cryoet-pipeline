@@ -1,0 +1,73 @@
+job         ryr1-cpu161 (3620374) on max182.mdc-berlin.net
+started     2026-10-14T18:54:50+02:00
+project     outputs/ryr1   config configs/lanes/ryr1-bin4.toml
+series      161
+steps       generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind
+
+preflight   ok
+
+
+# ---- 161 (ryr1-bin4) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ryr1/manifests/161.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --backend imod-autofidseed --tracking-binning 2 --fiducial-diameter-nm 10.0
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ cli.py:873 in generate_fiducial_seed                                         │
+│                                                                              │
+│    870 │   │   device=resolve_device(device),                                │
+│    871 │   │   parameters=parameters,                                        │
+│    872 │   )                                                                 │
+│ ❱  873 │   artifacts = generate_seed_and_register(                           │
+│    874 │   │   selected_backend,                                             │
+│    875 │   │   tilt_stack,                                                   │
+│    876 │   │   alignment,                                                    │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1318 in generate_seed_and_register                     │
+│                                                                              │
+│   1315 ) -> list[Artifact]:                                                  │
+│   1316 │   """Generate and register tracking-stack, seed-model, and QC       │
+│        artifacts."""                                                         │
+│   1317 │                                                                     │
+│ ❱ 1318 │   artifacts = backend.generate(tilt_stack, alignment, manifest,     │
+│        context)                                                              │
+│   1319 │   registry.extend(artifacts, replace=replace_existing)              │
+│   1320 │   return artifacts                                                  │
+│   1321                                                                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:142 in generate                                        │
+│                                                                              │
+│    139 │   │   │   tracking_binning=tracking_binning,                        │
+│    140 │   │   │   label=variant_label(context),                             │
+│    141 │   │   )                                                             │
+│ ❱  142 │   │   _require_available_paths(paths.outputs, overwrite=overwrite)  │
+│    143 │   │   paths.output_dir.mkdir(parents=True, exist_ok=True)           │
+│    144 │   │                                                                 │
+│    145 │   │   newstack = resolve_imod_executable("newstack", context)       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1944 in _require_available_paths                       │
+│                                                                              │
+│   1941 │   existing = [path for path in paths if path.exists()]              │
+│   1942 │   if existing and not overwrite:                                    │
+│   1943 │   │   joined = ", ".join(str(path) for path in existing)            │
+│ ❱ 1944 │   │   raise FileExistsError(f"fiducial outputs already exist:       │
+│        {joined}")                                                            │
+│   1945                                                                       │
+│   1946                                                                       │
+│   1947 def _positive_int_parameter(                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+FileExistsError: fiducial outputs already exist: 
+outputs/ryr1/fiducials/161/161_fiducial_newstack.log, 
+outputs/ryr1/fiducials/161/161_autofidseed.log
+# generate-fiducial-seed: 0.7 min, +0.00 GB
+
+# FAILED at generate-fiducial-seed (exit 1) for 161.
+# Fix it, then resume with:
+#   --series 161 --from generate-fiducial-seed

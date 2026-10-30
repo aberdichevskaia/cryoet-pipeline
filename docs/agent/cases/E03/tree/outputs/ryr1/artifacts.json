@@ -15789,6 +15789,82 @@
         "161"
       ],
       "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "ctffind5",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "039:ctf_model:ctffind5",
+      "kind": "ctf_model",
+      "parameters": {
+        "amplitude_contrast": 0.07,
+        "astigmatism_frame": "aligned_stack",
+        "axis_angle_deg": 84.12,
+        "backend": "ctffind5",
+        "command_log_path": "outputs/ryr1/ctf/039/039_ctffind5.log",
+        "defocus_search_window_angstrom": 1000.0,
+        "determines_sample_tilt": false,
+        "diagnostic_path": "outputs/ryr1/ctf/039/039_ctffind5_diagnostic.mrc",
+        "hint_defocus_um": 4.65282226565,
+        "includes_astigmatism": true,
+        "includes_phase_shift": false,
+        "input_stack_id": "039:aligned_tilt_stack:final",
+        "num_tilts": 29,
+        "pixel_spacing_angstrom": 3.360000086016002,
+        "qc_path": "outputs/ryr1/qc/039/ctf/039_ctffind5_estimation_qc.json",
+        "spherical_aberration_mm": 2.7,
+        "summary_path": "outputs/ryr1/ctf/039/039_ctffind5_ctffind.txt",
+        "tilt_series_id": "039",
+        "voltage_kv": 300.0
+      },
+      "parent_ids": [
+        "039:aligned_tilt_stack:final",
+        "039:alignment:fine"
+      ],
+      "path": "outputs/ryr1/ctf/039/039_ctffind5.defocus",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 1504,
+      "software_versions": {
+        "ctffind": "5.0.2"
+      },
+      "storage_role": "canonical",
+      "tilt_series_ids": [
+        "039"
+      ],
+      "variant": null
+    },
+    {
+      "axis_order": null,
+      "backend": "ctffind5",
+      "binning": null,
+      "can_recompute": true,
+      "dtype": null,
+      "id": "039:qc:ctf_estimation:ctffind5",
+      "kind": "qc",
+      "parameters": {
+        "backend": "ctffind5",
+        "qc_type": "ctf_estimation",
+        "status": "pass",
+        "tilt_series_id": "039"
+      },
+      "parent_ids": [
+        "039:ctf_model:ctffind5"
+      ],
+      "path": "outputs/ryr1/qc/039/ctf/039_ctffind5_estimation_qc.json",
+      "pixel_spacing_angstrom": null,
+      "retention_policy": "keep",
+      "shape": null,
+      "size_bytes": 683,
+      "software_versions": {},
+      "storage_role": "qc",
+      "tilt_series_ids": [
+        "039"
+      ],
+      "variant": null
     }
   ],
   "schema_version": 1

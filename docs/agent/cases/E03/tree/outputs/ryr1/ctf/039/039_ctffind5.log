@@ -1,0 +1,670 @@
+$ /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/newstack -secs 12 {{ROOT}}/outputs/ryr1/aligned/039/039_final_bin2.st {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/view_013.mrc
+
+[stdout]
+
+ RO image file on unit   1 : {{ROOT}}/outputs/ryr1/aligned/039/039_final_bin2.st     Size=     667508 K
+
+ Number of columns, rows, sections .....    2046    2880      29
+ Map mode ..............................    2   (32-bit float)             
+ Start cols, rows, sects, grid x,y,z ...    0     0     0    2046   2880     29
+ Pixel spacing (Angstroms)..............   3.360      3.360      3.360    
+ Cell angles ...........................   90.000   90.000   90.000
+ Fast, medium, slow axes ...............    X    Y    Z
+ Origin on x,y,z ..(inverted_in_file_)..   -1401.       1401.       0.000    
+ Minimum density ....................... -0.96531E-01
+ Maximum density .......................   4.0672    
+ Mean density ..........................   1.2493    
+ tilt angles (original,current) ........   0.0   0.0   0.0   0.0   0.0   0.0
+ Space group,# extra bytes,idtype,lens .        1        0        0        0
+
+     2 Titles :
+Created by mrcfile.py                                       2026-10-16 16:57:47
+NEWSTACK: Images copied, transformed                    16-Oct-26  16:57:56    
+
+
+ NEW image file on unit   2 : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/view_013.mrc
+ section   input min&max       output min&max  &  mean
+       0      0.05      3.46      0.05      3.46      1.33
+
+[stderr]
+
+[exit_code]
+0
+
+
+$ /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind '<<stdin>>
+{{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/view_013.mrc
+{{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind.mrc
+3.360000
+300.000000
+2.700000
+0.070000
+512
+30.000000
+6.720000
+10000.000000
+80000.000000
+100.000000
+no
+no
+no
+no
+no
+no
+no
+'
+
+[stdout]
+
+
+        **   Welcome to Ctffind   **
+
+            Version : 5.0.2
+           Compiled : Mar 28 2024
+    Library Version : 2.0.0-alpha-295-b21db55-dirty
+        From Branch : ctffind5_merge
+               Mode : Scripted
+
+Input image file name                              : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/view_013.mrc
+Output diagnostic image file name                  : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind.mrc
+Pixel size                                         : 3.360000
+Acceleration voltage                               : 300.000000
+Spherical aberration                               : 2.700000
+Amplitude contrast                                 : 0.070000
+Size of amplitude spectrum to compute              : 512
+Minimum resolution                                 : 30.000000
+Maximum resolution                                 : 6.720000
+Minimum defocus                                    : 10000.000000
+Maximum defocus                                    : 80000.000000
+Defocus search step                                : 100.000000
+Do you know what astigmatism is present?           : no
+Slower, more exhaustive search?                    : no
+Use a restraint on astigmatism?                    : no
+Find additional phase shift?                       : no
+Determine sample tilt?                             : no
+Determine samnple thickness?                       : no
+Do you want to set expert options?                 : no
+Input file looks OK, proceeding
+File name: view_013.mrc
+File type: MRC
+Dimensions: X = 2046 Y = 2880 Z = 1
+Number of slices: 1
+Working on micrograph 1 of 1
+      DFMID1      DFMID2      ANGAST          CC
+    46726.09    46726.09        2.50     0.25962
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:01:160
+		Total measured                   : 00:00:01:160   100.00% 
+		Initialization                   : 00:00:00:001     0.17% 
+		Spectrum computation             : 00:00:00:421    36.37% 
+		Parameter search                 : 00:00:00:225    19.41% 
+		Diagnostics                      : 00:00:00:511    44.06% 
+
+		--------------------------------
+
+
+
+Estimated defocus values        : 46594.27 , 46462.18 Angstroms
+Estimated azimuth of astigmatism: -41.90 degrees
+Score                           : 0.06542
+Pixel size for fitting          : 3.360 Angstroms
+Thon rings with good fit up to  : 6.9 Angstroms
+Did not detect CTF aliasing
+
+
+Summary of results                          : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind.txt
+Diagnostic images                           : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind.mrc
+Detailed results, including 1D fit profiles : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind_avrot.txt
+Use this command to plot 1D fit profiles    : ctffind_plot_results.sh {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/zero_tilt_ctffind_avrot.txt
+
+
+
+[stderr]
+
+[exit_code]
+0
+
+
+$ /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind '<<stdin>>
+{{ROOT}}/outputs/ryr1/aligned/039/039_final_bin2.st
+no
+{{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind.mrc
+3.360000
+300.000000
+2.700000
+0.070000
+512
+30.000000
+6.720000
+45528.222657
+47528.222657
+100.000000
+no
+no
+no
+no
+no
+no
+no
+'
+
+[stdout]
+
+
+        **   Welcome to Ctffind   **
+
+            Version : 5.0.2
+           Compiled : Mar 28 2024
+    Library Version : 2.0.0-alpha-295-b21db55-dirty
+        From Branch : ctffind5_merge
+               Mode : Scripted
+
+Input image file name                              : {{ROOT}}/outputs/ryr1/aligned/039/039_final_bin2.st
+Input is a movie (stack of frames)                 : no
+Output diagnostic image file name                  : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind.mrc
+Pixel size                                         : 3.360000
+Acceleration voltage                               : 300.000000
+Spherical aberration                               : 2.700000
+Amplitude contrast                                 : 0.070000
+Size of amplitude spectrum to compute              : 512
+Minimum resolution                                 : 30.000000
+Maximum resolution                                 : 6.720000
+Minimum defocus                                    : 45528.222657
+Maximum defocus                                    : 47528.222657
+Defocus search step                                : 100.000000
+Do you know what astigmatism is present?           : no
+Slower, more exhaustive search?                    : no
+Use a restraint on astigmatism?                    : no
+Find additional phase shift?                       : no
+Determine sample tilt?                             : no
+Determine samnple thickness?                       : no
+Do you want to set expert options?                 : no
+Input file looks OK, proceeding
+File name: 039_final_bin2.st
+File type: MRC
+Dimensions: X = 2046 Y = 2880 Z = 29
+Number of slices: 29
+Will estimate the CTF parameters for 29 micrographs.
+Results will be written to this file: {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind.txt
+
+Estimating CTF parameters...
+
+     0% [                              ] ???h:??m:??s   
+      DFMID1      DFMID2      ANGAST          CC
+    46675.75    46675.75        5.00     0.18031
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:00:267    29.28% 
+		Parameter search                 : 00:00:00:353    38.66% 
+		Diagnostics                      : 00:00:00:282    30.84% 
+
+		--------------------------------
+
+     3% [=                             ] 0h:00m28s                 
+      DFMID1      DFMID2      ANGAST          CC
+    47028.21    47028.21      -42.50     0.17547
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:01:444   157.87% 
+		Parameter search                 : 00:00:00:595    65.05% 
+		Diagnostics                      : 00:00:00:564    61.65% 
+
+		--------------------------------
+
+      DFMID1      DFMID2      ANGAST          CC
+    50922.99    50922.99        2.50     0.11842
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:03:417   373.40% 
+		Parameter search                 : 00:00:00:843    92.15% 
+		Diagnostics                      : 00:00:00:848    92.68% 
+
+		--------------------------------
+
+    10% [===                           ] 0h:00m17s                 
+      DFMID1      DFMID2      ANGAST          CC
+    47028.21    47028.21      -40.00     0.12035
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:06:195   677.02% 
+		Parameter search                 : 00:00:01:092   119.42% 
+		Diagnostics                      : 00:00:01:132   123.74% 
+
+		--------------------------------
+
+    14% [====                          ] 0h:00m19s                 
+      DFMID1      DFMID2      ANGAST          CC
+    47028.21    47028.21      -42.50     0.10314
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:09:785  1069.28% 
+		Parameter search                 : 00:00:01:359   148.60% 
+		Diagnostics                      : 00:00:01:415   154.64% 
+
+		--------------------------------
+
+    17% [=====                         ] 0h:00m19s                 
+      DFMID1      DFMID2      ANGAST          CC
+    46628.22    46628.22        7.50     0.09234
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:14:197  1551.47% 
+		Parameter search                 : 00:00:01:619   176.94% 
+		Diagnostics                      : 00:00:01:697   185.50% 
+
+		--------------------------------
+
+    21% [======                        ] 0h:00m19s                 
+      DFMID1      DFMID2      ANGAST          CC
+    46295.63    46295.63        2.50     0.09421
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:19:425  2122.73% 
+		Parameter search                 : 00:00:01:910   208.72% 
+		Diagnostics                      : 00:00:01:977   216.08% 
+
+		--------------------------------
+
+    24% [=======                       ] 0h:00m19s                 
+      DFMID1      DFMID2      ANGAST          CC
+    45069.90    45069.90      -42.50     0.11059
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:25:496  2786.13% 
+		Parameter search                 : 00:00:02:217   242.30% 
+		Diagnostics                      : 00:00:02:256   246.53% 
+
+		--------------------------------
+
+      DFMID1      DFMID2      ANGAST          CC
+    50113.95    50113.95        2.50     0.22837
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:32:426  3543.40% 
+		Parameter search                 : 00:00:02:551   278.82% 
+		Diagnostics                      : 00:00:02:766   302.30% 
+
+		--------------------------------
+
+    31% [=========                     ] 0h:00m16s                 
+      DFMID1      DFMID2      ANGAST          CC
+    49373.91    49373.91      -37.50     0.21984
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:40:473  4422.70% 
+		Parameter search                 : 00:00:02:801   306.08% 
+		Diagnostics                      : 00:00:03:276   358.03% 
+
+		--------------------------------
+
+    34% [==========                    ] 0h:00m17s                 
+      DFMID1      DFMID2      ANGAST          CC
+    48435.04    48435.04        5.00     0.23412
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:49:551  5414.75% 
+		Parameter search                 : 00:00:03:157   345.03% 
+		Diagnostics                      : 00:00:03:786   413.74% 
+
+		--------------------------------
+
+    38% [===========                   ] 0h:00m16s                 
+      DFMID1      DFMID2      ANGAST          CC
+    48208.43    48208.43        5.00     0.21622
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:00:59:768  6531.21% 
+		Parameter search                 : 00:00:03:409   372.54% 
+		Diagnostics                      : 00:00:04:295   469.42% 
+
+		--------------------------------
+
+    41% [============                  ] 0h:00m16s                 
+      DFMID1      DFMID2      ANGAST          CC
+    46728.21    46728.21        2.50     0.25961
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:01:11:024  7761.23% 
+		Parameter search                 : 00:00:03:633   397.03% 
+		Diagnostics                      : 00:00:04:805   525.17% 
+
+		--------------------------------
+
+    45% [==============                ] 0h:00m15s                 
+      DFMID1      DFMID2      ANGAST          CC
+    46495.55    46495.55        2.50     0.26824
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:01:23:287  9101.24% 
+		Parameter search                 : 00:00:03:894   425.58% 
+		Diagnostics                      : 00:00:05:313   580.64% 
+
+		--------------------------------
+
+    48% [==============                ] 0h:00m14s                 
+      DFMID1      DFMID2      ANGAST          CC
+    45038.77    45038.77      -37.50     0.21720
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:01:36:590  10554.97% 
+		Parameter search                 : 00:00:04:147   453.26% 
+		Diagnostics                      : 00:00:05:819   635.97% 
+
+		--------------------------------
+
+    52% [================              ] 0h:00m13s                 
+      DFMID1      DFMID2      ANGAST          CC
+    44389.27    44389.27      -37.50     0.26906
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:01:50:925  12121.41% 
+		Parameter search                 : 00:00:04:388   479.54% 
+		Diagnostics                      : 00:00:06:339   692.75% 
+
+		--------------------------------
+
+    55% [=================             ] 0h:00m12s                 
+      DFMID1      DFMID2      ANGAST          CC
+    48967.55    48967.55      -37.50     0.06374
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:02:06:292  13800.67% 
+		Parameter search                 : 00:00:04:819   526.61% 
+		Diagnostics                      : 00:00:06:853   748.95% 
+
+		--------------------------------
+
+    59% [==================            ] 0h:00m11s                 
+      DFMID1      DFMID2      ANGAST          CC
+    51346.20    51346.20      -40.00     0.11331
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:02:22:877  15612.93% 
+		Parameter search                 : 00:00:05:139   561.66% 
+		Diagnostics                      : 00:00:07:138   780.07% 
+
+		--------------------------------
+
+    62% [===================           ] 0h:00m10s                 
+      DFMID1      DFMID2      ANGAST          CC
+    51312.70    51312.70        2.50     0.12119
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:02:40:338  17521.04% 
+		Parameter search                 : 00:00:05:446   595.22% 
+		Diagnostics                      : 00:00:07:419   810.76% 
+
+		--------------------------------
+
+    66% [====================          ] 0h:00m09s                 
+      DFMID1      DFMID2      ANGAST          CC
+    51313.00    51313.00      -42.50     0.16886
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:02:58:660  19523.14% 
+		Parameter search                 : 00:00:05:677   620.37% 
+		Diagnostics                      : 00:00:07:719   843.54% 
+
+		--------------------------------
+
+    69% [=====================         ] 0h:00m09s                 
+      DFMID1      DFMID2      ANGAST          CC
+    48981.90    48981.90      -40.00     0.16743
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:03:17:785  21613.08% 
+		Parameter search                 : 00:00:05:957   651.04% 
+		Diagnostics                      : 00:00:08:002   874.47% 
+
+		--------------------------------
+
+      DFMID1      DFMID2      ANGAST          CC
+    51327.12    51327.12        5.00     0.21628
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:03:37:746  23794.33% 
+		Parameter search                 : 00:00:06:201   677.63% 
+		Diagnostics                      : 00:00:08:286   905.47% 
+
+		--------------------------------
+
+    76% [=======================       ] 0h:00m06s                 
+      DFMID1      DFMID2      ANGAST          CC
+    50953.04    50953.04      -40.00     0.23234
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:03:58:506  26062.85% 
+		Parameter search                 : 00:00:06:449   704.81% 
+		Diagnostics                      : 00:00:08:567   936.21% 
+
+		--------------------------------
+
+    79% [========================      ] 0h:00m05s                 
+      DFMID1      DFMID2      ANGAST          CC
+    53704.17    53704.17        7.50     0.20858
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:04:20:067  28418.96% 
+		Parameter search                 : 00:00:06:709   733.13% 
+		Diagnostics                      : 00:00:08:850   967.11% 
+
+		--------------------------------
+
+    83% [=========================     ] 0h:00m05s                 
+      DFMID1      DFMID2      ANGAST          CC
+    43688.12    43688.12      -42.50     0.24847
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:04:42:443  30864.06% 
+		Parameter search                 : 00:00:06:949   759.36% 
+		Diagnostics                      : 00:00:09:356  1022.45% 
+
+		--------------------------------
+
+    86% [==========================    ] 0h:00m04s                 
+      DFMID1      DFMID2      ANGAST          CC
+    47028.21    47028.21        7.50     0.19789
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:05:05:837  33420.48% 
+		Parameter search                 : 00:00:07:227   789.80% 
+		Diagnostics                      : 00:00:09:636  1053.04% 
+
+		--------------------------------
+
+    90% [===========================   ] 0h:00m03s                 
+      DFMID1      DFMID2      ANGAST          CC
+    50570.37    50570.37        2.50     0.24548
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:05:30:092  36070.94% 
+		Parameter search                 : 00:00:07:506   820.27% 
+		Diagnostics                      : 00:00:09:921  1084.23% 
+
+		--------------------------------
+
+    93% [============================  ] 0h:00m02s                 
+      DFMID1      DFMID2      ANGAST          CC
+    47028.21    47028.21      -42.50     0.19594
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:05:55:185  38812.91% 
+		Parameter search                 : 00:00:07:765   848.59% 
+		Diagnostics                      : 00:00:10:433  1140.08% 
+
+		--------------------------------
+
+    97% [============================= ] 0h:00m01s                 
+      DFMID1      DFMID2      ANGAST          CC
+    46628.21    46628.21      -37.50     0.18799
+
+
+		---------Timing Results---------
+
+		Total elapsed                    : 00:00:00:915
+		Total measured                   : 00:00:00:915   100.00% 
+		Initialization                   : 00:00:00:011     1.22% 
+		Spectrum computation             : 00:06:21:320  41668.82% 
+		Parameter search                 : 00:00:08:028   877.33% 
+		Diagnostics                      : 00:00:10:715  1170.94% 
+
+		--------------------------------
+
+   100% [=================] done! (0h:00m26s)                
+
+
+
+Summary of results                          : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind.txt
+Diagnostic images                           : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind.mrc
+Detailed results, including 1D fit profiles : {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind_avrot.txt
+Use this command to plot 1D fit profiles    : ctffind_plot_results.sh {{ROOT}}/outputs/ryr1/ctf/039/.039-ctffind-3w8p45zt/039_ctffind_avrot.txt
+
+
+
+[stderr]
+
+[exit_code]
+0

@@ -1,0 +1,73 @@
+job         ryr1-cpu161 (3620884) on max177.mdc-berlin.net
+started     2026-10-14T19:01:47+02:00
+project     outputs/ryr1   config configs/lanes/ryr1-bin4.toml
+series      161
+steps       generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-5.0.2/cisTEM/bin/ctffind
+
+preflight   ok
+
+
+# ---- 161 (ryr1-bin4) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ryr1/manifests/161.json --registry outputs/ryr1/artifacts.json --out outputs/ryr1 --backend imod-autofidseed --tracking-binning 2 --fiducial-diameter-nm 10.0 --overwrite
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ cli.py:873 in generate_fiducial_seed                                         │
+│                                                                              │
+│    870 │   │   device=resolve_device(device),                                │
+│    871 │   │   parameters=parameters,                                        │
+│    872 │   )                                                                 │
+│ ❱  873 │   artifacts = generate_seed_and_register(                           │
+│    874 │   │   selected_backend,                                             │
+│    875 │   │   tilt_stack,                                                   │
+│    876 │   │   alignment,                                                    │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1318 in generate_seed_and_register                     │
+│                                                                              │
+│   1315 ) -> list[Artifact]:                                                  │
+│   1316 │   """Generate and register tracking-stack, seed-model, and QC       │
+│        artifacts."""                                                         │
+│   1317 │                                                                     │
+│ ❱ 1318 │   artifacts = backend.generate(tilt_stack, alignment, manifest,     │
+│        context)                                                              │
+│   1319 │   registry.extend(artifacts, replace=replace_existing)              │
+│   1320 │   return artifacts                                                  │
+│   1321                                                                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:265 in generate                                        │
+│                                                                              │
+│    262 │   │   │   │   env=imod_environment(autofidseed, context),           │
+│    263 │   │   │   )                                                         │
+│    264 │   │   │   write_command_log(paths.autofidseed_log,                  │
+│        (autofidseed_command, autofidseed_result))                            │
+│ ❱  265 │   │   │   _require_success(                                         │
+│    266 │   │   │   │   autofidseed_result,                                   │
+│    267 │   │   │   │   program="IMOD autofidseed",                           │
+│    268 │   │   │   │   log_path=paths.autofidseed_log,                       │
+│                                                                              │
+│ {{ROOT}}/src/cryoet_pipeline/ │
+│ backends/fiducials.py:1924 in _require_success                               │
+│                                                                              │
+│   1921 │   log_path: Path,                                                   │
+│   1922 ) -> None:                                                            │
+│   1923 │   if result.returncode != 0:                                        │
+│ ❱ 1924 │   │   raise RuntimeError(                                           │
+│   1925 │   │   │   f"{program} failed with exit code {result.returncode};    │
+│        see {log_path}"                                                       │
+│   1926 │   │   )                                                             │
+│   1927                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: IMOD autofidseed failed with exit code 1; see 
+outputs/ryr1/fiducials/161/161_autofidseed.log
+# generate-fiducial-seed: 0.7 min, +0.00 GB
+
+# FAILED at generate-fiducial-seed (exit 1) for 161.
+# Fix it, then resume with:
+#   --series 161 --from generate-fiducial-seed

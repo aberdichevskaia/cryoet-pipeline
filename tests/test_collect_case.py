@@ -468,6 +468,19 @@ def test_the_case_ends_where_its_last_day_ends(tmp_path):
     assert modified["slurm-p-cpu-123.log"] == _at(13, 31)
 
 
+def test_a_job_the_table_names_is_left_out_if_it_started_after_the_case(tmp_path):
+    """E01's table once named 161b, the run that held the fix."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    _touch(root / "slurm-p-cpu161b-778.log", LATER,
+           f"job         p-cpu161b (778) on node3\nstarted     {LATER.isoformat()}\n"
+           "project     outputs/p   config configs/lanes/l.toml\n")
+    folder, _ = _collected(root, tmp_path / "cases", case={**COLLECTED, "jobs": ["778"]})
+    assert not (folder / "tree" / "slurm-p-cpu161b-778.log").exists()
+    left = json.loads((folder / "manifest.json").read_text())["left_out"]
+    assert {"path": "slurm-p-cpu161b-778.log", "why": "started after the case ended"} in left
+
+
 def test_a_registry_naming_files_by_absolute_paths_puts_them_where_the_sandbox_looks(tmp_path):
     """As Munich's does: the clone's outputs/p is a link into the folder the jobs
     run from, and the registry names files by their paths there."""
