@@ -30,8 +30,20 @@
 # A job that runs out of time, or stops, is submitted again as it was: the project
 # is not made again, and the port carries on from its last finished iteration
 # (`iteration N ok` in ${NAME}_port/log.txt). Every iteration starts from what the
-# one before it wrote, as Dynamo's do, so the run ends as an unstopped one would.
-# A run that finished is only reported again.
+# one before it wrote, as Dynamo's do, so the run ends as an unstopped one would:
+# g2atan2's first job ran out of time in iteration 2 (2026-10-29), the next carried
+# it on from iteration 1 and agreed with Dynamo's g2atan as the unstopped mirror
+# did, iteration by iteration. A run that finished is only reported again.
+#
+# One job at a time on a run. The job holds a lock on <run>.lock, beside the run
+# folder (${NAME}_port.lock for a new run), from the setup to the report
+# (scripts/hold_run_lock.py). A second job of the same run, started while the
+# first is on it, stops at once with REFUSED, the first job's number, node and
+# start, having run nothing; one that waited in the queue and starts after the
+# first has ended carries the run on. (On 2026-10-29 two jobs carrying g2atan2 on,
+# submitted a minute apart, computed iterations 2-5 into the same files for two
+# hours; the folder held one run in the end only because both computed the same
+# numbers.)
 #
 # Or PROJECT=<a Dynamo project>, set up or computed (instead of EXPORT): the port
 # runs it again beside it as <project>_port (NAME names it otherwise), and when
@@ -60,6 +72,10 @@
 
 set -euo pipefail
 
+# This script, to run again under the run's lock below: SLURM runs a copy of it,
+# by an absolute path in its spool; run by hand, it is found from here.
+script=$0
+[[ "$script" = /* ]] || script=$PWD/$script
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 [[ -f scripts/mra_port_run.py ]] || { echo "submit from the repo root" >&2; exit 1; }
 if [[ -n "${EXPORT:-}" ]]; then
@@ -72,6 +88,19 @@ if [[ -n "${EXPORT:-}" ]]; then
     fi
     PROJECT=$EXPORT/$NAME
     name=${NAME}_port
+else
+    : "${PROJECT:?set PROJECT to a Dynamo project, or EXPORT and NAME for a new run}"
+    name=${NAME:-$(basename "$PROJECT")_port}
+fi
+run=$(dirname "$PROJECT")/$name
+source scripts/activate_env.sh
+# The rest of the job runs again under the run's lock, the setup, the port and the
+# report: a second job of the same run stops here, naming the first.
+if [[ "${MRA_PORT_RUN_LOCK:-}" != "$run.lock" ]]; then
+    export MRA_PORT_RUN_LOCK=$run.lock
+    exec python scripts/hold_run_lock.py "$run.lock" -- bash "$script"
+fi
+if [[ -n "${EXPORT:-}" ]]; then
     if [[ ! -f "$PROJECT/cards/ite_0001/card_ite_ite_0001.card" ]]; then
         # Made for 32 cores, which the setup reads from SLURM_CPUS_PER_TASK, whatever
         # this job has; a refusal of the setup ends this job, on this log.
@@ -80,12 +109,8 @@ if [[ -n "${EXPORT:-}" ]]; then
         echo "set up      $PROJECT was made before: the port follows its cards, and the" \
              "setup's variables are not read"
     fi
-else
-    : "${PROJECT:?set PROJECT to a Dynamo project, or EXPORT and NAME for a new run}"
-    name=${NAME:-$(basename "$PROJECT")_port}
 fi
-run=$(dirname "$PROJECT")/$name
-source scripts/activate_env.sh
+echo "lock        $run.lock, held by this job to its end"
 echo "node        $(hostname)"
 echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
 echo "started     $(date -Is)"

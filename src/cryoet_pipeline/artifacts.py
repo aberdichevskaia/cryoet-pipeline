@@ -490,20 +490,34 @@ def _acquire(descriptor: int, lock_path: Path, timeout: float) -> None:
 
 
 def lock_scope_problem(directory: Path) -> str | None:
+    """`node_local_lock`, said of the registry, or None.
+
+    For a filesystem that misbehaves unseen, a commit that finds the registry
+    replaced under its lock refuses (see `ArtifactRegistry.commit`).
+    """
+
+    problem = node_local_lock(directory)
+    if problem is None:
+        return None
+    return (
+        f"{problem} and a job on another node could commit to the same registry at the "
+        "same time. The registry needs locks across nodes (Lustre: -o flock)."
+    )
+
+
+def node_local_lock(directory: Path) -> str | None:
     """Why a POSIX lock in `directory` would lock only this node, or None.
 
     A mount can grant every lock locally while saying nothing: Lustre mounted with
     `localflock`, which covers fcntl locks as well as flock, and NFS mounted with
     `nolock` or `local_lock=posix|all`. Jobs on two nodes would then both hold the
     lock. (Lustre with `noflock` makes the call itself fail with ENOSYS, which
-    `_acquire` reports.) Read from /proc/self/mountinfo, so Linux only; elsewhere
+    the lock reports.) Read from /proc/self/mountinfo, so Linux only; elsewhere
     there is nothing to read.
 
     Other filesystems are not judged from their mount options. GPFS mounts at MDC
     as plain `rw,relatime` and keeps POSIX locks across nodes but flock within one,
-    which only trying it on two nodes showed (scripts/lock_probe.py). For a
-    filesystem that misbehaves unseen, a commit that finds the registry replaced
-    under its lock refuses (see `ArtifactRegistry.commit`).
+    which only trying it on two nodes showed (scripts/lock_probe.py).
     """
 
     try:
@@ -545,9 +559,7 @@ def _mount_lock_problem(mountinfo: str, device: int) -> str | None:
         if local:
             return (
                 f"{mount_point} is {fstype} mounted with {', '.join(local)}, so a POSIX lock "
-                f"there holds only on this node ({socket.gethostname()}) and a job on another "
-                "node could commit to the same registry at the same time. The registry needs "
-                "locks across nodes (Lustre: -o flock)."
+                f"there holds only on this node ({socket.gethostname()})"
             )
         return None
     return None
