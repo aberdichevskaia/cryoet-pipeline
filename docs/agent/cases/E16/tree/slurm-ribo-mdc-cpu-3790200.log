@@ -1,0 +1,24 @@
+job         ribo-mdc-cpu (3790200) on max012
+started     2026-10-29T08:40:02+00:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/rerun-track.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+overwrite   yes
+env         /fast/AG_Kudryashev/<user>/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      /fast/AG_Kudryashev/<user>/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/software/imod_5.1.12/bin/tiltxcorr
+ctffind     not on PATH
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --overwrite ...
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ .../cryoet_pipeline/backends/fiducials.py:1167 in _track_inputs                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: this patch seed predates prealigned tracking stacks, so tracking it would apply the coarse shifts twice; rerun generate-fiducial-seed
+# track-fiducials: 0.2 min, +0.00 GB
+
+# FAILED at track-fiducials (exit 1) for TS_0306.
+# Fix it, then resume with:
+#   --series TS_0306 --from track-fiducials

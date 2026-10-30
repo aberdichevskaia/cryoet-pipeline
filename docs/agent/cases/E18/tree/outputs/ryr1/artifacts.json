@@ -1,0 +1,65 @@
+{
+ "schema_version": 1,
+ "artifacts": [
+  {
+   "id": "039:ctf_model:ctfw1",
+   "kind": "ctf_model",
+   "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw1.txt",
+   "variant": "ctfw1",
+   "tilt_series_ids": [
+    "039"
+   ],
+   "parameters": {
+    "tilt_series_id": "039"
+   }
+  },
+  {
+   "id": "039:ctf_model:ctfw5",
+   "kind": "ctf_model",
+   "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw5.txt",
+   "variant": "ctfw5",
+   "tilt_series_ids": [
+    "039"
+   ],
+   "parameters": {
+    "tilt_series_id": "039"
+   }
+  },
+  {
+   "id": "039:ctf_model:ctfw10",
+   "kind": "ctf_model",
+   "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw10.txt",
+   "variant": "ctfw10",
+   "tilt_series_ids": [
+    "039"
+   ],
+   "parameters": {
+    "tilt_series_id": "039"
+   }
+  },
+  {
+   "id": "039:ctf_model:ctfw5-tilt",
+   "kind": "ctf_model",
+   "path": "outputs/ryr1/ctf/039/039_ctffind5_ctfw5-tilt.txt",
+   "variant": "ctfw5-tilt",
+   "tilt_series_ids": [
+    "039"
+   ],
+   "parameters": {
+    "tilt_series_id": "039"
+   }
+  },
+  {
+   "id": "039:ctf_model",
+   "kind": "ctf_model",
+   "path": "outputs/ryr1/ctf/039/039_ctffind5.txt",
+   "variant": null,
+   "tilt_series_ids": [
+    "039"
+   ],
+   "parameters": {
+    "tilt_series_id": "039"
+   }
+  }
+ ]
+}

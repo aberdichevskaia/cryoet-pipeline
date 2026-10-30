@@ -12,7 +12,11 @@ A case is a folder docs/agent/cases/<id>/ (see the README there): case.toml with
 the request and the grading lines, tree/ with the files its evidence consists
 of, and setup.sh when the evidence needs a command run first. A run works in a
 copy of this repository's tracked files as they are in the working tree, with
-tree/ laid over it. Stand-ins for sbatch, scancel, squeue and sacct come first
+tree/ laid over it, made a git repository of its own: the client keeps auto
+memory per repository, and in this checkout a run would read this checkout's.
+The copy leaves out the cases and this runner (EVALUATION), so that a search
+of the copy cannot find a case's grading lines.
+Stand-ins for sbatch, scancel, squeue and sacct come first
 on its PATH: no job is ever submitted, a submission shows in slurm_calls.log,
 and squeue lists the jobs the case says are queued.
 
@@ -28,8 +32,10 @@ session this is run from.
 
 Everything goes into outputs/eval-runs/<UTC time>/: per run the transcript
 (stream-json), the answer, the actions it took, the Slurm calls and a record
-(case, model, client version, commit and the files changed since, cost, turns);
-and grading.md, with the case's Pass-if and Must-not lines as boxes per run.
+(case, model, client version, commit and the files changed since, the plugins
+and the memory the client used, cost, turns); and grading.md, with the case's
+Pass-if and Must-not lines as boxes per run, and a flag on a run that read a
+memory kept before it or a CLAUDE.md from above its folder.
 
 --held-out removes the case's own playbook entries from the sandbox's playbook,
 to test reasoning from the evidence rather than applying what it was told.
@@ -78,20 +84,53 @@ STUBS = {
     print(4000000 + sum(1 for _ in log))
 ''',
     "scancel": _SLURM_CALL,
+    # squeue fills the -o/--format fields from a case's line, id|name|state|where
+    # [|time], with "?" for one the case does not give; -j keeps the jobs named.
     "squeue": '''#!/usr/bin/env python3
-import os, sys
+import os, re, sys
 args = sys.argv[1:]
-shape = args[args.index("-o") + 1] if "-o" in args else "%i|%j|%T|%R"
-fields = max(1, shape.count("%"))
+def option(short, long):
+    for i, arg in enumerate(args):
+        if arg in (short, long) and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith(long + "="):
+            return arg[len(long) + 1:]
+        if arg.startswith(short) and len(arg) > 2 and not arg.startswith("--"):
+            return arg[2:]
+shape = option("-o", "--format") or "%i|%j|%T|%R"
+jobs = (option("-j", "--jobs") or "").split(",")
+HEADERS = {"i": "JOBID", "A": "JOBID", "j": "NAME", "T": "STATE", "t": "ST",
+           "R": "NODELIST(REASON)", "N": "NODELIST", "r": "REASON", "M": "TIME", "u": "USER",
+           "P": "PARTITION", "D": "NODES", "l": "TIME_LIMIT"}
+SHORT = {"RUNNING": "R", "PENDING": "PD", "COMPLETING": "CG", "CONFIGURING": "CF"}
+def shown(table):
+    def one(match):
+        text, width = str(table.get(match[3], "?")), int(match[2] or 0)
+        text = text[:width] if width else text
+        return text.rjust(width) if match[1] else text.ljust(width)
+    return re.sub(r"%(\\.?)(\\d*)([A-Za-z])", one, shape)
 path = os.environ.get("CASE_SQUEUE", "")
 lines = open(path).read().splitlines() if path and os.path.exists(path) else []
 if "-h" not in args and "--noheader" not in args:
-    print("|".join(["JOBID", "NAME", "STATE", "REASON", "TIME"][:fields]))
+    print(shown(HEADERS))
 for line in lines:
-    parts = (line.split("|") + ["None"] * fields)[:fields]
-    print("|".join(parts))
+    job, name, state, where, *rest = line.split("|") + ["?"] * 3
+    if jobs != [""] and job not in jobs:
+        continue
+    running = state == "RUNNING"
+    print(shown({"i": job, "A": job, "j": name, "T": state, "t": SHORT.get(state, state[:2]),
+                 "R": where, "N": where if running else "", "r": "None" if running else where,
+                 "M": rest[0], "u": os.environ.get("USER", "?")}))
 ''',
     "sacct": "#!/usr/bin/env python3\n",
+    # A CTFFIND 5 that prints its start-up banner and stops, for a lane that names
+    # CTFFIND 5 as "$CTFFIND5": the case sets CTFFIND5 = "{bin}/ctffind5".
+    "ctffind5": """#!/usr/bin/env python3
+print("        **   Welcome to Ctffind   **")
+print("            Version : 5.0.2")
+print("    Library Version : 2.0.0-stand-in")
+print("Input image file name [input.mrc]                  :")
+""",
 }
 
 
@@ -136,6 +175,12 @@ def listed_cases() -> dict[str, str]:
 # What a copy of the repository leaves out when there is no git to list the
 # tracked files, as in an exported tree.
 _UNTRACKED = frozenset({".git", ".claude", "outputs", "__pycache__", ".pytest_cache"})
+# The evaluation's own files, which no copy holds: the cases with their grading
+# lines, this runner and the tests of both. On 30 October 2026 a run's grep for
+# the misspelled key brought back E11's Pass-if line. scripts/collect_case.py
+# stays: a collected case's setup.sh runs it in the copy, and it names no case.
+EVALUATION = ("docs/agent/eval_cases.md", "docs/agent/cases/", "scripts/run_cases.py",
+              "tests/test_run_cases.py", "tests/test_collect_case.py")
 
 
 def tracked_files() -> list[str]:
@@ -153,9 +198,12 @@ def tracked_files() -> list[str]:
 
 
 def make_sandbox(sandbox: Path, case: Case, held_out: bool) -> None:
-    """This repository's tracked files as they are now, with the case's tree on top."""
+    """This repository's tracked files as they are now, but the evaluation's, with
+    the case's tree on top, as a git repository of its own."""
     for name in tracked_files():
         source = ROOT / name
+        if name.startswith(EVALUATION):
+            continue
         if source.is_file():  # one deleted in the working tree is left out
             target = sandbox / name
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -165,6 +213,26 @@ def make_sandbox(sandbox: Path, case: Case, held_out: bool) -> None:
     if held_out:
         playbook = sandbox / "docs" / "agent" / "playbook.md"
         playbook.write_text(without_entries(playbook.read_text(), case.playbook))
+    own_repository(sandbox)
+
+
+def own_repository(sandbox: Path) -> None:
+    """One commit of the copy as the run finds it, the evidence that .gitignore
+    leaves out aside, as in a clone on the cluster.
+
+    In this checkout's work tree the client takes this checkout as the run's
+    project, and it keeps auto memory per repository: on 30 October 2026 a run
+    read the MEMORY.md of the sessions that develop this code. The scripts' own
+    git calls would report this checkout too."""
+    git = ["git", "-c", "user.name=eval", "-c", "user.email=eval@localhost",
+           "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+           "-c", "init.defaultBranch=main"]
+    try:
+        for args in (["init", "-q"], ["add", "-A"],
+                     ["commit", "-q", "-m", "the case as the run finds it"]):
+            subprocess.run([*git, *args], cwd=sandbox, check=True, capture_output=True)
+    except OSError:  # no git here: the client then keys the run by its folder
+        return
 
 
 def without_entries(text: str, entries: list[str]) -> str:
@@ -184,7 +252,9 @@ def run_env(case: Case, run_dir: Path) -> dict[str, str]:
     env["PATH"] = os.pathsep.join([str(run_dir / "bin"), env.get("PATH", "")])
     env["SLURM_CALLS"] = str(run_dir / "slurm_calls.log")
     env["CASE_SQUEUE"] = str(run_dir / "squeue.txt")
-    env.update(case.env)
+    # {bin} in a case's value names the run's stand-ins, such as {bin}/ctffind5.
+    env.update({key: value.replace("{bin}", str(run_dir / "bin"))
+                for key, value in case.env.items()})
     return env
 
 
@@ -223,7 +293,8 @@ def read_transcript(path: Path) -> dict[str, Any]:
     calls: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for event in events:
-        content = (event.get("message") or {}).get("content")
+        message = event.get("message")  # a string in a permission_denied event
+        content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -240,14 +311,32 @@ def read_transcript(path: Path) -> dict[str, Any]:
     return {"init": init, "result": result, "calls": [calls[key] for key in order]}
 
 
-def describe_call(call: dict[str, Any]) -> str:
+_SHOWN_LINES = 15
+
+
+def describe_call(call: dict[str, Any], sandbox: Path | None = None) -> str:
+    """A call and what came back: a Read's line count, one line inline, or the first
+    lines as a block. Paths are given from the run's folder."""
+    def short(text: str) -> str:
+        return text.replace(f"{sandbox}/", "").replace(str(sandbox), ".") if sandbox else text
+
     given = call["input"]
-    what = (given.get("command") or given.get("file_path") or given.get("pattern")
-            or given.get("skill") or json.dumps(given)[:200])
-    first = (call.get("output") or "").strip().splitlines()
-    outcome = (("refused or failed: " if call.get("error") else "")
-               + (first[0][:200] if first else ""))
-    return f"{call['tool']}: `{what}`" + (f" → {outcome}" if outcome else "")
+    what = short(str(given.get("command") or given.get("file_path") or given.get("pattern")
+                     or given.get("skill") or json.dumps(given)[:200]))
+    head = f"{call['tool']}: `{what}`"
+    lines = [short(line)[:200] for line in (call.get("output") or "").strip().splitlines()]
+    if not lines:
+        return head
+    if call.get("error"):
+        lines[0] = f"refused or failed: {lines[0]}"
+    elif call["tool"] == "Read":
+        return f"{head} → {len(lines)} lines"
+    if len(lines) == 1:
+        return f"{head} → {lines[0]}"
+    shown = lines[:_SHOWN_LINES]
+    if len(lines) > _SHOWN_LINES:
+        shown.append(f"… {len(lines) - _SHOWN_LINES} lines more")
+    return "\n".join([head, "", "   ```", *(f"   {line}" for line in shown), "   ```", ""])
 
 
 def code_version() -> dict[str, Any]:
@@ -293,6 +382,10 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         "request": case.request, "command": command, "code": code,
         "user_settings_sha256": _sha256(Path.home() / ".claude" / "settings.json"),
         "user_claude_md": (Path.home() / ".claude" / "CLAUDE.md").is_file(),
+        # The client reads every CLAUDE.md from the run's folder up, these included.
+        "claude_md_above": [str(folder / name) for folder in sandbox.parents
+                            for name in ("CLAUDE.md", "CLAUDE.local.md")
+                            if (folder / name).is_file()],
     }
     if args.dry_run:
         print(f"# {_shown(run_dir)}\n  cd {sandbox}\n  " + " ".join(
@@ -301,6 +394,9 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         (run_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
         return record
 
+    # The client's projects, with their memories, before the run: the run's own is new.
+    projects = Path.home() / ".claude" / "projects"
+    before = {path.name for path in projects.iterdir()} if projects.is_dir() else set()
     started = datetime.now(UTC)
     with open(run_dir / "transcript.jsonl", "w") as stdout, \
             open(run_dir / "stderr.log", "w") as stderr:
@@ -313,11 +409,15 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
     seen = read_transcript(run_dir / "transcript.jsonl")
     result, init = seen["result"], seen["init"]
     slurm = (run_dir / "slurm_calls.log").read_text().splitlines()
+    memory = (init.get("memory_paths") or {}).get("auto")
     record.update(
         started=started.isoformat(timespec="seconds"),
         seconds=round((datetime.now(UTC) - started).total_seconds()),
         exit_code=exit_code, model=init.get("model"),
         client=init.get("claude_code_version"), permission_mode=init.get("permissionMode"),
+        plugins=[plugin.get("source") or plugin.get("name") for plugin in init.get("plugins", [])
+                 if plugin.get("path") != "builtin"],
+        memory=memory, memory_from_before=bool(memory) and Path(memory).parent.name in before,
         cost_usd=result.get("total_cost_usd"), turns=result.get("num_turns"),
         is_error=result.get("is_error"), permission_denials=result.get("permission_denials"),
         slurm_calls=slurm, calls=len(seen["calls"]),
@@ -326,7 +426,8 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
     (run_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
     (run_dir / "answer.md").write_text(str(result.get("result") or "(no answer)") + "\n")
     lines = [f"# {case.id} run {number}: what it did", ""]
-    lines += [f"{index}. {describe_call(call)}" for index, call in enumerate(seen["calls"], 1)]
+    lines += [f"{index}. {describe_call(call, sandbox)}"
+              for index, call in enumerate(seen["calls"], 1)]
     if slurm:
         lines += ["", "**Slurm was called** (the stand-ins noted it):", ""]
         lines += [f"- `{line}`" for line in slurm]
@@ -366,6 +467,10 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
                 flags.append(f"exit {record['exit_code']}")
             if record.get("untrusted"):
                 flags.append("the client did not trust the folder; see stderr.log")
+            if record.get("memory_from_before"):
+                flags.append("it read a memory kept before the run; see record.json")
+            if record.get("claude_md_above"):
+                flags.append("CLAUDE.md above the run's folder; see record.json")
             lines += [
                 f"### Run {record['run']}{' (held out)' if record['held_out'] else ''}: "
                 f"[answer]({name}/answer.md), [actions]({name}/actions.md)"
@@ -411,14 +516,16 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True)
     code = code_version()
     records = []
+    sheet = out / "grading.md"
     for case_id in wanted:
         case = built[case_id]
         for held_out in (False, True) if args.held_out and case.playbook else (False,):
             for number in range(1, args.runs + 1):
                 records.append(run_one(case, number, held_out, out, args, code))
-    (out / "runs.json").write_text(json.dumps(records, indent=2) + "\n")
-    sheet = out / "grading.md"
-    sheet.write_text(grading_sheet([built[case_id] for case_id in wanted], records, out, code))
+                # After every run, so that a stopped batch leaves the runs it made.
+                (out / "runs.json").write_text(json.dumps(records, indent=2) + "\n")
+                sheet.write_text(grading_sheet([built[case_id] for case_id in wanted], records,
+                                               out, code))
     print(f"{len(records)} runs; grade them in {_shown(sheet)}")
     return 0
 

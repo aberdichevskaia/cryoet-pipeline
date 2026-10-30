@@ -1,0 +1,22 @@
+job         ribo-mdc-gpu (3790001) on max041
+started     2026-10-29T09:12:44+00:00
+project     outputs/ribo-mdc   config configs/lanes/ribo-mdc.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       prepare-template pick-particles visualize-picks extract-particles
+overwrite   no
+env         /fast/AG_Kudryashev/<user>/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      /fast/AG_Kudryashev/<user>/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/software/imod_5.1.12/bin/tiltxcorr
+ctffind     not on PATH
+NVIDIA A40, 8.6, 46068 MiB
+GPU 0: NVIDIA A40 (UUID: GPU-<uuid>)
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 ...
+# prepare-template: 2.0 min, +0.01 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --pytom-low-pass 25.0 ...
+matching rotations 1/2

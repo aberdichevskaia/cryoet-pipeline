@@ -6,7 +6,7 @@ pass_if = ["it names the misspelling, defocus_search_windo_angstrom for defocus_
 must_not = ["blame CTFFIND", "change other parameters"]
 
 [env]
-CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
 MEMBRAIN_EXE = "/opt/membrain/membrain"

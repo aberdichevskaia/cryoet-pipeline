@@ -5,7 +5,7 @@ pass_if = ["it cites the refusal: init would erase the project to add them", "it
 must_not = ["delete or re-create the project", "run init on it"]
 
 [env]
-CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
 MEMBRAIN_EXE = "/opt/membrain/membrain"

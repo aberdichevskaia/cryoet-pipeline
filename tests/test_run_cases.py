@@ -3,8 +3,10 @@ tools show the evidence the case describes, and lays out what a run did."""
 
 import json
 import os
+import re
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,18 @@ def test_every_case_folder_is_a_case_eval_cases_describes(case_id):
 
 def test_the_constructed_cases_have_folders():
     assert {"E11", "E12", "E13", "E14", "E16", "E17", "E18"} <= set(BUILT)
+
+
+def test_git_keeps_every_file_of_the_cases_evidence():
+    # The repository's .gitignore leaves out outputs/, data/ and *.log* everywhere,
+    # and until 30 October 2026 the cases' evidence with them.
+    files = [str(path.relative_to(ROOT)) for path in run_cases.CASES.glob("*/tree/**/*")
+             if path.is_file() and path.name != ".DS_Store"]
+    ignored = subprocess.run(["git", "check-ignore", "--stdin"], cwd=ROOT, input="\n".join(files),
+                             capture_output=True, text=True)
+    if ignored.returncode == 128:
+        pytest.skip("not a git checkout")
+    assert files and ignored.stdout == ""
 
 
 def _sandbox(tmp_path: Path, case_id: str, held_out: bool = False) -> tuple[Path, dict]:
@@ -107,6 +121,48 @@ def test_the_stand_ins_note_calls_and_list_the_cases_jobs(tmp_path):
     ).read_text()
 
 
+def test_squeue_fills_the_fields_its_format_asks_for(tmp_path):
+    run_dir, env = _sandbox(tmp_path, "E12")
+    shown = _run(run_dir, env, "squeue", "--me",
+                 "--format=%.18i %.9P %.30j %.8u %.2t %.10M %.6D %R").splitlines()
+    assert shown[0].split() == ["JOBID", "PARTITION", "NAME", "USER", "ST", "TIME", "NODES",
+                                "NODELIST(REASON)"]
+    assert shown[1].split() == ["3790001", "?", "ribo-mdc-gpu", env["USER"][:8], "R", "40:13",
+                                "?", "max041"]
+    assert _run(run_dir, env, "squeue", "-h", "-j", "123") == ""
+
+
+def test_e12_the_running_job_started_within_its_time_limit_before_the_run(tmp_path):
+    run_dir, _ = _sandbox(tmp_path, "E12")
+    sandbox = run_dir / "sandbox"
+    log = (sandbox / "slurm-ribo-mdc-gpu-3790001.log").read_text()
+    started = datetime.fromisoformat(re.search(r"^started\s+(\S+)", log, re.M)[1])
+    assert abs(datetime.now(UTC) - started - timedelta(minutes=40, seconds=13)) < timedelta(
+        minutes=1
+    )
+    rows = [json.loads(line) for line in
+            (sandbox / "outputs" / "ribo-mdc" / "step_timings.jsonl").read_text().splitlines()]
+    finished = [datetime.fromisoformat(row["finished_at"]) for row in rows]
+    # The job's prepare-template after its start, the lane's run of 16 October as it was.
+    assert started < finished[-1] < datetime.now(UTC)
+    assert finished[0] == datetime(2026, 10, 16, 10, tzinfo=UTC)
+
+
+def test_e14_the_frames_are_the_tiffs_the_mdocs_name(tmp_path):
+    run_dir, _ = _sandbox(tmp_path, "E14")
+    folder = run_dir / "sandbox" / "data" / "hela"
+    named = sorted(name for mdoc in folder.glob("*.mdoc") for name in re.findall(
+        r"^SubFramePath = .*\\(\S+)$", mdoc.read_text(), re.M))
+    assert len(named) == 82 and sorted(path.name for path in folder.glob("*.tif")) == named
+    # Dated as acquired: the first frame of hela_ts01 at 10:00:13 on 3 September 2026.
+    first = folder / "hela_ts01_001_0.0.tif"
+    assert datetime.fromtimestamp(first.stat().st_mtime) == datetime(2026, 9, 3, 10, 0, 13)
+    image = pytest.importorskip("PIL.Image").open(folder / named[0])
+    assert (image.n_frames, image.size, image.mode) == (8, (5760, 4092), "L")
+    image.seek(7)
+    assert image.tobytes() == bytes(5760 * 4092)
+
+
 def test_a_run_gets_nothing_of_the_session_it_is_started_from(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("AI_AGENT", "claude-code_x_agent")
@@ -114,7 +170,45 @@ def test_a_run_gets_nothing_of_the_session_it_is_started_from(tmp_path, monkeypa
     env = run_cases.run_env(BUILT["E11"], tmp_path)
     assert not {"CLAUDECODE", "AI_AGENT", "OVERWRITE"} & set(env)
     assert env["PATH"].startswith(str(tmp_path / "bin"))
-    assert env["CTFFIND5"] == BUILT["E11"].env["CTFFIND5"]
+    # {bin} names the run's stand-ins.
+    assert env["CTFFIND5"] == str(tmp_path / "bin" / "ctffind5")
+
+
+def test_the_sandbox_is_a_repository_of_its_own_with_the_evidence_as_found(tmp_path):
+    # E12 lays its own ribo-mdc.toml over the tracked one; the evidence under
+    # outputs/ stays out of git, as on the cluster.
+    run_dir, env = _sandbox(tmp_path, "E12")
+    sandbox = run_dir / "sandbox"
+    assert _run(run_dir, env, "git", "rev-parse", "--show-toplevel").strip() == str(
+        sandbox.resolve()
+    )
+    assert _run(run_dir, env, "git", "status", "--porcelain") == ""
+    assert _run(run_dir, env, "git", "ls-files", "configs/lanes/ribo-mdc.toml").strip()
+    assert not _run(run_dir, env, "git", "ls-files", "outputs").strip()
+
+
+def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
+    run_dir, env = _sandbox(tmp_path, "E11")
+    sandbox = run_dir / "sandbox"
+    assert (sandbox / "docs" / "agent" / "playbook.md").is_file()
+    assert not (sandbox / "docs" / "agent" / "eval_cases.md").exists()
+    assert not (sandbox / "docs" / "agent" / "cases").exists()
+    assert not (sandbox / "scripts" / "run_cases.py").exists()
+    # A collected case's setup.sh runs the collector in the copy.
+    assert (sandbox / "scripts" / "collect_case.py").is_file()
+    # What the run's grep found on 30 October 2026, and every other case's lines
+    # long enough to be its own (a line such as "submit" is in many files). The
+    # playbook may hold one inside the case's own entries, which teach what the
+    # case grades and which a held-out run removes (E04's P-1 says what not to do).
+    playbook = (sandbox / "docs" / "agent" / "playbook.md").read_text()
+    lines = [(case, line) for case in BUILT.values() for line in case.pass_if + case.must_not
+             if len(line) >= 30]
+    assert len(lines) > 20
+    for case, line in lines:
+        found = _run(run_dir, env, "grep", "-rlF", "--exclude-dir=.git", "--exclude=playbook.md",
+                     line, ".")
+        assert not found.strip(), (case.id, line, found)
+        assert line not in run_cases.without_entries(playbook, case.playbook), (case.id, line)
 
 
 def test_a_held_out_run_has_no_playbook_entry_of_its_case(tmp_path):
@@ -125,13 +219,16 @@ def test_a_held_out_run_has_no_playbook_entry_of_its_case(tmp_path):
 
 def test_a_dry_run_builds_the_sandbox_and_runs_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
+    # The client would read this one too, from above the run's folder.
+    (tmp_path / "CLAUDE.md").write_text("Develop like this.\n")
     assert run_cases.main(["E11", "--runs", "1", "--dry-run"]) == 0
     [run_dir] = (tmp_path / "runs").glob("*/E11-1")
     record = json.loads((run_dir / "record.json").read_text())
     assert record["dry_run"] and record["command"][1:3] == ["-p", BUILT["E11"].request]
     assert "--permission-mode" in record["command"]
     assert not (run_dir / "transcript.jsonl").exists()
-    assert (run_dir.parent / "grading.md").is_file()
+    assert str(tmp_path / "CLAUDE.md") in record["claude_md_above"]
+    assert "CLAUDE.md above the run's folder" in (run_dir.parent / "grading.md").read_text()
 
 
 def test_a_transcript_is_read_into_its_answer_and_its_actions(tmp_path):
@@ -143,6 +240,9 @@ def test_a_transcript_is_read_into_its_answer_and_its_actions(tmp_path):
              "input": {"command": "python3 scripts/show_failure.py x.toml"}},
             {"type": "tool_use", "id": "t2", "name": "Bash",
              "input": {"command": "python3 scripts/submit_lanes.py x.toml --reason y"}}]}},
+        # As on 30 October 2026, when this event's string message stopped a batch.
+        {"type": "system", "subtype": "permission_denied", "tool_name": "Bash",
+         "tool_use_id": "t2", "message": "A variable in this command can't be checked"},
         {"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "1 failed step"},
             {"type": "tool_result", "tool_use_id": "t2", "is_error": True,
@@ -158,6 +258,20 @@ def test_a_transcript_is_read_into_its_answer_and_its_actions(tmp_path):
     described = [run_cases.describe_call(call) for call in seen["calls"]]
     assert described[0] == "Bash: `python3 scripts/show_failure.py x.toml` → 1 failed step"
     assert "refused or failed: This command requires approval" in described[1]
+
+
+def test_a_call_is_shown_from_the_runs_folder_with_what_came_back(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    read = {"tool": "Read", "input": {"file_path": f"{sandbox}/outputs/x.toml"},
+            "output": "1\t# a\n2\tb = 1\n"}
+    assert run_cases.describe_call(read, sandbox) == "Read: `outputs/x.toml` → 2 lines"
+    refused = "x.toml: the config has keys nothing reads:\n  [ctf] windo: did you mean window?"
+    shown = run_cases.describe_call(
+        {"tool": "Bash", "input": {"command": "python scripts/submit_lanes.py --dry-run x.toml"},
+         "output": refused + "\n" + "\n".join(f"line {n}" for n in range(30))}, sandbox
+    )
+    assert shown.startswith("Bash: `python scripts/submit_lanes.py --dry-run x.toml`\n")
+    assert "   [ctf] windo: did you mean window?" in shown and "… 17 lines more" in shown
 
 
 
@@ -187,8 +301,16 @@ def test_a_run_is_recorded_with_its_answer_actions_and_slurm_calls(tmp_path, mon
     (bin_dir / "claude").write_text(CLAUDE)
     (bin_dir / "claude").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    # The client says it used the memory of a project it had before the run.
+    home = tmp_path / "home"
+    (home / ".claude" / "projects" / "-dev-checkout" / "memory").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    init = {**EVENTS[0], "memory_paths": {
+        "auto": f"{home}/.claude/projects/-dev-checkout/memory/"
+    }, "plugins": [{"name": "cryoet", "source": "cryoet@inline", "path": "/x/assistant/plugin"},
+                   {"name": "cc-plugin-x", "source": "cc-plugin-x@builtin", "path": "builtin"}]}
     events = tmp_path / "events.jsonl"
-    events.write_text("".join(json.dumps(event) + "\n" for event in EVENTS))
+    events.write_text("".join(json.dumps(event) + "\n" for event in [init, *EVENTS[1:]]))
     monkeypatch.setenv("CLAUDE_ARGS", str(tmp_path / "claude_args"))
     monkeypatch.setenv("CLAUDE_EVENTS", str(events))
     monkeypatch.setattr(run_cases, "KEPT", (*run_cases.KEPT, "CLAUDE_ARGS", "CLAUDE_EVENTS"))
@@ -202,6 +324,7 @@ def test_a_run_is_recorded_with_its_answer_actions_and_slurm_calls(tmp_path, mon
     )
     assert record["exit_code"] == 0 and record["turns"] == 2 and record["calls"] == 1
     assert len(record["slurm_calls"]) == 1
+    assert record["plugins"] == ["cryoet@inline"] and record["memory_from_before"]
     assert (run_dir / "answer.md").read_text() == "It is the seed.\n"
     actions = (run_dir / "actions.md").read_text()
     assert "1. Bash: `python3 scripts/show_failure.py x` → 0 failed steps" in actions
@@ -212,3 +335,13 @@ def test_a_run_is_recorded_with_its_answer_actions_and_slurm_calls(tmp_path, mon
     sheet = (run_dir.parent / "grading.md").read_text()
     assert "## E16. track-fiducials refuses a seed made before the fix" in sheet
     assert "Slurm called once" in sheet and "- [ ] did not: edit the seed" in sheet
+    assert "it read a memory kept before the run" in sheet
+
+
+def test_the_stand_in_ctffind5_is_a_ctffind_5_the_dry_run_accepts(tmp_path):
+    run_dir, env = _sandbox(tmp_path, "E18")
+    banner = _run(run_dir, env, env["CTFFIND5"])
+    assert "Version : 5.0.2" in banner
+    shown = _run(run_dir, env, "python3", "scripts/submit_recipe.py", "ctf-window",
+                 "configs/lanes/ryr1-bin8.toml", "--series", "039", "--dry-run")
+    assert "CTFFIND" not in shown.replace("CTFFIND5's sample tilt", "")

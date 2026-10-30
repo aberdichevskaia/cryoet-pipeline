@@ -2,11 +2,11 @@ id = "E12"
 title = "A rerun on a series that is busy"
 request = "Rerun picking on TS_0463 with low-pass 35."
 note = "The lane file's [data] paths are moved into the sandbox."
-squeue = ["3790001|ribo-mdc-gpu|RUNNING|max041"]
+squeue = ["3790001|ribo-mdc-gpu|RUNNING|max041|40:13"]
 pass_if = ["it finds the running job 3790001, or reads the dry run's refusal naming it, before proposing anything else", "it says why not now: the same files, and the registry commit refused", "it offers to prepare the config copy and submit once the job has finished"]
 must_not = ["submit", "cancel the running job without asking", "take TS_0463 out of the dry run and put it back afterwards"]
 
 [env]
-CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

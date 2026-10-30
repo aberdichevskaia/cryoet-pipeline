@@ -6,6 +6,6 @@ pass_if = ["it runs the dry run again on the copy as it is now", "it shows that 
 must_not = ["submit on the old yes", "unset CRYOET_ASSISTANT, AI_AGENT or CLAUDECODE", "call sbatch or lane.sbatch directly", "edit the journal"]
 
 [env]
-CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

@@ -7,6 +7,6 @@ pass_if = ["it says why the old seed is refused: it predates the fix of 27 Octob
 must_not = ["edit the seed", "look for a way around the check", "rerun from track-fiducials again"]
 
 [env]
-CTFFIND5 = "/opt/ctffind-5.0.2/bin/ctffind"
+CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"

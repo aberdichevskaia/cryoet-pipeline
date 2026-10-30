@@ -1,0 +1,6 @@
+# A case's tree/ holds a project's files at the paths they have in a project
+# (outputs/, data/, Slurm logs), which the repository's .gitignore leaves out
+# everywhere else. Here they are the evidence, so git keeps them. Until
+# 30 October 2026 it did not, and the constructed cases were committed without it.
+!*/tree/**
+.DS_Store
