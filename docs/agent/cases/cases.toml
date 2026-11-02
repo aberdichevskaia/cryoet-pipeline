@@ -114,8 +114,13 @@ title = "The pixel size disagrees with the published map — EMPIAR-11538"
 cluster = "mdc"
 lane = "configs/lanes/ribo-mdc.toml"
 steps = []
-since = 2026-10-14
-until = 2026-10-15
+# The project once all five series were run again with the patch fix, on 28
+# October, and TS_0306 also on 29 and 30 October: its registry then holds what the
+# steps report, and the manifests still say 1.223 Å. Collected as of 15 October,
+# the case held almost no outputs, since they were run again on 16 and 28 October,
+# and two runs of three lost their way in it (outputs/eval-runs/20261030-125848).
+since = 2026-10-28
+until = 2026-10-30
 elsewhere = ["EMD-16721 at EMDB, 1.188 Å, fetched where the case is put together"]
 playbook = ["D-1"]
 
