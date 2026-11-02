@@ -79,7 +79,8 @@ def test_aligned_undoes_the_pose_and_fills_undefined_voxels_as_asked():
     inside = x * x + y * y + z * z < 10**2
     assert correlation(back[inside], band[inside]) > 0.95
     # The two fillings differ by exactly the band-filtered fill of undefined voxels.
-    raw, valid = core.resample(moved, -angles[::-1], -shift, sphere=True)
+    raw, valid = core.resample(moved, -angles[::-1], -shift, sphere=True,
+                               coordinates_in_double=True)
     assert not valid[0, 0, 0] and valid[BOX // 2, BOX // 2, 1]  # a corner, inside the sphere
     fill = np.where(valid, 0.0, raw[valid].min())
     difference = port.aligned(moved, angles, shift, HIGH, LOW, undefined="min") - back

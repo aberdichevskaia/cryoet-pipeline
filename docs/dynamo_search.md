@@ -68,6 +68,19 @@ score-selected project, up to 4.6e-4 of the sd inside the mask in the MRA setup'
 seeds. Checked against the MEX itself: 300 random poses of a 16 px volume gave
 the same values to the last bit.
 
+The PCA port's particles (`dynamo_particle`, the same MEX inside its implicit
+sphere, to the last bit on the same 300 poses) and the classification report's
+galleries are turned the same way. The search is not. Its own call,
+`dynamo_shift_rot_from_mask`, is the same MEX too, and the double sum gives its
+template and support to the last bit (200 orientations of refine223's template and
+mask), but the float32 sum's support was the same in all 200 and its values within
+1.4e-11. Searched both ways (2026-11-02), refine223's 223 particles kept the same
+two particles more than 0.02 deg from Dynamo's poses (53 and 170) and the same
+agreement elsewhere: the median CC difference 2.5e-6 against 2.6e-6, a 99th
+percentile of 6.5e-6 against 9.4e-6. What remains between the kernel and Dynamo is
+not the rotation's arithmetic, and the GPU kernel, which mirrors the numpy one bit
+for bit, would have to compute float64 coordinates for nothing measurable.
+
 ## What one iteration does
 
 1. The current reference is prepared as Dynamo's iteration setup prepares

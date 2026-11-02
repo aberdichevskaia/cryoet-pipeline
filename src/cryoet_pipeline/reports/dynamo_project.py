@@ -308,8 +308,9 @@ def read_dynamo_classification(
     def aligned(tag: int, pose: Pose) -> np.ndarray:
         row = pose_row(tag, pose)
         particle = read_map(_particle_path(particles, tag, extension))
+        # As dynamo_average turns a particle, the MEX's coordinates (docs/dynamo_search.md).
         volume, valid = resample(  # type: ignore[no-untyped-call]
-            particle, -row[ANGLES][::-1], -row[SHIFTS]
+            particle, -row[ANGLES][::-1], -row[SHIFTS], coordinates_in_double=True
         )
         result = np.asarray(volume, dtype=np.float32)
         result[~np.asarray(valid, dtype=bool)] = np.nan
