@@ -5,9 +5,14 @@
         outputs/ryr1/dynamo/bin8-2x-pad/mra_pad_ssn_g2atan:1 \\
         --agree outputs/ryr1/dynamo/bin8-2x-pad/mra_pad_ssb_g2atan:1 \\
         --start-lowpass 53.76 --out outputs/ryr1/dynamo/ryr1-consensus
+    EXPORT=outputs/ryr1/dynamo/ryr1-consensus-half1 NAME=refine_h1 SEEDS=map \\
+        REFERENCE=outputs/ryr1/dynamo/ryr1-consensus-half1/start_reference.mrc \\
+        SCHEDULE=coarse_to_fine FIRST_LOWPASS=53.76 LAST_LOWPASS=29.4 DIAMETER=340 \\
+        sbatch --export=ALL --job-name=refine_h1 --gres=gpu:a40:1 scripts/mra_port_run.sbatch
+    (and the same for half 2, NAME=refine_h2)
     python scripts/consensus_halves.py maps \\
-        outputs/ryr1/dynamo/ryr1-consensus-half1/refine_h1 \\
-        outputs/ryr1/dynamo/ryr1-consensus-half2/refine_h2 \\
+        outputs/ryr1/dynamo/ryr1-consensus-half1/refine_h1_port \\
+        outputs/ryr1/dynamo/ryr1-consensus-half2/refine_h2_port \\
         --out outputs/ryr1/dynamo/ryr1-consensus
 
 `split` takes the members of one class, PROJECT:CHANNEL, after the last iteration its
@@ -20,14 +25,18 @@ series by series (--seed), so both halves hold every series in the same proporti
 Each half is an export of its own, <out>-half1 and <out>-half2, written as
 scripts/split_export_by_view.py writes its groups (links to the export's particle
 files, initial.tbl, export_manifest.json with the split recorded under
-"consensus_half", export_complete.json), so scripts/dynamo_mra_mdc.sbatch and the
-reports take it as any export. Both get the same start_reference.mrc: the first
-run's class average of that iteration, low-passed to --start-lowpass (A) with a
-raised-cosine edge (cryoet_pipeline.filters.low_pass_filter_volume). Each half is
-then refined on its own from that start, one channel and no MRA:
-scripts/dynamo_mra_mdc.sbatch with SEEDS=map REFERENCE=<half>/start_reference.mrc.
+"consensus_half", export_complete.json), so the MRA jobs and the reports take it as
+any export. Both get the same start_reference.mrc: the first run's class average of
+that iteration, low-passed to --start-lowpass (A) with a raised-cosine edge
+(cryoet_pipeline.filters.low_pass_filter_volume). Each half is then refined on its
+own from that start, one channel and no MRA, by the pipeline's port without Dynamo:
+scripts/mra_port_run.sbatch with EXPORT=<half>, SEEDS=map and
+REFERENCE=<half>/start_reference.mrc, the run <half>/<NAME>_port. Until 2026-11-02
+Dynamo refined them (scripts/dynamo_mra_mdc.sbatch with the same variables, which
+it still can as a control), as refine_h1 and refine_h2 of RyR1 at bin8 were.
 
-`maps` reads the last iteration the two half projects finished and writes, as MRC at
+`maps` reads the last iteration the two half projects finished (the port's runs, or
+Dynamo's projects) and writes, as MRC at
 the export's pixel size: <out>_half1.mrc and <out>_half2.mrc, their mean
 <out>_mean.mrc to look at, and <out>_mask.mrc, the halves' alignment mask. It prints
 how far each half moved its particles from their starting poses and where the FSC
