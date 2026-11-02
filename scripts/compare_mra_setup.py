@@ -23,10 +23,26 @@ writes it there), makes the plan from the same export with
   part; why is not known. The whole map's difference is printed too;
 - a noise seed is not compared: MATLAB's randn is not numpy's, so it is new noise.
 
-A variable the command left out takes the setup's default, and lowpass_steps the
-one the log's last line names (its default changed on 2026-10-19). Projects with
-symmetry or an axis offset are not compared: the port models neither. Prints one
-block per project and PASS or FAIL; exits 1 if any failed. Disposable.
+A variable the command left out takes the setup's default of today, but where an
+older dynamo_mra_setup.m meant something else, read from the log's last line, as
+the setup of today can make it again:
+
+- before 2026-10-19 (c2f442a) the low-passes stepped evenly in frequency, and that
+  line named no steps: lowpass_steps 'fourier';
+- from 2026-10-22 to 10-24 (22bdc7d) global rounds searched a grid of global_step
+  deg, 45 unless given, at the full box ("global round(s) in 45 deg steps"):
+  global_step and global_full_box;
+- a GPU project (gpus, from 2026-10-26) binned its global rounds by powers of 2:
+  global_full_box where that left the full box, as for RyR1's 52 px; another dim
+  is not compared, the port does not bin.
+
+Projects with symmetry or an axis offset are not compared: the port models neither.
+On max (2026-11-02, before the older setups were read so), of 41 projects 39 were
+compared: the tables, masks, seeds' particles and map seeds of all matched, the
+searches of all but the older setups' and one GPU project's, which differed as
+above; the subset and blob seeds of most differed, by up to 4.6e-4 of their sd
+inside the mask. Prints one block per project and PASS or FAIL; exits 1 if any
+failed. Disposable.
 """
 
 from __future__ import annotations
@@ -40,7 +56,7 @@ from typing import Any
 import numpy as np
 
 from cryoet_pipeline.dynamo_mra_project import CLASS, MraPlan, plan_from_dynamo
-from cryoet_pipeline.mra_setup import plan_from_export
+from cryoet_pipeline.mra_setup import plan_from_export, read_export, search_rounds
 
 SEED_DIFFERENCE = 1e-4
 """A subset or blob seed's rms difference from Dynamo's inside the mask, over the sd of
@@ -81,8 +97,9 @@ def _value(text: str) -> Any:
     return float(text)
 
 
-def setup_variables(log: Path) -> dict[str, Any]:
-    """The variables the setup was evaluated with, from the command its log repeats."""
+def setup_variables(log: Path) -> tuple[dict[str, Any], list[str]]:
+    """The variables the setup was evaluated with, from the command its log repeats, and
+    what an older setup meant by the ones it left out (see the header), in words."""
 
     lines = log.read_text(errors="replace").splitlines()
     command = next((line for line in lines if "project = '" in line and "fileread(" in line),
@@ -94,11 +111,40 @@ def setup_variables(log: Path) -> dict[str, Any]:
         name, sign, value = statement.partition("=")
         if sign and re.fullmatch(r"\s*\w+\s*", name):
             variables[name.strip()] = _value(value)
+    notes = []
     ready = next((line for line in lines if " is ready, " in line), "")
     steps = re.search(r"\((angstrom|fourier) steps\)", ready)
     if "lowpass_steps" not in variables and steps:
         variables["lowpass_steps"] = steps.group(1)
-    return variables
+    elif "lowpass_steps" not in variables and ready:
+        variables["lowpass_steps"] = "fourier"
+        if variables.get("schedule") == "coarse_to_fine":
+            notes.append("set up before 2026-10-19: low-passes in even steps of frequency")
+    grid = re.search(r"global round\(s\) in (\S+) deg steps", ready)
+    if grid and variables.get("global_rounds"):
+        variables.setdefault("global_step", float(grid.group(1)))
+        variables["global_full_box"] = True
+        notes.append(f"set up 2026-10-22 to 10-24: global rounds on a {grid.group(1)} deg grid "
+                     "at the full box")
+    return variables, notes
+
+
+def _gpu_dims(options: dict[str, Any], export: Path) -> list[int]:
+    """The dims Dynamo's GPU setup gave the global rounds: the box halved while the
+    half still holds the dim the CPU's would have had (it resizes only by binning)."""
+
+    particles = read_export(export, options.get("data_folder", "particles"))
+    keys = ("schedule", "first_lowpass", "last_lowpass", "diameter", "lowpass_steps",
+            "global_rounds", "global_step", "cone_steps")
+    rounds = search_rounds(particles.box, particles.pixel_size,
+                           **{key: options[key] for key in keys if key in options})
+    dims = []
+    for searched in (r for r in rounds if r.is_global):
+        dim = particles.box
+        while dim % 2 == 0 and dim / 2 >= searched.dim:
+            dim //= 2
+        dims.append(dim)
+    return dims
 
 
 def _options(variables: dict[str, Any], export: Path) -> dict[str, Any]:
@@ -234,7 +280,7 @@ def main() -> int:
         log = export / f"{project.name}_setup.log"
         print(project.name)
         try:
-            variables = setup_variables(log)
+            variables, notes = setup_variables(log)
         except (OSError, ValueError) as error:
             print(f"  not compared: {error}")
             failed += 1
@@ -246,8 +292,21 @@ def main() -> int:
             print("  not compared: symmetry or an axis offset, which the port does not model")
             continue
         try:
+            options = _options(variables, export)
+            if variables.get("gpus") and options.get("global_rounds"):
+                box = read_export(export, options.get("data_folder", "particles")).box
+                dims = _gpu_dims(options, export)
+                if any(dim != box for dim in dims):
+                    print(f"  not compared: Dynamo's GPU setup binned the global rounds to "
+                          f"{dims} px, which the port does not")
+                    continue
+                options["global_full_box"] = True
+                notes.append("set up for Dynamo's GPUs: global rounds at the full box, the "
+                             "only power-of-2 binning that held their dim")
+            for note in notes:
+                print(f"  read as        {note}")
             theirs = plan_from_dynamo(project)
-            ours = plan_from_export(export, log=lambda _: None, **_options(variables, export))
+            ours = plan_from_export(export, log=lambda _: None, **options)
         except (OSError, ValueError) as error:
             print(f"  not compared: {error}")
             failed += 1

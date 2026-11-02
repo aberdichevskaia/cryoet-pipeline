@@ -191,10 +191,12 @@ def test_taking_the_lock_again_in_its_process_is_refused_and_keeps_it(
 # were asked, and whether the pipeline's env was active for them, and wait for a
 # release file, so that a second job can start while the first is on either.
 DYNAMO = r"""#!/bin/bash
-# The setup, `dynamo "project = '...'; ...; cores = N; ..."` in the export folder.
+# The setup, `dynamo "project = '...'; ...; cores = N; ..."` in the export folder,
+# which makes <project>_seeds first, as dynamo_mra_setup.m does.
 project=$(sed -n "s/^project = '\([^']*\)'.*/\1/p" <<< "$1")
 cores=$(sed -n 's/.*cores = \([0-9]*\);.*/\1/p' <<< "$1")
 echo "dynamo $SLURM_JOB_ID project=$project cores=$cores env=${PIPELINE_ENV:-none}" >> "$CALLS"
+mkdir -p "${project}_seeds"
 while [[ ! -e "$SETUP_RELEASE" ]]; do sleep 0.05; done
 mkdir -p "$project/cards/ite_0001"
 echo "how_many_processors=$cores;" > "$project/cards/ite_0001/card_ite_ite_0001.card"
@@ -274,10 +276,11 @@ def _calls(repo: Path) -> list[str]:
     return path.read_text().splitlines() if path.exists() else []
 
 
-def _port_call(job: str, export: Path) -> str:
+def _setup_call(job: str, export: Path, setup: str = "") -> str:
+    """The port asked for a new run: its plan made from the export, without Dynamo."""
     return (
-        f"port {job} env=active {export}/mra_t --name mra_t_port --device cuda "
-        "--dtype float32 --per-gpu 1 --workers 1"
+        f"port {job} env=active --export {export} --seeds subset subset noise{setup} "
+        "--name mra_t_port --device cuda --dtype float32 --per-gpu 1 --workers 1"
     )
 
 
@@ -310,29 +313,38 @@ def test_a_second_job_of_a_run_stops_before_the_port_and_names_the_first(
     assert [call.split()[1] for call in _calls(repo)] == ["3790159", "3790200"]
 
 
-def test_a_second_job_started_during_the_first_job_s_setup_is_refused_too(
+def test_a_new_run_is_set_up_without_dynamo_and_a_second_job_of_it_is_refused(
     tmp_path: Path,
 ) -> None:
     repo = _stand_in_repo(tmp_path)
     export = tmp_path / "export"
-    (tmp_path / "release").write_text("")  # the port does not wait here
-    first = _job(
-        repo, "1", by_hand=True, EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise"
-    )
+    setup = {"SCHEDULE": "coarse_to_fine", "GLOBAL_ROUNDS": "2", "CONE_STEPS": "5 5 3 3 3",
+             "GLOBAL_FULL_BOX": "1", "MASK_FILE": "masks/m.mrc"}
+    first = _job(repo, "1", by_hand=True, EXPORT=str(export), NAME="mra_t",
+                 SEEDS="subset subset noise", **setup)
     try:
-        _wait_until(lambda: _calls(repo) == ["dynamo 1 project=mra_t cores=32 env=none"], first)
+        _wait_until(lambda: len(_calls(repo)) == 1, first)
         second = _job(repo, "2", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
         _, err = second.communicate(timeout=60)
         assert second.returncode == 1
         assert f"REFUSED: {export}/mra_t_port is taken by job 1 (mra_t) on " in err
-        assert _calls(repo) == ["dynamo 1 project=mra_t cores=32 env=none"]
     finally:
-        (tmp_path / "setup_release").write_text("")
-    _, err = first.communicate(timeout=60)
+        (tmp_path / "release").write_text("")
+    out, err = first.communicate(timeout=60)
     assert first.returncode == 0, err
-    # Dynamo's setup (SETUP_ONLY: nothing computed) ran in the job's own environment,
-    # the port in the pipeline's.
-    assert _calls(repo) == ["dynamo 1 project=mra_t cores=32 env=none", _port_call("1", export)]
+    assert f"export      {export}, set up by the pipeline" in out
+    # The setup is the port's own, given the setup's variables: Dynamo never ran.
+    assert _calls(repo) == [_setup_call("1", export, (
+        " --schedule coarse_to_fine --mask-file masks/m.mrc --global-rounds 2 "
+        "--cone-steps 5 5 3 3 3 --global-full-box"))]
+
+    # Dynamo's own variables are refused for a new run.
+    for variable, value in (("GPUS", "0"), ("SYMMETRY", "c4"), ("AXIS_OFFSET", "-0.45 -0.45")):
+        refused = _job(repo, "3", EXPORT=str(export), NAME="mra_u", SEEDS="noise noise",
+                       **{variable: value})
+        _, err = refused.communicate(timeout=60)
+        assert refused.returncode == 1 and variable in err
+    assert len(_calls(repo)) == 1
 
 
 def test_a_second_dynamo_job_of_a_project_is_refused_while_the_first_computes_it(
@@ -388,9 +400,7 @@ def test_a_second_dynamo_job_is_refused_during_the_first_job_s_setup(tmp_path: P
     ]
 
 
-def test_a_port_job_does_not_set_up_a_project_a_dynamo_job_is_setting_up(
-    tmp_path: Path,
-) -> None:
+def test_a_new_run_of_a_name_dynamo_is_setting_up_or_has_is_refused(tmp_path: Path) -> None:
     repo = _stand_in_repo(tmp_path)
     export = tmp_path / "export"
     (tmp_path / "release").write_text("")
@@ -400,9 +410,22 @@ def test_a_port_job_does_not_set_up_a_project_a_dynamo_job_is_setting_up(
         port = _job(repo, "22", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
         _, err = port.communicate(timeout=60)
         assert port.returncode == 1
-        assert f"REFUSED: {export}/mra_t is taken by job 21 (mra_t) on " in err
+        assert f"REFUSED: {export} holds Dynamo's mra_t_seeds, a Dynamo project" in err
+        assert f"PROJECT={export}/mra_t" in err
         assert _calls(repo) == ["dynamo 21 project=mra_t cores=4 env=none"]
     finally:
         (tmp_path / "setup_release").write_text("")
     _, err = dynamo.communicate(timeout=60)
     assert dynamo.returncode == 0, err
+
+    # Once Dynamo has made the project, a new run of its name is still refused...
+    port = _job(repo, "23", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
+    _, err = port.communicate(timeout=60)
+    assert port.returncode == 1 and "holds Dynamo's mra_t mra_t_seeds" in err
+    # ...but a run the pipeline set up before carries on, whatever Dynamo made since.
+    (export / "mra_t_port" / "settings").mkdir(parents=True)
+    (export / "mra_t_port" / "settings" / "setup.json").write_text("{}\n")
+    port = _job(repo, "24", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
+    _, err = port.communicate(timeout=60)
+    assert port.returncode == 0, err
+    assert _calls(repo)[-1] == _setup_call("24", export)
