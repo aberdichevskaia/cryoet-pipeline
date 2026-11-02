@@ -64,6 +64,11 @@
 # job's number, node and start, having run nothing; one that waited in the queue
 # and starts after the first has ended carries the project on. The setup that
 # scripts/mra_port_run.sbatch runs takes the same lock while it makes the project.
+# On max (2026-10-30), with the lock of a project lock_check held on max011, a job
+# of that project on max031 stopped at once naming the holder, and the next one,
+# started once the holder had ended, took the lock and set the project up
+# (SETUP_ONLY). Dynamo computing under the lock was not part of that check; on
+# the Mac a toy's 5 iterations were computed under it.
 #
 # Dynamo is the group's shared installation, activated with its shipped MATLAB
 # Runtime 9.9. dynamo_activate_linux.sh alone tries to compile OpenMP wrappers

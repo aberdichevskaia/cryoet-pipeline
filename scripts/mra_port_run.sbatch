@@ -43,7 +43,9 @@
 # first has ended carries the run on. (On 2026-10-29 two jobs carrying g2atan2 on,
 # submitted a minute apart, computed iterations 2-5 into the same files for two
 # hours; the folder held one run in the end only because both computed the same
-# numbers.)
+# numbers.) On max (2026-10-30) the lock kept out a job on another node (see
+# scripts/dynamo_mra_mdc.sbatch, which locks with the same holder), and a port job
+# on maxg22 ran itself again under its lock from SLURM's copy of this script.
 #
 # Or PROJECT=<a Dynamo project>, set up or computed (instead of EXPORT): the port
 # runs it again beside it as <project>_port (NAME names it otherwise), and when
