@@ -264,18 +264,57 @@ def angle_list(old_angles, aperture, sampling, inplane_range, inplane_sampling):
     return np.array(rows)
 
 
-def resample(volume, angles, shift=(0.0, 0.0, 0.0), *, mask=None, sphere=False):
+_DEGREES_TO_RADIANS = 0.0174532925199432954743716805978692718781530857086181640625
+"""orientation.cpp's own constant, the double nearest pi / 180."""
+
+
+def _mex_matrix(angles) -> np.ndarray:
+    """The rotation `dynamo_shift_rot_mex` turns by: the angles stored as float, the
+    matrix computed from them in double, term by term as `orientation::fill_matrix`."""
+    td, ti, na = (float(a) * _DEGREES_TO_RADIANS for a in _triple(angles).astype(np.float32))
+    cotd, sitd, coti, siti = math.cos(td), math.sin(td), math.cos(ti), math.sin(ti)
+    cona, sina = math.cos(na), math.sin(na)
+    return np.array(
+        [
+            [cotd * cona - sitd * coti * sina, -cona * sitd - cotd * coti * sina, sina * siti],
+            [cotd * sina + cona * sitd * coti, cotd * cona * coti - sitd * sina, -cona * siti],
+            [sitd * siti, cotd * siti, coti],
+        ]
+    )
+
+
+def resample(volume, angles, shift=(0.0, 0.0, 0.0), *, mask=None, sphere=False,
+             coordinates_in_double=False):
     """Pull at c + M @ (x-c) - shift; return values and valid support.
 
     Match the MEX float32 rotation and strict eight-corner support. A nonzero
     input mask is boolean, not a soft multiplier. Undefined outputs are zero.
+
+    The coordinates c + M @ (x-c) - shift: with `coordinates_in_double`, as the MEX
+    computes them for `dynamo_average` and `dynamo_rot` (`volume_float::
+    shift_and_rotation_of`): a double matrix (`_mex_matrix`), the sum in double, each
+    coordinate stored as float once. Without, the matrix and the sum in float32, as
+    the search kernels compute them, numpy and torch alike. The two part in a
+    coordinate's last bits, which decide its floor; at the box's faces that decides
+    whether a voxel is reached at all. Averages made the float32 way differed from
+    Dynamo's by 8e-5 (refine223's project average), 6.5e-5 and 2.1e-4 (sel45_k1's) and
+    up to 4.6e-4 (MRA seeds), most at the box's faces; the MEX's way, by 2.6e-7 to
+    4.1e-7 (2026-11-02).
     """
     v = _cube(volume).astype(np.float32)
     n = v.shape[0]
-    m = euler_matrix(_triple(angles).astype(np.float32)).astype(np.float32)
-    d = _triple(shift).astype(np.float32)
     xyz = _xyz(n)
-    q = np.stack([m[i, 0] * xyz[0] + m[i, 1] * xyz[1] + m[i, 2] * xyz[2] - d[i] for i in range(3)])
+    if coordinates_in_double:
+        m = _mex_matrix(angles)
+        d = _triple(shift).astype(np.float32).astype(np.float64)
+        here = xyz.astype(np.float64)
+        q = np.stack([m[i, 0] * here[0] + m[i, 1] * here[1] + m[i, 2] * here[2] - d[i]
+                      for i in range(3)]).astype(np.float32)
+    else:
+        m = euler_matrix(_triple(angles).astype(np.float32)).astype(np.float32)
+        d = _triple(shift).astype(np.float32)
+        q = np.stack([m[i, 0] * xyz[0] + m[i, 1] * xyz[1] + m[i, 2] * xyz[2] - d[i]
+                      for i in range(3)])
     floors = np.floor(q).astype(np.int32)
     frac = q - floors.astype(np.float32)
     base = floors + n // 2
@@ -621,7 +660,9 @@ def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_rang
 
     Use the same helper for fixed and refined poses to avoid comparing different
     averaging estimators. The `dynamo-search` backend averages every iteration
-    with it (replayed against Dynamo: 8e-5 on refine223, 6.5e-5 on sel45_k1).
+    with it (replayed against Dynamo's project averages: 4.1e-7 on refine223, 2.6e-7 and
+    3.1e-7 on sel45_k1's two iterations; 8e-5, 6.5e-5 and 2.1e-4 before the coordinates
+    were computed as the MEX computes them, `resample(..., coordinates_in_double=True)`).
     Normalization uses all NONZERO mask voxels (ddof=1).
     Match the CPU project's fsc=true assembly: normalize odd/even raw averages
     separately, merge them equally, compensate at weight >= 0.1, and do NOT
@@ -639,13 +680,15 @@ def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_rang
         if _cube(particle).shape != mask.shape:
             raise ValueError("particle and mask shapes differ")
         inverse_angles = -_triple(angle)[::-1]
-        aligned, valid = resample(particle, inverse_angles, -_triple(shift))
+        aligned, valid = resample(particle, inverse_angles, -_triple(shift),
+                                  coordinates_in_double=True)
         aligned = normalize_roi(aligned, mask)
         aligned[~valid] = 0
         half = count % 2
         total[half] += aligned
         contributions[half] += valid
-        rotated_wedge, _ = resample(wedge(len(mask), tilts), inverse_angles, sphere=True)
+        rotated_wedge, _ = resample(wedge(len(mask), tilts), inverse_angles, sphere=True,
+                                    coordinates_in_double=True)
         weights[half] += rotated_wedge
         count += 1
     # Dynamo's explicitBalanceNan defaults to 1: count only valid resamplings.
@@ -688,11 +731,11 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
 
     Also the console call `dynamo_average(..., 'fcompensate', true, 'fmin', 1,
     'nmask', mask)` that makes a project's starting template from the initial
-    poses (sel45_avg.em, replayed to 4e-7), and so the `dynamo-search` backend's
-    starting reference when none is given.
+    poses (sel45_avg.em, replayed to 4e-7; the MRA setup's seeds, to 7e-7), and so the
+    `dynamo-search` backend's starting reference when none is given.
 
     Per particle, the path of the project's own averaging, which the search
-    kernel's `average_particles` reproduces (replay: 8e-5 against Dynamo): the
+    kernel's `average_particles` reproduces (replay: 4e-7 against Dynamo): the
     inverse pose, out-of-box voxels zeroed, normalization over the mask's nonzero
     voxels, zeroed again, and the table wedge rotated with the implicit sphere
     for the Fourier weight. Unlike that `fsc = true` assembly: one sum over all
@@ -714,12 +757,14 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
         if _cube(particle).shape != nmask.shape:
             raise ValueError("particle and mask shapes differ")
         inverse_angles = -_triple(angle)[::-1]
-        aligned, valid = resample(particle, inverse_angles, -_triple(shift))
+        aligned, valid = resample(particle, inverse_angles, -_triple(shift),
+                                  coordinates_in_double=True)
         aligned = normalize_roi(aligned, nmask)
         aligned[~valid] = 0
         total += aligned
         contributions += valid
-        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True)
+        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True,
+                                    coordinates_in_double=True)
         weights += rotated_wedge
         count += 1
     if not count:

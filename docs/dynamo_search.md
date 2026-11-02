@@ -49,11 +49,24 @@ identical poses or from an identical start, took the case apart:
   its interpolated wedge weights carry that.
 
 With no loss in accuracy, averaging as Dynamo does makes the whole backend
-reproduce Dynamo, search and map, each replayed against it: 8e-5 for the
-average on refine223, 6.5e-5 on the score-selected project, 4e-7 for the
-`dynamo_average` start. Dynamo's rise of half-set FSC near Nyquist comes with
-it, so read half-set FSC there with care, and only masked; `compute-fsc` warns
-when a curve rises like that (`fsc.rise_toward_nyquist`).
+reproduce Dynamo, search and map, each replayed against it: 4.1e-7 for the
+average on refine223, 2.6e-7 and 3.1e-7 on the score-selected project's two
+iterations, 4e-7 for the `dynamo_average` start. Dynamo's rise of half-set FSC
+near Nyquist comes with it, so read half-set FSC there with care, and only
+masked; `compute-fsc` warns when a curve rises like that
+(`fsc.rise_toward_nyquist`).
+
+The averages reach float32's rounding only because each particle and its wedge are
+turned as Dynamo's MEX turns them (`dynamo_shift_rot_mex`, which `dynamo_average`
+and `dynamo_rot` call): the rotation matrix and each coordinate summed in double,
+the coordinate stored as float once (`resample(..., coordinates_in_double=True)`).
+Until 2026-11-02 the averaging summed in float32, as the search still does, and
+the last bits of a coordinate decided otherwise now and then whether a voxel at a
+box face was reached at all: one voxel of one particle in 300 made the average
+differ from Dynamo's there, 8e-5 on refine223, 6.5e-5 and 2.1e-4 on the
+score-selected project, up to 4.6e-4 of the sd inside the mask in the MRA setup's
+seeds. Checked against the MEX itself: 300 random poses of a 16 px volume gave
+the same values to the last bit.
 
 ## What one iteration does
 
@@ -139,7 +152,8 @@ Checked against Dynamo's own half-set project on the CZII score-selected set
 Dynamo's console makes a project's starting average with `dynamo_average(data,
 'table', t, 'fcompensate', true, 'fmin', 1, 'nmask', mask)`. `dynamo-search`
 starts from the same average when it is given no reference (`average_class`,
-replayed against Dynamo's to 4e-7 on sel45), and `dynamo-average` writes it on its
+replayed against Dynamo's to 4e-7 on sel45, and the MRA setup's seeds to 8e-7), and
+`dynamo-average` writes it on its
 own: every particle at the pose its stack gives it, the same mask and wedge
 handling, no search. The poses go out unchanged in the STAR beside the map.
 

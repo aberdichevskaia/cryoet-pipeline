@@ -1159,3 +1159,47 @@ def test_dynamo_is_given_the_tomograms_tilt_range_negated() -> None:
     assert dynamo_ytilt((-20.0, 60.0)) == (-60.0, 20.0)
     assert np.mean(negated[inside] == ours[inside]) > 0.98
     assert np.mean(as_given[inside] == ours[inside]) < 0.8
+
+
+# What Dynamo's dynamo_shift_rot_mex (1.1.511, the call dynamo_average makes) returned
+# on 2026-11-02. Three poses of CZII particles (the inverse table pose and shift, as
+# average_class passes them) at which a 48 px box keeps these voxels: the MEX sums
+# each coordinate in double from a double matrix and stores it as float once, a
+# float32 sum ends one voxel off at a face.
+MEX_REACHED = [
+    ([-70.714286, -37.026801, -126.666667],
+     [0.835393215945, 1.04455258042, -0.0839296857138], 82984, 82985),
+    ([-165.0, -85.751977, 133.333333],
+     [0.5870702836, 1.06821503882, -0.147727130334], 84018, 84017),
+    ([-239.1386687713539, -68.95221047878026, -58.004652720945515],
+     [1.08250770803, 0.638524574398, -0.12569618216], 80451, 80452),
+]
+
+
+@pytest.mark.parametrize("angles, shift, mex, float32_sum", MEX_REACHED)
+def test_coordinates_in_double_reach_the_voxels_dynamos_mex_reaches(
+    angles, shift, mex, float32_sum
+):
+    ones = np.ones((48,) * 3)
+    assert int(core.resample(ones, angles, shift, coordinates_in_double=True)[1].sum()) == mex
+    assert int(core.resample(ones, angles, shift)[1].sum()) == float32_sum
+
+
+# A 16 px volume turned by the MEX at two random poses: the values it kept, summed.
+MEX_SUMS = [
+    ([289.8010525483369, 118.22951217520887, 260.7508842517592],
+     [1.6503344362145613, 1.805571184407254, 1.1319795194201534], 2840, 1063.5622217133641),
+    ([290.85868430513773, 34.240614660343134, 164.7267343272283],
+     [-0.8381868880210726, 1.6580974758868825, 1.2439241736968056], 2613, 1056.2015744957607),
+]
+
+
+@pytest.mark.parametrize("angles, shift, reached, total", MEX_SUMS)
+def test_coordinates_in_double_give_the_mex_s_values(angles, shift, reached, total):
+    z, y, x = np.indices((16,) * 3, dtype=float)
+    volume = (np.sin(0.7 * x + 1.3 * y + 0.4 * z) + 0.01 * x * y - 0.02 * z).astype(np.float32)
+    values, valid = core.resample(volume, angles, shift, coordinates_in_double=True)
+    assert int(valid.sum()) == reached
+    assert float(values[valid].sum()) == pytest.approx(total, rel=1e-12)
+    values, valid = core.resample(volume, angles, shift)
+    assert float(values[valid].sum()) != pytest.approx(total, rel=1e-9)

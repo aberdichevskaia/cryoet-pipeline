@@ -13,14 +13,14 @@ writes it there), makes the plan from the same export with
   which particles each seed averaged (the project's seed_manifest.txt) must be the
   same. The table only after rounding ours to 5 significant digits, as Dynamo wrote
   its own; the run keeps the export's digits.
-- a map seed must be the same map; a subset or blob seed, Dynamo's average to
-  within 1e-4 of its standard deviation inside the mask (rms), the level at which
-  the port's averaging was accepted against Dynamo's project averaging before (8e-5
-  on refine223, 6.5e-5 on sel45_k1). On five projects made in Dynamo 1.1.511 on the
-  Mac from the CZII export (2026-11-02, all passed): 3.5e-7 to 1.8e-5 inside the
-  mask, 8e-7 to 1.6e-4 over the whole map, growing toward the box's faces (up to
-  1.4e-3 of the largest value there), where `average_class` and `dynamo_average`
-  part; why is not known. The whole map's difference is printed too;
+- a map seed must be the same map; a subset or blob seed, Dynamo's average to 1e-5
+  over the whole box (the norm of the difference over the norm of Dynamo's), what
+  float32 leaves being 2e-7 to 8e-7: five projects made in Dynamo 1.1.511 on the Mac
+  from the CZII export, 2026-11-02, where the largest difference anywhere was 1.1e-6
+  of the largest value. Before `average_class` computed its coordinates as the MEX
+  does (`resample(..., coordinates_in_double=True)`), one voxel at a box face, which
+  one particle in 300 reached in one but not in the other, had them differ by up to
+  1.6e-4 over the box there and up to 4.6e-4 of the sd inside the mask on max;
 - a noise seed is not compared: MATLAB's randn is not numpy's, so it is new noise.
 
 A variable the command left out takes the setup's default of today, but where an
@@ -37,12 +37,12 @@ the setup of today can make it again:
   is not compared, the port does not bin.
 
 Projects with symmetry or an axis offset are not compared: the port models neither.
-On max (2026-11-02, before the older setups were read so), of 41 projects 39 were
-compared: the tables, masks, seeds' particles and map seeds of all matched, the
-searches of all but the older setups' and one GPU project's, which differed as
-above; the subset and blob seeds of most differed, by up to 4.6e-4 of their sd
-inside the mask. Prints one block per project and PASS or FAIL; exits 1 if any
-failed. Disposable.
+On max (2026-11-02, before the older setups were read so and before the seeds were
+averaged as the MEX turns), of 41 projects 39 were compared: the tables, masks,
+seeds' particles and map seeds of all matched, the searches of all but the older
+setups' and one GPU project's, which differed as above, and the subset and blob
+seeds of most differed as above. Prints one block per project and PASS or FAIL;
+exits 1 if any failed. Disposable.
 """
 
 from __future__ import annotations
@@ -58,9 +58,9 @@ import numpy as np
 from cryoet_pipeline.dynamo_mra_project import CLASS, MraPlan, plan_from_dynamo
 from cryoet_pipeline.mra_setup import plan_from_export, read_export, search_rounds
 
-SEED_DIFFERENCE = 1e-4
-"""A subset or blob seed's rms difference from Dynamo's inside the mask, over the sd of
-Dynamo's there."""
+SEED_DIFFERENCE = 1e-5
+"""A subset or blob seed's difference from Dynamo's over the whole box: the norm of the
+difference over the norm of Dynamo's."""
 
 
 def _split(command: str) -> list[str]:
@@ -247,10 +247,10 @@ def compare(ours: MraPlan, theirs: MraPlan) -> tuple[list[str], bool]:
         masked = float(np.sqrt(np.mean(difference[inside] ** 2)) / dynamo_seed[inside].std())
         whole = float(np.linalg.norm(difference) / np.linalg.norm(dynamo_seed))
         correlation = float(np.corrcoef(mine_seed[inside], dynamo_seed[inside])[0, 1])
-        check(label, masked <= SEED_DIFFERENCE,
-              f"inside the mask rms difference {masked:.1e} of its sd, correlation "
-              f"{correlation:.10f}; the whole map {whole:.1e}, the largest "
-              f"{_largest(difference, dynamo_seed):.1e} of its largest value")
+        check(label, whole <= SEED_DIFFERENCE,
+              f"the whole map {whole:.1e}, the largest "
+              f"{_largest(difference, dynamo_seed):.1e} of its largest value; inside the mask "
+              f"rms difference {masked:.1e} of its sd, correlation {correlation:.10f}")
     check("seed notes", [_note(note) for note in ours.reference_notes]
           == [_note(note) for note in theirs.reference_notes], "; ".join(theirs.reference_notes))
     return lines, passed

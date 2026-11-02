@@ -41,13 +41,16 @@ python scripts/compare_mra_setup.py <export folder>/<project> ...
 reads each project's variables from `<export folder>/<project>_setup.log`, makes
 the plan again and compares the two: particles, starting table (ours rounded to
 five digits for it), mask, every iteration's search and the particles of each
-seed must be the same, a subset or blob seed within 1e-4 of its sd inside the
-mask. On five projects of the CZII export made in Dynamo 1.1.511 on the Mac
-(2026-11-02, every variable of the setup but symmetry and GPUs) all of that
-matched exactly but the averaged seeds, which agreed to 3.5e-7 to 1.8e-5 of their
-sd inside the mask and 8e-7 to 1.6e-4 over the whole box, the difference growing
-toward the box's faces; why `average_class` and `dynamo_average` part there is
-not known.
+seed must be the same, a subset or blob seed within 1e-5 over the whole box. Older
+setups are read as they meant their variables (the script's header). On five
+projects of the CZII export made in Dynamo 1.1.511 on the Mac (2026-11-02, every
+variable of the setup but symmetry and GPUs) all of that matched exactly and the
+averaged seeds to float32's rounding, 2e-7 to 8e-7 over the box, once
+`average_class` turned each particle as Dynamo's MEX does
+([dynamo_search.md](dynamo_search.md)); before, one voxel at a box face made them
+differ by up to 1.6e-4. On max's 41 projects (the same day, before that fix and
+before older setups were read so) tables, masks, the seeds' particles and map
+seeds all matched.
 
 ## Dynamo itself on the MDC cluster
 
