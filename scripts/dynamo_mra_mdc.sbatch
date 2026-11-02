@@ -37,8 +37,11 @@
 # one (scripts/sample_export.py) to check the port's global search against
 # (scripts/torch_search_check.py). SETUP_ONLY=1 makes the project and stops, for
 # the port to compute it by the cards Dynamo wrote for every iteration when the
-# setup unfolded it; a few cores and an hour do. scripts/mra_port_run.sbatch,
-# given the same variables, runs this setup itself and then the port, in one job.
+# setup unfolded it (scripts/mra_port_run.sbatch with PROJECT); a few cores and an
+# hour do. The port's own runs need none of this since 2026-11-02:
+# scripts/mra_port_run.sbatch, given EXPORT, NAME and these variables, makes the
+# plan without Dynamo (cryoet_pipeline.mra_setup, checked against this setup's
+# projects with scripts/compare_mra_setup.py).
 # CONE_STEPS="5 5 3 3 3" sets how wide each round's cone is, in its own steps (3
 # unless given). GPUS=0 aligns on the job's GPU (submit with --partition=gpu
 # --gres=gpu:1) from EM copies of the particles, DATA_FOLDER=particles_em
@@ -62,8 +65,9 @@
 # the setup to the report (scripts/hold_run_lock.py). A second job of the same
 # project, started while the first is on it, stops at once with REFUSED, the first
 # job's number, node and start, having run nothing; one that waited in the queue
-# and starts after the first has ended carries the project on. The setup that
-# scripts/mra_port_run.sbatch runs takes the same lock while it makes the project.
+# and starts after the first has ended carries the project on. (Until 2026-11-02
+# scripts/mra_port_run.sbatch ran this setup too, under the same lock; it now
+# refuses a new run of a NAME this job has a project or a setup of in EXPORT.)
 # On max (2026-10-30), with the lock of a project lock_check held on max011, a job
 # of that project on max031 stopped at once naming the holder, and the next one,
 # started once the holder had ended, took the lock and set the project up
@@ -225,7 +229,7 @@ if [[ -n "${SETUP_ONLY:-}" ]]; then
         exit 1
     fi
     echo "set up      $EXPORT/$NAME, not computed (SETUP_ONLY); the port computes it with"
-    echo "            scripts/mra_port_run.sbatch and the same EXPORT and NAME"
+    echo "            PROJECT=$EXPORT/$NAME scripts/mra_port_run.sbatch"
     exit 0
 fi
 made_for=$(sed -n 's/^how_many_processors=\([0-9]*\);$/\1/p' "$card")

@@ -5,9 +5,10 @@ the starting table, the references its channels start from (its seeds, as
 `settings/template_initial_ref_*.em`), the soft mask (`settings/mask.em`), the
 particles (its `folder_data`), and each iteration's search from that iteration's
 own card, which Dynamo writes for every iteration when a project is unfolded: a
-project the setup made and Dynamo never computed has its whole plan too, and that
-is how the pipeline makes runs of its own. `run_mra_project` then runs those
-iterations with `dynamo_mra` (reference preparation, every channel's search,
+project the setup made and Dynamo never computed has its whole plan too.
+`mra_setup.plan_from_export` makes the same plan from an export folder without
+Dynamo, and that is how the pipeline makes runs of its own. `run_mra_project`
+then runs those iterations with `dynamo_mra` (reference preparation, every channel's search,
 assignment by the highest CC,
 class averages as the MRA plugin makes them, dead channels dropped; in a project
 without MRA, a map seed's one channel, its average as the project makes it) and
@@ -92,6 +93,12 @@ class MraPlan:
     mra: list[bool]
     """Per iteration, the card's `mra`: the MRA plugin assigns and averages, or (0)
     the project averages its one channel itself."""
+    seed_groups: np.ndarray | None = None
+    """(tag, channel) rows, in the starting table's order: the channel whose seed
+    averaged the particle, 0 for none; the seeds' `seed_manifest.txt`."""
+    setup: dict[str, Any] | None = None
+    """What the pipeline's setup made the plan from, when it made it
+    (`mra_setup.plan_from_export`); the run keeps it as `settings/setup.json`."""
 
 
 _REFUSED = {
@@ -104,14 +111,21 @@ _REFUSED = {
 }
 
 
+def dim_is_ported(dim: int, box: int) -> bool:
+    """Can the port search at `dim`: the box itself, or an even, smaller one that
+    does not divide it (Dynamo bins then instead of interpolating: not ported)."""
+
+    return dim == box or (dim % 2 == 0 and 4 <= dim < box and box % dim != 0)
+
+
 def _card_settings(card: dict[str, str], box: int, number: int) -> SearchSettings:
     """An iteration's search from its card, refusing what the port does not model."""
 
     wrong = {key: card[key] for key, allowed in _REFUSED.items()
              if key in card and card[key].strip() not in allowed}
     dim = int(float(card.get("dim", box)))
-    if dim != box and (dim % 2 or not 4 <= dim < box or box % dim == 0):
-        wrong["dim"] = card["dim"]  # Dynamo bins when dim divides the box: not ported
+    if not dim_is_ported(dim, box):
+        wrong["dim"] = card["dim"]
     limits = [float(value) for value in card.get("area_search", "").replace(",", " ")
               .strip("[] ").split()]
     if len(limits) != 3 or len(set(limits)) != 1:
@@ -166,6 +180,11 @@ def plan_from_dynamo(project: Path, *, iterations: int | None = None) -> MraPlan
         seeds = seeds.parent
     notes_path = seeds / "seed_kinds.txt"
     notes = notes_path.read_text().splitlines() if notes_path.exists() else []
+    manifest = seeds / "seed_manifest.txt"
+    try:
+        groups = read_seed_manifest(manifest) if manifest.exists() else None
+    except ValueError:
+        groups = None  # a record only: one dlmwrite could not hold does not stop the run
     mra = [card.get("mra", "1").strip() != "0" for card in cards]
     if len(references) > 1 and not all(mra):
         raise ValueError(f"{project}: mra 0 with {len(references)} references, each refined "
@@ -174,8 +193,22 @@ def plan_from_dynamo(project: Path, *, iterations: int | None = None) -> MraPlan
         source=project, particles=particles, table=table, references=references,
         reference_notes=notes, soft_mask=soft_mask,
         settings=[_card_settings(card, box, index) for index, card in enumerate(cards, 1)],
-        cards=cards, mra=mra,
+        cards=cards, mra=mra, seed_groups=groups,
     )
+
+
+def read_seed_manifest(path: Path) -> np.ndarray:
+    """`seed_manifest.txt`'s (tag, channel) rows as integers. MATLAB's dlmwrite wrote
+    Dynamo's with 5 significant digits (123456 as 1.2346e+05, Dynamo 1.1.511), so a
+    tag from 100,000 up cannot be read back from one."""
+
+    rows = np.array([[float(token) for token in line.split()]
+                     for line in path.read_text().splitlines() if line.strip()])
+    if rows.ndim != 2 or rows.shape[1] != 2:
+        raise ValueError(f"{path}: not (tag, channel) rows")
+    if np.any(rows[:, 0] >= 100_000) or np.any(rows != np.round(rows)):
+        raise ValueError(f"{path}: tags from 100,000 up, which dlmwrite's 5 digits cannot hold")
+    return rows.astype(int)
 
 
 def _particle(folder: Path, tag: int) -> np.ndarray:
@@ -312,6 +345,12 @@ def _write_start(plan: MraPlan, out: Path, destination: str, spacing: float | No
         write_em(seeds / f"template_initial_ref_{channel:03d}.em", reference)
         write_em(out / "settings" / f"template_initial_ref_{channel:03d}.em", reference)
     (seeds / "seed_kinds.txt").write_text("".join(f"{line}\n" for line in plan.reference_notes))
+    if plan.seed_groups is not None:
+        (seeds / "seed_manifest.txt").write_text(
+            "".join(f"{tag} {channel}\n" for tag, channel in plan.seed_groups))
+    if plan.setup is not None:
+        (out / "settings").mkdir(parents=True, exist_ok=True)
+        (out / "settings" / "setup.json").write_text(json.dumps(plan.setup, indent=1) + "\n")
     write_em(out / "settings" / "mask.em", plan.soft_mask)
     starting = out / "results" / "ite_0001" / "starting_values"
     for channel in plan.references:
@@ -359,12 +398,11 @@ def _finished(plan: MraPlan, out: Path) -> int:
              for seed in sorted(settings.glob("template_initial_ref_*.em"))}
     if sorted(seeds) != sorted(plan.references):
         differ.append(f"channels {sorted(seeds)}, the plan's {sorted(plan.references)}")
-    elif any(not np.array_equal(read_em(seed), plan.references[channel].astype(np.float32))
+    elif any(not _same_map(read_em(seed), plan.references[channel])
              for channel, seed in seeds.items()):
         differ.append("seeds")
     mask = settings / "mask.em"
-    if not mask.exists() or not np.array_equal(read_em(mask),
-                                                plan.soft_mask.astype(np.float32)):
+    if not mask.exists() or not _same_map(read_em(mask), plan.soft_mask):
         differ.append("mask")
     starting = out / "results" / "ite_0001" / "starting_values"
     for channel in plan.references:
@@ -384,6 +422,22 @@ def _finished(plan: MraPlan, out: Path) -> int:
         raise ValueError(f"{out} finished {done} iteration(s) of another plan than "
                          f"{plan.source}'s ({'; '.join(differ)}); give the run a new name")
     return done
+
+
+def _same_map(written: np.ndarray, planned: np.ndarray) -> bool:
+    """A map the run wrote (float32) against the plan's, equal to float32's last bits.
+
+    A plan the pipeline's setup made again from an export has its seeds averaged and
+    its mask made again, possibly on another node, where numpy can take other
+    vectorised exp, sin and cos for the CPU; a map of other particles, or another
+    mask, differs by far more than a millionth of its largest value.
+    """
+
+    planned = planned.astype(np.float32)
+    if written.shape != planned.shape:
+        return False
+    scale = float(np.abs(planned).max()) or 1.0
+    return float(np.abs(written - planned).max()) <= 1e-6 * scale
 
 
 def _written(out: Path, number: int) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
@@ -516,4 +570,5 @@ def torch_search(device: str, dtype: str, chunk: int, devices: int = 1,
     return search
 
 
-__all__ = ["MraPlan", "plan_from_dynamo", "run_mra_project", "torch_search"]
+__all__ = ["MraPlan", "dim_is_ported", "plan_from_dynamo", "read_seed_manifest",
+           "run_mra_project", "torch_search"]

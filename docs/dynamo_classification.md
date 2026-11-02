@@ -2,10 +2,54 @@
 
 Real Dynamo's multireference alignment (MRA) on an export of
 `scripts/export_dynamo.py`, one project per seed design, and a PDF report per
-project. The pipeline runs none of it yet; the report's pages are written so
-that the pipeline's own classification can feed them later.
+project. Since 2026-11-02 the pipeline sets such a run up and computes it without
+Dynamo (the next section); Dynamo's own route, after it, stays as an external
+control. The report reads both.
 
-## Make and run a project on the MDC cluster
+## A run without Dynamo
+
+From the repo root on max, one GPU job per run, with the variables of Dynamo's
+route below:
+
+```bash
+EXPORT=<export folder> NAME=mra_nss SEEDS="subset subset noise" sbatch --export=ALL --job-name=mra_nss scripts/mra_port_run.sbatch
+```
+
+The job makes the plan from the export with the pipeline's setup
+(`cryoet_pipeline.mra_setup`, `scripts/dynamo_mra_setup.m` in Python), computes
+it with the pipeline's port of Dynamo's MRA on the job's GPUs as
+`<EXPORT>/<NAME>_port`, laid out as a Dynamo project, and writes the report beside
+it. The plan is the one Dynamo's setup made from the same variables: the same
+particles in each subset or blob seed (MATLAB's `rand` and `randperm` after
+`rng(20261016)` are numpy's `RandomState`, measured), averaged as `dynamo_average`
+averages, the same mask (`dynamo_sphere`'s, bit for bit) and the same search in
+every iteration. Two things differ: a noise seed is new noise (MATLAB's `randn` is
+not numpy's), and the starting table keeps the export's digits where Dynamo's
+projects rounded it to five significant digits. The run keeps the variables in
+`settings/setup.json`; a job submitted again makes the plan again and carries the
+run on only if it comes out the same. `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
+refused (the port models no symmetry and searches on every GPU of the job), and
+so is a `NAME` Dynamo has a project of in the export: that project's port run is
+made with `PROJECT=<export>/<name>` (the header of `scripts/mra_port_run.sbatch`).
+
+The setup is checked against projects Dynamo's setup made:
+
+```bash
+python scripts/compare_mra_setup.py <export folder>/<project> ...
+```
+
+reads each project's variables from `<export folder>/<project>_setup.log`, makes
+the plan again and compares the two: particles, starting table (ours rounded to
+five digits for it), mask, every iteration's search and the particles of each
+seed must be the same, a subset or blob seed within 1e-4 of its sd inside the
+mask. On five projects of the CZII export made in Dynamo 1.1.511 on the Mac
+(2026-11-02, every variable of the setup but symmetry and GPUs) all of that
+matched exactly but the averaged seeds, which agreed to 3.5e-7 to 1.8e-5 of their
+sd inside the mask and 8e-7 to 1.6e-4 over the whole box, the difference growing
+toward the box's faces; why `average_class` and `dynamo_average` part there is
+not known.
+
+## Dynamo itself on the MDC cluster
 
 From the repo root on max, one job per project:
 

@@ -10,25 +10,32 @@
 # on four A40s, with its classification report. A new run is one command from the
 # repo root, with the variables scripts/dynamo_mra_mdc.sbatch takes for Dynamo:
 #
-#   EXPORT=outputs/ryr1/dynamo/bin8-2x-pad NAME=mra_pad_ssn_g2atan2 \
+#   EXPORT=outputs/ryr1/dynamo/bin8-2x-pad NAME=mra_pad_ssn_g2atan3 \
 #       SEEDS="subset subset noise" SCHEDULE=coarse_to_fine FIRST_LOWPASS=53.76 \
 #       LAST_LOWPASS=29.4 DIAMETER=340 GLOBAL_ROUNDS=2 \
-#       sbatch --export=ALL --job-name=mra_pad_ssn_g2atan2 scripts/mra_port_run.sbatch
+#       sbatch --export=ALL --job-name=mra_pad_ssn_g2atan3 scripts/mra_port_run.sbatch
 #
 # (g2atan's own variables, which Dynamo ran on 32 cores as mra_pad_ssn_g2atan.)
-# The job makes the Dynamo project $EXPORT/$NAME unless it is there (Dynamo's own
-# setup: scripts/dynamo_mra_mdc.sbatch with SETUP_ONLY=1, run inside this job while
-# the cards wait, 3 minutes for g2atan2 on max; it averages 300 particles for each
-# subset or blob seed and writes every iteration's card, the plan the port follows),
-# computes it with the port as $EXPORT/${NAME}_port, and writes
-# $EXPORT/${NAME}_port_classification_report.pdf, TEMPLATE drawn in it as in
-# Dynamo's reports. The project is made for 32 cores, so Dynamo can compute the
-# same one for a comparison (scripts/dynamo_mra_mdc.sbatch, the same EXPORT and
-# NAME). GPUS, Dynamo's own GPU setting, is refused here: the port searches on
-# every GPU the job has.
+# Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
+# with the pipeline's setup (cryoet_pipeline.mra_setup; until 2026-11-02 Dynamo's,
+# scripts/dynamo_mra_setup.m, ran inside this job): the same particles in each subset
+# or blob seed, averaged as dynamo_average averages, the same mask and the same
+# search in every iteration, but new noise in a noise seed (MATLAB's randn is not
+# numpy's) and the export's own digits in the starting table, where Dynamo's were
+# rounded to five; scripts/compare_mra_setup.py checks a plan against a project
+# Dynamo's setup made. It then computes the plan with the port as
+# $EXPORT/${NAME}_port, which keeps the setup's variables in settings/setup.json,
+# and writes $EXPORT/${NAME}_port_classification_report.pdf, TEMPLATE drawn in it as
+# in Dynamo's reports. GPUS, Dynamo's own GPU setting, is refused here: the port
+# searches on every GPU the job has; so are SYMMETRY (but c1) and AXIS_OFFSET, which
+# the port does not model. A NAME that Dynamo has a project of in EXPORT, or a setup
+# under way (its ${NAME}_seeds and the rest), is refused for a new run: that
+# project's port run is made and carried on with PROJECT, below.
 #
-# A job that runs out of time, or stops, is submitted again as it was: the project
-# is not made again, and the port carries on from its last finished iteration
+# A job that runs out of time, or stops, is submitted again as it was: the plan is
+# made again from the same variables, and must come out as the run's (seeds and mask
+# to float32's last bits, the starting table and every finished iteration's search
+# exactly), and the port carries on from its last finished iteration
 # (`iteration N ok` in ${NAME}_port/log.txt). Every iteration starts from what the
 # one before it wrote, as Dynamo's do, so the run ends as an unstopped one would:
 # g2atan2's first job ran out of time in iteration 2 (2026-10-29), the next carried
@@ -82,38 +89,47 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 [[ -f scripts/mra_port_run.py ]] || { echo "submit from the repo root" >&2; exit 1; }
 if [[ -n "${EXPORT:-}" ]]; then
     [[ -z "${PROJECT:-}" ]] || { echo "give EXPORT and NAME for a new run, or PROJECT; not both" >&2; exit 1; }
-    : "${NAME:?set NAME to the name of the project}"
+    : "${NAME:?set NAME to the name of the run}"
+    : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to set the run up}"
     if [[ -n "${GPUS:-}" ]]; then
         echo "GPUS is Dynamo's own GPU setting; the port searches on every GPU of the job" \
              "(--gres=gpu:a40:N)" >&2
         exit 1
     fi
-    PROJECT=$EXPORT/$NAME
+    if [[ -n "${SYMMETRY:-}" && "$SYMMETRY" != c1 ]] || [[ -n "${AXIS_OFFSET:-}" ]]; then
+        echo "SYMMETRY and AXIS_OFFSET are Dynamo's; the port models no symmetry" >&2
+        exit 1
+    fi
     name=${NAME}_port
+    run=$EXPORT/$name
 else
     : "${PROJECT:?set PROJECT to a Dynamo project, or EXPORT and NAME for a new run}"
     name=${NAME:-$(basename "$PROJECT")_port}
+    run=$(dirname "$PROJECT")/$name
 fi
-run=$(dirname "$PROJECT")/$name
 # The rest of the job runs again under the run's lock, the setup, the port and the
 # report: a second job of the same run stops here, naming the first. The pipeline's
-# env only gives the lock its python here: the setup runs Dynamo in the job's own
-# environment, and the env is activated after it.
+# env only gives the lock its python here; the job activates it after.
 if [[ "${MRA_PORT_RUN_LOCK:-}" != "$run.lock" ]]; then
     export MRA_PORT_RUN_LOCK=$run.lock
     holder=$(source scripts/activate_env.sh > /dev/null && command -v python) \
         || { echo "REFUSED: no pipeline env found to hold $run.lock with" >&2; exit 1; }
     exec "$holder" scripts/hold_run_lock.py "$run.lock" -- bash "$script"
 fi
-if [[ -n "${EXPORT:-}" ]]; then
-    if [[ ! -f "$PROJECT/cards/ite_0001/card_ite_ite_0001.card" ]]; then
-        # Made for 32 cores, which the setup reads from SLURM_CPUS_PER_TASK, whatever
-        # this job has; a refusal of the setup ends this job, on this log, as does a
-        # Dynamo job of the same project holding its lock (scripts/dynamo_mra_mdc.sbatch).
-        SETUP_ONLY=1 SLURM_CPUS_PER_TASK=32 bash scripts/dynamo_mra_mdc.sbatch
-    else
-        echo "set up      $PROJECT was made before: the port follows its cards, and the" \
-             "setup's variables are not read"
+if [[ -n "${EXPORT:-}" && ! -f "$run/settings/setup.json" ]]; then
+    # A new run. Dynamo's own files of the name belong to a Dynamo project, or to a
+    # setup a Dynamo job is making, whose port run is PROJECT's.
+    dynamo=()
+    for item in "$NAME" "${NAME}_seeds" "${NAME}_fmasks" "${NAME}_tables" "${NAME}.vpr"; do
+        if [[ -e "$EXPORT/$item" ]]; then dynamo+=("$item"); fi
+    done
+    if (( ${#dynamo[@]} )); then
+        {
+            echo "REFUSED: $EXPORT holds Dynamo's ${dynamo[*]}, a Dynamo project of this name"
+            echo "or its setup. Its port run is made, or carried on, with PROJECT=$EXPORT/$NAME;"
+            echo "a new run needs another NAME."
+        } >&2
+        exit 1
     fi
 fi
 source scripts/activate_env.sh
@@ -121,14 +137,32 @@ echo "lock        $run.lock, held by this job to its end"
 echo "node        $(hostname)"
 echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
 echo "started     $(date -Is)"
-echo "project     $PROJECT"
+if [[ -n "${EXPORT:-}" ]]; then
+    echo "export      $EXPORT, set up by the pipeline"
+    from=(--export "$EXPORT" --seeds "$SEEDS")
+    for pair in SCHEDULE:--schedule FIRST_LOWPASS:--first-lowpass LAST_LOWPASS:--last-lowpass \
+            DIAMETER:--diameter LOWPASS_STEPS:--lowpass-steps MASK_RADIUS:--mask-radius \
+            MASK_EDGE:--mask-edge MASK_FILE:--mask-file REFERENCE:--reference \
+            GLOBAL_ROUNDS:--global-rounds GLOBAL_STEP:--global-step CONE_STEPS:--cone-steps \
+            DATA_FOLDER:--data-folder; do
+        variable=${pair%%:*}
+        if [[ -n "${!variable:-}" ]]; then from+=("${pair#*:}" "${!variable}"); fi
+    done
+    case "${GLOBAL_FULL_BOX:-}" in
+        "" | 0 | false) ;;
+        *) from+=(--global-full-box) ;;
+    esac
+else
+    echo "project     $PROJECT"
+    from=("$PROJECT")
+fi
 echo "port run    $run"
 cards="slurm-${SLURM_JOB_NAME:-mra_port_run}-${SLURM_JOB_ID:-local}-gpus.csv"
 nvidia-smi --format=csv,noheader,nounits -l 60 \
     --query-gpu=timestamp,index,clocks.sm,clocks.max.sm,utilization.gpu,temperature.gpu,power.draw \
     > "$cards" 2>&1 &
 sampler=$!
-python scripts/mra_port_run.py "$PROJECT" --name "$name" --device "${DEVICE:-cuda}" \
+python scripts/mra_port_run.py "${from[@]}" --name "$name" --device "${DEVICE:-cuda}" \
     --dtype "${DTYPE:-float32}" --per-gpu "${PER_GPU:-1}" --workers "${SLURM_CPUS_PER_TASK:-1}"
 { kill "$sampler" && wait "$sampler"; } 2>/dev/null || true
 echo "finished    $(date -Is)"
@@ -145,7 +179,8 @@ awk -F', ' '$2 ~ /^[0-9]+$/ && $5 + 0 >= 50 {
             clock[g] / n[g], low[g], top[g], busy[g] / n[g], hot[g], watts[g]
     }' "$cards" | sort || echo "no gpu summary" >&2
 echo "gpu samples $cards"
-if compgen -G "$PROJECT/results/ite_*/averages/refined_table_ref_*_ite_*.tbl" > /dev/null; then
+if [[ -n "${PROJECT:-}" ]] \
+        && compgen -G "$PROJECT/results/ite_*/averages/refined_table_ref_*_ite_*.tbl" > /dev/null; then
     python scripts/compare_dynamo_classes.py "$PROJECT" "$run" || echo "no class comparison" >&2
 fi
 report_options=()

@@ -1,4 +1,5 @@
-"""scripts/mra_port_run.py: a project computed again and compared, or only set up and computed."""
+"""scripts/mra_port_run.py: a project computed again and compared, or only set up and
+computed, or a new run set up from an export without Dynamo."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import sys
 from pathlib import Path
 
 from test_dynamo_mra_project import _project
+from test_mra_setup import _export
 
 from cryoet_pipeline.dynamo_mra_project import plan_from_dynamo, run_mra_project
 
@@ -38,6 +40,34 @@ def test_a_project_only_set_up_is_computed_with_nothing_to_compare(tmp_path: Pat
     again = _run(str(project), "--device", "numpy")
     assert again.returncode == 0, again.stderr
     assert "mra_t_port: all 2 iterations finished before; nothing to compute" in again.stdout
+
+
+def test_a_new_run_is_set_up_from_an_export_without_dynamo(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    arguments = ("--export", str(export), "--name", "mra_n_port", "--seeds", "noise noise",
+                 "--mask-radius", "5", "--schedule", "coarse_to_fine", "--first-lowpass", "50",
+                 "--iterations", "1", "--device", "numpy")
+    result = _run(*arguments)
+    assert result.returncode == 0, result.stderr
+    assert "seed 1: noise" in result.stdout
+    assert ("round 1: 1 iteration(s), low-pass 3 px (53.3 A), cone and in-plane 31.2 deg in "
+            "10.4 deg steps") in result.stdout
+    assert "mra_n_port was set up from" in result.stdout
+    run = export / "mra_n_port"
+    assert (run / "log.txt").read_text() == "iteration 1 ok\n"
+    assert '"seeds": [\n  "noise",\n  "noise"\n ]' in (run / "settings" / "setup.json").read_text()
+    # Submitted again: the plan made again is the run's, and it is finished.
+    again = _run(*arguments)
+    assert again.returncode == 0, again.stderr
+    assert "mra_n_port: all 1 iterations finished before; nothing to compute" in again.stdout
+    # The setup's refusals end the script with REFUSED, not a traceback.
+    refused = _run("--export", str(export), "--name", "x", "--seeds", "subset subset",
+                   "--device", "numpy")
+    assert refused.returncode == 1
+    assert refused.stderr.strip() == ("REFUSED: the setup: 12 particles cannot give 2 disjoint "
+                                      "subsets of 300")
+    both = _run(str(export / "mra_t"), "--export", str(export), "--seeds", "noise noise")
+    assert both.returncode == 2 and "one of them" in both.stderr
 
 
 def test_a_computed_project_is_run_again_and_compared(tmp_path: Path) -> None:
