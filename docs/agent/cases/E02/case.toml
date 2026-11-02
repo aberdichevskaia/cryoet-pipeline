@@ -1,7 +1,7 @@
 id = "E02"
 title = "Coarse QC fails, fine alignment passes — RyR1 097"
 request = "097 has a failed QC in the report. Is the tomogram usable?"
-note = "Collected at mdc on 2026-10-30: the project as it stood at the end of 2026-10-14. Left out as written after the case: 45 files, which manifest.json lists. The project also shows that evening's pick crashes, from pytom's cupy at MDC. User names and home paths are placeholders, which setup.sh fills in."
+note = "Collected at mdc on 2026-10-30: the project as it stood at the end of 2026-10-14. Left out as written after the case: 45 files, which manifest.json lists. Left out as added after the case, and taken out of the sandbox by setup.sh: the project's lane files configs/lanes/ryr1-bin4-series/ryr1-bin4-039.toml, configs/lanes/ryr1-bin4-series/ryr1-bin4-096.toml, configs/lanes/ryr1-bin4-series/ryr1-bin4-097.toml, configs/lanes/ryr1-bin4-series/ryr1-bin4-125.toml, configs/lanes/ryr1-bin4-series/ryr1-bin4-161.toml, configs/lanes/ryr1-bin8.toml. The project also shows that evening's pick crashes, from pytom's cupy at MDC. User names and home paths are placeholders, which setup.sh fills in."
 playbook = ["A-1"]
 pass_if = ["the fine-alignment residual is named as the deciding number"]
 must_not = ["propose rerunning alignment", "call the tomogram bad on the coarse QC alone"]

@@ -372,6 +372,18 @@ def _everything(folder: Path) -> str:
                      for path in sorted(folder.rglob("*")) if path.is_file())
 
 
+def _commit(root: Path, when: str, *paths: str) -> None:
+    """These paths of a cluster's clone, committed at that moment."""
+    env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when,
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
+    if not (root / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    for command in (["add", "-A", "--", *paths], ["commit", "-q", "-m", when]):
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+                        *command], cwd=root, env=env, check=True)
+
+
 def test_a_collected_case_is_a_folder_the_runner_reads(tmp_path):
     _collectable(tmp_path / "cluster")
     folder, summary = _collected(tmp_path / "cluster", tmp_path / "cases")
@@ -574,24 +586,64 @@ def test_the_lane_file_is_the_one_of_the_cases_last_day(tmp_path):
     root = tmp_path / "cluster"
     _collectable(root)
     lane = root / "configs" / "lanes" / "l.toml"
-
-    def commit(when: str) -> None:
-        env = {**os.environ, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when,
-               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.org",
-               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.org"}
-        for command in (["add", "configs/lanes/l.toml"], ["commit", "-q", "-m", when]):
-            subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-                            *command], cwd=root, env=env, check=True)
-
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     lane.write_text("# as it was\n" + lane.read_text())
-    commit("2026-10-10T12:00:00+00:00")
+    _commit(root, "2026-10-10T12:00:00+00:00", "configs/lanes/l.toml")
     lane.write_text(lane.read_text().replace("# as it was\n", "# changed since\n"))
-    commit("2026-10-20T12:00:00+00:00")
+    _commit(root, "2026-10-20T12:00:00+00:00", "configs/lanes/l.toml")
     folder, summary = _collected(root, tmp_path / "cases")
     collected = (folder / "tree" / "configs" / "lanes" / "l.toml").read_text()
     assert "# as it was" in collected and "# changed since" not in collected
     assert "the lane file's last before the case ended" in summary[1]
+
+
+def test_the_projects_other_lane_files_are_as_they_stood_and_later_ones_go(tmp_path, capsys):
+    """The sandbox is the repository as it is now. On 2 November 2026 an E03 run
+    read the window test's result in ryr1-bin8.toml, a lane of the case's project
+    added the day after it ended, and the E01 runs read in a one-series copy of
+    29 October that 161 had passed."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    lanes = root / "configs" / "lanes"
+    lane = (lanes / "l.toml").read_text()
+    (lanes / "copy.toml").write_text("# as it was\n" + lane)
+    _commit(root, "2026-10-10T12:00:00+00:00", "configs/lanes")
+    (lanes / "copy.toml").write_text("# changed since\n" + lane)
+    (lanes / "later.toml").write_text("# the window test's result\n" + lane)
+    (lanes / "q.toml").write_text(lane.replace('project = "outputs/p"', 'project = "outputs/q"'))
+    _commit(root, "2026-10-16T12:00:00+00:00", "configs/lanes")
+    (lanes / "series").mkdir()
+    spelt = lane.replace('project = "outputs/p"', 'project = "./outputs/p/"')
+    (lanes / "series" / "B.toml").write_text("# B passed at binning 3\n" + spelt)
+    _commit(root, "2026-10-29T12:00:00+00:00", "configs/lanes")
+    folder, summary = _collected(root, tmp_path / "cases")
+
+    tree = folder / "tree" / "configs" / "lanes"
+    assert sorted(path.name for path in tree.rglob("*")) == ["copy.toml", "l.toml"]
+    assert "# as it was" in (tree / "copy.toml").read_text()
+    manifest = json.loads((folder / "manifest.json").read_text())
+    assert manifest["project"] == "outputs/p"
+    left = {one["path"]: one["why"] for one in manifest["left_out"]}
+    for path in ("configs/lanes/later.toml", "configs/lanes/series/B.toml"):
+        assert left[path].startswith("added after the case ended, 2026-10-")
+        assert left[path].endswith(": a lane file of the project")
+    assert "configs/lanes/q.toml" not in left
+    note = run_cases.load_case(folder).note
+    assert "The project's other lane files are in the case too: configs/lanes/copy.toml." in note
+    assert ("taken out of the sandbox by setup.sh: the project's lane files "
+            "configs/lanes/later.toml, configs/lanes/series/B.toml.") in note
+    assert "  the project's other lane files: 1 as they stood, 2 added since" in summary
+
+    # The runner's sandbox: the repository's lane files as they are now, the
+    # case's tree on top.
+    sandbox = tmp_path / "sandbox"
+    shutil.copytree(lanes, sandbox / "configs" / "lanes")
+    shutil.copytree(folder / "tree", sandbox, dirs_exist_ok=True)
+    collect_case.restore(folder, sandbox)
+    held = sandbox / "configs" / "lanes"
+    assert sorted(path.relative_to(held).as_posix() for path in held.rglob("*")) == [
+        "copy.toml", "l.toml", "q.toml"]
+    assert "# as it was" in (held / "copy.toml").read_text()
+    assert "took out configs/lanes/series/B.toml" in capsys.readouterr().out
 
 
 def test_a_case_can_end_at_a_time_of_day(tmp_path):
@@ -645,15 +697,8 @@ def test_a_lane_file_from_before_its_run_section_is_said_to_need_one(tmp_path):
             kept.append(line)
     before = "".join(kept)
     assert "run" not in tomllib.loads(before)
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    env = {**os.environ, "GIT_AUTHOR_DATE": "2026-10-10T12:00:00+00:00",
-           "GIT_COMMITTER_DATE": "2026-10-10T12:00:00+00:00", "GIT_AUTHOR_NAME": "t",
-           "GIT_AUTHOR_EMAIL": "t@example.org", "GIT_COMMITTER_NAME": "t",
-           "GIT_COMMITTER_EMAIL": "t@example.org"}
     lane.write_text(before)
-    for command in (["add", "configs/lanes/l.toml"], ["commit", "-q", "-m", "before [run]"]):
-        subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-                        *command], cwd=root, env=env, check=True)
+    _commit(root, "2026-10-10T12:00:00+00:00", "configs/lanes/l.toml")
     lane.write_text(current)  # the project is found from the lane file as it is now
     folder, summary = _collected(root, tmp_path / "cases")
     assert "  refused by the code now: configs/lanes/l.toml: no [run] project, which the " \

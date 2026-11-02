@@ -5,6 +5,7 @@
     "2026-10-14",
     "2026-10-14"
   ],
+  "project": "outputs/ryr1",
   "collected": "2026-10-30T13:16:34+01:00",
   "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
   "files": [
@@ -648,6 +649,30 @@
     {
       "path": "outputs/ryr1/journal.jsonl",
       "why": "no row from before the case ended"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4-series/ryr1-bin4-039.toml",
+      "why": "added after the case ended, 2026-10-29T14:52:45+01:00 (f4a8798): a lane file of the project"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4-series/ryr1-bin4-096.toml",
+      "why": "added after the case ended, 2026-10-29T14:52:45+01:00 (f4a8798): a lane file of the project"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4-series/ryr1-bin4-097.toml",
+      "why": "added after the case ended, 2026-10-29T14:52:45+01:00 (f4a8798): a lane file of the project"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4-series/ryr1-bin4-125.toml",
+      "why": "added after the case ended, 2026-10-29T14:52:45+01:00 (f4a8798): a lane file of the project"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin4-series/ryr1-bin4-161.toml",
+      "why": "added after the case ended, 2026-10-29T14:52:45+01:00 (f4a8798): a lane file of the project"
+    },
+    {
+      "path": "configs/lanes/ryr1-bin8.toml",
+      "why": "added after the case ended, 2026-10-16T16:54:21+02:00 (7f4fd37): a lane file of the project"
     }
   ],
   "slurm": {}

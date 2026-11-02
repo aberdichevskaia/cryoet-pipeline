@@ -5,6 +5,7 @@
     "2026-10-16",
     "2026-10-28T16:30:00"
   ],
+  "project": "outputs/ribo-mdc",
   "collected": "2026-10-30T13:16:35+01:00",
   "commit": "5bcfecb62bf1eea7d6e2f232b190ca2673b0afa7",
   "files": [

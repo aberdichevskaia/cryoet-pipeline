@@ -57,6 +57,11 @@ client, which is what makes it the instrument for deciding about either (see
     one is left. Their `setup.sh` fills the placeholders in and gives the files
     their times on the cluster back, which git does not keep and `show_failure.py`
     needs.
+  - The sandbox is the repository as it is now, so the project's other lane
+    files are taken as they stood when the case ended. `setup.sh` takes out the
+    ones added since: on 2 November 2026, `ryr1-bin8.toml`, added the day after
+    E03 ended, gave an E03 run the result of the test the case asks it to
+    propose.
 
 ## From history
 

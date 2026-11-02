@@ -33,7 +33,8 @@ without days is the project as it is now.
 
 * tree/: the project as it stood when the case ended (the end of its last day,
   or the time `until` gives), at its paths from the repository root. The lane
-  file is its last commit before then. The registry, step timings and journal
+  file, and every other lane file of the project, is its last commit before
+  then; one added since is left out. The registry, step timings and journal
   lose what was written after; QC records, program logs, extra files and job
   configs written after are left out, as are binary files and files over 5 MB.
   The jobs the table names and those that started in the case's days give their
@@ -43,9 +44,12 @@ without days is the project as it is now.
   playbook entries, a note on what is missing, and stand-ins for the variables
   the lane's commands name;
 * manifest.json: every file's time on the cluster and where it came from, what
-  was left out and why, and what only Slurm knows of the named jobs;
+  was left out and why, the project's folder, and what only Slurm knows of the
+  named jobs;
 * setup.sh, which runs --restore in the runner's sandbox: git keeps no file
-  times, and show_failure finds a step's logs by when they were written.
+  times, and show_failure finds a step's logs by when they were written. It
+  also takes out of the sandbox, a copy of the repository as it is now, the
+  project's lane files the case does not hold.
 
 The folders the jobs ran in become {{ROOT}}, the home folder {{HOME}}, the
 user's login and the forms of their name {{USER}} (the passwd full name gives
@@ -505,6 +509,11 @@ def _found(entry: dict[str, Any]) -> list[str]:
 # Collecting
 
 OUT = Path.home() / "cases"
+# Where the lane files are. The sandbox is the repository as it is now, so a lane
+# file of the case's project added later would be in it: on 2 November 2026
+# ryr1-bin8.toml, added on 16 October, gave an E03 run the result of the window
+# test E03 asks it to propose.
+LANES = Path("configs/lanes")
 # A bigger file is not evidence a case folder can carry. The registry, the step
 # timings and the journal are taken whatever their size.
 MAX_BYTES = 5 * 1024 * 1024
@@ -530,7 +539,8 @@ SETUP = """\
 # Puts this sandbox's own folder, home and user where the collector left
 # placeholders for the cluster's, and gives every file of the case the time it was
 # last written there: git keeps no file times, and show_failure finds a step's
-# logs by when they were written.
+# logs by when they were written. Takes out the project's lane files the case does
+# not hold, which were added after it ended.
 set -euo pipefail
 python3 scripts/collect_case.py --restore "$(dirname "$0")"
 """
@@ -662,6 +672,75 @@ def lane_at(root: Path, lane: str, end: datetime | None) -> tuple[str, float, st
     why = "the lane file as it is now" + (
         ": git has no commit of it from before the case ended" if end is not None else "")
     return path.read_text(), path.stat().st_mtime, why
+
+
+def _project_of(text: str | None) -> str | None:
+    """The project a lane file's [run] writes to."""
+    try:
+        named = (tomllib.loads(text or "").get("run") or {}).get("project")
+    except tomllib.TOMLDecodeError:
+        return None
+    return named if isinstance(named, str) else None
+
+
+def _git(root: Path, *args: str) -> str | None:
+    try:
+        return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
+                              text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def project_lanes(
+    root: Path, lane: str, project: Path, end: datetime | None
+) -> tuple[list[Evidence], list[dict[str, str]]]:
+    """The project's lane files besides the case's own, each as its last commit
+    before the case ended, and those added since, left out. A file is the
+    project's if its [run] names the project then or now. For a case without days,
+    or where git cannot say, they are the files as they are now."""
+    def ours(text: str | None) -> bool:
+        named = _project_of(text)
+        return named is not None and (
+            os.path.realpath(_resolve(root, named)) == os.path.realpath(project))
+
+    tracked = _git(root, "ls-files", "--", LANES.as_posix())
+    if tracked is None:
+        paths = {path.relative_to(root).as_posix() for path in (root / LANES).rglob("*.toml")}
+    else:
+        paths = set(tracked.splitlines())
+    last = ""
+    if end is not None and tracked is not None:
+        last = (_git(root, "log", "-1", "--format=%H", f"--before={end.isoformat()}") or "").strip()
+    if last:
+        paths.update((_git(root, "ls-tree", "-r", "--name-only", last, "--", LANES.as_posix())
+                      or "").splitlines())
+    taken: list[Evidence] = []
+    left: list[dict[str, str]] = []
+    for path in sorted(paths - {lane}):
+        if not path.endswith(".toml"):
+            continue
+        current = root / path
+        now = current.read_text() if current.is_file() else None
+        if not last:
+            if ours(now):
+                taken.append(Evidence(path, now, current.stat().st_mtime,
+                                      "the lane file as it is now"))
+            continue
+        found = (_git(root, "log", "-1", "--format=%H %ct", f"--before={end.isoformat()}", "--",
+                      path) or "").split()
+        then = _git(root, "show", f"{found[0]}:{path}") if found else None
+        if then is not None:
+            if ours(then) or ours(now):
+                taken.append(Evidence(path, then, float(found[1]), f"commit {found[0][:9]}, "
+                                      "the lane file's last before the case ended"))
+        elif ours(now):
+            added = (_git(root, "log", "-1", "--diff-filter=A", "--format=%h %ct", "--", path)
+                     or "").split()
+            when = (f", {_when(datetime.fromtimestamp(float(added[1]), tz=UTC))} ({added[0]})"
+                    if added else "")
+            left.append({"path": path,
+                         "why": f"added after the case ended{when}: a lane file of the project"})
+    return taken, left
 
 
 def moved_data(cfg: dict[str, Any]) -> dict[str, str]:
@@ -877,6 +956,9 @@ def collect(
 
     lane_text, lane_modified, lane_source = lane_at(root, case["lane"], end)
     files[case["lane"]] = Evidence(case["lane"], lane_text, lane_modified, lane_source)
+    other_lanes, later_lanes = project_lanes(root, case["lane"], project, end)
+    files.update((one.path, one) for one in other_lanes)
+    left += later_lanes
     for path in named_configs:
         target = _inside(path, sorted(roots))
         if target is None:
@@ -982,6 +1064,13 @@ def collect(
     if later:
         note.append(f"Left out as written after the case: {later} files, which manifest.json "
                     "lists.")
+    if other_lanes:
+        note.append("The project's other lane files are in the case too: "
+                    + ", ".join(one.path for one in other_lanes) + ".")
+    if later_lanes:
+        note.append("Left out as added after the case, and taken out of the sandbox by setup.sh: "
+                    "the project's lane files " + ", ".join(one["path"] for one in later_lanes)
+                    + ".")
     lost = [one["path"] for one in left if one["why"].startswith("not found")]
     if lost:
         note.append(f"Not found on the cluster: {', '.join(lost)}.")
@@ -997,6 +1086,7 @@ def collect(
         "cluster": case["cluster"],
         "days": ([case["since"].isoformat(), case["until"].isoformat()]
                  if end is not None else None),
+        "project": project_name,
         "collected": _when(datetime.now(UTC)),
         "commit": _git_head(root),
         "files": [{"path": one.path, "modified": _when(datetime.fromtimestamp(one.modified,
@@ -1042,6 +1132,8 @@ def collect(
     summary = [
         f"{name}: {len(written)} files in {folder}",
         f"  lane file: {scrub(lane_source)}",
+        f"  the project's other lane files: {len(other_lanes)} as they stood, "
+        f"{len(later_lanes)} added since",
         "  left out: " + (", ".join(f"{count} {reason}"
                                     for reason, count in sorted(reasons.items())) or "nothing"),
     ]
@@ -1055,7 +1147,9 @@ def collect(
 
 def restore(folder: Path, sandbox: Path) -> None:
     """In a runner's sandbox: the placeholders become this sandbox's folder, home
-    and user, and every file of the case gets the time it had on the cluster."""
+    and user, and every file of the case gets the time it had on the cluster. A
+    lane file of the project the case does not hold is the repository's, added
+    after the case ended, and is taken out."""
     manifest = json.loads((folder / "manifest.json").read_text())
     values = {"ROOT": str(sandbox), "HOME": str(Path.home()), "USER": getpass.getuser()}
     for entry in manifest["files"]:
@@ -1069,6 +1163,28 @@ def restore(folder: Path, sandbox: Path) -> None:
             path.write_text(filled)
         moment = datetime.fromisoformat(entry["modified"]).timestamp()
         os.utime(path, (moment, moment))
+    project = manifest.get("project")
+    if not project:
+        return  # collected before 2 November 2026
+    held = {entry["path"] for entry in manifest["files"]}
+    emptied = set()
+    for path in sorted((sandbox / LANES).rglob("*.toml")):
+        relative = path.relative_to(sandbox).as_posix()
+        if relative in held:
+            continue
+        try:
+            named = _project_of(path.read_text())
+        except (OSError, UnicodeDecodeError):
+            continue
+        if named is not None and (
+                os.path.normpath(sandbox / named) == os.path.normpath(sandbox / project)):
+            path.unlink()
+            emptied.add(path.parent)
+            print(f"took out {relative}: a lane file of {project} that the case does not hold")
+    for parent in sorted(emptied, key=lambda one: len(one.parts), reverse=True):
+        while parent != sandbox / LANES and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
 
 
 def main() -> int:
