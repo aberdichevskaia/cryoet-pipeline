@@ -1,0 +1,26 @@
+{
+  "amplitude_contrast": 0.07,
+  "axis_angle_deg": 84.02,
+  "backend": "imod-ctfphaseflip",
+  "corrected_stack_id": "TS_0306:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip:bin8",
+  "ctf_model_id": "TS_0306:ctf_model:ctffind5",
+  "excluded_z_values": [
+    53
+  ],
+  "input_stack_id": "TS_0306:aligned_tilt_stack:final:bin8",
+  "maximum_defocus_um": 3.0593035,
+  "mean_defocus_um": 2.913767112244898,
+  "minimum_defocus_um": 2.6944245000000002,
+  "num_tilts": 49,
+  "pixel_spacing_angstrom": 9.784000396728516,
+  "schema_version": 1,
+  "spherical_aberration_mm": 2.7,
+  "status": "warning",
+  "tilt_series_id": "TS_0306",
+  "voltage_kv": 300.0,
+  "warnings": [
+    "CTF model was fitted on 'TS_0306:aligned_tilt_stack:final', not on 'TS_0306:aligned_tilt_stack:final:bin8'; defocus transfers between binnings but the fit was not made on this stack",
+    "fitted at 2.446 angstrom/pixel and applied at 9.784 angstrom/pixel",
+    "left out 1 of 50 views that the CTF model marks as unfitted (z 53); the corrected stack, and the tomogram built from it, has 49"
+  ]
+}

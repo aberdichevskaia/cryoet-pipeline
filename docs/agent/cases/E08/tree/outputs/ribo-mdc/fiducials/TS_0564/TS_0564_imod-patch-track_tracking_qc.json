@@ -1,0 +1,16 @@
+{
+  "backend": "imod-patch-track",
+  "coverage_fraction": 1.0,
+  "image_count": 56,
+  "max_points_per_fiducial": 56,
+  "median_points_per_fiducial": 56.0,
+  "min_points_per_fiducial": 56,
+  "model_id": "TS_0564:fiducial_model:imod-patch-track",
+  "num_fiducials": 25,
+  "num_points": 1400,
+  "schema_version": 1,
+  "stage": "tracked",
+  "status": "pass",
+  "tilt_series_id": "TS_0564",
+  "warnings": []
+}

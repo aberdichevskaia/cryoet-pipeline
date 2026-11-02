@@ -1,0 +1,18 @@
+{
+  "backend": "cubic-crop",
+  "box_size_px": 48,
+  "dropped_edge_count": 51,
+  "dropped_score_count": 0,
+  "edge_policy": "drop",
+  "extracted_particle_count": 549,
+  "input_tomogram_id": "TS_0623:tomogram:fine:bin8",
+  "minimum_score_threshold": null,
+  "padded_particle_count": 0,
+  "particle_stack_id": "TS_0623:particle_stack:cubic-crop:bin8",
+  "picks_id": "TS_0623:picks:full:pytom-match-pick:bin8",
+  "requested_particle_count": 600,
+  "schema_version": 1,
+  "status": "pass",
+  "tilt_series_id": "TS_0623",
+  "warnings": []
+}

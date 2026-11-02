@@ -1,0 +1,19 @@
+job         ribo-mdc-cpu (3789923) on max162.mdc-berlin.net
+started     2026-10-29T17:44:26+01:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/rerun-seed.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+overwrite   yes
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+[2026-10-29T17:45:07.390] error: *** JOB 3789923 ON max162 CANCELLED AT 2026-10-29T17:45:07 DUE to SIGNAL Terminated ***

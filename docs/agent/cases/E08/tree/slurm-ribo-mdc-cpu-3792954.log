@@ -1,0 +1,51 @@
+job         ribo-mdc-cpu (3792954) on max169.mdc-berlin.net
+started     2026-10-30T13:06:10+01:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/resume-0306.toml
+series      TS_0306
+steps       estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+overwrite   yes
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_ctffind5_estimation_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 1.4 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 0.7 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0306/TS_0306_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 0.6 min, +0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0306/TS_0306_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0306/TS_0306_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0306/reconstruction/TS_0306_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 0.7 min, +0.00 GB
+
+finished    2026-10-30T13:12:36+01:00

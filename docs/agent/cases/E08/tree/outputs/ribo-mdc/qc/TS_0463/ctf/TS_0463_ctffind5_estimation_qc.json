@@ -1,0 +1,33 @@
+{
+  "amplitude_contrast": 0.07,
+  "axis_angle_deg": null,
+  "backend": "ctffind5",
+  "ctf_model_id": "TS_0463:ctf_model:ctffind5",
+  "excluded_z_values": [
+    0
+  ],
+  "hint_defocus_um": 4.5008681641,
+  "input_stack_id": "TS_0463:aligned_tilt_stack:final",
+  "interpolated_z_values": [
+    0
+  ],
+  "max_resolution_angstrom": 4.892000198364258,
+  "maximum_defocus_um": 4.66526875,
+  "mean_astigmatism_um": 0.03321209961000002,
+  "mean_defocus_um": 4.490624943189457,
+  "minimum_defocus_um": 4.3259576172,
+  "num_tilts": 60,
+  "nyquist_angstrom": 4.892000198364258,
+  "pixel_spacing_angstrom": 2.446000099182129,
+  "schema_version": 2,
+  "spherical_aberration_mm": 2.7,
+  "status": "warning",
+  "tilt_series_id": "TS_0463",
+  "unfitted_z_values": [
+    0
+  ],
+  "voltage_kv": 300.0,
+  "warnings": [
+    "1 of 60 views stopped at the low end of the fit range (27 A or coarser of 30), so CTFFIND found no Thon rings on them: -61.7 deg (z 0). With no more than 5, correct-ctf leaves them out of the corrected stack and so of the tomogram; the model gives them a defocus interpolated from the fitted views all the same"
+  ]
+}

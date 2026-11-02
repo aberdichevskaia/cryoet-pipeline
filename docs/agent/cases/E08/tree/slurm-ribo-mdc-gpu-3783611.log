@@ -1,0 +1,267 @@
+job         ribo-mdc-gpu (3783611) on max026.mdc-berlin.net
+started     2026-10-28T18:17:07+01:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/rerun-seed.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       prepare-template pick-particles visualize-picks extract-particles
+overwrite   yes
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind
+NVIDIA A40, 8.6, 46068 MiB
+GPU 0: NVIDIA A40 (UUID: GPU-afe2614a-3b47-1e1e-dfd5-7ea55a8a3b1c)
+
+preflight   ok
+
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --emdb-id EMD-16721 --template-particle-diameter-angstrom 290.0 --template-low-pass-angstrom 19.6 --template-mask-radius-px 18 --template-mask-sigma-px 1.0 --template-box-size-px 60 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map outputs/ribo-mdc/emdb-cache/emd_16721.map
+wrote template: outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_template.mrc
+wrote template mask: outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_mask.mrc
+box size: 60 px
+voxel size: 9.784000396728516 A
+density extent: 31.0/32.0/30.0 px (303/313/294 A)
+mask radius: 18.0 px (176 A)
+wrote template QC: outputs/ribo-mdc/qc/TS_0306/template/TS_0306_pytom_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# prepare-template: 3.5 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --device cuda --pytom-particle-diameter 290.0 --pytom-number-of-particles 600 --pytom-cut-off 0.0 --pytom-low-pass 25.0 --no-pytom-ctf-weighting --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_0306:template_match:pytom-match-pick:bin8
+wrote picks: outputs/ribo-mdc/picks/TS_0306/TS_0306_full_pytom-match-pick_bin8_particles.star
+particles found: 600
+score: 0.1083 min, 0.1267 mean, 0.3156 max
+z spread: 66.6 px sd about z=174, against 75.1 px for a uniform fill
+wrote picking QC: outputs/ribo-mdc/qc/TS_0306/picking/TS_0306_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# pick-particles: 40.7 min, -0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+wrote tomogram: outputs/ribo-mdc/picks_view/TS_0306/TS_0306.mrc
+wrote picks: outputs/ribo-mdc/picks_view/TS_0306/TS_0306_particles.star
+wrote template: outputs/ribo-mdc/picks_view/TS_0306/TS_0306_template.mrc
+wrote ChimeraX script: outputs/ribo-mdc/picks_view/TS_0306/TS_0306_open_in_chimerax.cxc
+wrote IMOD model: outputs/ribo-mdc/picks_view/TS_0306/TS_0306_picks.mod
+  600 picks, drawn as spheres of 18 px — the template mask radius, 18.0 px
+open with: chimerax outputs/ribo-mdc/picks_view/TS_0306/TS_0306_open_in_chimerax.cxc
+open with: 3dmod outputs/ribo-mdc/picks_view/TS_0306/TS_0306.mrc outputs/ribo-mdc/picks_view/TS_0306/TS_0306_picks.mod
+# visualize-picks: 0.7 min, +0.00 GB
+
+# extract-particles
+cryoet extract-particles --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --box-size-px 48 --variant bin8 --overwrite
+wrote particle stack: outputs/ribo-mdc/particles/TS_0306/TS_0306_cubic-crop_bin8_particles.zarr
+particles extracted: 546 of 600
+  dropped: 54 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: outputs/ribo-mdc/qc/TS_0306/particle_extraction/TS_0306_cubic-crop_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# extract-particles: 0.9 min, +0.00 GB
+
+# ---- TS_0463 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --emdb-id EMD-16721 --template-particle-diameter-angstrom 290.0 --template-low-pass-angstrom 19.6 --template-mask-radius-px 18 --template-mask-sigma-px 1.0 --template-box-size-px 60 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map outputs/ribo-mdc/emdb-cache/emd_16721.map
+wrote template: outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8_template.mrc
+wrote template mask: outputs/ribo-mdc/templates/TS_0463/TS_0463_pytom_bin8_mask.mrc
+box size: 60 px
+voxel size: 9.784000396728516 A
+density extent: 31.0/32.0/30.0 px (303/313/294 A)
+mask radius: 18.0 px (176 A)
+wrote template QC: outputs/ribo-mdc/qc/TS_0463/template/TS_0463_pytom_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# prepare-template: 1.3 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --device cuda --pytom-particle-diameter 290.0 --pytom-number-of-particles 600 --pytom-cut-off 0.0 --pytom-low-pass 25.0 --no-pytom-ctf-weighting --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_0463:template_match:pytom-match-pick:bin8
+wrote picks: outputs/ribo-mdc/picks/TS_0463/TS_0463_full_pytom-match-pick_bin8_particles.star
+particles found: 600
+score: 0.1186 min, 0.1453 mean, 0.2344 max
+z spread: 34.8 px sd about z=159, against 75.1 px for a uniform fill
+wrote picking QC: outputs/ribo-mdc/qc/TS_0463/picking/TS_0463_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# pick-particles: 40.9 min, -0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+wrote tomogram: outputs/ribo-mdc/picks_view/TS_0463/TS_0463.mrc
+wrote picks: outputs/ribo-mdc/picks_view/TS_0463/TS_0463_particles.star
+wrote template: outputs/ribo-mdc/picks_view/TS_0463/TS_0463_template.mrc
+wrote ChimeraX script: outputs/ribo-mdc/picks_view/TS_0463/TS_0463_open_in_chimerax.cxc
+wrote IMOD model: outputs/ribo-mdc/picks_view/TS_0463/TS_0463_picks.mod
+  600 picks, drawn as spheres of 18 px — the template mask radius, 18.0 px
+open with: chimerax outputs/ribo-mdc/picks_view/TS_0463/TS_0463_open_in_chimerax.cxc
+open with: 3dmod outputs/ribo-mdc/picks_view/TS_0463/TS_0463.mrc outputs/ribo-mdc/picks_view/TS_0463/TS_0463_picks.mod
+# visualize-picks: 0.9 min, +0.00 GB
+
+# extract-particles
+cryoet extract-particles --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --box-size-px 48 --variant bin8 --overwrite
+wrote particle stack: outputs/ribo-mdc/particles/TS_0463/TS_0463_cubic-crop_bin8_particles.zarr
+particles extracted: 532 of 600
+  dropped: 68 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: outputs/ribo-mdc/qc/TS_0463/particle_extraction/TS_0463_cubic-crop_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# extract-particles: 1.5 min, -0.00 GB
+
+# ---- TS_0493 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --emdb-id EMD-16721 --template-particle-diameter-angstrom 290.0 --template-low-pass-angstrom 19.6 --template-mask-radius-px 18 --template-mask-sigma-px 1.0 --template-box-size-px 60 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map outputs/ribo-mdc/emdb-cache/emd_16721.map
+wrote template: outputs/ribo-mdc/templates/TS_0493/TS_0493_pytom_bin8_template.mrc
+wrote template mask: outputs/ribo-mdc/templates/TS_0493/TS_0493_pytom_bin8_mask.mrc
+box size: 60 px
+voxel size: 9.784000396728516 A
+density extent: 31.0/32.0/30.0 px (303/313/294 A)
+mask radius: 18.0 px (176 A)
+wrote template QC: outputs/ribo-mdc/qc/TS_0493/template/TS_0493_pytom_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# prepare-template: 1.5 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --device cuda --pytom-particle-diameter 290.0 --pytom-number-of-particles 600 --pytom-cut-off 0.0 --pytom-low-pass 25.0 --no-pytom-ctf-weighting --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_0493:template_match:pytom-match-pick:bin8
+wrote picks: outputs/ribo-mdc/picks/TS_0493/TS_0493_full_pytom-match-pick_bin8_particles.star
+particles found: 600
+score: 0.1211 min, 0.1414 mean, 0.2674 max
+z spread: 41.8 px sd about z=158, against 75.1 px for a uniform fill
+wrote picking QC: outputs/ribo-mdc/qc/TS_0493/picking/TS_0493_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# pick-particles: 40.7 min, -0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+wrote tomogram: outputs/ribo-mdc/picks_view/TS_0493/TS_0493.mrc
+wrote picks: outputs/ribo-mdc/picks_view/TS_0493/TS_0493_particles.star
+wrote template: outputs/ribo-mdc/picks_view/TS_0493/TS_0493_template.mrc
+wrote ChimeraX script: outputs/ribo-mdc/picks_view/TS_0493/TS_0493_open_in_chimerax.cxc
+wrote IMOD model: outputs/ribo-mdc/picks_view/TS_0493/TS_0493_picks.mod
+  600 picks, drawn as spheres of 18 px — the template mask radius, 18.0 px
+open with: chimerax outputs/ribo-mdc/picks_view/TS_0493/TS_0493_open_in_chimerax.cxc
+open with: 3dmod outputs/ribo-mdc/picks_view/TS_0493/TS_0493.mrc outputs/ribo-mdc/picks_view/TS_0493/TS_0493_picks.mod
+# visualize-picks: 0.6 min, +0.00 GB
+
+# extract-particles
+cryoet extract-particles --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --box-size-px 48 --variant bin8 --overwrite
+wrote particle stack: outputs/ribo-mdc/particles/TS_0493/TS_0493_cubic-crop_bin8_particles.zarr
+particles extracted: 554 of 600
+  dropped: 46 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: outputs/ribo-mdc/qc/TS_0493/particle_extraction/TS_0493_cubic-crop_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# extract-particles: 0.8 min, +0.00 GB
+
+# ---- TS_0564 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --emdb-id EMD-16721 --template-particle-diameter-angstrom 290.0 --template-low-pass-angstrom 19.6 --template-mask-radius-px 18 --template-mask-sigma-px 1.0 --template-box-size-px 60 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map outputs/ribo-mdc/emdb-cache/emd_16721.map
+wrote template: outputs/ribo-mdc/templates/TS_0564/TS_0564_pytom_bin8_template.mrc
+wrote template mask: outputs/ribo-mdc/templates/TS_0564/TS_0564_pytom_bin8_mask.mrc
+box size: 60 px
+voxel size: 9.784000396728516 A
+density extent: 31.0/32.0/30.0 px (303/313/294 A)
+mask radius: 18.0 px (176 A)
+wrote template QC: outputs/ribo-mdc/qc/TS_0564/template/TS_0564_pytom_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# prepare-template: 1.4 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --device cuda --pytom-particle-diameter 290.0 --pytom-number-of-particles 600 --pytom-cut-off 0.0 --pytom-low-pass 25.0 --no-pytom-ctf-weighting --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_0564:template_match:pytom-match-pick:bin8
+wrote picks: outputs/ribo-mdc/picks/TS_0564/TS_0564_full_pytom-match-pick_bin8_particles.star
+particles found: 600
+score: 0.1132 min, 0.1311 mean, 0.1906 max
+z spread: 37.0 px sd about z=161, against 75.1 px for a uniform fill
+wrote picking QC: outputs/ribo-mdc/qc/TS_0564/picking/TS_0564_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# pick-particles: 40.8 min, +0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+wrote tomogram: outputs/ribo-mdc/picks_view/TS_0564/TS_0564.mrc
+wrote picks: outputs/ribo-mdc/picks_view/TS_0564/TS_0564_particles.star
+wrote template: outputs/ribo-mdc/picks_view/TS_0564/TS_0564_template.mrc
+wrote ChimeraX script: outputs/ribo-mdc/picks_view/TS_0564/TS_0564_open_in_chimerax.cxc
+wrote IMOD model: outputs/ribo-mdc/picks_view/TS_0564/TS_0564_picks.mod
+  600 picks, drawn as spheres of 18 px — the template mask radius, 18.0 px
+open with: chimerax outputs/ribo-mdc/picks_view/TS_0564/TS_0564_open_in_chimerax.cxc
+open with: 3dmod outputs/ribo-mdc/picks_view/TS_0564/TS_0564.mrc outputs/ribo-mdc/picks_view/TS_0564/TS_0564_picks.mod
+# visualize-picks: 0.8 min, +0.00 GB
+
+# extract-particles
+cryoet extract-particles --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --box-size-px 48 --variant bin8 --overwrite
+wrote particle stack: outputs/ribo-mdc/particles/TS_0564/TS_0564_cubic-crop_bin8_particles.zarr
+particles extracted: 536 of 600
+  dropped: 64 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: outputs/ribo-mdc/qc/TS_0564/particle_extraction/TS_0564_cubic-crop_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# extract-particles: 0.8 min, +0.00 GB
+
+# ---- TS_0623 (ribo-bin8) ----
+
+# prepare-template
+cryoet prepare-template --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --emdb-id EMD-16721 --template-particle-diameter-angstrom 290.0 --template-low-pass-angstrom 19.6 --template-mask-radius-px 18 --template-mask-sigma-px 1.0 --template-box-size-px 60 --pytom-create-template-executable $PYTOMO_MP_DIR/pytom_create_template.py --pytom-create-mask-executable $PYTOMO_MP_DIR/pytom_create_mask.py --variant bin8 --overwrite
+using cached EMDB map outputs/ribo-mdc/emdb-cache/emd_16721.map
+wrote template: outputs/ribo-mdc/templates/TS_0623/TS_0623_pytom_bin8_template.mrc
+wrote template mask: outputs/ribo-mdc/templates/TS_0623/TS_0623_pytom_bin8_mask.mrc
+box size: 60 px
+voxel size: 9.784000396728516 A
+density extent: 31.0/32.0/30.0 px (303/313/294 A)
+mask radius: 18.0 px (176 A)
+wrote template QC: outputs/ribo-mdc/qc/TS_0623/template/TS_0623_pytom_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# prepare-template: 1.4 min, +0.00 GB
+
+# pick-particles
+cryoet pick-particles --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --device cuda --pytom-particle-diameter 290.0 --pytom-number-of-particles 600 --pytom-cut-off 0.0 --pytom-low-pass 25.0 --no-pytom-ctf-weighting --pytom-per-tilt-weighting --pytom-spectral-whitening --pytom-gpu-ids 0 --pytom-match-template-executable $PYTOMO_MP_DIR/pytom_match_template.py --pytom-extract-candidates-executable $PYTOMO_MP_DIR/pytom_extract_candidates.py --variant bin8 --overwrite
+registered template match: TS_0623:template_match:pytom-match-pick:bin8
+wrote picks: outputs/ribo-mdc/picks/TS_0623/TS_0623_full_pytom-match-pick_bin8_particles.star
+particles found: 600
+score: 0.1119 min, 0.1255 mean, 0.1847 max
+z spread: 46.0 px sd about z=149, against 75.1 px for a uniform fill
+wrote picking QC: outputs/ribo-mdc/qc/TS_0623/picking/TS_0623_full_pytom-match-pick_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# pick-particles: 40.8 min, +0.00 GB
+
+# visualize-picks
+cryoet visualize-picks --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+wrote tomogram: outputs/ribo-mdc/picks_view/TS_0623/TS_0623.mrc
+wrote picks: outputs/ribo-mdc/picks_view/TS_0623/TS_0623_particles.star
+wrote template: outputs/ribo-mdc/picks_view/TS_0623/TS_0623_template.mrc
+wrote ChimeraX script: outputs/ribo-mdc/picks_view/TS_0623/TS_0623_open_in_chimerax.cxc
+wrote IMOD model: outputs/ribo-mdc/picks_view/TS_0623/TS_0623_picks.mod
+  600 picks, drawn as spheres of 18 px — the template mask radius, 18.0 px
+open with: chimerax outputs/ribo-mdc/picks_view/TS_0623/TS_0623_open_in_chimerax.cxc
+open with: 3dmod outputs/ribo-mdc/picks_view/TS_0623/TS_0623.mrc outputs/ribo-mdc/picks_view/TS_0623/TS_0623_picks.mod
+# visualize-picks: 0.6 min, +0.00 GB
+
+# extract-particles
+cryoet extract-particles --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --box-size-px 48 --variant bin8 --overwrite
+wrote particle stack: outputs/ribo-mdc/particles/TS_0623/TS_0623_cubic-crop_bin8_particles.zarr
+particles extracted: 549 of 600
+  dropped: 51 too close to the tomogram edge for the box, 0 below the score threshold
+wrote extraction QC: outputs/ribo-mdc/qc/TS_0623/particle_extraction/TS_0623_cubic-crop_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# extract-particles: 0.7 min, -0.00 GB
+
+finished    2026-10-28T22:11:22+01:00

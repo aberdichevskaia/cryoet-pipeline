@@ -1,0 +1,360 @@
+job         ribo-mdc-cpu (3783610) on max169.mdc-berlin.net
+started     2026-10-28T16:55:27+01:00
+project     outputs/ribo-mdc   config outputs/ribo-mdc/rerun-seed.toml
+series      TS_0306 TS_0463 TS_0493 TS_0564 TS_0623
+steps       generate-fiducial-seed track-fiducials fine-align-tilt-series build-ctf-stack estimate-ctf build-final-aligned-stack correct-ctf reconstruct-tomogram
+overwrite   yes
+env         {{HOME}}/micromamba/envs/cryoet-pipeline (micromamba)
+cryoet      {{HOME}}/micromamba/envs/cryoet-pipeline/bin/cryoet
+imod        /fast/AG_Kudryashev/{{USER}}/apps/IMOD/imod_5.1.12/bin/tiltxcorr
+ctffind     /fast/AG_Kudryashev/software/ctffind-4.1.14/centOS7/bin/ctffind
+
+preflight   ok
+
+
+# ---- TS_0306 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 3.6 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0306/TS_0306_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.1 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0306/fine/TS_0306_fine_alignment_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.3 min, +0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 1.4 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_ctffind5_estimation_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 1.9 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0306/TS_0306_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 1.2 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0306/TS_0306_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0306/TS_0306_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0306/ctf/TS_0306_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 1.2 min, -0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0306.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0306/TS_0306_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0306/TS_0306_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0306/reconstruction/TS_0306_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 1.3 min, +0.00 GB
+
+# ---- TS_0463 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0463/TS_0463_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0463/TS_0463_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0463/TS_0463_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 1.2 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0463/TS_0463_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0463/TS_0463_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.2 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0463/fine/TS_0463_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0463/fine/TS_0463_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0463/fine/TS_0463_fine_alignment_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.1 min, -0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0463/TS_0463_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0463/TS_0463_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 1.4 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0463/TS_0463_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0463/TS_0463_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0463/ctf/TS_0463_ctffind5_estimation_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 2.3 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0463/TS_0463_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0463/TS_0463_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 1.2 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0463/TS_0463_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0463/TS_0463_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0463/ctf/TS_0463_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 1.1 min, -0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0463.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0463/TS_0463_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0463/TS_0463_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0463/reconstruction/TS_0463_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 1.2 min, -0.00 GB
+
+# ---- TS_0493 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0493/TS_0493_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0493/TS_0493_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0493/TS_0493_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 1.2 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0493/TS_0493_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0493/TS_0493_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.2 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0493/fine/TS_0493_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0493/fine/TS_0493_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0493/fine/TS_0493_fine_alignment_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.6 min, +0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0493/TS_0493_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0493/TS_0493_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 1.5 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0493/TS_0493_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0493/TS_0493_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0493/ctf/TS_0493_ctffind5_estimation_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 2.0 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0493/TS_0493_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0493/TS_0493_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 1.3 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0493/TS_0493_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0493/TS_0493_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0493/ctf/TS_0493_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 1.2 min, +0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0493.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0493/TS_0493_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0493/TS_0493_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0493/reconstruction/TS_0493_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 1.2 min, -0.00 GB
+
+# ---- TS_0564 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0564/TS_0564_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0564/TS_0564_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0564/TS_0564_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 1.2 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0564/TS_0564_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0564/TS_0564_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.2 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0564/fine/TS_0564_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0564/fine/TS_0564_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0564/fine/TS_0564_fine_alignment_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.4 min, -0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0564/TS_0564_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0564/TS_0564_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 1.4 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0564/TS_0564_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0564/TS_0564_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0564/ctf/TS_0564_ctffind5_estimation_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 2.0 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0564/TS_0564_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0564/TS_0564_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 1.2 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0564/TS_0564_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0564/TS_0564_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0564/ctf/TS_0564_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 1.2 min, +0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0564.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0564/TS_0564_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0564/TS_0564_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0564/reconstruction/TS_0564_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 1.3 min, +0.00 GB
+
+# ---- TS_0623 (ribo-bin8) ----
+
+# generate-fiducial-seed
+cryoet generate-fiducial-seed --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-seed --pre-binning 8 --num-patches-x 5 --num-patches-y 5 --patch-overlap 0.33 --patch-margin-px 26 --overwrite
+wrote fiducial tracking stack: outputs/ribo-mdc/fiducials/TS_0623/TS_0623_patch_bin8_preali.mrc
+wrote fiducial seed model: outputs/ribo-mdc/fiducials/TS_0623/TS_0623_patch_grid.json
+wrote fiducial seed QC: outputs/ribo-mdc/fiducials/TS_0623/TS_0623_patch_seed_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# generate-fiducial-seed: 1.2 min, +0.00 GB
+
+# track-fiducials
+cryoet track-fiducials --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --backend imod-patch-track --overwrite
+wrote tracked fiducial model: outputs/ribo-mdc/fiducials/TS_0623/TS_0623_imod-patch-track.fid
+wrote fiducial tracking QC: outputs/ribo-mdc/fiducials/TS_0623/TS_0623_imod-patch-track_tracking_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# track-fiducials: 1.1 min, +0.00 GB
+
+# fine-align-tilt-series
+cryoet fine-align-tilt-series --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --robust-fitting --auto-prune-outliers --max-pruned-fraction 0.12 --surfaces-to-analyze 1 --overwrite
+wrote fine alignment: outputs/ribo-mdc/alignments/TS_0623/fine/TS_0623_fine_alignment.json
+wrote final IMOD transforms: outputs/ribo-mdc/alignments/TS_0623/fine/TS_0623_fine.xf
+wrote fine-alignment QC: outputs/ribo-mdc/alignments/TS_0623/fine/TS_0623_fine_alignment_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# fine-align-tilt-series: 2.7 min, -0.00 GB
+
+# build-ctf-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 2 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0623/TS_0623_final_bin2.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0623/TS_0623_final_bin2.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-ctf-stack: 1.4 min, +0.00 GB
+
+# estimate-ctf
+cryoet estimate-ctf --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --ctf-voltage-kv 300.0 --ctf-spherical-aberration-mm 2.7 --ctf-amplitude-contrast 0.07 --ctffind-min-defocus-angstrom 10000 --ctffind-max-defocus-angstrom 50000 --ctffind-executable $CTFFIND5 --overwrite
+wrote CTF model: outputs/ribo-mdc/ctf/TS_0623/TS_0623_ctffind5.defocus
+wrote CTF diagnostic image: outputs/ribo-mdc/ctf/TS_0623/TS_0623_ctffind5_diagnostic.mrc
+wrote CTF estimation QC: outputs/ribo-mdc/qc/TS_0623/ctf/TS_0623_ctffind5_estimation_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# estimate-ctf: 2.0 min, +0.00 GB
+
+# build-final-aligned-stack
+cryoet build-final-aligned-stack --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --output-binning 8 --variant bin8 --overwrite
+wrote final aligned stack: outputs/ribo-mdc/aligned/TS_0623/TS_0623_final_bin8_bin8.st
+wrote solved tilt angles: outputs/ribo-mdc/aligned/TS_0623/TS_0623_final_bin8_bin8.tlt
+updated outputs/ribo-mdc/artifacts.json
+# build-final-aligned-stack: 1.2 min, +0.00 GB
+
+# correct-ctf
+cryoet correct-ctf --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --variant bin8 --overwrite
+used CTF model: outputs/ribo-mdc/ctf/TS_0623/TS_0623_ctffind5.defocus
+wrote CTF-corrected stack: outputs/ribo-mdc/ctf/TS_0623/TS_0623_imod-ctfphaseflip_bin8_ctf.st
+wrote CTF correction QC: outputs/ribo-mdc/qc/TS_0623/ctf/TS_0623_imod-ctfphaseflip_bin8_correction_qc.json
+QC status: warning
+updated outputs/ribo-mdc/artifacts.json
+# correct-ctf: 1.2 min, -0.00 GB
+
+# reconstruct-tomogram
+cryoet reconstruct-tomogram --manifest outputs/ribo-mdc/manifests/TS_0623.json --registry outputs/ribo-mdc/artifacts.json --out outputs/ribo-mdc --thickness 320 --variant bin8 --overwrite
+wrote canonical tomogram: outputs/ribo-mdc/tomograms/TS_0623/TS_0623_fine_bin8_bin8.zarr
+wrote IMOD reconstruction: outputs/ribo-mdc/tomograms/TS_0623/TS_0623_fine_bin8_bin8.rec
+wrote reconstruction QC: outputs/ribo-mdc/qc/TS_0623/reconstruction/TS_0623_fine_bin8_bin8_qc.json
+QC status: pass
+updated outputs/ribo-mdc/artifacts.json
+# reconstruct-tomogram: 1.2 min, +0.00 GB
+
+finished    2026-10-28T18:16:43+01:00

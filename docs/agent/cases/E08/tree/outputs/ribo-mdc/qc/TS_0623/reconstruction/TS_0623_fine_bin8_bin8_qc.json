@@ -1,0 +1,26 @@
+{
+  "alignment_stage": "fine",
+  "backend": "imod-tilt",
+  "central_slice_paths": {
+    "xy": "outputs/ribo-mdc/qc/TS_0623/reconstruction/TS_0623_fine_bin8_bin8_central_xy.mrc",
+    "xz": "outputs/ribo-mdc/qc/TS_0623/reconstruction/TS_0623_fine_bin8_bin8_central_xz.mrc",
+    "yz": "outputs/ribo-mdc/qc/TS_0623/reconstruction/TS_0623_fine_bin8_bin8_central_yz.mrc"
+  },
+  "ctf_corrected": true,
+  "finite": true,
+  "maximum": 1578.0791015625,
+  "mean": 44.79651434356704,
+  "minimum": -1726.93505859375,
+  "schema_version": 1,
+  "shape": [
+    320,
+    512,
+    512
+  ],
+  "standard_deviation": 233.11733482489058,
+  "status": "pass",
+  "tilt_series_id": "TS_0623",
+  "tomogram_id": "TS_0623:tomogram:fine:bin8",
+  "voxel_spacing_angstrom": 9.784000396728516,
+  "warnings": []
+}

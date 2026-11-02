@@ -1,0 +1,23 @@
+{
+  "amplitude_contrast": 0.07,
+  "axis_angle_deg": 84.3,
+  "backend": "imod-ctfphaseflip",
+  "corrected_stack_id": "TS_0564:aligned_tilt_stack:ctf_corrected:imod-ctfphaseflip:bin8",
+  "ctf_model_id": "TS_0564:ctf_model:ctffind5",
+  "excluded_z_values": [],
+  "input_stack_id": "TS_0564:aligned_tilt_stack:final:bin8",
+  "maximum_defocus_um": 3.3494200000000003,
+  "mean_defocus_um": 3.1800725892857145,
+  "minimum_defocus_um": 3.0479105,
+  "num_tilts": 56,
+  "pixel_spacing_angstrom": 9.784000396728516,
+  "schema_version": 1,
+  "spherical_aberration_mm": 2.7,
+  "status": "warning",
+  "tilt_series_id": "TS_0564",
+  "voltage_kv": 300.0,
+  "warnings": [
+    "CTF model was fitted on 'TS_0564:aligned_tilt_stack:final', not on 'TS_0564:aligned_tilt_stack:final:bin8'; defocus transfers between binnings but the fit was not made on this stack",
+    "fitted at 2.446 angstrom/pixel and applied at 9.784 angstrom/pixel"
+  ]
+}
