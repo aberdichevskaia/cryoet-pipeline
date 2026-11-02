@@ -33,7 +33,11 @@ own from that start, one channel and no MRA, by the pipeline's port without Dyna
 scripts/mra_port_run.sbatch with EXPORT=<half>, SEEDS=map and
 REFERENCE=<half>/start_reference.mrc, the run <half>/<NAME>_port. Until 2026-11-02
 Dynamo refined them (scripts/dynamo_mra_mdc.sbatch with the same variables, which
-it still can as a control), as refine_h1 and refine_h2 of RyR1 at bin8 were.
+it still can as a control), as refine_h1 and refine_h2 of RyR1 at bin8 were. The
+port ran those two again on max (PROJECT=, 2026-11-02), and `maps` read the same:
+FSC unmasked through 0.5 at 54.4 A and 0.143 at 39.1 A in both, masked at 36.8 and
+32.9 A against Dynamo's 36.9 and 33.0, the particles turned from the start by a
+median 1.7 and 1.6 deg and shifted by 0.12 and 0.11 px in both.
 
 `maps` reads the last iteration the two half projects finished (the port's runs, or
 Dynamo's projects) and writes, as MRC at
