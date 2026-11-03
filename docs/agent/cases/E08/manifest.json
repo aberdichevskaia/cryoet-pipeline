@@ -401,5 +401,69 @@
     }
   ],
   "left_out": [],
-  "slurm": {}
+  "slurm": {
+    "3781480": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-28T15:48:53",
+      "Elapsed": "00:08:25",
+      "NodeList": "max190",
+      "AllocTRES": "billing=16,cpu=16,energy=58187,mem=32G,node=1"
+    },
+    "3783610": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-28T16:55:14",
+      "Elapsed": "01:21:29",
+      "NodeList": "max169",
+      "AllocTRES": "billing=16,cpu=16,energy=547870,mem=32G,node=1"
+    },
+    "3783611": {
+      "JobName": "ribo-mdc-gpu",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-28T18:16:55",
+      "Elapsed": "03:54:27",
+      "NodeList": "max026",
+      "AllocTRES": "billing=16,cpu=16,gres/gpu:a40=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "3789923": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "CANCELLED by 28900",
+      "ExitCode": "0:0",
+      "Start": "2026-10-29T17:44:25",
+      "Elapsed": "00:00:42",
+      "NodeList": "max162",
+      "AllocTRES": "billing=16,cpu=16,energy=4803,mem=32G,node=1"
+    },
+    "3789938": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-29T17:46:02",
+      "Elapsed": "00:08:37",
+      "NodeList": "max162",
+      "AllocTRES": "billing=16,cpu=16,energy=54886,mem=32G,node=1"
+    },
+    "3792954": {
+      "JobName": "ribo-mdc-cpu",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-30T13:06:08",
+      "Elapsed": "00:06:28",
+      "NodeList": "max169",
+      "AllocTRES": "billing=16,cpu=16,energy=41155,mem=32G,node=1"
+    },
+    "3792955": {
+      "JobName": "ribo-mdc-gpu",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-30T13:12:39",
+      "Elapsed": "00:47:44",
+      "NodeList": "maxg15",
+      "AllocTRES": "billing=16,cpu=16,energy=517648,gres/gpu:a40=1,gres/gpu=1,mem=64G,node=1"
+    }
+  }
 }

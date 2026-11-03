@@ -66,6 +66,10 @@ client, which is what makes it the instrument for deciding about either (see
     its sacct record, from which the runner's `sacct` answers. Until
     3 November 2026, E01's manifest kept the record of 161b, the job that passed
     with the fix, and `sacct -S` in the sandbox listed it as COMPLETED.
+  - Every job whose log a case holds gives its sacct record, not only the jobs
+    the table names. E08 names none, so until 3 November 2026 its sandbox's
+    `sacct` printed headers only. An E08 run then read job 3789923, which had
+    been cancelled, as ending unclearly.
 
 ## From history
 

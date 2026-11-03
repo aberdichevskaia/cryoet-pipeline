@@ -46,7 +46,8 @@ without days is the project as it is now.
   the lane's commands name;
 * manifest.json: every file's time on the cluster and where it came from, what
   was left out and why, the project's folder, and what only Slurm knows of the
-  named jobs, which the runner's sacct answers with;
+  named jobs and of those whose logs it holds, which the runner's sacct answers
+  with;
 * setup.sh, which runs --restore in the runner's sandbox: git keeps no file
   times, and show_failure finds a step's logs by when they were written. It
   also takes out of the sandbox, a copy of the repository as it is now, the
@@ -98,7 +99,7 @@ CASE_KEYS = frozenset({
     "log_pattern", "extras", "elsewhere", "note", "playbook",
 })
 _LISTS = ("series", "steps", "jobs", "extras", "elsewhere", "playbook")
-# What only Slurm knows of a job the table names: where it ran and what it got.
+# What only Slurm knows of a case's job: where it ran and what it got.
 _DETAILS = ("JobID", "JobName", "State", "ExitCode", "Start", "Elapsed", "NodeList",
             "AllocTRES")
 # Files named one by one per list in the text; --json has them all.
@@ -944,17 +945,7 @@ def collect(
                 continue
             logs.setdefault(path.resolve(),
                             (path, f"Slurm log of job {job_id}, named in the table"))
-    # Its sacct record is left out too: the runner's sacct answers from these, and
-    # sacct -S would list the later job.
-    details: dict[str, dict[str, str]] = {}
-    for job_id, record in (_slurm_details(case["jobs"]) if slurm and case.get("jobs")
-                           else {}).items():
-        started = _slurm_time(record.get("Start"))
-        if end is not None and started is not None and started >= end:
-            left.append({"path": f"the sacct record of job {job_id}",
-                         "why": f"started after the case ended, {_when(started)}"})
-        else:
-            details[job_id] = record
+    in_days: list[str] = []
     if start is not None and end is not None:
         found = show_project.job_logs(root, cfg["run"]["project"],
                                       show_project.slurm_logs(project) if slurm else ())
@@ -964,6 +955,20 @@ def collect(
                 path = _resolve(root, job["log"])
                 logs.setdefault(path.resolve(), (
                     path, f"Slurm log of job {job.get('id', '?')}, started in the case's days"))
+                if "id" in job:
+                    in_days.append(job["id"])
+    # What sacct knows of these jobs, which the runner's sacct answers with: without
+    # it, a job whose log the case holds reads as one sacct never ran. A named job
+    # that started after the case gives no record, or sacct -S would list it.
+    asked = list(dict.fromkeys([*case.get("jobs", []), *in_days]))
+    details: dict[str, dict[str, str]] = {}
+    for job_id, record in (_slurm_details(asked) if slurm and asked else {}).items():
+        started = _slurm_time(record.get("Start"))
+        if end is not None and started is not None and started >= end:
+            left.append({"path": f"the sacct record of job {job_id}",
+                         "why": f"started after the case ended, {_when(started)}"})
+        else:
+            details[job_id] = record
     roots = {str(root), os.path.realpath(root)}
     real = Path(os.path.realpath(project)).parts
     own = Path(project_name).parts

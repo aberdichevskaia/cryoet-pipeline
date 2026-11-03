@@ -538,6 +538,38 @@ def test_so_is_its_sacct_record_read_in_the_clusters_time(tmp_path, monkeypatch)
     assert "778" not in json.dumps(manifest["slurm"])
 
 
+def test_sacct_answers_for_every_job_whose_log_the_case_holds(tmp_path, monkeypatch):
+    """E08 names no job: its manifest held no record, and on 2 November 2026 an
+    E08 run read the empty answer of the sandbox's sacct as an unclear end for job
+    3789923, which had been cancelled. 123 started in the case's day, 150 after
+    it, and the table names 777."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+    records = {
+        "123": ["123", "p-cpu", "FAILED", "1:0", "2026-10-14T12:57:00", "00:33:00", "node1",
+                "billing=16"],
+        "150": ["150", "p-cpu", "FAILED", "1:0", "2026-10-20T14:00:00", "00:01:00", "node1",
+                "billing=16"],
+        "777": ["777", "q-gpu", "FAILED", "1:0", "2026-10-14T12:58:00", "00:12:40", "gpu07",
+                "billing=4"],
+    }
+    asked = []
+
+    def slurm(command):
+        if "-j" not in command or "JobID,JobName,WorkDir" in command:
+            return []
+        wanted = command[command.index("-j") + 1].split(",")
+        asked.append(wanted)
+        return [records[job] for job in wanted if job in records]
+
+    monkeypatch.setattr(show_project, "_slurm", slurm)
+    folder = collect_case.collect("E99", COLLECTED, PERSON, root=root, out=tmp_path / "cases")[0]
+    manifest = json.loads((folder / "manifest.json").read_text())
+    assert asked == [["777", "123"]]
+    assert list(manifest["slurm"]) == ["777", "123"]
+    assert manifest["slurm"]["123"]["NodeList"] == "node1"
+
+
 def test_a_registry_naming_files_by_absolute_paths_puts_them_where_the_sandbox_looks(tmp_path):
     """As Munich's does: the clone's outputs/p is a link into the folder the jobs
     run from, and the registry names files by their paths there."""
