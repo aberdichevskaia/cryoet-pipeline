@@ -204,5 +204,33 @@
       "why": "added after the case ended, 2026-10-16T16:54:21+02:00 (7f4fd37): a lane file of the project"
     }
   ],
-  "slurm": {}
+  "slurm": {
+    "3609935": {
+      "JobName": "ryr1-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-14T16:21:39",
+      "Elapsed": "00:01:01",
+      "NodeList": "maxg05",
+      "AllocTRES": "billing=16,cpu=16,energy=5082,gres/gpu:tesla-v100=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "3611148": {
+      "JobName": "ryr1-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-14T16:45:54",
+      "Elapsed": "00:00:07",
+      "NodeList": "maxg05",
+      "AllocTRES": "billing=16,cpu=16,energy=661,gres/gpu:tesla-v100=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "3611180": {
+      "JobName": "ryr1-motion",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-14T16:48:40",
+      "Elapsed": "00:11:45",
+      "NodeList": "maxg05",
+      "AllocTRES": "billing=16,cpu=16,energy=66779,gres/gpu:tesla-v100=1,gres/gpu=1,mem=64G,node=1"
+    }
+  }
 }

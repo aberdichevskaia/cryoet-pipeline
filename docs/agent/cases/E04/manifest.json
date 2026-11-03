@@ -179,6 +179,96 @@
     }
   ],
   "slurm": {
+    "41051519": {
+      "JobName": "hiv-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T17:56:01",
+      "Elapsed": "00:02:03",
+      "NodeList": "gpusrv44",
+      "AllocTRES": "billing=8,cpu=8,energy=65928,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41065633": {
+      "JobName": "hiv-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T19:59:24",
+      "Elapsed": "00:01:19",
+      "NodeList": "gpusrv51",
+      "AllocTRES": "billing=8,cpu=8,energy=47911,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41074288": {
+      "JobName": "hiv-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T20:58:00",
+      "Elapsed": "00:00:27",
+      "NodeList": "gpusrv30",
+      "AllocTRES": "billing=8,cpu=8,energy=22786,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41074613": {
+      "JobName": "hiv-motion",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T21:02:33",
+      "Elapsed": "00:00:25",
+      "NodeList": "gpusrv42",
+      "AllocTRES": "billing=8,cpu=8,energy=22410,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41074764": {
+      "JobName": "hiv-motion",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-07T21:15:47",
+      "Elapsed": "00:10:28",
+      "NodeList": "gpusrv40",
+      "AllocTRES": "billing=8,cpu=8,energy=452589,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41074765": {
+      "JobName": "hiv-cpu",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T21:26:16",
+      "Elapsed": "00:05:41",
+      "NodeList": "cpusrv18",
+      "AllocTRES": "billing=8,cpu=8,energy=174780,mem=32G,node=1"
+    },
+    "41075008": {
+      "JobName": "hiv-cpu-TS_01",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-07T21:42:09",
+      "Elapsed": "00:05:24",
+      "NodeList": "cpusrv23",
+      "AllocTRES": "billing=8,cpu=8,energy=174541,mem=32G,node=1"
+    },
+    "41075009": {
+      "JobName": "hiv-cpu-TS_43",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-07T21:47:34",
+      "Elapsed": "00:04:50",
+      "NodeList": "cpusrv23",
+      "AllocTRES": "billing=8,cpu=8,energy=145818,mem=32G,node=1"
+    },
+    "41075010": {
+      "JobName": "hiv-gpu-TS_01",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T21:52:45",
+      "Elapsed": "00:00:04",
+      "NodeList": "gpusrv39",
+      "AllocTRES": "billing=8,cpu=8,energy=2092,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41075011": {
+      "JobName": "hiv-gpu-TS_43",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-07T21:53:16",
+      "Elapsed": "00:00:02",
+      "NodeList": "gpusrv39",
+      "AllocTRES": "billing=8,cpu=8,energy=2156,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
     "41075712": {
       "JobName": "hiv-gpu-TS_01",
       "State": "FAILED",
@@ -187,6 +277,15 @@
       "Elapsed": "00:12:35",
       "NodeList": "gpusrv50",
       "AllocTRES": "billing=8,cpu=8,energy=472800,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
+    },
+    "41075713": {
+      "JobName": "hiv-gpu-TS_43",
+      "State": "COMPLETED",
+      "ExitCode": "0:0",
+      "Start": "2026-10-07T23:10:59",
+      "Elapsed": "00:46:29",
+      "NodeList": "gpusrv30",
+      "AllocTRES": "billing=8,cpu=8,energy=2270832,gres/gpu:a100_3g.20gb=1,gres/gpu=1,mem=64G,node=1"
     }
   }
 }
