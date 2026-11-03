@@ -505,6 +505,39 @@ def test_a_job_the_table_names_is_left_out_if_it_started_after_the_case(tmp_path
     assert {"path": "slurm-p-cpu161b-778.log", "why": "started after the case ended"} in left
 
 
+def test_so_is_its_sacct_record_read_in_the_clusters_time(tmp_path, monkeypatch):
+    """E01's manifest kept 161b's record, whose log was gone: in the sandbox,
+    sacct -S listed the fix as COMPLETED. sacct prints the cluster's time without
+    its zone; read as UTC, 777 would start after the case wherever the clock is
+    ahead of UTC, and 778 before it wherever it is behind. 779 never started."""
+    root = tmp_path / "cluster"
+    _collectable(root)
+
+    def printed(moment: datetime) -> str:
+        return moment.astimezone().replace(tzinfo=None).isoformat(timespec="seconds")
+
+    def slurm(command):
+        if "-j" not in command or "JobID,JobName,WorkDir" in command:
+            return []
+        return [["777", "p-cpu161", "FAILED", "1:0", printed(_at(12, 20)), "00:00:45",
+                 "node2", "billing=16"],
+                ["778", "p-cpu161b", "COMPLETED", "0:0", printed(_at(12, 40)), "00:03:48",
+                 "node3", "billing=16"],
+                ["779", "p-cpu", "CANCELLED by 0", "0:0", "Unknown", "00:00:00",
+                 "None assigned", ""]]
+
+    monkeypatch.setattr(show_project, "_slurm", slurm)
+    before_fix = {**COLLECTED, "jobs": ["777", "778", "779"],
+                  "until": datetime(2026, 10, 14, 12, 30, tzinfo=UTC)}
+    folder = collect_case.collect("E99", before_fix, PERSON, root=root,
+                                  out=tmp_path / "cases")[0]
+    manifest = json.loads((folder / "manifest.json").read_text())
+    assert list(manifest["slurm"]) == ["777", "779"]
+    assert {"path": "the sacct record of job 778", "why": "started after the case ended, "
+            + collect_case._when(_at(12, 40))} in manifest["left_out"]
+    assert "778" not in json.dumps(manifest["slurm"])
+
+
 def test_a_registry_naming_files_by_absolute_paths_puts_them_where_the_sandbox_looks(tmp_path):
     """As Munich's does: the clone's outputs/p is a link into the folder the jobs
     run from, and the registry names files by their paths there."""

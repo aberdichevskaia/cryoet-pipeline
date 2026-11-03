@@ -62,6 +62,10 @@ client, which is what makes it the instrument for deciding about either (see
     ones added since: on 2 November 2026, `ryr1-bin8.toml`, added the day after
     E03 ended, gave an E03 run the result of the test the case asks it to
     propose.
+  - A job the table names that started after the case gives neither its log nor
+    its sacct record, from which the runner's `sacct` answers. Until
+    3 November 2026, E01's manifest kept the record of 161b, the job that passed
+    with the fix, and `sacct -S` in the sandbox listed it as COMPLETED.
 
 ## From history
 

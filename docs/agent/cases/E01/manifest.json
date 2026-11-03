@@ -326,6 +326,10 @@
       "why": "not found where the job ran"
     },
     {
+      "path": "the sacct record of job 3623086",
+      "why": "started after the case ended, 2026-10-14T19:22:21+02:00"
+    },
+    {
       "path": "outputs/ryr1/qc/039/ctf/039_ctffind5_estimation_qc.json",
       "why": "written later, 2026-10-18T23:14:02+02:00"
     },
@@ -544,15 +548,6 @@
       "Elapsed": "00:00:45",
       "NodeList": "max177",
       "AllocTRES": "billing=16,cpu=16,energy=5522,mem=32G,node=1"
-    },
-    "3623086": {
-      "JobName": "ryr1-cpu161b",
-      "State": "COMPLETED",
-      "ExitCode": "0:0",
-      "Start": "2026-10-14T19:22:21",
-      "Elapsed": "00:03:48",
-      "NodeList": "max173",
-      "AllocTRES": "billing=16,cpu=16,energy=28824,mem=32G,node=1"
     }
   }
 }

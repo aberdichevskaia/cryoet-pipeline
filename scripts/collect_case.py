@@ -38,14 +38,15 @@ without days is the project as it is now.
   lose what was written after; QC records, program logs, extra files and job
   configs written after are left out, as are binary files and files over 5 MB.
   The jobs the table names and those that started in the case's days give their
-  Slurm logs, and the configs their headers name. A stack lane's stack and mdoc
+  Slurm logs, and the configs their headers name; a named job that started after
+  the case gives nothing, since it may be the fix. A stack lane's stack and mdoc
   paths point at empty stand-ins under data/, as in the constructed cases;
 * case.toml: the request and the grading lines from eval_cases.md, the table's
   playbook entries, a note on what is missing, and stand-ins for the variables
   the lane's commands name;
 * manifest.json: every file's time on the cluster and where it came from, what
   was left out and why, the project's folder, and what only Slurm knows of the
-  named jobs;
+  named jobs, which the runner's sacct answers with;
 * setup.sh, which runs --restore in the runner's sandbox: git keeps no file
   times, and show_failure finds a step's logs by when they were written. It
   also takes out of the sandbox, a copy of the repository as it is now, the
@@ -170,6 +171,16 @@ def _time(text: Any) -> datetime | None:
 
 def _when(moment: datetime) -> str:
     return moment.astimezone().isoformat(timespec="seconds")
+
+
+def _slurm_time(text: Any) -> datetime | None:
+    """A time sacct prints, which is this machine's, the cluster's, without its
+    zone; None for a job that has not started (Unknown)."""
+    try:
+        value = datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+    return value if value.tzinfo else value.astimezone()
 
 
 def _resolve(root: Path, path: str | Path) -> Path:
@@ -932,6 +943,17 @@ def collect(
                 continue
             logs.setdefault(path.resolve(),
                             (path, f"Slurm log of job {job_id}, named in the table"))
+    # Its sacct record is left out too: the runner's sacct answers from these, and
+    # sacct -S would list the later job.
+    details: dict[str, dict[str, str]] = {}
+    for job_id, record in (_slurm_details(case["jobs"]) if slurm and case.get("jobs")
+                           else {}).items():
+        started = _slurm_time(record.get("Start"))
+        if end is not None and started is not None and started >= end:
+            left.append({"path": f"the sacct record of job {job_id}",
+                         "why": f"started after the case ended, {_when(started)}"})
+        else:
+            details[job_id] = record
     if start is not None and end is not None:
         found = show_project.job_logs(root, cfg["run"]["project"],
                                       show_project.slurm_logs(project) if slurm else ())
@@ -1093,7 +1115,7 @@ def collect(
                                                                             tz=UTC)),
                    "source": one.source} for one in files.values()],
         "left_out": left,
-        "slurm": _slurm_details(case["jobs"]) if slurm and case.get("jobs") else {},
+        "slurm": details,
     }
 
     scrub = Scrub(sorted(roots), person)
