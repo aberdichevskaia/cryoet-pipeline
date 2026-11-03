@@ -531,6 +531,15 @@
     }
   ],
   "slurm": {
+    "3611181": {
+      "JobName": "ryr1-cpu",
+      "State": "FAILED",
+      "ExitCode": "1:0",
+      "Start": "2026-10-14T17:00:26",
+      "Elapsed": "00:11:58",
+      "NodeList": "max198",
+      "AllocTRES": "billing=16,cpu=16,energy=108325,mem=32G,node=1"
+    },
     "3620374": {
       "JobName": "ryr1-cpu161",
       "State": "FAILED",

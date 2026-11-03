@@ -31,7 +31,8 @@ until = 2026-10-14T19:15:00
 # The first CPU job, then the reruns of 161 on max182 and max177, read off their
 # logs in the session records of that day. 161b (3623086, max173) passed with
 # tracking_binning 3 after the case ends. None of their logs is left on the cluster:
-# the case folder holds them as restored from those records.
+# the case folder holds them as restored from those records. The first job ran on
+# max198: its sacct record went into the manifest by hand on 3 November 2026.
 jobs = ["3611181", "3620374", "3620884"]
 log_pattern = "Segmentation fault|core dumped|exit 139"
 playbook = ["A-2"]
