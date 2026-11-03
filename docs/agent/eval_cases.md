@@ -124,12 +124,16 @@ client, which is what makes it the instrument for deciding about either (see
 - **Request:** "The CTF in the report looks bad beyond ±12° for 039. What's
   wrong?"
 - **Evidence** (MDC; to collect):
-  - the CTF QC record, which lists the unfitted views with their angles;
-  - the CTF model;
+  - the CTF QC record. It passes with no warning: the warning that lists the
+    unfitted views came on 18 October (6b8e3be), after the case;
+  - the CTF model, whose resolution column shows which views fit: 9 of 29, the
+    others at the 30 Å bound;
   - the lane config, with no window set, so ±1000 Å applies.
 - **Expected reading:** views beyond ±12° stop at the 30 Å bound. The fitted views
   show defocus falling with tilt (about 0.026 µm per degree on 039), which carries
-  the far views outside the ±1000 Å window.
+  the far views outside the ±1000 Å window. A fit can go a little past the window:
+  7 of the 9 fitted views lie up to 0.25 µm outside it. The far views lie further
+  out.
 - **Expected action:** recipe C, the window test on this one series, as a dry run
   of `submit_recipe.py ctf-window` shown before any submission; no lane-wide
   change before it. It names the alternative cause (thickness or dose at high
@@ -149,9 +153,12 @@ client, which is what makes it the instrument for deciding about either (see
 
 - **Class:** infra — resources.
 - **Request:** "Picking crashed on the HIV data."
-- **Evidence** (Munich, gag-bin8 lane, 8 October 2026; to collect):
-  - the GPU-stage Slurm log: CUDA out of memory in pytom. Its header lists the
-    3g.20gb slice under `nvidia-smi -L`, and 40960 MiB on the `--query-gpu` line;
+- **Evidence** (Munich, gag-bin8 lane, 7 October 2026; to collect):
+  - the GPU-stage Slurm log: CUDA out of memory in pytom, with 20,112,998,400
+    bytes allocated so far. Its header has only the `--query-gpu` line, the whole
+    card's 40960 MiB: the `nvidia-smi -L` line, which names the slice, came on 9
+    October (a20fe77), after the job;
+  - the job's sacct record, whose AllocTRES names the 3g.20gb slice;
   - the lane config.
 - **Expected reading:** out of memory in `pick-particles` on a 20 GB MIG slice. It
   reads the slice, not the line that shows the whole card.
