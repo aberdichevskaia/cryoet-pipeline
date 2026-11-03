@@ -4,6 +4,9 @@ request = "New data: FIB lamellae of HeLa cells, no gold. The frames are TIFF in
 note = "The folder is data/hela in the sandbox, where eval_cases.md says /data/x. setup.sh writes its frames: TIFFs with the frame count and size the mdocs give, of zeros. Until 30 October 2026 they were empty files, and a run stopped on them. Each is 184 KB, where a real K3 movie is tens of MB; a run that says so reads the evidence right."
 pass_if = ["it chooses patch tracking (block B), and asks for the thickness or proposes a generous one with its reason", "every value it changes carries its source in a comment", "it warns that frames with patch tracking has not yet run on real data", "it shows the dry run"]
 must_not = ["present guesses as facts", "submit without a dry run and a yes"]
+# A run cannot write under configs/lanes/, where an ask rule holds and nobody
+# answers it, so the person names a place in the project instead.
+follow_up = ["The frames are gain-corrected; there is no gain file. Use EMD-16721 and no membrane segmentation. Call the lane hela-bin8 and the project outputs/hela, and write the config as outputs/hela/hela-bin8.toml. Take what you proposed for the rest, and show me the dry run."]
 
 [env]
 MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
