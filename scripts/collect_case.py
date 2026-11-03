@@ -50,7 +50,9 @@ without days is the project as it is now.
 * setup.sh, which runs --restore in the runner's sandbox: git keeps no file
   times, and show_failure finds a step's logs by when they were written. It
   also takes out of the sandbox, a copy of the repository as it is now, the
-  project's lane files the case does not hold.
+  project's lane files the case does not hold. It runs the sandbox's copy of
+  this file, which a run can read, so nothing here names a case's answer: the
+  tests and eval_cases.md, which the sandbox leaves out, cite the cases.
 
 The folders the jobs ran in become {{ROOT}}, the home folder {{HOME}}, the
 user's login and the forms of their name {{USER}} (the passwd full name gives
@@ -521,9 +523,8 @@ def _found(entry: dict[str, Any]) -> list[str]:
 
 OUT = Path.home() / "cases"
 # Where the lane files are. The sandbox is the repository as it is now, so a lane
-# file of the case's project added later would be in it: on 2 November 2026
-# ryr1-bin8.toml, added on 16 October, gave an E03 run the result of the window
-# test E03 asks it to propose.
+# file of the case's project added later would be in it, and may hold the case's
+# answer.
 LANES = Path("configs/lanes")
 # A bigger file is not evidence a case folder can carry. The registry, the step
 # timings and the journal are taken whatever their size.
@@ -986,8 +987,7 @@ def collect(
         if target is None:
             left.append({"path": str(path), "why": "outside the folders the jobs ran in"})
         else:
-            # One changed after the case may hold its fix: E05's copy was given its
-            # CTFFIND between the failed job and the next.
+            # One changed after the case may hold its fix.
             take(path, target, "a config a job's log names")
 
     # The project as it stood: what only grows loses its later rows, the registry

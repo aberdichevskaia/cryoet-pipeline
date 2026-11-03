@@ -698,7 +698,8 @@ def test_a_case_can_end_at_a_time_of_day(tmp_path):
 
 
 def test_a_config_a_job_names_is_taken_only_as_it_was(tmp_path):
-    """A copy changed after the case may hold the fix the case asks for."""
+    """A copy changed after the case may hold the fix the case asks for: E05's
+    copy was given its CTFFIND between the failed job and the next."""
     root = tmp_path / "cluster"
     _collectable(root)
     for job, name, written in (("124", "early", _at(11, 50)), ("125", "late", LATER),
