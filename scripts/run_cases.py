@@ -64,6 +64,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ROOT / "docs" / "agent" / "cases"
 RUNS = ROOT / "outputs" / "eval-runs"
+# What the client says when it cannot reach Anthropic: at start, loading the
+# organization's settings, and in a run, as its result.
+UNREACHABLE = ("couldn't reach Anthropic", "Can't reach the API server")
 # What a run inherits from this shell: enough for the client to find its login
 # and the tools, and nothing of a Claude Code session this may be run from.
 KEPT = ("HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
@@ -544,6 +547,9 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
                             for denial in result.get("permission_denials") or []],
         slurm_calls=slurm, calls=len(seen["calls"]),
         untrusted="has not been trusted" in (run_dir / "stderr.log").read_text(errors="replace"),
+        unreachable=any(text in (run_dir / "stderr.log").read_text(errors="replace")
+                        or any(text in str(result.get("result") or "") for result in results)
+                        for text in UNREACHABLE),
     )
     (run_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
     answered = {result["_turn"]: result.get("result") for result in results}
@@ -609,6 +615,8 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
                 flags.append(f"stopped after message {sent} of {1 + len(case.follow_up)}")
             if record.get("untrusted"):
                 flags.append("the client did not trust the folder; see stderr.log")
+            if record.get("unreachable"):
+                flags.append("the client could not reach Anthropic; run it again")
             if record.get("memory_from_before"):
                 flags.append("it read a memory kept before the run; see record.json")
             if record.get("claude_md_above"):
@@ -659,15 +667,23 @@ def main(argv: list[str] | None = None) -> int:
     code = code_version()
     records = []
     sheet = out / "grading.md"
-    for case_id in wanted:
-        case = built[case_id]
-        for held_out in (False, True) if args.held_out and case.playbook else (False,):
-            for number in range(1, args.runs + 1):
-                records.append(run_one(case, number, held_out, out, args, code))
-                # After every run, so that a stopped batch leaves the runs it made.
-                (out / "runs.json").write_text(json.dumps(records, indent=2) + "\n")
-                sheet.write_text(grading_sheet([built[case_id] for case_id in wanted], records,
-                                               out, code))
+    plan = [(built[case_id], held_out, number) for case_id in wanted
+            for held_out in ((False, True) if args.held_out and built[case_id].playbook
+                             else (False,))
+            for number in range(1, args.runs + 1)]
+    for case, held_out, number in plan:
+        records.append(run_one(case, number, held_out, out, args, code))
+        # After every run, so that a stopped batch leaves the runs it made.
+        (out / "runs.json").write_text(json.dumps(records, indent=2) + "\n")
+        sheet.write_text(grading_sheet([built[case_id] for case_id in wanted], records, out, code))
+        # Offline, every run after fails the same way: on 3 November 2026 the Mac
+        # slept and 21 runs did, over three hours.
+        if len(records) >= 2 and all(record.get("unreachable") for record in records[-2:]):
+            print(f"stopped: two runs in a row could not reach Anthropic, and "
+                  f"{len(plan) - len(records)} were not made; run them again once this machine "
+                  f"is online and awake (caffeinate -i on a Mac)", file=sys.stderr)
+            print(f"{len(records)} runs; see {_shown(sheet)}")
+            return 1
     print(f"{len(records)} runs; grade them in {_shown(sheet)}")
     return 0
 

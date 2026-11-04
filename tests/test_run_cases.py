@@ -324,6 +324,9 @@ def test_a_call_is_shown_from_the_runs_folder_with_what_came_back(tmp_path):
 CLAUDE = """#!/bin/bash
 if [[ "$1" == "--version" ]]; then echo "9.9.9 (Claude Code)"; exit 0; fi
 printf '%s\\n' "${*//$'\\n'/ }" >> "$CLAUDE_ARGS"
+if [[ -n "$CLAUDE_OFFLINE" ]]; then
+  echo "Claude Code couldn't reach Anthropic to load your organization's settings." >&2; exit 1
+fi
 if [[ " $* " == *" --resume "* ]]; then cat "$CLAUDE_EVENTS_2"; exit 0; fi
 sbatch --parsable lane.sbatch > /dev/null
 cat "$CLAUDE_EVENTS"
@@ -367,7 +370,7 @@ def _stand_in(tmp_path: Path, monkeypatch, init: dict | None = None) -> None:
         monkeypatch.setenv(name, str(path))
     monkeypatch.setenv("CLAUDE_ARGS", str(tmp_path / "claude_args"))
     monkeypatch.setattr(run_cases, "KEPT", (*run_cases.KEPT, "CLAUDE_ARGS", "CLAUDE_EVENTS",
-                                            "CLAUDE_EVENTS_2", "CLAUDE_EXIT"))
+                                            "CLAUDE_EVENTS_2", "CLAUDE_EXIT", "CLAUDE_OFFLINE"))
     monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
 
 
@@ -425,6 +428,18 @@ def test_a_follow_up_is_sent_only_after_a_turn_that_ended_well(tmp_path, monkeyp
     assert len((tmp_path / "claude_args").read_text().splitlines()) == 1
     assert "(not sent)" in (run_dir / "answer.md").read_text()
     assert "exit 1, stopped after message 1 of 2" in (run_dir.parent / "grading.md").read_text()
+
+
+def test_a_batch_stops_once_two_runs_in_a_row_could_not_reach_anthropic(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_OFFLINE", "1")
+    assert run_cases.main(["E13", "E17", "E18", "--runs", "1"]) == 1
+    [out] = (tmp_path / "runs").glob("*")
+    records = json.loads((out / "runs.json").read_text())
+    assert [record["case"] for record in records] == ["E13", "E17"]
+    assert all(record["unreachable"] for record in records)
+    assert not (out / "E18-1").exists()
+    assert "the client could not reach Anthropic; run it again" in (out / "grading.md").read_text()
 
 
 def test_a_case_without_follow_ups_answers_in_one_piece(tmp_path, monkeypatch):

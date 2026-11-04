@@ -75,6 +75,12 @@ names a place in the project for it.
 Claude Code's documentation says so for each of these (checked on 29 October
 2026).
 
+A run that could not reach Anthropic is flagged in `grading.md`, and the batch
+stops after two such runs in a row, since every run after them fails the same
+way. On 3 November 2026 a Mac on battery fell asleep, and 21 runs failed over
+three hours. Run a long batch on a Mac as `caffeinate -i python3
+scripts/run_cases.py …`.
+
 The runs need Claude Code signed in on the machine that runs them. Its version
 goes into each run's record, and the same version on the Mac and on the cluster
 keeps runs comparable. `--dry-run` builds the copies and shows the commands
