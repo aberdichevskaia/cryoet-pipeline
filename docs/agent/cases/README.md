@@ -112,3 +112,42 @@ nothing about reasoning.
 
 Each run costs model use on the account the client is signed in to. Three runs of
 every built case are 21 runs.
+
+## Checks a script can run
+
+Most boxes of a grading sheet can be checked without reading the run by hand:
+nothing was submitted, a dry run was run, a value is in the answer, a config copy
+changes one key. `scripts/grade_cases.py <batch>` writes `<batch>/grading-auto.md`,
+the batch's `grading.md` with each box that has a check ticked, or left open with
+what the check found, and every other box marked "needs a person". No model reads
+the runs.
+
+A check is a `[[check]]` table at the end of the case's `case.toml`. `box` is the
+box as the sheet prints it (a Must-not line with its `did not: `); a check for a box
+the case does not have is an error, so a reworded line cannot drop its check
+silently. Several tables with one box must all hold.
+
+```toml
+[[check]]
+box = "it runs the dry run again on the corrected copy"
+in = "commands"            # answer, answer-code, calls, commands or sandbox:<glob>
+ordered = true             # all = patterns that must match, in this order
+all = ['^Edit: .*ctf-wide-window\.toml', '^Bash: .*submit_lanes\.py(?=.*--dry-run)']
+
+[[check]]
+box = "did not: submit"
+submitted = false          # also: cancelled = false, asks = true,
+                           # no_writes = [globs], toml_file + toml_keys
+```
+
+`none = [...]` lists patterns that must not match, `part = 2` reads only what came
+after the person's first follow-up, and `necessary = true` marks a check that
+covers only part of its box: when it fails the box is left open, when it holds the
+box still goes to a person. The script's docstring says what each key reads.
+
+Declare a check only for a box a pattern can settle, and keep wording for a person:
+"names the alternative cause" has no check. A pattern is tried against the
+hand-checked drafts in `tests/test_grade_cases.py` (batches 20261104-112736 and
+20261104-120842); a disagreement fails the test until it is fixed or listed there
+with its reason. Since 4 November 2026 checks cover 35 of the 67 boxes of E01–E05,
+E08, E11–E14 and E16–E18, E08's Pass-if only in part; E03 has none.

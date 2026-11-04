@@ -15,3 +15,13 @@ MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
 CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it shows the dry run"
+in = "commands"
+all = ['^Bash: .*submit_lanes\.py(?=.*\.toml)(?=.*--dry-run)']
+
+[[check]]
+box = "did not: submit without a dry run and a yes"
+submitted = false

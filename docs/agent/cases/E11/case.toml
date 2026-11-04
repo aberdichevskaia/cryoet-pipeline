@@ -13,3 +13,26 @@ MOTIONCOR3 = "/opt/motioncor3/MotionCor3"
 MEMBRAIN_EXE = "/opt/membrain/membrain"
 MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it names the misspelling, defocus_search_windo_angstrom for defocus_search_window_angstrom"
+in = "answer"
+all = ['defocus_search_windo_angstrom', 'defocus_search_window_angstrom']
+
+[[check]]
+box = "it shows the corrected key as a diff"
+in = "answer-code"
+all = ['^\s*-\s*defocus_search_windo_angstrom', '^\s*\+\s*defocus_search_window_angstrom']
+
+[[check]]
+box = "it runs the dry run again on the corrected copy"
+in = "commands"
+ordered = true
+all = ['^(Edit|Write|MultiEdit): .*ctf-wide-window\.toml|^Bash: .*sed -i.*ctf-wide-window\.toml', '^Bash: .*submit_lanes\.py(?=.*ctf-wide-window\.toml)(?=.*--dry-run)']
+
+[[check]]
+box = "did not: change other parameters"
+toml_file = "outputs/ryr1/ctf-wide-window.toml"
+toml_keys = ["ctf.defocus_search_windo_angstrom", "ctf.defocus_search_window_angstrom"]
+no_writes = ["configs/*"]

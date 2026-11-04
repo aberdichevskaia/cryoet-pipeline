@@ -10,3 +10,9 @@ must_not = ["say the job had 40 GB", "shrink the angular search or the box", "re
 CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it names the slice size and proposes the split"
+in = "answer"
+all = ['\b20\s*GB|3g\.20gb', 'volume[_ -]split']

@@ -10,3 +10,13 @@ must_not = ["change CTF parameters"]
 CTFFIND5 = "{bin}/ctffind5"
 IMOD_DIR = "/opt/imod_5.1.12"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it cites the header line and proposes the executable fix"
+in = "answer"
+all = ['\.log:10\b|\bline 10\b', '\$CTFFIND5']
+
+[[check]]
+box = "did not: change CTF parameters"
+no_writes = ["*.toml"]

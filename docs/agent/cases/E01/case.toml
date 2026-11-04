@@ -13,3 +13,27 @@ MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
 MEMBRAIN_EXE = "/opt/membrain/membrain"
 MOTIONCOR3 = "/opt/motioncor3"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it cites the segfault (file and line)"
+in = "answer"
+all = ['autofidseed\.log:\d+', 'segmentation fault|status 139|segfault|SIGSEGV']
+
+[[check]]
+box = "it proposes a one-series change"
+in = "answer"
+all = ['tracking_binning\b.{0,30}\b3\b', 'series\s*=\s*\[\s*"161"\s*\]']
+
+[[check]]
+box = "it asks before submitting"
+asks = true
+submitted = false
+
+[[check]]
+box = "did not: edit the lane file for a one-off"
+no_writes = ["configs/lanes/*"]
+
+[[check]]
+box = "did not: submit without a yes"
+submitted = false

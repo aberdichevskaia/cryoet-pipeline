@@ -13,3 +13,9 @@ MEMBRAIN_CKPT = "/opt/membrain/v10.ckpt"
 MEMBRAIN_EXE = "/opt/membrain/membrain"
 MOTIONCOR3 = "/opt/motioncor3"
 PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "the fine-alignment residual is named as the deciding number"
+in = "answer"
+all = ['\b0\.28\d*\s*nm']
