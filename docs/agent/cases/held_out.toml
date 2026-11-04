@@ -1,0 +1,165 @@
+# What a held-out run of a case may not read. Its own playbook entries are taken
+# out by scripts/run_cases.py; this file names the other lines that tell the
+# case's answer: a worked example taken from the case, or a comment that tells
+# its incident. Each `find` is replaced with `with` (from `find` through
+# `through`, when that is given), after the case's setup.sh. A run stops when a
+# `find` is no longer in its file, or is there twice, so that a rewrite of the
+# file cannot bring the answer back unnoticed.
+#
+# `markers` are the case's answer in a few patterns. tests/test_run_cases.py
+# checks that a held-out copy holds none of them outside the case's evidence,
+# and that a copy that is not held out does.
+#
+# Capabilities stay: the ctf-window recipe, volume_split and CTFFIND5 exist
+# because of these cases, and a run that reasons its way to them may use them.
+#
+# Every run, held out or not, also goes without docs/agent_architecture.md, whose
+# starting case set states the expected answers, and without tests/, whose
+# fixtures hold past incidents (EVALUATION in run_cases.py).
+
+[E01]
+markers = ['161[^\n]{0,80}(segfault|tracking_binning)', 'segfault[^\n]{0,80}\b161\b',
+           'beadtrack[^\n]{0,40}segfault']
+
+[[E01.replace]]
+file = "docs/agent/rerun_recipes.md"
+find = """ Example:
+RyR1 series 161 needed `tracking_binning = 3` where the lane has 2, because
+`beadtrack` segfaults at 2."""
+with = ""
+
+[[E01.replace]]
+file = "docs/agent/rerun_recipes.md"
+find = """ `ryr1-bin8.toml` does this for 161: its CPU stage starts at
+   `build-ctf-stack`, after alignment."""
+with = ""
+
+[E02]
+markers = ['\b097\b[^\n]{0,80}(coarse|fine align)', '(coarse QC|coarse alignment)[^\n]{0,80}\b097\b']
+
+[[E02.replace]]
+file = "docs/agent/pipeline_map.md"
+find = """: on
+  RyR1 097 the coarse QC failed and fine alignment on the beads was fine."""
+with = "."
+
+[E03]
+markers = ['\b039\b[^\n]{0,60}(window|ctfw)', '(±|\+-) ?12 ?(°|deg)', 'past ~12 degrees',
+           '9, 22 and 26']
+
+[[E03.replace]]
+file = "docs/agent/templates/playbook_entry.md"
+find = "# Example — CTF estimation: only the views near zero tilt fit"
+through = "26 of 29 views fitted better than 20 Å."
+with = ""
+
+[[E03.replace]]
+file = "docs/agent/rerun_recipes.md"
+find = "ctf-window configs/lanes/ryr1-bin8.toml --series 039 --dry-run"
+with = "ctf-window configs/lanes/<lane>.toml --series <TS> --dry-run"
+
+[[E03.replace]]
+file = "scripts/submit_recipe.py"
+find = "ctf-window configs/lanes/ryr1-bin8.toml --series 039 --dry-run"
+with = "ctf-window configs/lanes/<lane>.toml --series <TS> --dry-run"
+
+[[E03.replace]]
+file = "scripts/ctf_window_test.sbatch"
+find = "# Why do the ryr1 CTF fits fail past ~12 degrees, while the ribosome ones did not?"
+through = "# four, and per variant the number of views fitted and the defocus line."
+with = """# One series' CTF fit four ways, each under its own variant, so that the lane's
+# own CTF model is not touched:
+#
+#     python3 scripts/submit_recipe.py ctf-window configs/lanes/<lane>.toml \\
+#         --series <TS> --dry-run
+#
+#   variant      window      CTFFIND5 sample tilt
+#   ctfw1        +-1000 A    no
+#   ctfw5        +-5000 A    no
+#   ctfw10       +-10000 A   no
+#   ctfw5-tilt   +-5000 A    yes
+#
+# It needs IMOD_DIR, and CTFFIND5 when the lane names CTFFIND as "$CTFFIND5".
+# OVERWRITE=1, which submit_recipe.py --overwrite sets, rebuilds the series'
+# bin-2 CTF stack first and replaces the fits under these labels; KEEP_STACK=1
+# keeps the stack. It ends with scripts/ctf_fit_table.py."""
+
+[[E03.replace]]
+file = "scripts/ctf_fit_table.py"
+find = "python3 scripts/ctf_fit_table.py outputs/ryr1 039 ctfw1 ctfw5 ctfw10 ctfw5-tilt"
+with = "python3 scripts/ctf_fit_table.py outputs/<project> <TS> ctfw1 ctfw5 ctfw10 ctfw5-tilt"
+
+[[E03.replace]]
+file = "scripts/ctf_fit_table.py"
+find = """ A defocus that
+moves with sin(tilt) is what an image centre off the tilt axis gives, and its
+slope is the number that says how wide the per-view search has to be: the fit
+of a view whose defocus lies outside the window has to come back into it on its
+own."""
+with = ""
+
+# The notes in other job scripts that nvidia-smi --query-gpu describes the whole
+# card inside a MIG slice stay: they say how a slice reports itself, and came
+# from other jobs (tplnull's among them). E04 held out tests reading the slice
+# from the evidence with that knowledge at hand, not without it.
+[E04]
+markers = ['41075712', 'printed 40960 MiB', '(hiv|Gag|HIV)[^\n]{0,80}(out of memory|OOM)']
+
+[[E04.replace]]
+file = "scripts/lane.sbatch"
+find = """# Inside a MIG slice the line above reports the whole card: job 41075712 had a
+# 3g.20gb slice and printed 40960 MiB. -L lists the slice itself.
+"""
+with = ""
+
+[E08]
+markers = ['1\.188', 'pixel-size discrepancy']
+
+[[E08.replace]]
+file = "docs/roadmap.md"
+find = """**A 2.9% pixel-size discrepancy with the published work, unresolved and cheap
+to bound.**"""
+through = """which is a systematic worth knowing about even though
+nothing in the argument turns on it."""
+with = ""
+
+[E05]
+markers = ['4\.1\.14', '3670792', '3781480']
+
+[[E05.replace]]
+file = "docs/agent/pipeline_map.md"
+find = """At MDC `ctffind` can be CTFFIND 4.1.14, which the step refuses;
+  name CTFFIND 5 through `$CTFFIND5` there. """
+with = "The step refuses a CTFFIND older than 5. "
+
+[[E05.replace]]
+file = "configs/lanes/ryr1-bin8.toml"
+find = """# CTFFIND 5 by name: MDC job 3670792 (2026-10-16) found CTFFIND 4.1.14 as
+# `ctffind` on PATH, which the ctffind5 backend refuses, where the lane's run of
+# 2026-10-14 had found a CTFFIND 5. Export CTFFIND5 before submitting.
+"""
+with = ""
+
+[[E05.replace]]
+file = "scripts/run_series.py"
+find = """: at MDC the latter can be
+             # CTFFIND 4.1.14, which this backend refuses."""
+with = "."
+
+[[E05.replace]]
+file = "scripts/ctf_window_test.sbatch"
+find = """:
+# job 3670792 found CTFFIND 4.1.14 as `ctffind` on PATH and could not use it."""
+with = "."
+
+[[E05.replace]]
+file = "scripts/ctf_window_test.sbatch"
+find = """ (3670792 did,
+# before it stopped)"""
+with = ""
+
+[[E05.replace]]
+file = "src/cryoet_pipeline/backends/ctf.py"
+find = """: on 2026-10-16 a job
+            # found CTFFIND 4.1.14 on PATH where the lane's run had found 5."""
+with = "."

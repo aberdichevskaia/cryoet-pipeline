@@ -33,9 +33,11 @@ client, which is what makes it the instrument for deciding about either (see
   the case's state and its log excerpts. A case's evidence is what these two print
   for it, plus the files they point at.
 - **Held out:** the cases from history are also run with their own playbook entry
-  removed. With the entry present, a case tests whether the assistant applies what
-  it has been told. Without it, the case tests whether the assistant reasons from
-  the evidence. Only the held-out result says anything about the second.
+  removed, and with the other lines that tell their answer replaced
+  ([cases/held_out.toml](cases/held_out.toml)). With the entry present, a case
+  tests whether the assistant applies what it has been told. Without it, the case
+  tests whether the assistant reasons from the evidence. Only the held-out result
+  says anything about the second.
 - **Evidence:** each case's goes in `docs/agent/cases/<id>/`
   ([cases/README.md](cases/README.md)), and `scripts/run_cases.py` runs the cases
   that have a folder. Since 29 October 2026 the constructed cases E11–E14 and

@@ -41,10 +41,12 @@ root as its WorkDir, where the job ran from in the clone.
 The copy differs from a clone in two ways, both found on the first real runs on
 30 October 2026:
 
-- it leaves out the cases, this runner and their tests (`EVALUATION` in
-  `run_cases.py`), because a run's grep for the misspelled key of E11 brought
-  back that case's Pass-if line. `scripts/collect_case.py` stays, because a
-  collected case's `setup.sh` runs it in the copy;
+- it leaves out the cases and this runner (`EVALUATION` in `run_cases.py`),
+  because a run's grep for the misspelled key of E11 brought back that case's
+  Pass-if line. Since 4 November it also leaves out `docs/agent_architecture.md`,
+  whose starting case set states the answers, and `tests/`, whose fixtures hold
+  past incidents. `scripts/collect_case.py` stays, because a collected case's
+  `setup.sh` runs it in the copy;
 - it is a git repository of its own, with one commit, because the client keeps
   auto memory per repository: inside this checkout, a run read the memory of the
   sessions that develop this code. The commit comes after `setup.sh`. Made before
@@ -97,7 +99,16 @@ The results go into `outputs/eval-runs/<UTC time>/`. Each run gets:
 `grading.md` holds every case's lines as boxes per run, for the person who
 grades. It flags a run that read a memory kept before it, or a `CLAUDE.md` from
 a folder above its own. `--held-out` also runs each case without its own
-playbook entries (eval_cases.md, "Held out").
+playbook entries (eval_cases.md, "Held out"), and `--only-held-out` runs only
+that copy. A held-out copy also goes without the other lines that tell the
+case's answer: [held_out.toml](held_out.toml) names them, a worked example or a
+comment about the incident, with what replaces each, and its `markers` are the
+answer in a few patterns that a test looks for in every held-out copy. A run
+stops when a line it should replace is no longer in its file. The capabilities
+that the cases brought stay, such as the `ctf-window` recipe, `volume_split` and
+`CTFFIND5`: a run may still reason its way to them. Until 4 November the answers
+of E01, E02, E03 and E05 were left in, so earlier held-out runs of those cases say
+nothing about reasoning.
 
 Each run costs model use on the account the client is signed in to. Three runs of
 every built case are 21 runs.

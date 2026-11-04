@@ -1,6 +1,7 @@
 """scripts/run_cases.py builds each case's sandbox so that the assistant's own
 tools show the evidence the case describes, and lays out what a run did."""
 
+import dataclasses
 import json
 import os
 import platform
@@ -235,6 +236,10 @@ def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
     assert not (sandbox / "docs" / "agent" / "eval_cases.md").exists()
     assert not (sandbox / "docs" / "agent" / "cases").exists()
     assert not (sandbox / "scripts" / "run_cases.py").exists()
+    # The architecture doc's starting case set states the answers; the tests'
+    # fixtures hold past incidents.
+    assert not (sandbox / "docs" / "agent_architecture.md").exists()
+    assert not (sandbox / "tests").exists()
     # A collected case's setup.sh runs the collector in the copy.
     assert (sandbox / "scripts" / "collect_case.py").is_file()
     # What the run's grep found on 30 October 2026, and every other case's lines
@@ -250,6 +255,55 @@ def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
                      line, ".")
         assert not found.strip(), (case.id, line, found)
         assert line not in run_cases.without_entries(playbook, case.playbook), (case.id, line)
+
+
+def _answer_markers(sandbox: Path, case: run_cases.Case) -> list[tuple[str, str]]:
+    """Each file of the copy, other than the case's evidence, that holds one of the
+    case's answer markers, with the marker."""
+    evidence = {str(path.relative_to(case.folder / "tree"))
+                for path in (case.folder / "tree").rglob("*") if path.is_file()}
+    manifest = case.folder / "manifest.json"
+    if manifest.is_file():
+        evidence |= {entry["path"] for entry in json.loads(manifest.read_text())["files"]}
+    found = []
+    for path in sandbox.rglob("*"):
+        name = str(path.relative_to(sandbox))
+        if ".git" in path.parts or not path.is_file() or name in evidence:
+            continue
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        found += [(name, marker) for marker in case.markers if re.search(marker, text)]
+    return found
+
+
+@pytest.mark.parametrize("case_id", sorted(case_id for case_id, case in BUILT.items()
+                                           if case.markers))
+def test_a_held_out_copy_holds_none_of_its_cases_answer(tmp_path, case_id):
+    case = BUILT[case_id]
+    (tmp_path / "plain").mkdir()
+    plain, _ = _sandbox(tmp_path / "plain", case_id)
+    # The markers find the answer where the copy is not held out ...
+    assert _answer_markers(plain / "sandbox", case)
+    held, _ = _sandbox(tmp_path, case_id, held_out=True)
+    # ... and nowhere outside the evidence once it is.
+    assert _answer_markers(held / "sandbox", case) == []
+
+
+def test_only_held_out_runs_just_the_held_out_copies(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
+    # E17 has no playbook entry of its own, so it has no held-out copy.
+    assert run_cases.main(["E02", "E17", "--runs", "2", "--only-held-out", "--dry-run"]) == 0
+    [out] = (tmp_path / "runs").glob("*")
+    assert sorted(path.name for path in out.glob("E*")) == ["E02-held-out-1", "E02-held-out-2"]
+
+
+def test_a_held_out_edit_whose_text_is_gone_stops_the_run(tmp_path):
+    case = dataclasses.replace(BUILT["E01"], held_out_replace=[
+        {"file": "docs/agent/rerun_recipes.md", "find": "a line no file holds", "with": ""}])
+    with pytest.raises(SystemExit, match="E01 held out: docs/agent/rerun_recipes.md holds 0"):
+        _sandbox(tmp_path, case, held_out=True)
 
 
 def test_a_held_out_run_has_no_playbook_entry_of_its_case(tmp_path):
@@ -440,6 +494,15 @@ def test_a_batch_stops_once_two_runs_in_a_row_could_not_reach_anthropic(tmp_path
     assert all(record["unreachable"] for record in records)
     assert not (out / "E18-1").exists()
     assert "the client could not reach Anthropic; run it again" in (out / "grading.md").read_text()
+
+
+def test_a_run_stopped_at_the_turn_limit_is_flagged(tmp_path):
+    # E08 held out, run 2, on 4 November 2026: 41 turns and no answer.
+    record = {"case": "E08", "run": 2, "held_out": True, "exit_code": 1, "prompts_sent": 1,
+              "max_turns_reached": True}
+    sheet = run_cases.grading_sheet([BUILT["E08"]], [record], tmp_path,
+                                    {"commit": None, "modified": []})
+    assert "exit 1, stopped at the turn limit, with no answer" in sheet
 
 
 def test_a_case_without_follow_ups_answers_in_one_piece(tmp_path, monkeypatch):

@@ -216,6 +216,10 @@ class Case:
     # What sacct knows of the case's jobs, by job id: [sacct.<id>] in case.toml,
     # and a collected case's manifest.json "slurm".
     sacct: dict[str, dict[str, str]] = field(default_factory=dict)
+    # From held_out.toml: the edits of a held-out copy, and the case's answer in
+    # a few patterns.
+    held_out_replace: list[dict[str, str]] = field(default_factory=list)
+    markers: list[str] = field(default_factory=list)
 
 
 def load_case(folder: Path) -> Case:
@@ -223,6 +227,7 @@ def load_case(folder: Path) -> Case:
     manifest = folder / "manifest.json"
     sacct = json.loads(manifest.read_text()).get("slurm", {}) if manifest.is_file() else {}
     sacct.update(data.get("sacct", {}))
+    hidden = tomllib.loads(HELD_OUT.read_text()).get(data["id"], {}) if HELD_OUT.is_file() else {}
     return Case(
         id=data["id"], title=data["title"], request=data["request"].strip(), folder=folder,
         pass_if=list(data["pass_if"]), must_not=list(data["must_not"]),
@@ -232,6 +237,7 @@ def load_case(folder: Path) -> Case:
         follow_up=[str(line).strip() for line in data.get("follow_up", [])],
         sacct={str(job): {key: str(value) for key, value in fields.items()}
                for job, fields in sacct.items()},
+        held_out_replace=list(hidden.get("replace", [])), markers=list(hidden.get("markers", [])),
     )
 
 
@@ -252,11 +258,15 @@ def listed_cases() -> dict[str, str]:
 # tracked files, as in an exported tree.
 _UNTRACKED = frozenset({".git", ".claude", "outputs", "__pycache__", ".pytest_cache"})
 # The evaluation's own files, which no copy holds: the cases with their grading
-# lines, this runner and the tests of both. On 30 October 2026 a run's grep for
-# the misspelled key brought back E11's Pass-if line. scripts/collect_case.py
-# stays: a collected case's setup.sh runs it in the copy, and it names no case.
+# lines and this runner (on 30 October 2026 a run's grep for the misspelled key
+# brought back E11's Pass-if line), and what states the cases' answers:
+# docs/agent_architecture.md's starting case set, and tests/, whose fixtures hold
+# past incidents. scripts/collect_case.py stays: a collected case's setup.sh runs
+# it in the copy, and it names no case.
 EVALUATION = ("docs/agent/eval_cases.md", "docs/agent/cases/", "scripts/run_cases.py",
-              "tests/test_run_cases.py", "tests/test_collect_case.py")
+              "docs/agent_architecture.md", "tests/")
+# The lines elsewhere that tell a case's answer, which its held-out runs go without.
+HELD_OUT = CASES / "held_out.toml"
 
 
 def tracked_files() -> list[str]:
@@ -304,8 +314,32 @@ def prepare_run(run_dir: Path, case: Case, held_out: bool) -> dict[str, str]:
         with open(run_dir / "setup.log", "w") as log:
             subprocess.run(["bash", str(case.folder / "setup.sh")], cwd=sandbox, env=env,
                            check=True, stdout=log, stderr=subprocess.STDOUT)
+    if held_out:
+        hide_answers(sandbox, case)
     own_repository(sandbox)
     return env
+
+
+def hide_answers(sandbox: Path, case: Case) -> None:
+    """The lines held_out.toml names for the case, replaced in its held-out copy:
+    after setup.sh, which may write the files they are in."""
+    for edit in case.held_out_replace:
+        path = sandbox / edit["file"]
+        text = path.read_text() if path.is_file() else ""
+        find, through = edit["find"], edit.get("through")
+        found = text.count(find)
+        start = text.find(find)
+        end = start + len(find)
+        if found == 1 and through is not None:
+            stop = text.find(through, end)
+            end = stop + len(through) if stop >= 0 else -1
+        if found != 1 or end < 0:
+            raise SystemExit(
+                f"{case.id} held out: {edit['file']} holds {found} of {find[:60]!r}"
+                + (f", and no {through[:40]!r} after it" if found == 1 else "")
+                + "; bring docs/agent/cases/held_out.toml up to date with the file"
+            )
+        path.write_text(text[:start] + edit.get("with", "") + text[end:])
 
 
 def own_repository(sandbox: Path) -> None:
@@ -547,6 +581,7 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
                             for denial in result.get("permission_denials") or []],
         slurm_calls=slurm, calls=len(seen["calls"]),
         untrusted="has not been trusted" in (run_dir / "stderr.log").read_text(errors="replace"),
+        max_turns_reached=any(result.get("subtype") == "error_max_turns" for result in results),
         unreachable=any(text in (run_dir / "stderr.log").read_text(errors="replace")
                         or any(text in str(result.get("result") or "") for result in results)
                         for text in UNREACHABLE),
@@ -617,6 +652,8 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
                 flags.append("the client did not trust the folder; see stderr.log")
             if record.get("unreachable"):
                 flags.append("the client could not reach Anthropic; run it again")
+            if record.get("max_turns_reached"):
+                flags.append("stopped at the turn limit, with no answer")
             if record.get("memory_from_before"):
                 flags.append("it read a memory kept before the run; see record.json")
             if record.get("claude_md_above"):
@@ -642,6 +679,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runs", type=int, default=3, help="runs per case (3)")
     parser.add_argument("--held-out", action="store_true",
                         help="also run each case with its own playbook entries removed")
+    parser.add_argument("--only-held-out", action="store_true",
+                        help="run only the held-out copies, of the cases that have them")
     parser.add_argument("--model", default=None, help="a full model ID, passed to the launcher")
     parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--timeout", type=int, default=1200, help="seconds a run may take")
@@ -668,8 +707,9 @@ def main(argv: list[str] | None = None) -> int:
     records = []
     sheet = out / "grading.md"
     plan = [(built[case_id], held_out, number) for case_id in wanted
-            for held_out in ((False, True) if args.held_out and built[case_id].playbook
-                             else (False,))
+            for held_out in (((True,) if args.only_held_out else (False, True))
+                             if (args.held_out or args.only_held_out) and built[case_id].playbook
+                             else () if args.only_held_out else (False,))
             for number in range(1, args.runs + 1)]
     for case, held_out, number in plan:
         records.append(run_one(case, number, held_out, out, args, code))
