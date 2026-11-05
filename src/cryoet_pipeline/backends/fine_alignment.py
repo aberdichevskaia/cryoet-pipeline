@@ -38,6 +38,7 @@ from cryoet_pipeline.models import (
     TiltAlignment,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.tool_versions import imod_version_of
 
 _RESIDUAL_RE = re.compile(
     r"Residual error mean and sd:\s+"
@@ -651,7 +652,7 @@ class ImodTiltalignBackend:
                     applied_positioning,
                 ),
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(tiltalign)},
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
@@ -684,7 +685,7 @@ class ImodTiltalignBackend:
                 "tilt_series_id": manifest.tilt_series_id,
                 "status": report.status.value,
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(tiltalign)},
             storage_role=StorageRole.QC,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

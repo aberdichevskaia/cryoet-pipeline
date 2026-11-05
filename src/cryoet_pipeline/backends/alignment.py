@@ -26,6 +26,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.tool_versions import imod_version_of
 
 
 class CommandRunner(Protocol):
@@ -308,7 +309,7 @@ class ImodTiltXcorrAlignmentBackend:
                 "xftoxg_log_path": str(paths.xftoxg_log),
                 "translation_units": "full_resolution_pixels",
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(tiltxcorr_executable)},
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

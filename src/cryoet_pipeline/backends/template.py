@@ -32,6 +32,7 @@ from cryoet_pipeline.models import (
     TemplatePreparationQc,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.tool_versions import package_version_of
 
 
 class PytomTemplateBackend:
@@ -314,7 +315,9 @@ class PytomTemplateBackend:
                 "centered": center,
                 "mirrored": mirror,
             },
-            software_versions={"pytom-match-pick": "external"},
+            software_versions={
+                "pytom-match-pick": package_version_of(create_template, "pytom-match-pick")
+            },
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
@@ -339,7 +342,9 @@ class PytomTemplateBackend:
                 "mask_is_spherical": mask_radii.is_sphere,
                 "mask_sigma_px": mask_sigma,
             },
-            software_versions={"pytom-match-pick": "external"},
+            software_versions={
+                "pytom-match-pick": package_version_of(create_template, "pytom-match-pick")
+            },
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

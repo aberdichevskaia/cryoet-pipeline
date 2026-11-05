@@ -41,6 +41,7 @@ from cryoet_pipeline.models import (
 )
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
 from cryoet_pipeline.runtime import DevicePreference
+from cryoet_pipeline.tool_versions import imod_version_of
 
 
 class ImodTiltReconstructionBackend:
@@ -265,7 +266,7 @@ class ImodTiltReconstructionBackend:
                 "log_path": str(paths.log),
             },
             software_versions={
-                "imod": "external",
+                "imod": imod_version_of(executable),
                 "zarr": _package_version("zarr"),
             },
             storage_role=StorageRole.CANONICAL,

@@ -39,6 +39,7 @@ from cryoet_pipeline.models import (
 from cryoet_pipeline.particles import pytom_template_shape
 from cryoet_pipeline.runtime import DevicePreference
 from cryoet_pipeline.score_preview import score_preview_from_mrc, write_score_preview
+from cryoet_pipeline.tool_versions import package_version_of
 
 _PREVIEW_FALLBACK_SLAB_PX = 10
 """Slab depth for the map preview when neither a diameter nor a template box is known."""
@@ -400,7 +401,9 @@ class PytomMatchPickBackend:
                 "qc_path": str(paths.report),
             },
             software_versions={
-                "pytom-match-pick": "external",
+                "pytom-match-pick": package_version_of(
+                    match_template_executable, "pytom-match-pick"
+                ),
                 "zarr": _package_version("zarr"),
             },
             storage_role=StorageRole.CANONICAL,

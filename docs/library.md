@@ -33,7 +33,11 @@ Status, 2026-11-05:
 
   A real headless run on the Mac checked all three. See
   [Read only, enforced in layers](#read-only-enforced-in-layers) and
-  [Search](#search).
+  [Search](#search). The first session at MDC (2026-11-05, on a login node)
+  was asked what newstack does:
+  - it found the snapshot and searched it with the script;
+  - it answered from the manual page, citing "IMOD 5.1.12, man/newstack.html"
+    with the page's line numbers.
 - **Not built yet:** the web sources and the git channel.
 
 ## Core rule
@@ -234,8 +238,11 @@ checked.
 
 1. **File permissions.** The builder is the only writer. A finished snapshot
    loses its write bits, and the group can only read. For every user except
-   the snapshot's owner this holds without any software of ours. Whether ACLs
-   on `/fast` change this is still to be checked.
+   the snapshot's owner this holds without any software of ours. It was checked
+   on MDC's `/fast` (GPFS) on 2026-11-05:
+   - the folder is `drwxr-sr-x`, group AG_Kudryashev;
+   - a snapshot is `dr-xr-x---`, and its files are `-r--r-----`;
+   - `test -w` finds them read-only, for their owner too.
 2. **Deny rules** in `assistant/settings.json`:
    `Edit(//fast/AG_Kudryashev/cryoet-library/**)` for MDC's folder, and
    `scripts/build_library.py` under `python3` and `python`. An `Edit` rule
@@ -274,8 +281,11 @@ Limits:
 - The owner can restore the write bits by hand. Layers 2–6 keep the assistant
   from doing that, not a person. A snapshot owned by a separate service account
   would close this gap too.
-- An administrator's managed settings (`allowManagedPermissionRulesOnly`) can
-  void layer 2. Layer 1 does not depend on them.
+- An administrator's managed settings can void layer 2
+  (`allowManagedPermissionRulesOnly`) and layer 3 (`allowManagedHooksOnly`).
+  Both keys are in Claude Code 2.1.312. Layer 1 does not depend on them.
+  Sessions at MDC open with Claude Code's note that the organization may apply
+  global configuration.
 
 ## Where snapshots live
 
@@ -346,16 +356,28 @@ The folder is decided; the rest is proposed.
 
 ## Versions the pipeline records today
 
-`software_versions` in the records, as of 2026-11-05:
+What `software_versions` in a step's record says, from 2026-11-05 on. The
+functions are in `cryoet_pipeline.tool_versions`, and each is asked once per
+step:
 
 ```text
-IMOD, pytom-match-pick, MemBrain-seg, IsoNet2   "external"
-MotionCor3                                      the motioncor3_version parameter, which no lane sets: "unknown"
-CTFFIND                                         the version read from its banner
-numpy, torch, zarr, mrcfile                     the installed package versions
+IMOD               the VERSION file of the install its program came from (imod_version_of)
+pytom-match-pick   package metadata in the environment its scripts run in (package_version_of)
+MemBrain-seg       package metadata in the environment it runs in (package_version_of)
+CTFFIND            the version its banner states in the run itself: estimate-ctf, and the defocus hint
+MotionCor3         still the motioncor3_version parameter, which no lane sets: "unknown"
+IsoNet2            "external": its backend is a skeleton
+numpy, torch, zarr, mrcfile   the installed package versions
 ```
 
-So the documentation for the version that ran a step cannot be looked up yet.
+"external" stays where an install states no version. Records written before 5
+November say "external" for IMOD, pytom-match-pick and MemBrain-seg.
+
+MotionCor3 is left for later. `motioncor3_version_of` is ready, but
+`backends/motion.py` holds another session's uncommitted work (EER gain flip),
+and two writers do not share a file. Once that work is committed, the parameter
+stays the override and the version is asked of the binary otherwise.
+
 Every one of these tools does state its version when asked. At MDC on
 2026-11-05 the builder read:
 
@@ -364,13 +386,13 @@ IMOD 5.1.12, CTFFIND 5.0.2, MotionCor3 1.2.4, pytom-match-pick 0.14.0,
 MemBrain-seg 0.0.10, Slurm 26.05.4, bash 5.1.8
 ```
 
-Recording these versions is not needed to build the library, because the
-builder finds the versions on its own. It is needed to match a run to the
-documentation of the version that ran it. One detection function should serve
-both the builder and the backends; changing the backends is a separate step.
+MotionCor3 states its version for `--version`, the first thing
+`stated_version` asks it.
 
-The library's version keys should be the same strings the pipeline will record.
-In database_design.md, the backend version is part of a run's fingerprint.
+The builder and the backends read versions the same way, so a record's version
+and a library page's version are the same string, and a run can be matched to
+the documentation of the version that ran it. In database_design.md, the
+backend version is part of a run's fingerprint.
 
 ## How we will know it helps (proposed)
 
@@ -438,18 +460,16 @@ Parked on 2026-11-05, while the work is at MDC.
 
 1. The folder in Munich.
 2. Which snapshot the constructed cases (cluster `none`) use.
-3. Recording the real versions of external tools (see
+3. MotionCor3's version in the records, once `backends/motion.py` is free (see
    [Versions](#versions-the-pipeline-records-today)).
-4. Which of MotionCor3's outputs the 1.2.4 was read from: `version_from` in
-   MDC's `library.json`.
-5. The MDC snapshot documents the installs of the shell it was built from.
+4. The MDC snapshot documents the installs of the shell it was built from.
    IMOD and pytom-match-pick there come from a personal folder and a personal
    environment, while CTFFIND, MotionCor3 and MemBrain-seg come from the
    group's `software/`. Do the group's lanes run the same installs?
-6. Whether MDC's cluster has a wiki of its own (Munich's: see
+5. Whether MDC's cluster has a wiki of its own (Munich's: see
    [Later](#later)).
-7. Whether Claude Code's Bash sandbox runs on the login nodes.
-8. Whether the snapshot's permissions hold on GPFS: `/fast` may carry ACLs
-   beside the mode bits.
-9. A first session at MDC with the library: whether the assistant finds it,
-   searches it and cites it there as it did on the Mac.
+6. Whether Claude Code's Bash sandbox runs on the login nodes.
+7. Whether the guard runs at MDC, given the organization's note on managed
+   settings. A `touch` into the library should be refused by
+   `assistant/guard.py`, not by the file permissions; `/status` names the
+   setting sources.

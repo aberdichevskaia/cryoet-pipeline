@@ -30,7 +30,8 @@ def test_html_keeps_its_form_and_loses_the_rest():
     html = """<html><head><title>Guide</title><style>p {color: red}</style>
     <script>alert(1)</script></head><body>
     <h2>Fiducial  models</h2>
-    <p>Seeds are <b>found</b>&nbsp;by <a href="x.html">autofidseed</a>;<br>see &quot;beads&quot;.</p>
+    <p>Seeds are <b>found</b>&nbsp;by
+    <a href="x.html">autofidseed</a>;<br>see &quot;beads&quot;.</p>
     <ul><li>first</li><li>second <code>-option</code>
       <ol><li>inner</li></ol></li></ul>
     <pre>
@@ -114,7 +115,8 @@ def test_the_imod_programs_are_read_from_the_code_that_runs_them(tmp_path):
     (tmp_path / "a.py").write_text(
         'x = resolve_imod_executable("newstack", context)\n'
         'y = resolve_imod_executable(\n    "tilt", context)\n')
-    (tmp_path / "b.py").write_text('# resolve_imod_executable, named and not called\nname = "beadtrack"\n')
+    (tmp_path / "b.py").write_text('# resolve_imod_executable, named and not called\n'
+                                   'name = "beadtrack"\n')
     assert bl.imod_programs_called(tmp_path) == {"newstack", "tilt"}
 
 
@@ -168,7 +170,8 @@ def host(tmp_path, monkeypatch):
     pages = {
         "man/newstack.html": "<html><head><title>newstack</title></head><body><pre>\n"
                              "<b>NAME</b>\n       newstack - stacks</pre></body></html>",
-        "man/tilt.html": "<html><head><title>tilt</title></head><body><pre>\ntilt</pre></body></html>",
+        "man/tilt.html": "<html><head><title>tilt</title></head><body><pre>\ntilt</pre>"
+                         "</body></html>",
         "guide.html": "<html><body><h1>Guide</h1><p>Words.</p></body></html>",
     }
     for name, html in pages.items():
@@ -192,7 +195,8 @@ def host(tmp_path, monkeypatch):
           *) echo "No manual entry for $1" >&2; exit 16 ;;
         esac
         """)
-    executable(bin_ / "sinfo", 'if [ "$1" = "-V" ]; then echo "slurm 26.05.3"; else echo gpu up; fi\n')
+    executable(bin_ / "sinfo",
+               'if [ "$1" = "-V" ]; then echo "slurm 26.05.3"; else echo gpu up; fi\n')
     executable(bin_ / "squeue", "echo 'Usage: squeue [OPTIONS]'\n")
     src = tmp_path / "src"
     src.mkdir()
@@ -283,11 +287,13 @@ def test_a_build_writes_a_read_only_snapshot_and_points_current_at_it(host, caps
     assert any("no manual page squeue" in note for note in record["notes"])
     for source in record["sources"]:
         if source.get("raw") and not source["raw"].endswith("/"):
-            assert hashlib.sha256((snapshot / source["raw"]).read_bytes()).hexdigest() == source["sha256"]
+            raw = (snapshot / source["raw"]).read_bytes()
+            assert hashlib.sha256(raw).hexdigest() == source["sha256"]
 
     tilt = (snapshot / "text" / "imod" / "man" / "tilt.md").read_text()
     assert tilt.startswith('---\ntool: "imod"\nversion: "5.1.12"\nchannel: "installation"\n')
-    assert "SBATCH\n       submits a batch script" in (snapshot / "text" / "slurm" / "sbatch.md").read_text()
+    sbatch = (snapshot / "text" / "slurm" / "sbatch.md").read_text()
+    assert "SBATCH\n       submits a batch script" in sbatch
     assert "Usage: squeue" in (snapshot / "text" / "slurm" / "squeue-help.md").read_text()
     assert "Input image file name" in (snapshot / "text" / "ctffind" / "help.md").read_text()
     assert "usage: pytom_match_template.py" in (
@@ -296,7 +302,7 @@ def test_a_build_writes_a_read_only_snapshot_and_points_current_at_it(host, caps
     assert "slurm 26.05.3" in site
     assert "Could not run" in site
 
-    for folder, folders, files in os.walk(snapshot):
+    for folder, _, files in os.walk(snapshot):
         assert stat.S_IMODE(os.stat(folder).st_mode) == 0o550, folder
         for name in files:
             assert stat.S_IMODE(os.stat(os.path.join(folder, name)).st_mode) == 0o440, name

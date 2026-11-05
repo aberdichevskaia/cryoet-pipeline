@@ -55,7 +55,8 @@ def test_ctffind5_defocus_hint_writes_summary_and_qc(tmp_path: Path) -> None:
             "# columns: #1 micrograph, #2 DF1, #3 DF2, #4 azimuth, #5 phase, #6 CC, #7 fit\n"
             "1 29500.0 28500.0 12.5 0.0 0.85 4.2\n"
         )
-        return subprocess.CompletedProcess(command, 0, stdout="done", stderr="")
+        banner = "            Version : 5.0.2\n    Library Version : 2.0.0-alpha\n"
+        return subprocess.CompletedProcess(command, 0, stdout=banner + "done", stderr="")
 
     context = BackendContext(
         output_dir=tmp_path / "outputs",
@@ -83,6 +84,8 @@ def test_ctffind5_defocus_hint_writes_summary_and_qc(tmp_path: Path) -> None:
     assert hint.parameters["defocus_um"] == pytest.approx(2.9)
     assert hint.parameters["astigmatism_um"] == pytest.approx(0.05)
     assert hint.parameters["tilt_angle_deg"] == pytest.approx(0.1)
+    # The version CTFFIND's banner states in the run itself.
+    assert hint.software_versions == {"ctffind": "5.0.2"}
 
     command = captured["command"]
     assert isinstance(command, list)

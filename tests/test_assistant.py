@@ -218,7 +218,8 @@ def test_a_session_reads_the_snapshot_current_names(claude, library, monkeypatch
     ])
 
 
-def test_none_and_a_folder_without_a_snapshot_start_without_the_library(claude, library, monkeypatch):
+def test_none_and_a_folder_without_a_snapshot_start_without_the_library(
+        claude, library, monkeypatch):
     plain = (ASSISTANT / "instructions.md").read_text().rstrip("\n")
     for value, said in (("none", ""), (str(library["tmp"]), "no library snapshot at")):
         monkeypatch.setenv("CRYOET_LIBRARY", value)

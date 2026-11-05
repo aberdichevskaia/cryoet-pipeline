@@ -48,6 +48,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.mrc_validation import inspect_mrc_file, validate_complete_mrc
+from cryoet_pipeline.tool_versions import imod_version_of
 
 DEFAULT_DEFOCUS_SEARCH_WINDOW_ANGSTROM = 1000.0
 """Half-width of the narrow second-pass defocus search around the hint."""
@@ -591,7 +592,7 @@ class ImodCtfPlotterEstimationBackend:
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(ctfplotter)},
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
@@ -852,7 +853,7 @@ class ImodCtfPhaseFlipBackend:
                 "command_log_path": str(paths.log),
                 "qc_path": str(paths.report),
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(ctfphaseflip)},
             storage_role=StorageRole.CACHE,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

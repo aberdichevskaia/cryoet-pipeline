@@ -33,6 +33,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.tool_versions import imod_version_of
 
 
 class ImodCoarseAlignmentQcBackend:
@@ -280,7 +281,7 @@ class ImodCoarseAlignmentQcBackend:
                 "excluded_z_values": alignment_result.excluded_z_values,
                 "order": "tilt_angle_ascending",
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(newstack_executable)},
             storage_role=StorageRole.QC,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
@@ -298,7 +299,7 @@ class ImodCoarseAlignmentQcBackend:
                 "newstack_log_path": str(paths.newstack_log),
                 "residual_log_path": str(paths.residual_log),
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(newstack_executable)},
             storage_role=StorageRole.QC,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

@@ -32,6 +32,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
 )
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.tool_versions import imod_version_of
 
 
 class ImodFinalAlignedStackBackend:
@@ -212,7 +213,7 @@ class ImodFinalAlignedStackBackend:
                 "tilt_file_path": str(paths.tilt_file),
                 "newstack_log_path": str(paths.newstack_log),
             },
-            software_versions={"imod": "external"},
+            software_versions={"imod": imod_version_of(newstack)},
             storage_role=StorageRole.CACHE,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,

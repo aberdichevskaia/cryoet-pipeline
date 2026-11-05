@@ -391,6 +391,44 @@ def _fake_imod_dir(tmp_path: Path) -> Path:
     return imod_dir
 
 
+@pytest.mark.parametrize(("version_file", "recorded"), [("9.8.7\n", "9.8.7"), (None, "external")])
+def test_imod_reconstruction_records_the_version_of_the_imod_it_ran(
+    tmp_path: Path, version_file: str | None, recorded: str
+) -> None:
+    """The tomogram's record names the version of the IMOD install its tilt came
+    from, as that install's VERSION file states it; "external" without one."""
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    registry = ArtifactRegistry.empty()
+    registry.extend([source_stack, alignment, aligned_stack])
+    imod_dir = _fake_imod_dir(tmp_path)
+    if version_file is not None:
+        (imod_dir / "VERSION").write_text(version_file)
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        with mrcfile.new(Path(command[command.index("-output") + 1]), overwrite=True) as rec:
+            rec.set_data(np.arange(48, dtype=np.float32).reshape(4, 2, 6))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CPU,
+        # The tilt named, not one on PATH: this host may have IMOD installed.
+        parameters={"tilt_executable": imod_dir / "bin" / "tilt"},
+    )
+    tomogram, _ = reconstruct_and_register(
+        ImodTiltReconstructionBackend(fake_runner), aligned_stack, alignment,
+        _manifest(), context, registry,
+    )
+    assert tomogram.software_versions["imod"] == recorded
+
+
 def test_imod_reconstruction_counts_views_correct_ctf_left_out(tmp_path: Path) -> None:
     """A view CTFFIND did not fit is as missing from the tomogram as a dropped one."""
 

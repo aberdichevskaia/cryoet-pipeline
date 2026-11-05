@@ -33,6 +33,7 @@ from cryoet_pipeline.models import (
     TiltSeriesManifest,
     TomogramBranch,
 )
+from cryoet_pipeline.tool_versions import package_version_of
 
 
 class MemBrainSegSegmentationBackend:
@@ -174,7 +175,7 @@ class MemBrainSegSegmentationBackend:
                 "qc_path": str(paths.report),
             },
             software_versions={
-                "membrain-seg": "external",
+                "membrain-seg": package_version_of(executable, "membrain-seg"),
                 "zarr": _package_version("zarr"),
             },
             storage_role=StorageRole.CANONICAL,

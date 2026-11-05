@@ -141,6 +141,48 @@ def test_a_stated_version_must_follow_the_programs_own_name(tmp_path):
     assert (found.value, found.how) == ("1.1.2", "MotionCor3 --version")
 
 
+def test_a_record_names_the_imod_install_its_program_belongs_to(tmp_path):
+    install = tmp_path / "imod_5.1.12"
+    program = install / "bin" / "newstack"
+    program.parent.mkdir(parents=True)
+    program.touch()
+    (install / "VERSION").write_text("5.1.12\n")
+    link = tmp_path / "on-path" / "newstack"
+    link.parent.mkdir()
+    link.symlink_to(program)
+    assert tv.imod_version_of(program) == "5.1.12"
+    # A program on PATH that links into the install, as a module may put it.
+    assert tv.imod_version_of(link) == "5.1.12"
+    bare = tmp_path / "bare" / "bin" / "tilt"
+    bare.parent.mkdir(parents=True)
+    bare.touch()
+    assert tv.imod_version_of(bare) == tv.EXTERNAL
+
+
+def test_a_record_names_the_package_version_of_the_scripts_environment(tmp_path):
+    script = tmp_path / "pytom_match_template.py"
+    script.write_text(f"#!{sys.executable}\n")
+    assert tv.package_version_of(script, "pytest") == pytest.__version__
+    assert tv.package_version_of(script, "no-such-distribution-here") == tv.EXTERNAL
+    plain = tmp_path / "plain"
+    plain.write_text("no interpreter named here\n")
+    assert tv.package_version_of(plain, "pytest") == tv.EXTERNAL
+
+
+def test_motioncor3_states_its_version_for_a_record(tmp_path):
+    named = stand_in(tmp_path, "MotionCor3",
+                     'if [ "$1" = "--version" ]; then echo "MotionCor3 version 1.2.4"; fi\n')
+    assert tv.motioncor3_version_of(named) == "1.2.4"
+    silent = stand_in(tmp_path, "MotionCor3-silent", "echo 'CUDA version 12.5'\n")
+    assert tv.motioncor3_version_of(silent) is None
+
+
+def test_a_runs_own_output_gives_ctffinds_version():
+    said = "   **   Welcome to Ctffind   **\n   Version : 5.0.2\n   Library Version : 2.0.0\n"
+    assert tv.ctffind_banner_version(said) == "5.0.2"
+    assert tv.ctffind_banner_version("   Library Version : 2.0.0\n") is None
+
+
 def test_no_stated_version_is_unknown_rather_than_a_guess(tmp_path):
     exe = stand_in(tmp_path, "MotionCor3",
                    "echo 'CUDA version 12.2'; echo 'MotionCor3 built with CUDA 12.2'\n")

@@ -1,8 +1,9 @@
 """The versions of the external tools the pipeline runs, asked of the tools.
 
 `scripts/build_library.py` files each tool's documentation under the version
-that is installed (docs/library.md). The backends are to use the same functions
-later: today their records say "external" where a version belongs.
+that is installed (docs/library.md). The backends write the same versions into
+their records' `software_versions`: the `*_of` functions near the end, cached,
+so that a step asks each tool once.
 
 Every probe is bounded. A tool gets no input, a time limit, and a cap on what is
 read from it, so one that waits for answers or keeps printing is stopped rather
@@ -12,6 +13,7 @@ whatever it started.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import select
@@ -154,8 +156,7 @@ def ctffind_version(executable: str | os.PathLike[str], seconds: float = 5.0) ->
         [executable], seconds=seconds, limit=1 << 16,
         stop=lambda text: _CTFFIND_VERSION.search(text) is not None,
     )
-    found = _CTFFIND_VERSION.search(result.output)
-    return Version(found["version"] if found else None, "its start-up banner", _head(result))
+    return Version(ctffind_banner_version(result.output), "its start-up banner", _head(result))
 
 
 def script_python(executable: Path) -> Path | None:
@@ -261,6 +262,53 @@ def stated_version(
     return Version(None, "asked with " + ", ".join(
         repr(" ".join(flags)) if flags else "no arguments" for flags in attempts
     ), said)
+
+
+# --- for the backends' records ------------------------------------------------------
+
+# What a record says of a tool from outside the environment whose version could
+# not be read. Records before 2026-11-05 said it of every such tool.
+EXTERNAL = "external"
+
+
+def ctffind_banner_version(output: str) -> str | None:
+    """The version in CTFFIND output already read, such as a run's stdout."""
+
+    found = _CTFFIND_VERSION.search(output)
+    return found["version"] if found else None
+
+
+def imod_version_of(program: str | os.PathLike[str]) -> str:
+    """The version of the IMOD install that `program` belongs to. That is the
+    VERSION file in the folder above the program's bin/, the program being one
+    that resolve_imod_executable found. EXTERNAL when the install states none."""
+
+    folder = os.path.dirname(os.path.dirname(os.path.realpath(program)))
+    return _imod_install_version(folder)
+
+
+@functools.cache
+def _imod_install_version(folder: str) -> str:
+    return imod_version(Path(folder)).value or EXTERNAL
+
+
+@functools.cache
+def package_version_of(script: str | os.PathLike[str], distribution: str) -> str:
+    """The version of `distribution` in the environment `script` runs in, that
+    is the Python its first line names. EXTERNAL when it cannot be read."""
+
+    python = script_python(Path(script))
+    if python is None:
+        return EXTERNAL
+    return package_version(python, distribution).value or EXTERNAL
+
+
+@functools.cache
+def motioncor3_version_of(executable: str | os.PathLike[str]) -> str | None:
+    """The version MotionCor3 states (1.2.4 at MDC answers --version); None when
+    it states none, or cannot run here."""
+
+    return stated_version(executable, "MotionCor3").value
 
 
 def _head(result: Probe, lines: int = 20) -> str:

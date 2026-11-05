@@ -23,6 +23,7 @@ from cryoet_pipeline.models import (
     StorageRole,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.tool_versions import EXTERNAL, ctffind_banner_version
 
 
 class Ctffind5DefocusHintBackend:
@@ -187,7 +188,7 @@ class Ctffind5DefocusHintBackend:
                 "amplitude_contrast": amplitude_contrast,
                 "log_path": str(paths.log),
             },
-            software_versions={"ctffind": "external"},
+            software_versions={"ctffind": ctffind_banner_version(result.stdout or "") or EXTERNAL},
             storage_role=StorageRole.CANONICAL,
             retention_policy=RetentionPolicy.KEEP,
             can_recompute=True,
