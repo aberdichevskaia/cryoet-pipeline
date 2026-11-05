@@ -470,3 +470,29 @@ def test_a_run_from_a_registry_is_made_and_locked_in_the_project(tmp_path: Path)
     _, err = missing.communicate(timeout=60)
     assert missing.returncode != 0 and "set SERIES" in err
     assert len(_calls(repo)) == 1
+
+
+def test_a_consensus_half_is_refined_beside_its_split(tmp_path: Path) -> None:
+    repo = _stand_in_repo(tmp_path)
+    split = tmp_path / "project" / "mra" / "split_a"
+    split.mkdir(parents=True)
+    (tmp_path / "release").write_text("")
+    job = _job(repo, "41", SPLIT=str(split), HALF="1", NAME="split_a-half1",
+               SCHEDULE="coarse_to_fine")
+    out, err = job.communicate(timeout=60)
+    assert job.returncode == 0, err
+    assert f"lock        {split.parent}/split_a-half1.lock, held by this job to its end" in out
+    assert f"split       {split}, half 1" in out
+    assert _calls(repo) == [
+        f"port 41 env=active --split {split} --half 1 --schedule coarse_to_fine "
+        "--name split_a-half1 --device cuda --dtype float32 --per-gpu 1 --workers 1"]
+
+    # The seed and the reference are the split's; SPLIT goes alone.
+    seeded = _job(repo, "42", SPLIT=str(split), HALF="2", NAME="x", SEEDS="map")
+    _, err = seeded.communicate(timeout=60)
+    assert seeded.returncode == 1 and "leave SEEDS and REFERENCE out" in err
+    both = _job(repo, "43", SPLIT=str(split), HALF="2", NAME="x",
+                SOURCE=str(tmp_path / "project"), SERIES="TS_A")
+    _, err = both.communicate(timeout=60)
+    assert both.returncode == 1 and "one of them" in err
+    assert len(_calls(repo)) == 1

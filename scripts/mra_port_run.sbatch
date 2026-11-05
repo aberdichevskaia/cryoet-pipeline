@@ -29,8 +29,12 @@
 #
 # Its particles, tags and starting table are the ones an export of the same LANE and
 # SERIES gives (one conversion, cryoet_pipeline.particle_sources); the setup's record
-# names each stack it read. The rest of this header says EXPORT where SOURCE works the
-# same. Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
+# names each stack it read. A consensus half of two such runs is refined with
+# SPLIT=<project>/mra/<split> HALF=1 (or 2) and NAME, the split written by
+# scripts/consensus_halves.py split (docs/halves_from_runs.md), with the schedule's
+# variables; the particles, their starting poses, the seed and the reference come from
+# the split, and the run is beside it. The rest of this header says EXPORT where SOURCE
+# works the same. Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
 # with the pipeline's setup (cryoet_pipeline.mra_setup; until 2026-11-02 Dynamo's,
 # scripts/dynamo_mra_setup.m, ran inside this job): the same particles in each subset
 # or blob seed, averaged as dynamo_average averages, the same mask and the same
@@ -109,13 +113,25 @@ script=$0
 [[ "$script" = /* ]] || script=$PWD/$script
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 [[ -f scripts/mra_port_run.py ]] || { echo "submit from the repo root" >&2; exit 1; }
-if [[ -n "${SOURCE:-}" || -n "${EXPORT:-}" ]]; then
-    if [[ -n "${PROJECT:-}" || ( -n "${SOURCE:-}" && -n "${EXPORT:-}" ) ]]; then
-        echo "give SOURCE or EXPORT, with NAME, for a new run, or PROJECT; one of them" >&2
+if [[ -n "${SOURCE:-}" || -n "${EXPORT:-}" || -n "${SPLIT:-}" ]]; then
+    given=0
+    for variable in SOURCE EXPORT SPLIT PROJECT; do
+        if [[ -n "${!variable:-}" ]]; then given=$((given + 1)); fi
+    done
+    if (( given > 1 )); then
+        echo "give SOURCE, EXPORT or SPLIT, with NAME, for a new run, or PROJECT; one of them" >&2
         exit 1
     fi
     : "${NAME:?set NAME to the name of the run}"
-    : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to set the run up}"
+    if [[ -n "${SPLIT:-}" ]]; then
+        : "${HALF:?set HALF to 1 or 2, the half of the split to refine}"
+        if [[ -n "${SEEDS:-}${REFERENCE:-}" ]]; then
+            echo "a half's seed is its split's start_reference.mrc; leave SEEDS and REFERENCE out" >&2
+            exit 1
+        fi
+    else
+        : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to set the run up}"
+    fi
     if [[ -n "${GPUS:-}" ]]; then
         echo "GPUS is Dynamo's own GPU setting; the port searches on every GPU of the job" \
              "(--gres=gpu:a40:N)" >&2
@@ -125,7 +141,11 @@ if [[ -n "${SOURCE:-}" || -n "${EXPORT:-}" ]]; then
         echo "SYMMETRY and AXIS_OFFSET are Dynamo's; the port models no symmetry" >&2
         exit 1
     fi
-    if [[ -n "${SOURCE:-}" ]]; then
+    if [[ -n "${SPLIT:-}" ]]; then
+        # A half is refined beside its split, in <project>/mra.
+        name=$NAME
+        run=$(dirname "$SPLIT")/$name
+    elif [[ -n "${SOURCE:-}" ]]; then
         : "${SERIES:?set SERIES to the tilt-series to read, in order, e.g. SERIES=\"TS_01 TS_43\"}"
         name=$NAME
         run=$SOURCE/mra/$name
@@ -175,7 +195,10 @@ echo "lock        $run.lock, held by this job to its end"
 echo "node        $(hostname)"
 echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
 echo "started     $(date -Is)"
-if [[ -n "${SOURCE:-}" ]]; then
+if [[ -n "${SPLIT:-}" ]]; then
+    echo "split       $SPLIT, half $HALF"
+    from=(--split "$SPLIT" --half "$HALF")
+elif [[ -n "${SOURCE:-}" ]]; then
     echo "source      $SOURCE, label ${LANE:-none}, series $SERIES${DECOY_LANE:+, decoys $DECOY_LANE}"
     read -ra series <<< "$SERIES"
     from=(--source "$SOURCE" --seeds "$SEEDS" --series "${series[@]}")
@@ -188,7 +211,7 @@ else
     echo "project     $PROJECT"
     from=("$PROJECT")
 fi
-if [[ -n "${SOURCE:-}${EXPORT:-}" ]]; then
+if [[ -n "${SOURCE:-}${EXPORT:-}${SPLIT:-}" ]]; then
     for pair in SCHEDULE:--schedule FIRST_LOWPASS:--first-lowpass LAST_LOWPASS:--last-lowpass \
             DIAMETER:--diameter LOWPASS_STEPS:--lowpass-steps MASK_RADIUS:--mask-radius \
             MASK_EDGE:--mask-edge MASK_FILE:--mask-file REFERENCE:--reference \

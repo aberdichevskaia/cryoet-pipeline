@@ -35,6 +35,7 @@ Dynamo's GPU options are left out: the port does not model them.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -50,8 +51,15 @@ from cryoet_pipeline.dynamo_mra_project import (
     _search_fields,
     dim_is_ported,
 )
-from cryoet_pipeline.particle_sources import RegistryParticles, registry_particles
+from cryoet_pipeline.mra_runs import HALVES, PLAN, START, STEP_SPLIT
+from cryoet_pipeline.particle_sources import (
+    RegistryParticles,
+    SelectionInput,
+    registry_particles,
+)
+from cryoet_pipeline.particle_tables import read_particle_table
 from cryoet_pipeline.reports.dynamo_project import read_map, read_table
+from cryoet_pipeline.runs import completed
 
 SUBSET = 300
 """Particles averaged into each 'subset' or 'blob' seed."""
@@ -336,6 +344,66 @@ def plan_from_registry(
     )
 
 
+def plan_from_split(
+    split: Path,
+    half: int,
+    *,
+    log: Callable[[str], None] = print,
+    **options: Any,
+) -> MraPlan:
+    """A consensus half's plan (docs/halves_from_runs.md): the particles of half `half`
+    of `split`, a split scripts/consensus_halves.py wrote of two runs of a registry, read
+    from that registry as the runs read them, each at the split's starting pose, and
+    refined from the split's start in one channel. The seeds and the reference are the
+    split's; the other options as `make_plan` takes them."""
+
+    split = Path(split).resolve()
+    record = completed(split)
+    if record is None or record.step != STEP_SPLIT:
+        raise ValueError(f"{split}: not a split of scripts/consensus_halves.py (no run.json "
+                         f"of step {STEP_SPLIT} that succeeded)")
+    if half not in (1, 2):
+        raise ValueError(f"half must be 1 or 2, got {half}")
+    given = sorted(name for name in ("seeds", "reference_file") if name in options)
+    if given:
+        raise ValueError(f"a half's seed is its split's {START}; leave out {', '.join(given)}")
+    columns, _ = read_particle_table(split / HALVES)
+    rows = np.flatnonzero(columns["half"] == half)
+    if not len(rows):
+        raise ValueError(f"{split}: half {half} holds no particle")
+    tags = columns["particle_id"][rows].astype(int)
+    angles = np.column_stack([columns[name] for name in ("tdrot_deg", "tilt_deg",
+                                                         "narot_deg")])[rows]
+    shifts = np.column_stack([columns[name] for name in ("shift_x_px", "shift_y_px",
+                                                         "shift_z_px")])[rows]
+    # The project is the one the split's first run read, as that run's plan names it.
+    poses = [item for item in record.inputs if item.slot == "poses"]
+    node = completed(Path(poses[0].path)) if len(poses) == 1 else None
+    if node is None or node.fingerprint != poses[0].fingerprint:
+        raise ValueError(f"{split}: the run it was split from is not there as it was "
+                         f"({poses[0].path if poses else 'no poses input'})")
+    named = json.loads((Path(poses[0].path).parent / PLAN).read_text())["particles"]
+    particles = record.content_params["particles"]
+    if {key: value for key, value in named.items() if key != "project"} != particles:
+        raise ValueError(f"{split}: its run's plan names other particles than the split")
+    project = Path(named["project"])
+    chosen = SelectionInput(name=f"half {half}", run=split, fingerprint=record.fingerprint)
+
+    def read() -> Particles:
+        return registry_particles(project, particles["label"], particles["series"],
+                                  particles["decoy_label"], log=log).selected(
+            tags, angles, shifts, chosen)
+
+    return make_plan(
+        read, ["map"], source=project.resolve(),
+        made_by="cryoet_pipeline.mra_setup.plan_from_split",
+        origin={"particles": {"label": particles["label"], "series": particles["series"],
+                              "decoy_label": particles["decoy_label"]}},
+        files={"project": str(project.resolve())}, reference_file=split / START, log=log,
+        **options,
+    )
+
+
 def make_plan(
     read: Callable[[], Particles],
     seeds: Sequence[str],
@@ -526,4 +594,5 @@ def make_plan(
 
 
 __all__ = ["ExportParticles", "Particles", "Round", "make_plan", "plan_from_export",
-           "plan_from_registry", "read_export", "search_rounds", "seed_draws", "soft_sphere"]
+           "plan_from_registry", "plan_from_split", "read_export", "search_rounds",
+           "seed_draws", "soft_sphere"]

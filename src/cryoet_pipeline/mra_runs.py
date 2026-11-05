@@ -65,6 +65,11 @@ index."""
 ITERATION_VERSION = BACKEND_VERSION = 1
 PLAN = "plan.json"
 PARTICLES = "particles.parquet"
+STEP_SPLIT = "consensus-split"
+"""A split of two runs' agreed class into consensus halves (docs/halves_from_runs.md),
+written by scripts/consensus_halves.py: its folder holds HALVES and START."""
+HALVES = "halves.parquet"
+START = "start_reference.mrc"
 TAG, SHIFTS, ANGLES, TILTS, TOMOGRAM, POSITION, PIXEL = (
     0, slice(3, 6), slice(6, 9), slice(13, 15), 19, slice(23, 26), 35)
 """The columns of the plan's starting table (a Dynamo table) the setup names."""
@@ -149,13 +154,18 @@ def _iteration_content(plan: MraPlan, number: int) -> dict[str, Any]:
             "mra": plan.mra[number - 1], "fmin": 1}
 
 
-def _identity(plan: MraPlan, run: Path, number: int,
-              previous: RunRecord | None) -> tuple[str, int, dict[str, Any], list[RunInput]]:
-    """Step, its version, content parameters and inputs of node `number`."""
+def _identity(
+    plan: MraPlan, run: Path, number: int, previous: RunRecord | None,
+) -> tuple[str, int, dict[str, Any], list[RunInput], str | None]:
+    """Step, its version, content parameters, inputs and selection of node `number`: the
+    setup of part of an earlier run's set (a consensus half) names that selection."""
 
     if number == 0:
         content, inputs = _setup_identity(plan)
-        return STEP_SETUP, SETUP_VERSION, content, inputs
+        chosen = (plan.particles.selection.name
+                  if isinstance(plan.particles, RegistryParticles)
+                  and plan.particles.selection is not None else None)
+        return STEP_SETUP, SETUP_VERSION, content, inputs, chosen
     assert previous is not None
     _, particles = _particles_input(plan)
     inputs = [
@@ -163,7 +173,7 @@ def _identity(plan: MraPlan, run: Path, number: int,
                  fingerprint=previous.fingerprint),
         RunInput(slot="particles", path=str(plan.particles), fingerprint=particles),
     ]
-    return STEP_ITERATION, ITERATION_VERSION, _iteration_content(plan, number), inputs
+    return STEP_ITERATION, ITERATION_VERSION, _iteration_content(plan, number), inputs, None
 
 
 def plan_record(plan: MraPlan) -> dict[str, Any]:
@@ -173,6 +183,9 @@ def plan_record(plan: MraPlan) -> dict[str, Any]:
         particles: Any = {"project": str(plan.particles.project), "label": plan.particles.label,
                           "series": list(plan.particles.series),
                           "decoy_label": plan.particles.decoy_label}
+        if plan.particles.selection is not None:
+            particles["selection"] = {"name": plan.particles.selection.name,
+                                      "run": str(plan.particles.selection.run)}
     else:
         particles = str(plan.particles)
     return {
@@ -208,10 +221,10 @@ def _finished(plan: MraPlan, run: Path) -> list[RunRecord]:
         record = completed(node_folder(run, number))
         if record is None:
             break
-        step, step_version, content, inputs = _identity(plan, run, number,
-                                                        done[-1] if done else None)
+        step, step_version, content, inputs, chosen = _identity(
+            plan, run, number, done[-1] if done else None)
         if record.fingerprint != fingerprint(step, step_version, BACKEND, BACKEND_VERSION,
-                                             content, inputs):
+                                             content, inputs, chosen):
             raise Refused(f"{node_folder(run, number)} holds a node of another plan; give "
                           "the run a new name")
         done.append(record)
@@ -482,8 +495,9 @@ def run_plan(
         _write_plan(run / PLAN, plan)
         for number in range(len(plan.settings) + 1):
             folder = node_folder(run, number)
-            step, step_version, content, inputs = _identity(plan, run, number, previous)
-            expected = fingerprint(step, step_version, BACKEND, BACKEND_VERSION, content, inputs)
+            step, step_version, content, inputs, chosen = _identity(plan, run, number, previous)
+            expected = fingerprint(step, step_version, BACKEND, BACKEND_VERSION, content, inputs,
+                                   chosen)
             record = completed(folder)
             if record is not None:
                 if record.fingerprint != expected:
@@ -501,7 +515,8 @@ def run_plan(
                 particles = [load_particle(plan.particles, int(tag)) for tag in tags]
             with writing(folder, step=step, step_version=step_version, backend=BACKEND,
                          backend_version=BACKEND_VERSION, content_params=content, inputs=inputs,
-                         execution_params=execution, log_path=log_path) as attempt:
+                         execution_params=execution, selection=chosen,
+                         log_path=log_path) as attempt:
                 if number == 0:
                     _write_setup(plan, attempt.add)
                     line = (f"{len(tags):,} particles, channels {sorted(plan.references)}, "

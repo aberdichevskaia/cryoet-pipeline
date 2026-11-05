@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +159,19 @@ class StackParticle:
     decoy: bool
 
 
+@dataclass(frozen=True)
+class SelectionInput:
+    """Part of a set that an earlier run chose, each particle at the pose it gave: a
+    selection that run's record lists (docs/halves_from_runs.md)."""
+
+    name: str
+    """The selection's name in that record, e.g. "half 1"."""
+    run: Path
+    """The folder of the run that defines it."""
+    fingerprint: str
+    """That run's record's fingerprint."""
+
+
 @dataclass
 class RegistryParticles:
     """The particles of a project's registry an MRA run reads, by tag."""
@@ -182,12 +195,17 @@ class RegistryParticles:
     stack_fingerprints: dict[str, str]
     """What each stack says it is: its registry record, its STAR file and the wedge
     read for it; not its voxels."""
+    selection: SelectionInput | None = None
+    """When only part of the particles is read, each at a pose an earlier run gave it."""
     _open: dict[str, Any] = field(default_factory=dict, repr=False)
+    _by_tag: dict[int, StackParticle] = field(default_factory=dict, repr=False)
 
     def __str__(self) -> str:
         decoys = f", decoys {self.decoy_label}" if self.decoy_label is not None else ""
+        part = (f", {self.selection.name} of {self.selection.run}"
+                if self.selection is not None else "")
         return (f"the registry of {self.project}, label {self.label}, series "
-                f"{' '.join(self.series)}{decoys}")
+                f"{' '.join(self.series)}{decoys}{part}")
 
     @property
     def tags(self) -> np.ndarray:
@@ -210,8 +228,10 @@ class RegistryParticles:
 
         import zarr
 
-        particle = self.particles[int(tag) - 1]
-        if particle.tag != int(tag):
+        if not self._by_tag:
+            self._by_tag.update({particle.tag: particle for particle in self.particles})
+        particle = self._by_tag.get(int(tag))
+        if particle is None:
             raise KeyError(f"no particle {tag}")
         stack = self._open.get(particle.stack_id)
         if stack is None:
@@ -226,17 +246,48 @@ class RegistryParticles:
         return self.volume(tag).astype(float)
 
     def fingerprint(self) -> str:
-        """Every stack read, in the order read, by what it says it is."""
+        """Every stack read, in the order read, by what it says it is; and the selection,
+        when only part of them is read."""
 
-        return hashlib.sha256(canonical_json(list(self.stack_fingerprints.items()))
-                              .encode()).hexdigest()
+        stacks = list(self.stack_fingerprints.items())
+        known: Any = stacks if self.selection is None else {
+            "stacks": stacks,
+            "selection": [self.selection.name, self.selection.fingerprint]}
+        return hashlib.sha256(canonical_json(known).encode()).hexdigest()
 
     def inputs(self) -> list[RunInput]:
-        """One input per stack, for a run's record."""
+        """One input per stack, and the run that chose the selection, for a run's record."""
 
-        return [RunInput(slot=f"particle_stack {stack_id}", path=str(stack.path),
-                         fingerprint=self.stack_fingerprints[stack_id])
-                for stack_id, stack in self.stacks.items()]
+        inputs = [RunInput(slot=f"particle_stack {stack_id}", path=str(stack.path),
+                           fingerprint=self.stack_fingerprints[stack_id])
+                  for stack_id, stack in self.stacks.items()]
+        if self.selection is not None:
+            inputs.append(RunInput(slot="selection", path=str(self.selection.run),
+                                   fingerprint=self.selection.fingerprint))
+        return inputs
+
+    def selected(self, tags: Sequence[int] | np.ndarray, angles: np.ndarray, shifts: np.ndarray,
+                 selection: SelectionInput) -> RegistryParticles:
+        """These particles only, each at the pose given (tdrot, tilt, narot in degrees;
+        shifts in pixels), as a run reading part of an earlier run's set reads them.
+        Every other column of their rows (wedge, series' number, pick) is the registry's."""
+
+        chosen = np.asarray(tags, dtype=int)
+        order = np.argsort(chosen, kind="stable")
+        chosen = chosen[order]
+        if len(set(chosen.tolist())) != len(chosen):
+            raise ValueError("a tag is selected twice")
+        rows = {int(tag): row for row, tag in enumerate(self.tags)}
+        missing = [int(tag) for tag in chosen if int(tag) not in rows]
+        if missing:
+            raise ValueError(f"{len(missing)} selected tags are not among {self}, e.g. "
+                             f"{missing[0]}")
+        index = [rows[int(tag)] for tag in chosen]
+        table = self.table[index].copy()
+        table[:, ANGLES] = np.asarray(angles, dtype=float)[order]
+        table[:, SHIFTS] = np.asarray(shifts, dtype=float)[order]
+        return replace(self, table=table, particles=[self.particles[row] for row in index],
+                       selection=selection, _open={}, _by_tag={})
 
 
 def registry_particles(
@@ -333,5 +384,6 @@ def registry_particles(
     )
 
 
-__all__ = ["RegistryParticles", "StackParticle", "TABLE_COLUMNS", "decoy_kind",
+__all__ = ["RegistryParticles", "SelectionInput", "StackParticle", "TABLE_COLUMNS",
+           "decoy_kind",
            "particle_stack", "reconstructed_tilt_range", "registry_particles", "table_row"]

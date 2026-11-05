@@ -87,7 +87,7 @@ PROJECT: `SOURCE=<pipeline project> LANE=<label> SERIES="TS_1 TS_2 ..."`
 ## Not in this step
 
 Score cuts and classes of earlier runs as inputs (selections), the consensus halves
-from a run instead of from sub-exports, registering runs, extraction's own run
+from a run instead of from sub-exports (since done: [halves_from_runs.md](halves_from_runs.md)), registering runs, extraction's own run
 records, and a STAR or RELION export of a run.
 
 ## Decided on 2026-11-05

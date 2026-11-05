@@ -16,8 +16,11 @@ run is written to <export>/<name>, with nothing to compare. With --source, --lan
 --series instead, the plan is made from the particle stacks of those series in the
 pipeline project's registry, read where they are (`mra_setup.plan_from_registry`,
 docs/mra_from_registry.md: the particles an export of the same arguments would copy),
-and the run is written to <source>/mra/<name>. That is how the pipeline's own runs
-are made (scripts/mra_port_run.sbatch with SOURCE or EXPORT, and NAME). The rest of
+and the run is written to <source>/mra/<name>. With --split and --half, a consensus
+half of a split scripts/consensus_halves.py wrote of two runs of the registry is
+refined from the split's start (`mra_setup.plan_from_split`, docs/halves_from_runs.md),
+the run written beside the split. That is how the pipeline's own runs are made
+(scripts/mra_port_run.sbatch with SOURCE, EXPORT or SPLIT, and NAME). The rest of
 this text is about a Dynamo project given instead.
 
 A run is written in the run-record layout (docs/run_records.md, `mra_runs.run_plan`):
@@ -87,7 +90,7 @@ from cryoet_pipeline.dynamo_mra_project import (
     torch_search,
 )
 from cryoet_pipeline.mra_runs import Refused, run_plan
-from cryoet_pipeline.mra_setup import plan_from_export, plan_from_registry
+from cryoet_pipeline.mra_setup import plan_from_export, plan_from_registry, plan_from_split
 from cryoet_pipeline.reports.classification import ClassificationRun, PoseTable
 from cryoet_pipeline.reports.classification_reader import read_classification
 
@@ -208,7 +211,7 @@ def new_run(args: argparse.Namespace) -> int:
     nothing to compare it with."""
 
     options: dict[str, Any] = dict(
-        reference_file=args.reference, schedule=args.schedule,
+        schedule=args.schedule,
         first_lowpass=args.first_lowpass, last_lowpass=args.last_lowpass,
         diameter=args.diameter, lowpass_steps=args.lowpass_steps,
         mask_radius=args.mask_radius, mask_edge=args.mask_edge, mask_file=args.mask_file,
@@ -220,13 +223,18 @@ def new_run(args: argparse.Namespace) -> int:
         if args.export is not None:
             where = args.export.resolve()
             plan = plan_from_export(where, args.seeds.split(), data_folder=args.data_folder,
-                                    **options)
+                                    reference_file=args.reference, **options)
             run, spacing = where / args.name, _spacing(where)
-        else:
+        elif args.source is not None:
             where = args.source.resolve()
             plan = plan_from_registry(where, args.lane, args.series, args.seeds.split(),
-                                      decoy_label=args.decoy_lane, **options)
+                                      decoy_label=args.decoy_lane,
+                                      reference_file=args.reference, **options)
             run, spacing = where / "mra" / args.name, None
+        else:
+            where = args.split.resolve()
+            plan = plan_from_split(where, args.half, **options)
+            run, spacing = where.parent / args.name, None
     except ValueError as error:
         raise SystemExit(f"REFUSED: the setup: {error}") from None
     if args.iterations is not None:
@@ -271,6 +279,12 @@ def main() -> int:
                           help="the tilt-series, in the order to number them")
     registry.add_argument("--decoy-lane", default=None,
                           help="the label of decoy stacks of the same series, after the particles")
+    halves = parser.add_argument_group(
+        "a consensus half: one half of a split of two runs of the registry, refined from "
+        "the split's start; the schedule's variables below")
+    halves.add_argument("--split", type=Path, default=None,
+                        help="the split, <project>/mra/<name> of consensus_halves.py split")
+    halves.add_argument("--half", type=int, choices=(1, 2), default=None)
     setup = parser.add_argument_group(
         "a new run, set up from an export folder without Dynamo, with the variables of "
         "scripts/dynamo_mra_setup.m (see its header)")
@@ -303,11 +317,26 @@ def main() -> int:
     setup.add_argument("--data-folder", default="particles")
     args = parser.parse_args()
 
-    given = [args.project is not None, args.export is not None, args.source is not None]
+    given = [args.project is not None, args.export is not None, args.source is not None,
+             args.split is not None]
     if sum(given) != 1:
-        parser.error("give a Dynamo project, or --export or --source for a new run; one of them")
+        parser.error("give a Dynamo project, or --export, --source or --split for a new run; "
+                     "one of them")
     if args.source is None and (args.series or args.lane or args.decoy_lane):
         parser.error("--series, --lane and --decoy-lane go with --source")
+    if (args.split is None) != (args.half is None):
+        parser.error("--split and --half go together")
+    if args.split is not None:
+        if args.name is None:
+            parser.error("a half needs --name")
+        if args.seeds is not None or args.reference is not None:
+            parser.error("a half's seed is its split's start_reference.mrc; leave out --seeds "
+                         "and --reference")
+        if args.data_folder != "particles":
+            parser.error("--data-folder is an export's; a half reads the stacks")
+        if args.compare_only:
+            parser.error("a new run has no Dynamo project to compare with")
+        return new_run(args)
     if args.export is not None or args.source is not None:
         if args.name is None or args.seeds is None:
             parser.error("a new run needs --name and --seeds")

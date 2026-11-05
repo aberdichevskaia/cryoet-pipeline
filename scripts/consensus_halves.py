@@ -15,6 +15,27 @@
         outputs/ryr1/dynamo/ryr1-consensus-half2/refine_h2 \\
         --out outputs/ryr1/dynamo/ryr1-consensus
 
+Runs of a project's registry (mra_port_run.sbatch with SOURCE, in <project>/mra) are
+split with no export (docs/halves_from_runs.md):
+
+    python scripts/consensus_halves.py split outputs/ryr1/mra/mra_ssn:1 \
+        --agree outputs/ryr1/mra/mra_ssb:1 --start-lowpass 53.76 \
+        --out outputs/ryr1/mra/ryr1-consensus
+    SPLIT=outputs/ryr1/mra/ryr1-consensus HALF=1 NAME=refine_h1 SCHEDULE=coarse_to_fine \
+        FIRST_LOWPASS=53.76 LAST_LOWPASS=29.4 DIAMETER=340 \
+        sbatch --export=ALL --job-name=refine_h1 --gres=gpu:a40:1 scripts/mra_port_run.sbatch
+    (and the same for half 2, HALF=2 NAME=refine_h2)
+    python scripts/consensus_halves.py maps outputs/ryr1/mra/refine_h1 \
+        outputs/ryr1/mra/refine_h2 --out outputs/ryr1/mra/ryr1-consensus
+
+The split is then a run of its own in <project>/mra (its run.json, halves.parquet with
+each kept particle's half and starting pose, start_reference.mrc), its halves two
+selections of its record; each half run reads the stacks the two runs read, its half's
+particles at the split's poses, from the split's start; `maps` knows the two halves by
+the split they name. Both runs must have read the same particles. The rest of this
+text says how the halves are chosen, dealt and started, which is the same for both,
+and what an export's split writes.
+
 `split` takes the members of one class, PROJECT:CHANNEL, after the last iteration its
 run finished, that are also members of the --agree class, from another run on the
 same export; decoys are left out. Their poses are the first run's: each one's shifts
@@ -71,6 +92,7 @@ import json
 import math
 import shutil
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -82,8 +104,15 @@ from split_export_by_view import write_subexport
 
 from cryoet_pipeline.backends.dynamo_search import _half_map_fsc, euler_matrix
 from cryoet_pipeline.filters import low_pass_filter_volume
+from cryoet_pipeline.models import ArtifactKind
+from cryoet_pipeline.mra_runs import HALVES, PLAN, START, STEP_SPLIT, node_folder
+from cryoet_pipeline.particle_tables import DYNAMO_POSES, write_particle_table
 from cryoet_pipeline.reports.classification import ClassificationRun, Pose, PoseTable
 from cryoet_pipeline.reports.classification_reader import read_classification
+from cryoet_pipeline.runs import RunInput, Selection, completed, writing
+
+SPLIT_VERSION = 1
+"""Declared: raised by hand when a change moves what a split of two runs writes."""
 
 POSE = slice(3, 9)
 LEVELS = (0.5, 0.143)
@@ -135,8 +164,56 @@ def _write_mrc(path: Path, volume: np.ndarray, spacing: float) -> None:
         handle.voxel_size = spacing
 
 
+def _from_registry(run: Path) -> bool:
+    """A run of the run-record layout that read its particles from a registry."""
+
+    path = run / PLAN
+    return path.is_file() and isinstance(json.loads(path.read_text()).get("particles"), dict)
+
+
+def _deal(chosen: list[int], series: Mapping[int, str], seed: int) -> dict[int, list[int]]:
+    """The particles dealt into two halves at random, series by series.
+
+    Dealt alternately after a shuffle within each series. A series with an odd count
+    gives its extra particle to the half it started with, so the next one starts with
+    the other half.
+    """
+
+    rng = np.random.default_rng(seed)
+    by_series: dict[str, list[int]] = defaultdict(list)
+    for tag in chosen:
+        by_series[series[tag]].append(tag)
+    halves: dict[int, list[int]] = {1: [], 2: []}
+    first = 1
+    for name in sorted(by_series):
+        for index, tag in enumerate(rng.permutation(by_series[name])):
+            halves[first if index % 2 == 0 else 3 - first].append(int(tag))
+        if len(by_series[name]) % 2:
+            first = 3 - first
+    return halves
+
+
+def _start(run: ClassificationRun, project: Path, channel: int, number: int, lowpass: float,
+           spacing: float) -> tuple[np.ndarray, str]:
+    """The halves' common start: the class average low-passed, and what it is in words."""
+
+    found = run.iterations[-1].classes[channel].average
+    if found is None:
+        raise SystemExit(f"{project}: iteration {number} wrote no average of class {channel}")
+    start = low_pass_filter_volume(torch.from_numpy(found.load()), cutoff_angstrom=lowpass,
+                                   pixel_spacing_angstrom=spacing).numpy()
+    return start, (f"{project.name}'s class {channel} average of iteration {number}, "
+                   f"low-passed to {lowpass:g} A")
+
+
 def split(args: argparse.Namespace) -> int:
     (project, channel), (agree, agree_channel) = args.poses, args.agree
+    registry = [_from_registry(path) for path in (project, agree)]
+    if any(registry):
+        if not all(registry):
+            raise SystemExit("a run from an export and a run from the registry are not split "
+                             f"together: {project} and {agree}")
+        return split_runs(args)
     export = project.parent
     if agree.parent != export:
         raise SystemExit(f"{agree} is not in {export}: both runs must be on the export split")
@@ -176,29 +253,8 @@ def split(args: argparse.Namespace) -> int:
         tokens[POSE] = [f"{value:.12g}" for value in refined[tag]]
         return " ".join(tokens)
 
-    # Dealt alternately after a shuffle within each series. A series with an odd count
-    # gives its extra particle to the half it started with, so the next one starts with
-    # the other half.
-    rng = np.random.default_rng(args.seed)
-    by_series: dict[str, list[int]] = defaultdict(list)
-    for tag in chosen:
-        by_series[series[tag]].append(tag)
-    halves: dict[int, list[int]] = {1: [], 2: []}
-    first = 1
-    for name in sorted(by_series):
-        for index, tag in enumerate(rng.permutation(by_series[name])):
-            halves[first if index % 2 == 0 else 3 - first].append(int(tag))
-        if len(by_series[name]) % 2:
-            first = 3 - first
-
-    found = run.iterations[-1].classes[channel].average
-    if found is None:
-        raise SystemExit(f"{project}: iteration {number} wrote no average of class {channel}")
-    average = found.load()
-    start = low_pass_filter_volume(torch.from_numpy(average), cutoff_angstrom=args.start_lowpass,
-                                   pixel_spacing_angstrom=spacing).numpy()
-    start_note = (f"{project.name}'s class {channel} average of iteration {number}, low-passed "
-                  f"to {args.start_lowpass:g} A")
+    halves = _deal(chosen, series, args.seed)
+    start, start_note = _start(run, project, channel, number, args.start_lowpass, spacing)
     written: Path | None = None
     for half, folder in folders.items():
         tags = sorted(halves[half])
@@ -229,6 +285,118 @@ def split(args: argparse.Namespace) -> int:
     return 0
 
 
+def split_runs(args: argparse.Namespace) -> int:
+    """Two runs of the registry split into halves written as a run of its own,
+    <project>/mra/<OUT> (docs/halves_from_runs.md): halves.parquet, each kept particle's
+    half and starting pose, and start_reference.mrc; its record lists `half 1` and
+    `half 2` as selections."""
+
+    (project, channel), (agree, agree_channel) = args.poses, args.agree
+    plans = [json.loads((path / PLAN).read_text()) for path in (project, agree)]
+    particles = plans[0]["particles"]
+    if any("selection" in plan["particles"] for plan in plans):
+        raise SystemExit("a run of part of a set (a half) is not split again")
+    if plans[1]["particles"] != particles:
+        raise SystemExit(f"{project} and {agree} read different particles: "
+                         f"{particles} and {plans[1]['particles']}")
+    home = (Path(particles["project"]) / "mra").resolve()
+    out = args.out.resolve()
+    if out.parent != home:
+        raise SystemExit(f"a split of runs from the registry lives in {home}; give --out "
+                         f"{home}/<name>")
+    if out.exists():
+        raise SystemExit(f"{out} exists; give the split a new name")
+
+    run, number, members = _members(project, channel)
+    agree_run, agree_number, agreed = _members(agree, agree_channel)
+    chosen = sorted(members & agreed)
+    print(f"in both: {len(chosen):,}")
+    if len(chosen) < 2:
+        raise SystemExit("fewer than two particles to split")
+    other = [tag for tag in chosen if run.identity.get(tag) != agree_run.identity.get(tag)]
+    if other:
+        raise SystemExit(f"{len(other)} tags name different particles in the two runs, e.g. "
+                         f"tag {other[0]}: {run.identity.get(other[0])} and "
+                         f"{agree_run.identity.get(other[0])}")
+    spacing = run.pixel_size_angstrom
+    if not spacing:
+        raise SystemExit(f"{project}: no pixel size")
+    if not 2 * spacing < args.start_lowpass:
+        raise SystemExit(f"--start-lowpass {args.start_lowpass} A is not coarser than Nyquist "
+                         f"({2 * spacing:.2f} A)")
+    refined = _poses(run, (number, channel))
+    halves = _deal(chosen, run.series, args.seed)
+    start, start_note = _start(run, project, channel, number, args.start_lowpass, spacing)
+
+    nodes = [(project, number), (agree, agree_number)]
+    records = [completed(node_folder(path, at)) for path, at in nodes]
+    inputs = []
+    for slot, (path, at), record in zip(("poses", "agree"), nodes, records, strict=True):
+        if record is None:
+            raise SystemExit(f"{node_folder(path, at)}: no record that succeeded")
+        inputs.append(RunInput(slot=slot, path=str(node_folder(path, at)),
+                               fingerprint=record.fingerprint))
+    content = {
+        "poses": {"run": project.name, "channel": channel, "iteration": number},
+        "agree": {"run": agree.name, "channel": agree_channel, "iteration": agree_number},
+        "seed": args.seed, "start_lowpass_angstrom": float(args.start_lowpass),
+        # Where the project is, the runs' plans say: paths stay out of fingerprints.
+        "particles": {key: value for key, value in particles.items() if key != "project"},
+    }
+    tags = sorted(chosen)
+    half_of = {tag: half for half, members_ in halves.items() for tag in members_}
+    poses = np.array([refined[tag] for tag in tags], dtype=float).reshape(len(tags), 6)
+    with writing(out, step=STEP_SPLIT, step_version=SPLIT_VERSION, backend="cryoet-pipeline",
+                 backend_version=SPLIT_VERSION, content_params=content,
+                 inputs=inputs) as attempt:
+        write_particle_table(attempt.add(ArtifactKind.PARTICLE_TABLE, HALVES), {
+            "particle_id": np.array(tags, dtype=np.int64),
+            "half": np.array([half_of[tag] for tag in tags], dtype=np.int8),
+            "tdrot_deg": poses[:, 3], "tilt_deg": poses[:, 4], "narot_deg": poses[:, 5],
+            "shift_x_px": poses[:, 0], "shift_y_px": poses[:, 1], "shift_z_px": poses[:, 2],
+        }, {"set": "each kept particle's consensus half and starting pose", **DYNAMO_POSES,
+            "pixel_size_angstrom": spacing, "box_px": run.box_px, "start_reference": start_note})
+        _write_mrc(attempt.add(ArtifactKind.CLASS_REFERENCE, START), start, spacing)
+        for half in (1, 2):
+            attempt.selections.append(Selection(
+                name=f"half {half}", kind="particles",
+                definition={"column": "half", "equals": half}, snapshot=HALVES))
+            attempt.metrics[f"half_{half}_particles"] = float(len(halves[half]))
+    for half in (1, 2):
+        counts: dict[str, int] = defaultdict(int)
+        for tag in halves[half]:
+            counts[run.series[tag]] += 1
+        print(f"half {half}: {len(halves[half]):,} particles; by series: "
+              + ", ".join(f"{name} {count}" for name, count in sorted(counts.items())))
+    print(f"{START}: {start_note}")
+    print(f"split written to {out}; refine each half with scripts/mra_port_run.sbatch, "
+          f"SPLIT={out} HALF=1 NAME={out.name}-half1 (and HALF=2) and the schedule's variables")
+    return 0
+
+
+def _split_half(run: Path) -> dict[str, Any] | None:
+    """What a half run of the run-record layout says of its split: its half, and the
+    split's record (by fingerprint), seed and start's low-pass. None for any other run."""
+
+    if not (run / PLAN).is_file():
+        return None
+    setup = completed(node_folder(run, 0))
+    if setup is None or setup.selection is None:
+        return None
+    found = [item for item in setup.inputs if item.slot == "selection"]
+    if len(found) != 1:
+        return None
+    named = Path(found[0].path)
+    record = completed(named)
+    if record is None or record.step != STEP_SPLIT:
+        raise SystemExit(f"{run}: the split it was set up from, {named}, is not there")
+    if record.fingerprint != found[0].fingerprint:
+        raise SystemExit(f"{run}: the split at {named} is not the one it was set up from")
+    return {"half": int(setup.selection.split()[-1]), "from": record.fingerprint,
+            "seed": record.content_params["seed"], "split": str(named),
+            "start_lowpass_angstrom": record.content_params["start_lowpass_angstrom"]}
+
+
 def _half(project: Path) -> tuple[ClassificationRun, int, np.ndarray, dict[str, Any]]:
     run, number = _last_classes(project)
     classes = run.iterations[-1].classes
@@ -237,11 +405,13 @@ def _half(project: Path) -> tuple[ClassificationRun, int, np.ndarray, dict[str, 
     result = next(iter(classes.values()))
     if result.average is None:
         raise SystemExit(f"{project}: iteration {number} wrote no average")
-    manifest_path = project.parent / "export_manifest.json"
-    record = (json.loads(manifest_path.read_text()).get("consensus_half")
-              if manifest_path.exists() else None)
+    record = _split_half(project)
+    if record is None:
+        manifest_path = project.parent / "export_manifest.json"
+        record = (json.loads(manifest_path.read_text()).get("consensus_half")
+                  if manifest_path.exists() else None)
     if not record:
-        raise SystemExit(f"{project.parent}: not a half of scripts/consensus_halves.py split")
+        raise SystemExit(f"{project}: not a half of scripts/consensus_halves.py split")
     return run, number, result.average.load(), record
 
 
@@ -354,7 +524,8 @@ def main() -> int:
     making.add_argument("--start-lowpass", type=float, required=True,
                         help="A; the common start is the class average low-passed to this")
     making.add_argument("--out", type=Path, required=True,
-                        help="the halves go to <out>-half1 and <out>-half2")
+                        help="the halves go to <out>-half1 and <out>-half2; for runs of the "
+                        "registry, the split itself, <project>/mra/<name>")
     making.add_argument("--seed", type=int, default=20261026, help="for the random split")
     making.set_defaults(run=split)
     reading = commands.add_parser("maps", help="the halves' maps, their FSC and mask")
