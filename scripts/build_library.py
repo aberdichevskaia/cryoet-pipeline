@@ -101,6 +101,11 @@ LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
     "membrain-seg": ("MEMBRAIN_EXE", ("membrain",)),
 }
 DISTRIBUTIONS = {"pytom-match-pick": "pytom-match-pick", "membrain-seg": "membrain-seg"}
+# The backends' last place to look for IMOD.
+MAC_IMOD = Path("/Applications/IMOD")
+# Why a tool variable missing here matters: scripts/lane.sbatch reads no shell
+# start-up file, and takes the variables from the shell it was submitted from.
+SUBMIT_SHELL = " (lane jobs take their tool variables from the shell they are submitted from)"
 
 # The site card's questions. Each one's output is kept as it was printed.
 SITE_PROBES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -178,7 +183,7 @@ def find_tools(sources: dict[str, Any], lanes: list[Lane],
     tools: dict[str, Tool] = {}
     for name in sources:
         if name == "imod":
-            tool = find_imod()
+            tool = find_imod(needed=bool(lanes))
         elif name == "slurm":
             tool = on_path("slurm", "sinfo")
         elif name == "bash":
@@ -197,18 +202,19 @@ def find_tools(sources: dict[str, Any], lanes: list[Lane],
     return tools
 
 
-def find_imod() -> Tool:
+def find_imod(needed: bool = False) -> Tool:
     """IMOD's folder, from where the backends would find its programs
     (cryoet_pipeline.backends.alignment.resolve_imod_executable): newstack on
     PATH, then $IMOD_DIR/bin, then /Applications/IMOD/bin. The first folder
-    that has a VERSION file wins."""
+    that has a VERSION file wins. Every lane runs IMOD, so with lane configs
+    given (`needed`) a missing IMOD is a problem, not a note."""
 
     candidates: list[tuple[Path, str]] = []
     if found := shutil.which("newstack"):
         candidates.append((Path(found), "newstack on PATH"))
     if imod_dir := os.environ.get("IMOD_DIR"):
         candidates.append((Path(imod_dir) / "bin" / "newstack", "$IMOD_DIR"))
-    candidates.append((Path("/Applications/IMOD/bin/newstack"), "/Applications/IMOD"))
+    candidates.append((MAC_IMOD / "bin" / "newstack", str(MAC_IMOD)))
     present = [(path.resolve().parent.parent, how) for path, how in candidates if path.is_file()]
     for folder, how in present:
         if (folder / "VERSION").is_file():
@@ -216,8 +222,10 @@ def find_imod() -> Tool:
     if present:
         folder, how = present[0]
         return Tool("imod", folder, how, problem=f"{folder} has no VERSION file")
-    return Tool("imod", note="not on this host: no newstack on PATH, under $IMOD_DIR/bin "
-                             "or under /Applications/IMOD/bin")
+    where = f"no newstack on PATH, IMOD_DIR is not set, and there is none under {MAC_IMOD}/bin"
+    if needed:
+        return Tool("imod", problem=f"every lane runs IMOD, and {where}{SUBMIT_SHELL}")
+    return Tool("imod", note=f"not on this host: {where}")
 
 
 def on_path(name: str, program: str) -> Tool:
@@ -257,7 +265,8 @@ def find_named(name: str, lanes: list[Lane]) -> Tool:
 def path_from(name: str, value: str, how: str) -> Tool:
     expanded = os.path.expandvars(value)
     if unset := re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", expanded):
-        return Tool(name, found=how, problem=f"{how}: ${', $'.join(unset)} is not set in this shell")
+        return Tool(name, found=how,
+                    problem=f"{how}: ${', $'.join(unset)} is not set in this shell{SUBMIT_SHELL}")
     path = Path(expanded).expanduser()
     if not path.is_absolute() and (found := shutil.which(expanded)):
         path = Path(found)
@@ -1038,7 +1047,11 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
             if item.kind == "manual":
                 shown.append(manual_summary(snapshot, snapshot.tools[name]))
             elif item.kind == "man":
-                shown.append(f"man {item.page}")
+                # `man -w` names a page's file without showing it: a compute
+                # node may have no manual pages where a login node has them.
+                page = probe(["man", "-w", item.page], seconds=10.0)
+                shown.append(f"man {item.page}" if page.ended_well and page.output.strip()
+                             else f"{item.page} --help (no manual page here)")
             else:
                 shown.append(" ".join([Path(part).name if index == 0 else part
                                        for index, part in enumerate(item.command)]))

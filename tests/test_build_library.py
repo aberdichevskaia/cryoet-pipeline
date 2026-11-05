@@ -187,6 +187,7 @@ def host(tmp_path, monkeypatch):
     executable(pytom / "pytom_match_template.py", "#!/usr/bin/env python3\n")
     executable(bin_ / "man", r"""
         case "$1" in
+          -w) if [ "$2" = sbatch ]; then echo /usr/share/man/man1/sbatch.1; else exit 16; fi ;;
           sbatch) printf 'S\bSB\bBA\bAT\bTC\bCH\bH\n       submits a batch script\n' ;;
           *) echo "No manual entry for $1" >&2; exit 16 ;;
         esac
@@ -251,7 +252,20 @@ def test_a_dry_run_finds_the_versions_and_writes_nothing(host, capsys):
                           ("pytom-match-pick", "0.14.0"), ("slurm", "26.05.3")):
         assert f"{name:<18}{version}" in printed
     assert "IMOD/html (3 pages)" in printed
+    assert "man sbatch; squeue --help (no manual page here)" in printed
     assert "Problems: none" in printed
+
+
+def test_with_a_lane_given_a_missing_imod_is_a_problem(host, capsys, monkeypatch):
+    monkeypatch.setenv("PATH", os.environ["PATH"].replace(f"{host['tmp'] / 'IMOD' / 'bin'}:", ""))
+    monkeypatch.setattr(bl, "MAC_IMOD", host["tmp"] / "no-imod-here")
+    assert run(host, "--dry-run") == 0
+    alone = capsys.readouterr().out
+    assert "Problems: none" in alone and "imod              -         not on this host" in alone
+    lane = host["tmp"] / "lane.toml"
+    lane.write_text("[lane]\nname = 'any'\n")
+    assert run(host, "--dry-run", "--config", str(lane)) == 0
+    assert "  - imod: every lane runs IMOD, and no newstack on PATH" in capsys.readouterr().out
 
 
 def test_a_build_writes_a_read_only_snapshot_and_points_current_at_it(host, capsys):
