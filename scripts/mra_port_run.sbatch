@@ -16,7 +16,21 @@
 #       sbatch --export=ALL --job-name=mra_pad_ssn_g2atan3 scripts/mra_port_run.sbatch
 #
 # (g2atan's own variables, which Dynamo ran on 32 cores as mra_pad_ssn_g2atan.)
-# Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
+# Or, with no export at all, from the particle stacks of a pipeline project's
+# registry, read where they are (docs/mra_from_registry.md): SOURCE, the project;
+# LANE, the stacks' label (the lane's variant); SERIES, the tilt-series in the order
+# to number them; DECOY_LANE for decoy stacks after them; the run is
+# $SOURCE/mra/$NAME:
+#
+#   SOURCE=outputs/ryr1 LANE=bin8 SERIES="039 096 097 125 161" NAME=mra_ssn \
+#       SEEDS="subset subset noise" SCHEDULE=coarse_to_fine FIRST_LOWPASS=53.76 \
+#       LAST_LOWPASS=29.4 DIAMETER=340 \
+#       sbatch --export=ALL --job-name=mra_ssn scripts/mra_port_run.sbatch
+#
+# Its particles, tags and starting table are the ones an export of the same LANE and
+# SERIES gives (one conversion, cryoet_pipeline.particle_sources); the setup's record
+# names each stack it read. The rest of this header says EXPORT where SOURCE works the
+# same. Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
 # with the pipeline's setup (cryoet_pipeline.mra_setup; until 2026-11-02 Dynamo's,
 # scripts/dynamo_mra_setup.m, ran inside this job): the same particles in each subset
 # or blob seed, averaged as dynamo_average averages, the same mask and the same
@@ -95,8 +109,11 @@ script=$0
 [[ "$script" = /* ]] || script=$PWD/$script
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 [[ -f scripts/mra_port_run.py ]] || { echo "submit from the repo root" >&2; exit 1; }
-if [[ -n "${EXPORT:-}" ]]; then
-    [[ -z "${PROJECT:-}" ]] || { echo "give EXPORT and NAME for a new run, or PROJECT; not both" >&2; exit 1; }
+if [[ -n "${SOURCE:-}" || -n "${EXPORT:-}" ]]; then
+    if [[ -n "${PROJECT:-}" || ( -n "${SOURCE:-}" && -n "${EXPORT:-}" ) ]]; then
+        echo "give SOURCE or EXPORT, with NAME, for a new run, or PROJECT; one of them" >&2
+        exit 1
+    fi
     : "${NAME:?set NAME to the name of the run}"
     : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to set the run up}"
     if [[ -n "${GPUS:-}" ]]; then
@@ -108,15 +125,21 @@ if [[ -n "${EXPORT:-}" ]]; then
         echo "SYMMETRY and AXIS_OFFSET are Dynamo's; the port models no symmetry" >&2
         exit 1
     fi
+    if [[ -n "${SOURCE:-}" ]]; then
+        : "${SERIES:?set SERIES to the tilt-series to read, in order, e.g. SERIES=\"TS_01 TS_43\"}"
+        name=$NAME
+        run=$SOURCE/mra/$name
+        mkdir -p "$SOURCE/mra"
     # A run begun in Dynamo's layout before 2026-11-05 is carried on in it, under its
     # name; every other run is NAME, in the run-record layout.
-    if [[ -f "$EXPORT/${NAME}_port/settings/setup.json" && ! -e "$EXPORT/$NAME/plan.json" ]]
+    elif [[ -f "$EXPORT/${NAME}_port/settings/setup.json" && ! -e "$EXPORT/$NAME/plan.json" ]]
     then
         name=${NAME}_port
+        run=$EXPORT/$name
     else
         name=$NAME
+        run=$EXPORT/$name
     fi
-    run=$EXPORT/$name
 else
     : "${PROJECT:?set PROJECT to a Dynamo project, or EXPORT and NAME for a new run}"
     name=${NAME:-$(basename "$PROJECT")_port}
@@ -152,9 +175,20 @@ echo "lock        $run.lock, held by this job to its end"
 echo "node        $(hostname)"
 echo "gpus        ${CUDA_VISIBLE_DEVICES:-none visible}: $(nvidia-smi -L 2>&1 | paste -sd ';' -)"
 echo "started     $(date -Is)"
-if [[ -n "${EXPORT:-}" ]]; then
+if [[ -n "${SOURCE:-}" ]]; then
+    echo "source      $SOURCE, label ${LANE:-none}, series $SERIES${DECOY_LANE:+, decoys $DECOY_LANE}"
+    read -ra series <<< "$SERIES"
+    from=(--source "$SOURCE" --seeds "$SEEDS" --series "${series[@]}")
+    if [[ -n "${LANE:-}" ]]; then from+=(--lane "$LANE"); fi
+    if [[ -n "${DECOY_LANE:-}" ]]; then from+=(--decoy-lane "$DECOY_LANE"); fi
+elif [[ -n "${EXPORT:-}" ]]; then
     echo "export      $EXPORT, set up by the pipeline"
     from=(--export "$EXPORT" --seeds "$SEEDS")
+else
+    echo "project     $PROJECT"
+    from=("$PROJECT")
+fi
+if [[ -n "${SOURCE:-}${EXPORT:-}" ]]; then
     for pair in SCHEDULE:--schedule FIRST_LOWPASS:--first-lowpass LAST_LOWPASS:--last-lowpass \
             DIAMETER:--diameter LOWPASS_STEPS:--lowpass-steps MASK_RADIUS:--mask-radius \
             MASK_EDGE:--mask-edge MASK_FILE:--mask-file REFERENCE:--reference \
@@ -167,9 +201,6 @@ if [[ -n "${EXPORT:-}" ]]; then
         "" | 0 | false) ;;
         *) from+=(--global-full-box) ;;
     esac
-else
-    echo "project     $PROJECT"
-    from=("$PROJECT")
 fi
 echo "port run    $run"
 cards="slurm-${SLURM_JOB_NAME:-mra_port_run}-${SLURM_JOB_ID:-local}-gpus.csv"

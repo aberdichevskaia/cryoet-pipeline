@@ -12,9 +12,13 @@ With --export, the pipeline's setup (`mra_setup.plan_from_export`) makes the pla
 the export folder and scripts/dynamo_mra_setup.m's variables, as that script made a
 Dynamo project from them (the same seeds but for new noise in a noise seed, the same
 mask and searches; scripts/compare_mra_setup.py checks it against Dynamo's), and the
-run is written to <export>/<name>, with nothing to compare. That is how the
-pipeline's own runs are made (scripts/mra_port_run.sbatch with EXPORT and NAME). The
-rest of this text is about a Dynamo project given instead.
+run is written to <export>/<name>, with nothing to compare. With --source, --lane and
+--series instead, the plan is made from the particle stacks of those series in the
+pipeline project's registry, read where they are (`mra_setup.plan_from_registry`,
+docs/mra_from_registry.md: the particles an export of the same arguments would copy),
+and the run is written to <source>/mra/<name>. That is how the pipeline's own runs
+are made (scripts/mra_port_run.sbatch with SOURCE or EXPORT, and NAME). The rest of
+this text is about a Dynamo project given instead.
 
 A run is written in the run-record layout (docs/run_records.md, `mra_runs.run_plan`):
 plan.json, then setup/ and ite_0001/, ite_0002/, ... each with its run.json, the
@@ -83,7 +87,7 @@ from cryoet_pipeline.dynamo_mra_project import (
     torch_search,
 )
 from cryoet_pipeline.mra_runs import Refused, run_plan
-from cryoet_pipeline.mra_setup import plan_from_export
+from cryoet_pipeline.mra_setup import plan_from_export, plan_from_registry
 from cryoet_pipeline.reports.classification import ClassificationRun, PoseTable
 from cryoet_pipeline.reports.classification_reader import read_classification
 
@@ -200,28 +204,37 @@ def compute(plan: MraPlan, run: Path, args: argparse.Namespace, spacing: float |
 
 
 def new_run(args: argparse.Namespace) -> int:
-    """A run set up from an export folder without Dynamo: nothing to compare it with."""
+    """A run set up without Dynamo, from an export folder or from a project's registry:
+    nothing to compare it with."""
 
-    export = args.export.resolve()
+    options: dict[str, Any] = dict(
+        reference_file=args.reference, schedule=args.schedule,
+        first_lowpass=args.first_lowpass, last_lowpass=args.last_lowpass,
+        diameter=args.diameter, lowpass_steps=args.lowpass_steps,
+        mask_radius=args.mask_radius, mask_edge=args.mask_edge, mask_file=args.mask_file,
+        global_rounds=args.global_rounds, global_step=args.global_step,
+        global_full_box=args.global_full_box,
+        cone_steps=[float(step) for step in args.cone_steps.split()],
+    )
     try:
-        plan = plan_from_export(
-            export, args.seeds.split(), reference_file=args.reference, schedule=args.schedule,
-            first_lowpass=args.first_lowpass, last_lowpass=args.last_lowpass,
-            diameter=args.diameter, lowpass_steps=args.lowpass_steps,
-            mask_radius=args.mask_radius, mask_edge=args.mask_edge, mask_file=args.mask_file,
-            global_rounds=args.global_rounds, global_step=args.global_step,
-            global_full_box=args.global_full_box,
-            cone_steps=[float(step) for step in args.cone_steps.split()],
-            data_folder=args.data_folder,
-        )
+        if args.export is not None:
+            where = args.export.resolve()
+            plan = plan_from_export(where, args.seeds.split(), data_folder=args.data_folder,
+                                    **options)
+            run, spacing = where / args.name, _spacing(where)
+        else:
+            where = args.source.resolve()
+            plan = plan_from_registry(where, args.lane, args.series, args.seeds.split(),
+                                      decoy_label=args.decoy_lane, **options)
+            run, spacing = where / "mra" / args.name, None
     except ValueError as error:
         raise SystemExit(f"REFUSED: the setup: {error}") from None
     if args.iterations is not None:
         first = slice(0, args.iterations)
         plan = replace(plan, settings=plan.settings[first], cards=plan.cards[first],
                        mra=plan.mra[first])
-    compute(plan, export / args.name, args, _spacing(export))
-    print(f"{args.name} was set up from {export}: no Dynamo project to compare it with")
+    compute(plan, run, args, spacing)
+    print(f"{args.name} was set up from {where}: no Dynamo project to compare it with")
     return 0
 
 
@@ -247,6 +260,17 @@ def main() -> int:
                         help="only the first so many of the project's iterations")
     parser.add_argument("--compare-only", action="store_true",
                         help="compare an existing port run with the project, run nothing")
+    registry = parser.add_argument_group(
+        "a new run from a pipeline project's registry: the particle stacks of --series, read "
+        "where they are; the setup's variables below")
+    registry.add_argument("--source", type=Path, default=None,
+                          help="the pipeline project (its artifacts.json and manifests/)")
+    registry.add_argument("--lane", default=None,
+                          help="the label of the particle stacks; leave out for unlabelled ones")
+    registry.add_argument("--series", nargs="+", default=None,
+                          help="the tilt-series, in the order to number them")
+    registry.add_argument("--decoy-lane", default=None,
+                          help="the label of decoy stacks of the same series, after the particles")
     setup = parser.add_argument_group(
         "a new run, set up from an export folder without Dynamo, with the variables of "
         "scripts/dynamo_mra_setup.m (see its header)")
@@ -279,11 +303,18 @@ def main() -> int:
     setup.add_argument("--data-folder", default="particles")
     args = parser.parse_args()
 
-    if (args.project is None) == (args.export is None):
-        parser.error("give a Dynamo project, or --export for a new run; one of them")
-    if args.export is not None:
+    given = [args.project is not None, args.export is not None, args.source is not None]
+    if sum(given) != 1:
+        parser.error("give a Dynamo project, or --export or --source for a new run; one of them")
+    if args.source is None and (args.series or args.lane or args.decoy_lane):
+        parser.error("--series, --lane and --decoy-lane go with --source")
+    if args.export is not None or args.source is not None:
         if args.name is None or args.seeds is None:
-            parser.error("--export needs --name and --seeds")
+            parser.error("a new run needs --name and --seeds")
+        if args.source is not None and not args.series:
+            parser.error("--source needs --series")
+        if args.source is not None and args.data_folder != "particles":
+            parser.error("--data-folder is an export's; a run from the registry reads the stacks")
         if args.compare_only:
             parser.error("a new run has no Dynamo project to compare with")
         return new_run(args)

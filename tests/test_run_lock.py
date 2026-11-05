@@ -441,3 +441,32 @@ def test_a_new_run_of_a_name_dynamo_is_setting_up_or_has_is_refused(tmp_path: Pa
     _, err = port.communicate(timeout=60)
     assert port.returncode == 0, err
     assert _calls(repo)[-1] == _setup_call("24", export, name="mra_t_port")
+
+
+def test_a_run_from_a_registry_is_made_and_locked_in_the_project(tmp_path: Path) -> None:
+    repo = _stand_in_repo(tmp_path)
+    source = tmp_path / "project"
+    source.mkdir()
+    (tmp_path / "release").write_text("")
+    job = _job(repo, "31", SOURCE=str(source), LANE="bin8", SERIES="TS_A TS_B", NAME="mra_t",
+               SEEDS="subset subset noise", SCHEDULE="coarse_to_fine")
+    out, err = job.communicate(timeout=60)
+    assert job.returncode == 0, err
+    assert f"lock        {source}/mra/mra_t.lock, held by this job to its end" in out
+    assert f"source      {source}, label bin8, series TS_A TS_B" in out
+    assert _calls(repo) == [
+        f"port 31 env=active --source {source} --seeds subset subset noise --series TS_A TS_B "
+        "--lane bin8 --schedule coarse_to_fine --name mra_t --device cuda --dtype float32 "
+        "--per-gpu 1 --workers 1"]
+
+    # SOURCE goes alone, and with SERIES.
+    for other in ({"EXPORT": str(tmp_path / "export")},
+                  {"PROJECT": str(tmp_path / "export" / "mra_t")}):
+        refused = _job(repo, "32", SOURCE=str(source), LANE="bin8", SERIES="TS_A", NAME="mra_u",
+                       SEEDS="noise noise", **other)
+        _, err = refused.communicate(timeout=60)
+        assert refused.returncode == 1 and "one of them" in err
+    missing = _job(repo, "33", SOURCE=str(source), NAME="mra_u", SEEDS="noise noise")
+    _, err = missing.communicate(timeout=60)
+    assert missing.returncode != 0 and "set SERIES" in err
+    assert len(_calls(repo)) == 1

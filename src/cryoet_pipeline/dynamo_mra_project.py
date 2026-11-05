@@ -50,7 +50,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -66,6 +66,9 @@ from cryoet_pipeline.reports.dynamo_project import (
     write_em,
 )
 
+if TYPE_CHECKING:
+    from cryoet_pipeline.particle_sources import RegistryParticles
+
 TAG, AVERAGED, CC, CLASS = 0, 2, 9, 33
 TABLE_COLUMNS = 35
 """Dynamo's table width up to column 34, the class; a wider table keeps its own."""
@@ -77,8 +80,9 @@ class MraPlan:
 
     source: Path
     """The project the plan was read from."""
-    particles: Path
-    """The folder of particle_NNNNN.mrc or .em files."""
+    particles: Path | RegistryParticles
+    """The folder of particle_NNNNN.mrc or .em files, or the particle stacks of a
+    project's registry (`mra_setup.plan_from_registry`)."""
     table: np.ndarray
     """The starting table every channel starts from, one row per particle, by tag."""
     references: dict[int, np.ndarray]
@@ -211,6 +215,21 @@ def read_seed_manifest(path: Path) -> np.ndarray:
     return rows.astype(int)
 
 
+def _folder(plan: MraPlan) -> Path:
+    """The particle folder of a plan Dynamo's layout can be written for."""
+
+    if not isinstance(plan.particles, Path):
+        raise TypeError("a plan read from a registry has no particle folder")
+    return plan.particles
+
+
+def load_particle(particles: Path | RegistryParticles, tag: int) -> np.ndarray:
+    """A particle as the port computes with it, float64: from its file in a folder, or
+    from its stack."""
+
+    return _particle(particles, tag) if isinstance(particles, Path) else particles.load(tag)
+
+
 def _particle(folder: Path, tag: int) -> np.ndarray:
     for extension in ("mrc", "em"):
         path = folder / f"particle_{tag:05d}.{extension}"
@@ -264,11 +283,11 @@ def _write_vpr(path: Path, plan: MraPlan, name: str, destination: str, box: int,
         return False
     nref = len(plan.references)
     card: dict[str, Any] = {
-        "name_project": name, "folder_data": plan.particles.name,
+        "name_project": name, "folder_data": _folder(plan).name,
         "file_template_initial": f"{name}_seeds", "file_mask": f"{name}/settings/mask.em",
         "file_mask_classification": f"{name}/settings/mask.em",
         "file_mask_smoothing": f"{name}/settings/mask.em", "feature_data_sidelength": box,
-        "feature_extension_data": "mrc" if any(plan.particles.glob("*.mrc")) else "em",
+        "feature_extension_data": "mrc" if any(_folder(plan).glob("*.mrc")) else "em",
         "destination": destination, "how_many_processors": 1, "apix": spacing or 1,
     }
     for round_, settings in enumerate(plan.settings, 1):
@@ -304,6 +323,9 @@ def run_mra_project(
     to follow this plan (`_finished`); one that finished them all computes nothing.
     """
 
+    if not isinstance(plan.particles, Path):
+        raise ValueError("a plan read from a registry is written only as a run of the "
+                         "run-record layout (mra_runs.run_plan), not as a Dynamo project")
     out = out.resolve()
     try:
         done = 0
@@ -414,7 +436,7 @@ def _finished(plan: MraPlan, out: Path) -> int:
         card_path = out / "cards" / f"ite_{number:04d}" / f"card_ite_ite_{number:04d}.card"
         card = read_card(card_path) if card_path.exists() else {}
         expected = {**_search_fields(searched, box), "mra": int(plan.mra[number - 1]),
-                    "folder_data": plan.particles.name}
+                    "folder_data": _folder(plan).name}
         changed = [key for key, value in expected.items() if card.get(key) != str(value)]
         if changed:
             differ.append(f"iteration {number}'s {', '.join(changed)}")
@@ -515,7 +537,7 @@ def _iterate(plan: MraPlan, out: Path, particles: list[np.ndarray],
         card = {
             "name_project": name, "database_ite": number, "nref": len(step.computed),
             "mra": int(plan.mra[number - 1]), **_search_fields(settings, box),
-            "folder_data": plan.particles.name, "file_template_initial": f"{name}_seeds",
+            "folder_data": _folder(plan).name, "file_template_initial": f"{name}_seeds",
             "feature_data_sidelength": box, "destination": destination,
             "time_start_computation": started.strftime(DYNAMO_TIME),
             "time_end_iteration": finished.strftime(DYNAMO_TIME),

@@ -18,10 +18,11 @@ reads (a run of the run-record layout holds a plan.json):
   the hypergeometric chance: are the particles one run sends to its junk classes
   the ones the other run sends to its own?
 
-Particles are matched by tag. Tags mean the same particle in two exports only if
-both were exported from the same stacks in the same series order, so the export
-manifests beside the projects are checked tag by tag (series and stack index)
-and a mismatch is refused. Decoys (marked in a manifest) are left out unless
+Particles are matched by tag. Tags mean the same particle in two runs only if both
+read the same stacks in the same series order, so each tag's series, stack and
+index in it are checked in both runs and a mismatch is refused: from a run's own
+particle table (a run of the run-record layout), or from the export manifest beside
+it (a Dynamo project, a run in Dynamo's layout). Decoys (marked in a manifest) are left out unless
 `--include-decoys`. Nothing in the projects is changed. See
 src/cryoet_pipeline/class_comparison.py for the statistics.
 """
@@ -66,33 +67,19 @@ def labels(run: ClassificationRun, iteration: int | None) -> tuple[int, dict[int
                            for tag in result.members}
 
 
-def particle_identity(project: Path) -> dict[int, tuple[str, str, int]] | None:
-    """Tag -> (series, stack, index in the stack), from the export manifest beside the project."""
-
-    manifest = project.parent / "export_manifest.json"
-    if not manifest.exists():
-        return None
-    entries = json.loads(manifest.read_text()).get("particles", [])
-    return {int(entry["tag"]): (str(entry.get("run")), str(entry.get("source_stack_id")),
-                                int(entry.get("source_index_zero_based", -1)))
-            for entry in entries}
-
-
-def check_identity(first: Path, second: Path, tags: list[int]) -> str:
-    known_first, known_second = particle_identity(first), particle_identity(second)
-    if known_first is None or known_second is None:
-        missing = [str(path.parent / "export_manifest.json")
-                   for path, known in ((first, known_first), (second, known_second))
-                   if known is None]
-        return ("NOT checked that a tag means the same particle in both runs: no "
-                + ", ".join(missing))
+def check_identity(first: ClassificationRun, second: ClassificationRun, tags: list[int]) -> str:
+    known_first, known_second = first.identity, second.identity
+    if not known_first or not known_second:
+        missing = [str(run.source) for run in (first, second) if not run.identity]
+        return ("NOT checked that a tag means the same particle in both runs: nothing says "
+                "which stack each tag of " + ", ".join(missing) + " came from")
     differing = [tag for tag in tags if known_first.get(tag) != known_second.get(tag)]
     if differing:
         examples = "; ".join(f"tag {tag}: {known_first.get(tag)} vs {known_second.get(tag)}"
                              for tag in differing[:5])
         raise SystemExit(f"{len(differing)} tags name different particles in the two exports, "
                          f"so they cannot be compared by tag: {examples}")
-    return "tags checked against both export manifests: same series, stack and index"
+    return "tags checked in both runs: same series, stack and index"
 
 
 def channels(text: str | None) -> set[int] | None:
@@ -170,7 +157,7 @@ def main() -> int:
     tags = sorted((set(first_labels) & set(second_labels)) - decoys)
     if len(tags) < 2:
         raise SystemExit("fewer than two particles are classified in both runs")
-    identity = check_identity(args.first.resolve(), args.second.resolve(), tags)
+    identity = check_identity(runs[0], runs[1], tags)
 
     first = np.array([first_labels[tag] for tag in tags])
     second = np.array([second_labels[tag] for tag in tags])

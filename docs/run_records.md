@@ -130,7 +130,8 @@ port runs follow when next touched.
 
 The database index, the controller and `execute-run`, plans that span steps, the
 other steps' records, and the export as a registered artifact (the MRA reads the
-export folder as now; reading the registry's particle stacks is the step after).
+export folder as now; reading the registry's particle stacks is the step after,
+[mra_from_registry.md](mra_from_registry.md)).
 
 ## Decided on 2026-11-05
 

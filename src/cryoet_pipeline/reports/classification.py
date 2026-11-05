@@ -209,6 +209,9 @@ class ClassificationRun:
     """The poses behind `aligned_particle`, a table at a time, for comparisons of runs."""
     mask: Volume | None = None
     """The alignment mask the iterations searched and averaged under."""
+    identity: dict[int, tuple[str, str, int]] = field(default_factory=dict)
+    """Each tag's tilt-series, particle stack and index in that stack, when known: what
+    makes a tag the same particle in two runs."""
 
 
 @dataclass(frozen=True)

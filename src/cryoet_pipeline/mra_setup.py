@@ -1,7 +1,10 @@
-"""The MRA setup without Dynamo: a run's plan made from an export folder.
+"""The MRA setup without Dynamo: a run's plan made from an export folder, or from the
+particle stacks of a project's registry.
 
 `plan_from_export` makes, from an export folder of scripts/export_dynamo.py
-(particles/, initial.tbl), the plan scripts/dynamo_mra_setup.m made a Dynamo project
+(particles/, initial.tbl), and `plan_from_registry` from the particle stacks that
+export would copy (`particle_sources.registry_particles`, the same conversion and the
+same tags in the same order), the plan scripts/dynamo_mra_setup.m made a Dynamo project
 for and `dynamo_mra_project.plan_from_dynamo` read back from it: every channel's
 seed, the soft mask, the starting table and every iteration's search, from the same
 variables (SEEDS, SCHEDULE, ... of scripts/mra_port_run.sbatch). `run_mra_project`
@@ -47,6 +50,7 @@ from cryoet_pipeline.dynamo_mra_project import (
     _search_fields,
     dim_is_ported,
 )
+from cryoet_pipeline.particle_sources import RegistryParticles, registry_particles
 from cryoet_pipeline.reports.dynamo_project import read_map, read_table
 
 SUBSET = 300
@@ -87,6 +91,17 @@ class ExportParticles:
     @property
     def tilt_ranges(self) -> list[tuple[float, float]]:
         return [(float(low), float(high)) for low, high in self.table[:, TILTS]]
+
+    def load(self, tag: int) -> np.ndarray:
+        return _particle(self.folder, int(tag))
+
+    def __str__(self) -> str:
+        return str(self.folder)
+
+
+Particles = ExportParticles | RegistryParticles
+"""What the setup reads: a table of Dynamo rows by tag, the box, the pixel size, and
+each particle's voxels."""
 
 
 def read_export(export: Path, data_folder: str = "particles") -> ExportParticles:
@@ -283,6 +298,52 @@ def plan_from_export(
     export: Path,
     seeds: Sequence[str],
     *,
+    data_folder: str = "particles",
+    **options: Any,
+) -> MraPlan:
+    """The plan dynamo_mra_setup.m made a project for, made from `export` without Dynamo;
+    the options as `make_plan` takes them."""
+
+    export = Path(export).resolve()
+    return make_plan(lambda: read_export(export, data_folder), seeds, source=export,
+                     made_by="cryoet_pipeline.mra_setup.plan_from_export",
+                     origin={"data_folder": data_folder}, files={"export": str(export)},
+                     **options)
+
+
+def plan_from_registry(
+    project: Path,
+    label: str | None,
+    series: Sequence[str],
+    seeds: Sequence[str],
+    *,
+    decoy_label: str | None = None,
+    log: Callable[[str], None] = print,
+    **options: Any,
+) -> MraPlan:
+    """The same plan made from the particle stacks of `series` (in that order) with
+    label `label` in `project`'s registry, the decoys of `decoy_label` after them: the
+    particles an export of the same arguments would copy, read where they are. The
+    project, the label, the series and the decoys' label are the plan's variables."""
+
+    project = Path(project).resolve()
+    series = list(series)
+    return make_plan(
+        lambda: registry_particles(project, label, series, decoy_label, log=log), seeds,
+        source=project, made_by="cryoet_pipeline.mra_setup.plan_from_registry",
+        origin={"particles": {"label": label, "series": series, "decoy_label": decoy_label}},
+        files={"project": str(project)}, log=log, **options,
+    )
+
+
+def make_plan(
+    read: Callable[[], Particles],
+    seeds: Sequence[str],
+    *,
+    source: Path,
+    made_by: str,
+    origin: dict[str, Any],
+    files: dict[str, str],
     reference_file: Path | None = None,
     schedule: str = "fixed",
     first_lowpass: float = 40.0,
@@ -296,11 +357,13 @@ def plan_from_export(
     global_step: float | None = None,
     global_full_box: bool = False,
     cone_steps: Sequence[float] = (3,),
-    data_folder: str = "particles",
     subset: int = SUBSET,
     log: Callable[[str], None] = print,
 ) -> MraPlan:
-    """The plan dynamo_mra_setup.m made a project for, made from `export` without Dynamo.
+    """The plan dynamo_mra_setup.m made a project for, from the particles `read` gives.
+
+    `origin` says where the particles come from among the plan's variables, `files`
+    names the files the setup reads besides the reference and the mask.
 
     `seeds` holds one kind per channel: 'subset' (the average of `subset` particles at
     their exported poses; channel k takes the k-th block of one random order), 'blob'
@@ -334,7 +397,7 @@ def plan_from_export(
         raise ValueError(f"cone_steps must be one positive number of steps or one per round "
                          f"({ROUNDS[schedule]} rounds), got {cone_steps}")
 
-    particles = read_export(export, data_folder)
+    particles = read()
     box, pixel_size, count = particles.box, particles.pixel_size, len(particles.table)
     if schedule == "coarse_to_fine" and not 2 * pixel_size <= last_lowpass < first_lowpass:
         raise ValueError(f"last_lowpass must lie between Nyquist ({2 * pixel_size:.1f} A) and "
@@ -401,7 +464,7 @@ def plan_from_export(
             members = members[np.argsort(particles.tags[members], kind="stable")]
             angles = orientations if kind == "blob" else particles.angles
             seed = average_class(
-                (_particle(particles.folder, int(tag)) for tag in particles.tags[members]),
+                (particles.load(int(tag)) for tag in particles.tags[members]),
                 angles[members], particles.shifts[members],
                 [particles.tilt_ranges[index] for index in members], mask, fmin=1,
             ).average
@@ -419,13 +482,13 @@ def plan_from_export(
     table = particles.table[np.argsort(particles.tags, kind="stable")]
     sphere = mask_file is None
     setup: dict[str, Any] = {
-        "made_by": "cryoet_pipeline.mra_setup.plan_from_export",
+        "made_by": made_by,
         # What the plan is made from besides the files below: a run's content
         # parameters (docs/run_records.md). Numbers as floats, so that 17 and 17.0 given
         # by two callers declare the same plan.
         "variables": {
-            "seeds": seeds, "subset": int(subset), "rng_seed": RNG_SEED,
-            "data_folder": data_folder, "schedule": schedule,
+            "seeds": seeds, "subset": int(subset), "rng_seed": RNG_SEED, **origin,
+            "schedule": schedule,
             "first_lowpass_angstrom": float(first_lowpass),
             "last_lowpass_angstrom": float(last_lowpass), "diameter_angstrom": float(diameter),
             "lowpass_steps": lowpass_steps, "global_rounds": int(global_rounds),
@@ -436,7 +499,7 @@ def plan_from_export(
             "mask_edge_px": float(mask_edge) if sphere else None,
         },
         # The files it read: its inputs, known by their contents rather than their paths.
-        "files": {"export": str(Path(export).resolve()),
+        "files": {**files,
                   "reference_file": str(reference_file) if reference_file else None,
                   "mask_file": str(mask_file) if mask_file else None},
         # What follows from both, for the record.
@@ -450,15 +513,17 @@ def plan_from_export(
         },
     }
     log(f"mra_setup: {len(settings)} iterations of {count:,} particles from "
-        f"{particles.folder}, seeds {' '.join(seeds)}, schedule {schedule} ({lowpass_steps} "
+        f"{particles}, seeds {' '.join(seeds)}, schedule {schedule} ({lowpass_steps} "
         f"steps), {global_rounds} global round(s), mask {mask_note}")
     return MraPlan(
-        source=Path(export).resolve(), particles=particles.folder, table=table,
+        source=source,
+        particles=particles.folder if isinstance(particles, ExportParticles) else particles,
+        table=table,
         references=references, reference_notes=notes, soft_mask=mask, settings=settings,
         cards=cards, mra=mra, seed_groups=np.column_stack([particles.tags, group]),
         setup=setup,
     )
 
 
-__all__ = ["ExportParticles", "Round", "plan_from_export", "read_export", "search_rounds",
-           "seed_draws", "soft_sphere"]
+__all__ = ["ExportParticles", "Particles", "Round", "make_plan", "plan_from_export",
+           "plan_from_registry", "read_export", "search_rounds", "seed_draws", "soft_sphere"]

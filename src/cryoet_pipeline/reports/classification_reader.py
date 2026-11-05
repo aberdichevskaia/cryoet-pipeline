@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -42,6 +42,7 @@ from cryoet_pipeline.reports.classification import (
     Volume,
 )
 from cryoet_pipeline.reports.dynamo_project import (
+    Pick,
     _area_mode,
     _cached,
     _particle_locations,
@@ -52,6 +53,8 @@ from cryoet_pipeline.reports.dynamo_project import (
     _template,
     aligned_volume,
     average_at_poses,
+    manifest_identity,
+    particle_locations,
     read_dynamo_classification,
     read_map,
     seed_notes,
@@ -113,12 +116,7 @@ def read_mra_run(
     tags = starting["particle_id"].astype(int)
     box = int(metadata.get("box_px") or 0)
 
-    particles = Path(plan["particles"])
-    if not particles.is_dir() and (base / particles.name).is_dir():
-        particles = base / particles.name
-    if not particles.is_dir():
-        problems.append(f"particle folder {particles} is missing: no galleries and no "
-                        "computed initial average")
+    load, particles = _particle_loader(plan["particles"], base, starting, metadata, problems)
 
     manifest_path = manifest or base / "export_manifest.json"
     manifest_spacing, decoy_variant, decoy_kind = None, None, DEFAULT_DECOY_KIND
@@ -126,6 +124,10 @@ def read_mra_run(
         _, _, manifest_spacing, _, _, decoy_variant, decoy_kind = _read_manifest(manifest_path)
     elif manifest is not None:
         problems.append(f"manifest {manifest} is missing")
+    if isinstance(plan["particles"], dict):
+        decoy_variant = plan["particles"].get("decoy_label")
+    if metadata.get("decoy_kind"):
+        decoy_kind = str(metadata["decoy_kind"])
     table_spacing = metadata.get("pixel_size_angstrom")
     if pixel_size_angstrom:
         spacing, spacing_source = float(pixel_size_angstrom), "given to the report"
@@ -181,19 +183,37 @@ def read_mra_run(
             index[pose] = (table, {int(one): row for row, one in enumerate(table.tags)})
         table, rows = index[pose]
         row = rows[int(tag)]
-        return aligned_volume(_particle_path(particles, int(tag), "mrc"), table.angles[row],
-                              table.shifts[row])
+        if load is None:
+            raise FileNotFoundError(f"the particles of {run} are not at hand")
+        return aligned_volume(load(int(tag)), table.angles[row], table.shifts[row])
 
     template_volume, template_note = (_template(template, box, spacing, problems)
                                       if template is not None else (None, None))
     mask_path = setup_folder / "mask.mrc"
-    locations = (_particle_locations(manifest_path, mask_path, spacing, box, problems)
-                 if manifest_path.exists() else None)
+    identity = {int(tag): (str(series), str(stack), int(position)) for tag, series, stack, position
+                in zip(tags, starting.get("tilt_series_id", []), starting.get("stack_id", []),
+                       starting.get("stack_index", []), strict=False) if stack}
+    if identity and metadata.get("project"):
+        picks: list[Pick] = [
+            (int(tag), str(series), str(stack), (float(x), float(y), float(z)))
+            for tag, series, stack, x, y, z, decoy in zip(
+                tags, starting["tilt_series_id"], starting["stack_id"],
+                starting["position_x_px"], starting["position_y_px"], starting["position_z_px"],
+                starting["decoy"], strict=True)
+            if stack and not decoy]
+        locations = particle_locations(metadata["project"], picks, mask_path, spacing, box,
+                                       problems)
+    elif manifest_path.exists():
+        locations = _particle_locations(manifest_path, mask_path, spacing, box, problems)
+    else:
+        locations = None
+    if not identity and manifest_path.exists():
+        identity = manifest_identity(manifest_path)
     if initial_average is not None:
         average: Volume | None = Volume(str(initial_average), partial(read_map, initial_average))
-    elif compute_initial_average and particles.is_dir() and mask_path.exists():
+    elif compute_initial_average and load is not None and mask_path.exists():
         average = Volume("computed for this report",
-                         _cached(partial(_starting_average, particles, starting, mask_path)))
+                         _cached(partial(_starting_average, load, starting, mask_path)))
     else:
         average = None
 
@@ -230,7 +250,49 @@ def read_mra_run(
         poses=poses,
         mask=Volume(_relative(mask_path, base), partial(read_map, mask_path))
         if mask_path.exists() else None,
+        identity=identity,
     )
+
+
+def _particle_loader(
+    named: Any, base: Path, starting: Mapping[str, np.ndarray], metadata: Mapping[str, Any],
+    problems: list[str],
+) -> tuple[Callable[[int], np.ndarray] | None, str]:
+    """How the run's particles are read, and their source in words: from the particle
+    folder the plan names (or the one of that name beside the run, when the run was
+    moved away from it), or from the particle stacks the setup's table names."""
+
+    if isinstance(named, str):
+        folder = Path(named)
+        if not folder.is_dir() and (base / folder.name).is_dir():
+            folder = base / folder.name
+        if not folder.is_dir():
+            problems.append(f"particle folder {folder} is missing: no galleries and no "
+                            "computed initial average")
+            return None, _relative(folder, base)
+        return (lambda tag: read_map(_particle_path(folder, int(tag), "mrc"))), \
+            _relative(folder, base)
+    note = (f"the particle stacks of {named.get('project')}, label {named.get('label')}"
+            + (f", decoys {named['decoy_label']}" if named.get("decoy_label") else ""))
+    stacks = {str(stack): Path(path) for stack, path in (metadata.get("stacks") or {}).items()}
+    missing = sorted(str(path) for path in stacks.values() if not path.exists())
+    if missing or not stacks or "stack_id" not in starting:
+        problems.append(f"particle stacks missing ({', '.join(missing) or 'none named'}): no "
+                        "galleries and no computed initial average")
+        return None, note
+    where = {int(tag): (str(stack), int(position)) for tag, stack, position in zip(
+        starting["particle_id"], starting["stack_id"], starting["stack_index"], strict=True)}
+    opened: dict[str, Any] = {}
+
+    def load(tag: int) -> np.ndarray:
+        import zarr
+
+        stack, position = where[int(tag)]
+        if stack not in opened:
+            opened[stack] = zarr.open_array(stacks[stack], mode="r")
+        return np.asarray(opened[stack][position], dtype=np.float32)
+
+    return load, note
 
 
 def _by_tag(columns: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -346,11 +408,11 @@ def _summary(search: Mapping[str, Any], record: RunRecord, box: int,
     return summary + (f" · {minutes:.0f} min" if minutes is not None else "")
 
 
-def _starting_average(particles: Path, starting: Mapping[str, np.ndarray],
+def _starting_average(load: Callable[[int], np.ndarray], starting: Mapping[str, np.ndarray],
                       mask_path: Path) -> np.ndarray:
     tags = starting["particle_id"].astype(int)
     return average_at_poses(
-        [_particle_path(particles, int(tag), "mrc") for tag in tags],
+        (load(int(tag)) for tag in tags),
         _stack(starting, ANGLE_COLUMNS), _stack(starting, SHIFT_COLUMNS),
         [(float(low), float(high)) for low, high in zip(starting["tilt_min_deg"],
                                                          starting["tilt_max_deg"], strict=True)],
@@ -400,7 +462,7 @@ def _spans(numbers: Sequence[int]) -> str:
 
 def _parameters(
     *, plan: Mapping[str, Any], base: Path, starting: Mapping[str, np.ndarray], box: int,
-    spacing: float | None, spacing_source: str, series: Mapping[int, str], particles: Path,
+    spacing: float | None, spacing_source: str, series: Mapping[int, str], particles: str,
     channels: Sequence[int], references: Mapping[int, Volume], notes: Mapping[int, str],
     records: Sequence[RunRecord], decoys: frozenset[int], decoy_variant: str | None,
     decoy_kind: str, template: str | None, mask_path: Path,
@@ -418,7 +480,7 @@ def _parameters(
     add("Data", "box", f"{box} px" + nm(box))
     add("Data", "pixel size",
         f"{spacing:.3f} Å, from {spacing_source}" if spacing else "not recorded")
-    add("Data", "particle folder", _relative(particles, base))
+    add("Data", "particles from", particles)
     if template:
         add("Data", "template", template)
     if decoys:

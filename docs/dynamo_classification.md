@@ -39,6 +39,12 @@ refused (the port models no symmetry and searches on every GPU of the job), and
 so is a `NAME` Dynamo has a project of in the export: that project's port run is
 made with `PROJECT=<export>/<name>` (the header of `scripts/mra_port_run.sbatch`).
 
+Without an export, the same job reads the particle stacks of a pipeline project's
+registry where they are, `SOURCE=<project> LANE=<the stacks' label>
+SERIES="<series in order>"` in place of `EXPORT`, and writes the run to
+`<project>/mra/<NAME>` ([mra_from_registry.md](mra_from_registry.md)): the particles,
+tags and starting table an export of the same label and series would give.
+
 The setup is checked against projects Dynamo's setup made:
 
 ```bash

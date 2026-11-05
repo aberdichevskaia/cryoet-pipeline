@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from functools import cache, partial
@@ -308,8 +308,8 @@ def read_dynamo_classification(
 
     def aligned(tag: int, pose: Pose) -> np.ndarray:
         row = pose_row(tag, pose)
-        return aligned_volume(_particle_path(particles, tag, extension), row[ANGLES],
-                              row[SHIFTS])
+        return aligned_volume(read_map(_particle_path(particles, tag, extension)),
+                              row[ANGLES], row[SHIFTS])
 
     def poses(pose: Pose) -> PoseTable:
         table = starting if pose is None else refined[pose]
@@ -368,16 +368,25 @@ def read_dynamo_classification(
         poses=poses,
         mask=Volume(_relative(mask_path, base), partial(read_em, mask_path))
         if mask_path.exists() else None,
+        identity=manifest_identity(manifest_path) if manifest_path.exists() else {},
     )
 
 
-def aligned_volume(path: Path, angles: np.ndarray, shifts: np.ndarray) -> np.ndarray:
-    """The particle in `path` turned and shifted from its pose into the references' frame,
-    as (z, y, x), NaN where no voxel of it reaches: as dynamo_average turns a particle,
+def manifest_identity(path: Path) -> dict[int, tuple[str, str, int]]:
+    """Each tag's tilt-series, particle stack and index in it, from an export manifest."""
+
+    return {int(entry["tag"]): (str(entry.get("run")), str(entry.get("source_stack_id")),
+                                int(entry.get("source_index_zero_based", -1)))
+            for entry in json.loads(path.read_text()).get("particles", [])}
+
+
+def aligned_volume(particle: np.ndarray, angles: np.ndarray, shifts: np.ndarray) -> np.ndarray:
+    """`particle` turned and shifted from its pose into the references' frame, as
+    (z, y, x), NaN where no voxel of it reaches: as dynamo_average turns a particle,
     with the MEX's coordinates (docs/dynamo_search.md)."""
 
     volume, valid = resample(  # type: ignore[no-untyped-call]
-        read_map(path), -np.asarray(angles)[::-1], -np.asarray(shifts),
+        particle, -np.asarray(angles)[::-1], -np.asarray(shifts),
         coordinates_in_double=True,
     )
     result = np.asarray(volume, dtype=np.float32)
@@ -385,15 +394,12 @@ def aligned_volume(path: Path, angles: np.ndarray, shifts: np.ndarray) -> np.nda
     return result
 
 
-def average_at_poses(paths: Sequence[Path], angles: np.ndarray, shifts: np.ndarray,
+def average_at_poses(particles: Iterable[np.ndarray], angles: np.ndarray, shifts: np.ndarray,
                      tilt_ranges: Sequence[tuple[float, float]], mask: np.ndarray) -> np.ndarray:
-    """The particles in `paths` averaged at their poses, as Dynamo's console
-    `dynamo_average` would (fcompensate, fmin 1, normalised under `mask`), through the
-    pipeline's port of it."""
+    """`particles` averaged at their poses, as Dynamo's console `dynamo_average` would
+    (fcompensate, fmin 1, normalised under `mask`), through the pipeline's port of it."""
 
-    result = average_class(
-        (read_map(path) for path in paths), angles, shifts, list(tilt_ranges), mask, fmin=1
-    )
+    result = average_class(particles, angles, shifts, list(tilt_ranges), mask, fmin=1)
     return np.asarray(result.average, dtype=np.float32)
 
 
@@ -578,7 +584,7 @@ def _initial_average(starting: np.ndarray, particles: Path, extension: str,
         raise ValueError("only single-axis wedges (ftype 1) are averaged here")
     rows = starting[np.argsort(starting[:, TAG])]
     return average_at_poses(
-        [_particle_path(particles, int(tag), extension) for tag in rows[:, TAG]],
+        (read_map(_particle_path(particles, int(tag), extension)) for tag in rows[:, TAG]),
         rows[:, ANGLES], rows[:, SHIFTS], [tuple(pair) for pair in rows[:, TILT_RANGE]],
         read_em(mask_path),
     )
@@ -652,16 +658,39 @@ def _read_manifest(
             str(variant) if variant else None, str(kind))
 
 
+Pick = tuple[int, str, str, tuple[float, float, float]]
+"""A real particle's tag, tilt-series, particle stack id and pick (x, y, z) in its
+tomogram's voxels, zero-based."""
+
+
 def _particle_locations(manifest: Path, mask: Path, spacing: float | None, box: int,
                         problems: list[str]) -> ParticleLocations | None:
-    """Where each real particle was picked, read through the pipeline project the export
-    names: the manifest gives each particle's pick and particle stack, the stack the
-    tomogram it was cut from. None when the export names no project; when it names one
-    that is not at hand (a report written away from the cluster), None and a problem.
-    """
+    """Where each real particle was picked, from an export manifest: its picks and
+    particle stacks, and the pipeline project it names (`particle_locations`)."""
 
     data = json.loads(manifest.read_text())
-    source = data.get("source_project")
+    picks: list[Pick] = []
+    for entry in data.get("particles", []):
+        record = entry.get("native_record")
+        if entry.get("decoy") or not isinstance(record, dict):
+            continue
+        try:
+            x, y, z = (float(record[name]) for name in ("x_px", "y_px", "z_px"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        picks.append((int(entry["tag"]), str(entry.get("run")),
+                      str(entry.get("source_stack_id")), (x, y, z)))
+    return particle_locations(data.get("source_project"), picks, mask, spacing, box, problems)
+
+
+def particle_locations(source: Any, picks: Sequence[Pick], mask: Path, spacing: float | None,
+                       box: int, problems: list[str]) -> ParticleLocations | None:
+    """Where each real particle was picked, read through pipeline project `source`: each
+    pick's particle stack names the tomogram it was cut from. None when no project is
+    named; when one is named that is not at hand (a report written away from the
+    cluster), None and a problem.
+    """
+
     if not isinstance(source, str) or not source:
         return None
     registry_path = Path(source) / "artifacts.json"
@@ -676,16 +705,9 @@ def _particle_locations(manifest: Path, mask: Path, spacing: float | None, box: 
     registry = ArtifactRegistry.load(registry_path)
     positions: dict[int, tuple[float, float, float]] = {}
     stacks: dict[str, set[str]] = {}
-    for entry in data.get("particles", []):
-        record = entry.get("native_record")
-        if entry.get("decoy") or not isinstance(record, dict):
-            continue
-        try:
-            x, y, z = (float(record[name]) for name in ("x_px", "y_px", "z_px"))
-        except (KeyError, TypeError, ValueError):
-            continue
-        positions[int(entry["tag"])] = (x, y, z)
-        stacks.setdefault(str(entry.get("run")), set()).add(str(entry.get("source_stack_id")))
+    for tag, series, stack_id, position in picks:
+        positions[tag] = position
+        stacks.setdefault(series, set()).add(stack_id)
     tomograms: dict[str, Callable[[], Any]] = {}
     for series, stack_ids in sorted(stacks.items()):
         found = set()

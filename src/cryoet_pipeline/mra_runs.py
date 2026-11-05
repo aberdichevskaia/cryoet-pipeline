@@ -2,8 +2,10 @@
 
     <run>/plan.json          what the run was asked for: the setup's record, every
                              iteration's search
-    <run>/setup/             node mra-setup: particles.parquet (one row per particle),
-                             reference_<k>.mrc (each channel's seed), mask.mrc
+    <run>/setup/             node mra-setup: particles.parquet (one row per particle:
+                             its series, stack and index, pick position, wedge, score,
+                             decoy mark, starting pose), reference_<k>.mrc (each
+                             channel's seed), mask.mrc
     <run>/ite_0001/          node mra-iteration: particles.parquet (one row per particle
                              and channel searched), average_<k>.mrc (each surviving class)
     <run>/ite_0002/ ...
@@ -36,8 +38,9 @@ import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import search_particles
 from cryoet_pipeline.dynamo_mra import mra_iteration
-from cryoet_pipeline.dynamo_mra_project import MraPlan, _particle
+from cryoet_pipeline.dynamo_mra_project import MraPlan, load_particle
 from cryoet_pipeline.models import ArtifactKind
+from cryoet_pipeline.particle_sources import RegistryParticles
 from cryoet_pipeline.particle_tables import DYNAMO_POSES, read_particle_table, write_particle_table
 from cryoet_pipeline.runs import (
     RunInput,
@@ -54,13 +57,19 @@ from cryoet_pipeline.runs import (
 
 STEP_SETUP, STEP_ITERATION = "mra-setup", "mra-iteration"
 BACKEND = "dynamo-port"
-SETUP_VERSION = ITERATION_VERSION = BACKEND_VERSION = 1
-"""Declared: raised by hand when a change moves what the step computes."""
+SETUP_VERSION = 2
+"""Declared: raised by hand when a change moves what the step computes. 2 (2026-11-05):
+the setup's table holds the pick position zero-based, as extraction's STAR has it,
+where 1 copied the export table's position plus 0.5, and each particle's stack and
+index."""
+ITERATION_VERSION = BACKEND_VERSION = 1
 PLAN = "plan.json"
 PARTICLES = "particles.parquet"
 TAG, SHIFTS, ANGLES, TILTS, TOMOGRAM, POSITION, PIXEL = (
     0, slice(3, 6), slice(6, 9), slice(13, 15), 19, slice(23, 26), 35)
 """The columns of the plan's starting table (a Dynamo table) the setup names."""
+POSITION_OFFSET = 0.5
+"""What the export adds to a pick's position in columns 24-26 of its table."""
 
 
 class Refused(ValueError):
@@ -75,7 +84,22 @@ def node_folder(run: Path, number: int) -> Path:
 
 
 def _export(plan: MraPlan) -> Path:
+    """The export folder of a plan whose particles are files in it."""
+
+    if not isinstance(plan.particles, Path):
+        raise TypeError("a plan from a registry has no export folder")
     return plan.particles.parent
+
+
+def _particles_input(plan: MraPlan) -> tuple[list[RunInput], str]:
+    """The setup's inputs that hold the particles, and the fingerprint the iterations
+    know the particles by: the export, or each particle stack of the registry."""
+
+    if isinstance(plan.particles, RegistryParticles):
+        return plan.particles.inputs(), plan.particles.fingerprint()
+    export = _export(plan)
+    known = export_fingerprint(export, plan.particles)
+    return [RunInput(slot="export", path=str(export), fingerprint=known)], known
 
 
 def export_fingerprint(export: Path, particles: Path) -> str:
@@ -102,9 +126,7 @@ def _setup_identity(plan: MraPlan) -> tuple[dict[str, Any], list[RunInput]]:
     tables), which Dynamo's setup made from variables the plan does not hold.
     """
 
-    export = _export(plan)
-    inputs = [RunInput(slot="export", path=str(export),
-                     fingerprint=export_fingerprint(export, plan.particles))]
+    inputs, _ = _particles_input(plan)
     if plan.setup is not None:
         files = plan.setup["files"]
         for slot in ("reference_file", "mask_file"):
@@ -135,11 +157,11 @@ def _identity(plan: MraPlan, run: Path, number: int,
         content, inputs = _setup_identity(plan)
         return STEP_SETUP, SETUP_VERSION, content, inputs
     assert previous is not None
+    _, particles = _particles_input(plan)
     inputs = [
         RunInput(slot="previous", path=node_folder(run, number - 1).name,
                  fingerprint=previous.fingerprint),
-        RunInput(slot="particles", path=str(plan.particles),
-                 fingerprint=export_fingerprint(_export(plan), plan.particles)),
+        RunInput(slot="particles", path=str(plan.particles), fingerprint=particles),
     ]
     return STEP_ITERATION, ITERATION_VERSION, _iteration_content(plan, number), inputs
 
@@ -147,9 +169,15 @@ def _identity(plan: MraPlan, run: Path, number: int,
 def plan_record(plan: MraPlan) -> dict[str, Any]:
     """plan.json: what the run was asked for, for people and tools to read."""
 
+    if isinstance(plan.particles, RegistryParticles):
+        particles: Any = {"project": str(plan.particles.project), "label": plan.particles.label,
+                          "series": list(plan.particles.series),
+                          "decoy_label": plan.particles.decoy_label}
+    else:
+        particles = str(plan.particles)
     return {
         "made_by": "cryoet_pipeline.mra_runs", "source": str(plan.source),
-        "particles": str(plan.particles), "setup": plan.setup,
+        "particles": particles, "setup": plan.setup,
         "channels": sorted(plan.references), "reference_notes": plan.reference_notes,
         "iterations": [_iteration_content(plan, number)
                        for number in range(1, len(plan.settings) + 1)],
@@ -207,12 +235,67 @@ def _read_mrc(path: Path) -> np.ndarray:
         return np.asarray(handle.data, dtype=np.float32).astype(float)
 
 
-def _manifest(export: Path) -> dict[int, dict[str, Any]]:
-    path = export / "export_manifest.json"
-    if not path.exists():
-        return {}
-    return {int(entry["tag"]): entry
-            for entry in json.loads(path.read_text()).get("particles", [])}
+def _particle_columns(plan: MraPlan, tags: np.ndarray) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Each particle's series, stack and index in it, pick position (zero-based, in its
+    tomogram's voxels), score and decoy mark, by `tags`; and what the setup table's
+    metadata says of them: the project and the decoys' kind, and each stack's path.
+
+    From the registry's stacks; for an export, from its manifest, or without one from
+    the table, whose columns 24-26 hold the position plus 0.5."""
+
+    count = len(tags)
+    if isinstance(plan.particles, RegistryParticles):
+        source = plan.particles
+        by_tag = {particle.tag: particle for particle in source.particles}
+        found = [by_tag[int(tag)] for tag in tags]
+        positions = np.array([[particle.record.x_px, particle.record.y_px, particle.record.z_px]
+                              for particle in found], dtype=float).reshape(count, 3)
+        columns: dict[str, Any] = {
+            "tilt_series_id": [particle.series for particle in found],
+            "stack_id": [particle.stack_id for particle in found],
+            "stack_index": np.array([particle.index for particle in found], dtype=np.int64),
+            "positions": positions,
+            "score": np.array([float("nan") if particle.record.score is None
+                               else particle.record.score for particle in found]),
+            "decoy": np.array([particle.decoy for particle in found]),
+        }
+        return columns, {"project": str(source.project),
+                         "decoy_kind": "; ".join(source.decoy_kinds) or None,
+                         "stacks": {stack_id: str(stack.path)
+                                    for stack_id, stack in source.stacks.items()}}
+    path = _export(plan) / "export_manifest.json"
+    manifest = json.loads(path.read_text()) if path.exists() else {}
+    entries = {int(entry["tag"]): entry for entry in manifest.get("particles", [])}
+    rows = {int(row[TAG]): row for row in plan.table}
+    picks: list[list[float]] = []
+    for tag in tags:
+        record = entries.get(int(tag), {}).get("native_record") or {}
+        try:
+            picks.append([float(record[name]) for name in ("x_px", "y_px", "z_px")])
+        except (KeyError, TypeError, ValueError):
+            picks.append([float(value) - POSITION_OFFSET
+                          for value in rows[int(tag)][POSITION]])
+
+    def score(tag: int) -> float:
+        value = (entries.get(tag, {}).get("native_record") or {}).get("score")
+        return float(value) if value is not None else float("nan")
+
+    columns = {
+        "tilt_series_id": [str(entries.get(int(tag), {}).get("run", "")) for tag in tags],
+        "stack_id": [str(entries.get(int(tag), {}).get("source_stack_id") or "")
+                     for tag in tags],
+        "stack_index": np.array([int(entries.get(int(tag), {}).get("source_index_zero_based",
+                                                                   -1)) for tag in tags],
+                                dtype=np.int64),
+        "positions": np.array(picks, dtype=float).reshape(count, 3),
+        "score": np.array([score(int(tag)) for tag in tags]),
+        "decoy": np.array([entries.get(int(tag), {}).get("decoy") is True for tag in tags]),
+    }
+    stacks = {str(entry["source_stack_id"]): str(entry["source_stack"])
+              for entry in entries.values()
+              if entry.get("source_stack_id") and entry.get("source_stack")}
+    return columns, {"project": manifest.get("source_project"),
+                     "decoy_kind": manifest.get("decoy_kind"), "stacks": stacks}
 
 
 def pixel_size(plan: MraPlan) -> float | None:
@@ -221,6 +304,8 @@ def pixel_size(plan: MraPlan) -> float | None:
 
     if plan.table.shape[1] > PIXEL and plan.table[0, PIXEL] > 0:
         return float(plan.table[0, PIXEL])
+    if not isinstance(plan.particles, Path):
+        return None
     manifest = _export(plan) / "export_manifest.json"
     value = json.loads(manifest.read_text()).get("pixel_spacing_angstrom") \
         if manifest.exists() else None
@@ -229,7 +314,7 @@ def pixel_size(plan: MraPlan) -> float | None:
 
 def _table_metadata(plan: MraPlan, what: str) -> dict[str, Any]:
     return {"set": what, **DYNAMO_POSES, "pixel_size_angstrom": pixel_size(plan),
-            "box_px": int(plan.soft_mask.shape[0]), "export": str(_export(plan))}
+            "box_px": int(plan.soft_mask.shape[0]), "source": str(plan.particles)}
 
 
 def _write_setup(plan: MraPlan, add: Callable[..., Path]) -> None:
@@ -237,31 +322,30 @@ def _write_setup(plan: MraPlan, add: Callable[..., Path]) -> None:
 
     table, spacing = plan.table, pixel_size(plan) or 0.0
     tags = table[:, TAG].astype(np.int64)
-    entries = _manifest(_export(plan))
+    known, about = _particle_columns(plan, tags)
     groups = ({int(tag): int(channel) for tag, channel in plan.seed_groups}
               if plan.seed_groups is not None else {})
-
-    def score(tag: int) -> float:
-        value = (entries.get(tag, {}).get("native_record") or {}).get("score")
-        return float(value) if value is not None else float("nan")
-
+    positions = known.pop("positions")
     columns: dict[str, Any] = {
         "particle_id": tags,
-        "tilt_series_id": [str(entries.get(int(tag), {}).get("run", "")) for tag in tags],
+        "tilt_series_id": known["tilt_series_id"],
+        "stack_id": known["stack_id"], "stack_index": known["stack_index"],
         "tomogram": table[:, TOMOGRAM].astype(np.int64),
-        "position_x_px": table[:, POSITION][:, 0], "position_y_px": table[:, POSITION][:, 1],
-        "position_z_px": table[:, POSITION][:, 2],
+        "position_x_px": positions[:, 0], "position_y_px": positions[:, 1],
+        "position_z_px": positions[:, 2],
         "tilt_min_deg": table[:, TILTS][:, 0], "tilt_max_deg": table[:, TILTS][:, 1],
-        "decoy": np.array([entries.get(int(tag), {}).get("decoy") is True for tag in tags]),
-        "score": np.array([score(int(tag)) for tag in tags]),
+        "decoy": known["decoy"],
+        "score": known["score"],
         "tdrot_deg": table[:, ANGLES][:, 0], "tilt_deg": table[:, ANGLES][:, 1],
         "narot_deg": table[:, ANGLES][:, 2],
         "shift_x_px": table[:, SHIFTS][:, 0], "shift_y_px": table[:, SHIFTS][:, 1],
         "shift_z_px": table[:, SHIFTS][:, 2],
         "seed_channel": np.array([groups.get(int(tag), 0) for tag in tags], dtype=np.int16),
     }
-    write_particle_table(add(ArtifactKind.PARTICLE_TABLE, PARTICLES),
-                         columns, _table_metadata(plan, "the particles at their starting poses"))
+    write_particle_table(add(ArtifactKind.PARTICLE_TABLE, PARTICLES), columns, {
+        **_table_metadata(plan, "the particles at their starting poses"), **about,
+        "positions": "the pick in its tomogram's voxels, zero-based, as extraction's STAR "
+                     "has it"})
     for channel, reference in sorted(plan.references.items()):
         _write_mrc(add(ArtifactKind.CLASS_REFERENCE, f"reference_{channel}.mrc"),
                    reference, spacing)
@@ -414,7 +498,7 @@ def run_plan(
                 log(f"{folder.name}: what a stopped attempt left is now {moved}")
             state = read_state(run, number - 1, tags) if number else None
             if number and particles is None:
-                particles = [_particle(plan.particles, int(tag)) for tag in tags]
+                particles = [load_particle(plan.particles, int(tag)) for tag in tags]
             with writing(folder, step=step, step_version=step_version, backend=BACKEND,
                          backend_version=BACKEND_VERSION, content_params=content, inputs=inputs,
                          execution_params=execution, log_path=log_path) as attempt:
