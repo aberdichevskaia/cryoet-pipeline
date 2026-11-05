@@ -356,6 +356,16 @@ such as brackets (`%5b-10.00%5d`), and an mdoc's `SubFramePath` does not. A
 download that stops before the size the server announced stays a `.part` file
 and resumes on the next run.
 
+EBI's file server comes and goes: on 4 and 5 November 2026 it refused
+connections for minutes at a time, and once answered a running download with
+`403 Forbidden`. So a file or a listing that fails for such a passing reason
+(HTTP 403, 429 or 5xx, a refused or dropped connection) is tried again after
+30 s, then 60, 120, 240 and 480 s, each time resuming from what arrived
+(`--retries`, `--retry-wait`). A 404 is not retried. If the last retry fails
+too, the command says so and stops; files already complete are kept, and
+running the same command again resumes the rest. For a long unattended
+download, `--retries 20` waits up to about three hours.
+
 Initialize a local project manifest after the files are present:
 
 ```bash

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 import mrcfile
@@ -12,10 +12,14 @@ import pytest
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DatasetLayout,
+    DownloadGaveUp,
     FetchGroup,
     IncompleteDownloadError,
+    RemoteFile,
     build_empiar_file_list,
+    call_with_retries,
     download_file,
+    download_files,
     empiar_base_url,
     extract_listing_hrefs,
     load_dataset_layout,
@@ -465,6 +469,189 @@ def test_a_restarted_download_is_held_to_the_whole_files_length(
     download_file("https://example.test/movie.eer", destination)
 
     assert destination.read_bytes() == b"c" * 100
+
+
+class _Server:
+    """Answers each request with the next of `answers`: an exception to raise, or a
+    _FakeResponse; records the Range header of every request."""
+
+    def __init__(self, *answers: object) -> None:
+        self.answers = list(answers)
+        self.ranges: list[str | None] = []
+
+    def __call__(self, request: Request) -> object:
+        self.ranges.append(request.get_header("Range"))
+        answer = self.answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+
+def _http_error(code: int, headers: dict[str, str] | None = None) -> HTTPError:
+    return HTTPError("https://example.test/x", code, "Forbidden", hdrs=headers, fp=None)  # type: ignore[arg-type]
+
+
+def test_a_403_is_waited_out_and_the_file_completes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server(
+        _http_error(403),
+        _http_error(403),
+        _FakeResponse(b"x" * 100, headers={"Content-Length": "100"}),
+    )
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", server)
+    waits: list[float] = []
+    messages: list[str] = []
+    remote = RemoteFile(
+        url="https://example.test/movie.eer", relative_path=Path("frames/movie.eer")
+    )
+
+    download_files([remote], output_root=tmp_path, progress=messages.append, sleep=waits.append)
+
+    assert (tmp_path / "frames/movie.eer").read_bytes() == b"x" * 100
+    assert waits == [30.0, 60.0]
+    assert "HTTP 403 Forbidden: https://example.test/movie.eer; retry 1 of 5 in 30 s" in messages
+
+
+def test_a_dropped_transfer_resumes_where_it_stopped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server(
+        _FakeResponse(b"a" * 60, headers={"Content-Length": "100"}),
+        _FakeResponse(b"b" * 40, status=206, headers={"Content-Range": "bytes 60-99/100"}),
+    )
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", server)
+    remote = RemoteFile(url="https://example.test/gain.gain", relative_path=Path("gain.gain"))
+
+    download_files([remote], output_root=tmp_path, sleep=lambda wait: None)
+
+    assert (tmp_path / "gain.gain").read_bytes() == b"a" * 60 + b"b" * 40
+    assert server.ranges == [None, "bytes=60-"]
+
+
+def test_overwrite_does_not_throw_away_what_the_run_itself_fetched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "movie.eer").write_bytes(b"old")
+    server = _Server(
+        _FakeResponse(b"a" * 60, headers={"Content-Length": "100"}),
+        _FakeResponse(b"b" * 40, status=206, headers={"Content-Range": "bytes 60-99/100"}),
+    )
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", server)
+    remote = RemoteFile(url="https://example.test/movie.eer", relative_path=Path("movie.eer"))
+
+    download_files([remote], output_root=tmp_path, overwrite=True, sleep=lambda wait: None)
+
+    assert (tmp_path / "movie.eer").read_bytes() == b"a" * 60 + b"b" * 40
+    assert server.ranges == [None, "bytes=60-"]
+
+
+def test_a_refused_connection_is_retried(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server(
+        URLError(ConnectionRefusedError(61, "Connection refused")),
+        _FakeResponse(b"x" * 10, headers={"Content-Length": "10"}),
+    )
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", server)
+    remote = RemoteFile(url="https://example.test/m.eer", relative_path=Path("m.eer"))
+
+    download_files([remote], output_root=tmp_path, sleep=lambda wait: None)
+
+    assert (tmp_path / "m.eer").read_bytes() == b"x" * 10
+
+
+def test_a_404_is_not_waited_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", _Server(_http_error(404)))
+    waits: list[float] = []
+    remote = RemoteFile(url="https://example.test/m.eer", relative_path=Path("m.eer"))
+
+    with pytest.raises(HTTPError):
+        download_files([remote], output_root=tmp_path, sleep=waits.append)
+
+    assert waits == []
+
+
+def test_after_the_last_retry_the_download_gives_up_and_keeps_its_part(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _Server(
+        _FakeResponse(b"a" * 60, headers={"Content-Length": "100"}),
+        _http_error(403),
+        _http_error(403),
+    )
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", server)
+    waits: list[float] = []
+    remote = RemoteFile(url="https://example.test/m.eer", relative_path=Path("m.eer"))
+
+    with pytest.raises(DownloadGaveUp, match="HTTP 403 Forbidden: .*gave up after 2 retries"):
+        download_files([remote], output_root=tmp_path, retries=2, sleep=waits.append)
+
+    assert waits == [30.0, 60.0]
+    assert (tmp_path / "m.eer.part").read_bytes() == b"a" * 60
+
+
+def test_the_wait_doubles_up_to_ten_minutes_and_honours_retry_after() -> None:
+    attempts: list[int] = []
+    waits: list[float] = []
+
+    def always_busy(attempt: int) -> None:
+        attempts.append(attempt)
+        raise _http_error(503, {"Retry-After": "100"} if attempt == 0 else None)
+
+    with pytest.raises(DownloadGaveUp):
+        call_with_retries(always_busy, what="x", retries=6, sleep=waits.append)
+
+    assert attempts == list(range(7))
+    assert waits == [100.0, 60.0, 120.0, 240.0, 480.0, 600.0]
+
+
+def test_a_listing_is_fetched_again_after_a_403() -> None:
+    answers: list[object] = [_http_error(403), GAIN_LISTING]
+    layout = DatasetLayout(
+        groups=(FetchGroup(remote_dir="g", file_pattern="*.gain", shared=True),)
+    )
+
+    def reader(url: str) -> str:
+        answer = answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return str(answer)
+
+    files = build_empiar_file_list(
+        "11830", ["S1"], layout, listing_reader=reader, sleep=lambda wait: None
+    )
+
+    assert [file.relative_path.name for file in files] == ["20230807_182744_EER_GainReference.gain"]
+
+
+def test_the_command_says_how_to_resume_when_it_gives_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    from cryoet_pipeline import cli
+
+    layout = tmp_path / "layout.yaml"
+    layout.write_text("groups:\n  - remote_dir: g\n    file_pattern: '*.gain'\n    shared: true\n")
+    monkeypatch.setattr("cryoet_pipeline.empiar.read_text_url", lambda url: GAIN_LISTING)
+    monkeypatch.setattr("cryoet_pipeline.empiar.urlopen", _Server(_http_error(403)))
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["download-empiar", "--out", str(tmp_path / "out"), "--empiar-id", "11830",
+         "--tilt-series", "S1", "--layout", str(layout), "--retries", "0"],
+    )
+
+    assert result.exit_code == 1
+    assert "download stopped: HTTP 403 Forbidden" in result.output
+    assert "run the same command again" in result.output
 
 
 def test_download_file_keeps_incomplete_mrc_as_partial(

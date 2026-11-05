@@ -117,7 +117,10 @@ from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
 from cryoet_pipeline.empiar import (
     DEFAULT_EMPIAR_10164_LAYOUT,
     DEFAULT_EMPIAR_ID,
+    DEFAULT_RETRIES,
+    DEFAULT_RETRY_WAIT_S,
     DEFAULT_TILT_SERIES,
+    DownloadGaveUp,
     build_empiar_file_list,
     download_files,
     load_dataset_layout,
@@ -325,6 +328,24 @@ def download_empiar(
         bool,
         typer.Option(help="Redownload files even if they exist."),
     ] = False,
+    retries: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help=(
+                "Times to try a file or listing again after a passing failure "
+                "(HTTP 403, 429, 5xx, a refused or dropped connection), resuming "
+                "from what arrived."
+            ),
+        ),
+    ] = DEFAULT_RETRIES,
+    retry_wait: Annotated[
+        float,
+        typer.Option(
+            min=0.0,
+            help="Seconds before the first retry; each later wait doubles, up to 10 minutes.",
+        ),
+    ] = DEFAULT_RETRY_WAIT_S,
 ) -> None:
     """Download selected tilt-series from one EMPIAR deposition without browser ZIPs."""
 
@@ -339,15 +360,37 @@ def download_empiar(
             param_hint="layout",
         )
 
-    files = build_empiar_file_list(empiar_id, tilt_series, selected_layout)
-    typer.echo(f"selected {len(files)} files")
-    for file in files:
-        typer.echo(f"{file.relative_path} <- {file.url}")
+    try:
+        files = build_empiar_file_list(
+            empiar_id,
+            tilt_series,
+            selected_layout,
+            retries=retries,
+            retry_wait_s=retry_wait,
+            progress=typer.echo,
+        )
+        typer.echo(f"selected {len(files)} files")
+        for file in files:
+            typer.echo(f"{file.relative_path} <- {file.url}")
 
-    if dry_run:
-        return
+        if dry_run:
+            return
 
-    download_files(files, output_root=out, overwrite=overwrite, progress=typer.echo)
+        download_files(
+            files,
+            output_root=out,
+            overwrite=overwrite,
+            progress=typer.echo,
+            retries=retries,
+            retry_wait_s=retry_wait,
+        )
+    except DownloadGaveUp as exc:
+        typer.echo(
+            f"download stopped: {exc}. Files already complete are kept, and an "
+            "unfinished one resumes from its .part: run the same command again.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
 
 
 @app.command("correct-motion")

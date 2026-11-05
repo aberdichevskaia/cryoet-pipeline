@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import fnmatch
+import http.client
 import re
 import shutil
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
-from urllib.error import HTTPError
+from typing import Any, TypeVar
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urljoin
 from urllib.request import Request, urlopen
 
@@ -22,9 +24,27 @@ _HREF_RE = re.compile(r'href="([^"]+)"')
 _TILT_SERIES_PLACEHOLDER = "{tilt_series}"
 _LAYOUT_GROUP_KEYS = ("remote_dir", "file_pattern", "local_dir", "shared")
 
+# EBI's file server comes and goes: on 4 and 5 November 2026 it refused
+# connections for minutes at a time, and answered a download running at MDC
+# with 403 Forbidden after three files had come through. Such a failure is
+# retried after a wait that doubles from DEFAULT_RETRY_WAIT_S up to
+# MAX_RETRY_WAIT_S: 30, 60, 120, 240 and 480 s, about 15 minutes in all.
+DEFAULT_RETRIES = 5
+DEFAULT_RETRY_WAIT_S = 30.0
+MAX_RETRY_WAIT_S = 600.0
+# 403 is among them because EBI's came and went; a 404 is a wrong path, and
+# waiting does not mend it.
+_TRANSIENT_HTTP_CODES = frozenset({403, 408, 425, 429, 500, 502, 503, 504})
+
+_T = TypeVar("_T")
+
 
 class IncompleteDownloadError(OSError):
     """A download ended before the server's announced size; its `.part` is kept."""
+
+
+class DownloadGaveUp(OSError):
+    """A transient failure outlasted every retry; what arrived is kept for a rerun."""
 
 
 @dataclass(frozen=True)
@@ -190,6 +210,10 @@ def build_empiar_file_list(
     *,
     base_url: str | None = None,
     listing_reader: Callable[[str], str] | None = None,
+    retries: int = DEFAULT_RETRIES,
+    retry_wait_s: float = DEFAULT_RETRY_WAIT_S,
+    progress: Callable[[str], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[RemoteFile]:
     """Build the download list for selected tilt-series of one EMPIAR deposition.
 
@@ -203,7 +227,8 @@ def build_empiar_file_list(
     escapes the brackets in names such as `..._001[-10.00]_EER.eer` as
     `%5b...%5d`, and an mdoc's `SubFramePath` names the file with brackets.
     Two remote files bound for the same local path are refused, since the
-    second would otherwise be skipped as already downloaded.
+    second would otherwise be skipped as already downloaded. A listing that
+    fails for a passing reason is fetched again, as `download_files` does.
     """
 
     requested = tuple(tilt_series)
@@ -211,7 +236,18 @@ def build_empiar_file_list(
         raise ValueError("at least one tilt-series id is required")
 
     resolved_base_url = base_url if base_url is not None else empiar_base_url(empiar_id)
-    reader = listing_reader or read_text_url
+    read = listing_reader or read_text_url
+
+    def reader(url: str) -> str:
+        return call_with_retries(
+            lambda attempt: read(url),
+            what=url,
+            retries=retries,
+            retry_wait_s=retry_wait_s,
+            progress=progress,
+            sleep=sleep,
+        )
+
     listings: dict[str, dict[str, str]] = {}
 
     files: list[RemoteFile] = []
@@ -313,18 +349,112 @@ def download_files(
     overwrite: bool = False,
     chunk_size: int = 8 * 1024 * 1024,
     progress: Callable[[str], None] | None = None,
+    retries: int = DEFAULT_RETRIES,
+    retry_wait_s: float = DEFAULT_RETRY_WAIT_S,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Download files with `.part` resume support."""
+    """Download files with `.part` resume support, retrying passing failures.
+
+    A retry resumes from the `.part` the failed attempt left. `overwrite`
+    applies to the first attempt only: a retry must not throw away what that
+    same run has just fetched.
+    """
 
     for remote_file in files:
         destination = output_root / remote_file.relative_path
-        download_file(
-            remote_file.url,
-            destination,
-            overwrite=overwrite,
-            chunk_size=chunk_size,
+
+        def attempt_download(
+            attempt: int, url: str = remote_file.url, path: Path = destination
+        ) -> None:
+            download_file(
+                url,
+                path,
+                overwrite=overwrite and attempt == 0,
+                chunk_size=chunk_size,
+                progress=progress,
+            )
+
+        call_with_retries(
+            attempt_download,
+            what=remote_file.url,
+            retries=retries,
+            retry_wait_s=retry_wait_s,
             progress=progress,
+            sleep=sleep,
         )
+
+
+def call_with_retries(
+    action: Callable[[int], _T],
+    *,
+    what: str,
+    retries: int = DEFAULT_RETRIES,
+    retry_wait_s: float = DEFAULT_RETRY_WAIT_S,
+    progress: Callable[[str], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> _T:
+    """`action(attempt)`, again after a wait each time it fails for a passing reason.
+
+    A failure that waiting cannot mend (a 404, a refused layout) is raised at
+    once. A passing one that outlasts `retries` becomes `DownloadGaveUp`.
+    """
+
+    if retries < 0:
+        raise ValueError(f"retries must be 0 or more, not {retries}")
+    attempt = 0
+    while True:
+        try:
+            return action(attempt)
+        except Exception as exc:
+            if not is_transient_download_error(exc):
+                raise
+            reason = _failure_reason(exc)
+            if attempt >= retries:
+                raise DownloadGaveUp(
+                    f"{reason}: {what}; gave up after {retries} "
+                    f"{'retry' if retries == 1 else 'retries'}"
+                ) from exc
+            wait = _retry_wait(exc, attempt, retry_wait_s)
+            _emit(
+                progress,
+                f"{reason}: {what}; retry {attempt + 1} of {retries} in {wait:.0f} s",
+            )
+            sleep(wait)
+            attempt += 1
+
+
+def is_transient_download_error(exc: BaseException) -> bool:
+    """Whether waiting and asking again may get past `exc`."""
+
+    if isinstance(exc, HTTPError):
+        return exc.code in _TRANSIENT_HTTP_CODES
+    # A transfer cut short: the .part is kept, and the next attempt resumes it.
+    if isinstance(exc, (IncompleteDownloadError, IncompleteMrcError)):
+        return True
+    return isinstance(
+        exc, (URLError, ConnectionError, TimeoutError, http.client.HTTPException)
+    )
+
+
+def _failure_reason(exc: BaseException) -> str:
+    if isinstance(exc, HTTPError):
+        return f"HTTP {exc.code} {exc.reason}"
+    if isinstance(exc, URLError):
+        return f"server not reached ({exc.reason})"
+    if isinstance(exc, (IncompleteDownloadError, IncompleteMrcError)):
+        return "transfer stopped early"
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _retry_wait(exc: BaseException, attempt: int, retry_wait_s: float) -> float:
+    """Doubling from `retry_wait_s`, longer if the server asks for it, capped."""
+
+    wait = retry_wait_s * 2.0**attempt
+    if isinstance(exc, HTTPError) and exc.headers is not None:
+        asked = str(exc.headers.get("Retry-After") or "").strip()
+        if asked.isdigit():
+            wait = max(wait, float(asked))
+    return min(wait, MAX_RETRY_WAIT_S)
 
 
 def download_file(
