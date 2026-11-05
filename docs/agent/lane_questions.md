@@ -55,8 +55,8 @@ the person and the date as its source.
 
 1. **What is to be picked, and from which map?** An EMDB entry (`EMD-…`) or a
    map file. This fills `[template] emdb_id` or `source_map`. If the person
-   knows none, say that proposing EMDB entries is not built yet
-   ([roadmap.md](../roadmap.md) section 23), and ask them to choose one.
+   knows none, propose one to three with the `emdb-template` skill
+   (`scripts/show_emdb.py`), and let the person choose.
 2. **How wide is it at its widest, in Å or nm?** This fills
    `[pick] particle_diameter_angstrom`. The template's mask and box, the
    angular step and `[extract] box_size_px` all follow from it. That is why it

@@ -64,8 +64,8 @@ the repository root.
 - **Defaults stay unless there is a reason.** The code's defaults for the mask,
   the box, the low-pass and the angular step already follow the lab's rules.
   Change one only with a reason, and write the reason.
-- **The template.** Ask the person for the EMDB entry or the map. Proposing
-  one from EMDB is a later skill.
+- **The template.** Ask the person for the EMDB entry or the map. If they know
+  none, the `emdb-template` skill proposes one to three for them to choose.
 - **Values you cannot fill in.** Ask. Do not leave a placeholder from
   `example.toml` in a config you submit.
 

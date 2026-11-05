@@ -33,6 +33,7 @@ are yours.
 |---|---|
 | [instructions.md](instructions.md) | the rules in force in every turn: the gates, what never to do, how to cite evidence, and the words to use |
 | [plugin/skills/project-status](plugin/skills/project-status/SKILL.md) | where a project stands and why something failed: `show_project.py`, then `show_failure.py`, then the playbook and the recipes |
+| [plugin/skills/emdb-template](plugin/skills/emdb-template/SKILL.md) | one to three EMDB entries proposed as the picking template with `show_emdb.py`, each checked against the lane, for the person to choose |
 | [plugin/skills/empiar-download](plugin/skills/empiar-download/SKILL.md) | an EMPIAR entry read with `show_empiar.py`, its download layout written and checked against each series' mdoc, and the download command handed to the person |
 | [plugin/skills/lane-config](plugin/skills/lane-config/SKILL.md) | writing a lane config with the source of every value: the data read with `show_folder.py`, then checking it, dry run, yes, and submit |
 | [settings.json](settings.json) | the client's permission rules, and the guard on shell commands |
