@@ -143,6 +143,11 @@ def test_a_split_of_runs_that_read_other_particles_is_refused(made: Split) -> No
                                f"{made.run}:{made.channel}", "--start-lowpass", 40,
                                "--out", made.project / "split_c")
     assert elsewhere.returncode != 0 and "lives in" in elsewhere.stderr
+    missing = _halves_script("split", f"{made.project / 'mra' / 'mra_none'}:1", "--agree",
+                             f"{made.run}:{made.channel}", "--start-lowpass", 40,
+                             "--out", made.project / "mra" / "split_e")
+    assert missing.returncode != 0
+    assert missing.stderr.strip() == f"{made.project / 'mra' / 'mra_none'}: no such run"
     again = _halves_script("split", f"{made.halves[0]}:1", "--agree", f"{made.halves[1]}:1",
                            "--start-lowpass", 40, "--out", made.project / "mra" / "split_d")
     assert again.returncode != 0 and "is not split again" in again.stderr

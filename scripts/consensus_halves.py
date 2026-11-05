@@ -208,6 +208,9 @@ def _start(run: ClassificationRun, project: Path, channel: int, number: int, low
 
 def split(args: argparse.Namespace) -> int:
     (project, channel), (agree, agree_channel) = args.poses, args.agree
+    for path in (project, agree):
+        if not path.is_dir():
+            raise SystemExit(f"{path}: no such run")
     registry = [_from_registry(path) for path in (project, agree)]
     if any(registry):
         if not all(registry):
@@ -218,7 +221,9 @@ def split(args: argparse.Namespace) -> int:
     if agree.parent != export:
         raise SystemExit(f"{agree} is not in {export}: both runs must be on the export split")
     if not (export / "export_complete.json").is_file():
-        raise SystemExit(f"{export}: no export_complete.json, so no finished export to split")
+        raise SystemExit(f"{export}: no export_complete.json, so no finished export to split; "
+                         f"{project.name} is not a run of a registry either (its plan.json would "
+                         "name the stacks it read)")
     out = args.out.resolve()
     folders = {half: out.with_name(f"{out.name}-half{half}") for half in (1, 2)}
     for folder in folders.values():
