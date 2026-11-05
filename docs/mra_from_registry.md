@@ -113,5 +113,8 @@ the runs. `mra_port_run.py --source/--lane/--series/--decoy-lane` and
 tests/test_mra_from_registry.py runs one plan from a synthetic registry and from an
 export of it: the export's table is the source's rows to its 12 digits and its
 voxels the stacks'; the two runs keep the same classes and members, with seeds
-within 1e-6 and poses within 1e-6 deg of each other (the tests' bounds). Not run on
-max yet.
+within 1e-6 and poses within 1e-6 deg of each other (the tests' bounds).
+`scripts/compare_export_registry.py <export>` checks an export against its project's
+registry (its table to the 12 digits it wrote, each tag's stack and index, every
+voxel) and prints the SOURCE, LANE and SERIES that read the same particles. Not run
+on max yet.

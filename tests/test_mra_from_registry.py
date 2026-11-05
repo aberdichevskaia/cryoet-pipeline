@@ -195,3 +195,25 @@ def test_the_job_script_runs_from_the_registry(tmp_path: Path) -> None:
                             "--seeds", "noise noise"], capture_output=True, text=True,
                            check=False)
     assert wrong.returncode == 2 and "--source needs --series" in wrong.stderr
+
+
+def test_an_export_is_checked_against_its_registry(tmp_path: Path) -> None:
+    import zarr
+
+    project = _project(tmp_path)
+    export = _export(project, tmp_path / "export")
+    command = [sys.executable, str(ROOT / "scripts/compare_export_registry.py"), str(export)]
+    agreed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert agreed.returncode == 0, agreed.stdout + agreed.stderr
+    assert "voxels      13 particle files, each equal to its stack slice" in agreed.stdout
+    assert f'  SOURCE={project} LANE=bin8 SERIES="TS_A TS_B"' in agreed.stdout
+    # One voxel of TS_B's third particle (tag 10) changed, as an extraction again would.
+    stack = zarr.open_array(project / "particles" / "TS_B" / "stack.zarr", mode="r+")
+    particle = stack[2]
+    particle[0, 0, 0] += 1
+    stack[2] = particle
+    changed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert changed.returncode == 1
+    assert ("voxels: 1 particle file(s) differ from their stack slice, the first tag 10, by up "
+            "to 1") in changed.stdout
+    assert "SOURCE=" not in changed.stdout
