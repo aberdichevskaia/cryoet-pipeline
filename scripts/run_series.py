@@ -165,7 +165,7 @@ LANE_KEYS: dict[str, frozenset[str]] = {
                        "mdoc", "stack"}),
     "motion": frozenset({"backend", "storage_policy", "gpu", "patch_x", "patch_y",
                          "pixel_size_angstrom", "gain_reference", "gain_rotation",
-                         "gain_flip", "ftbin"}),
+                         "gain_flip", "ftbin", "eer_sampling", "eer_fractions"}),
     "binning": frozenset({"ctf_fit", "tomogram"}),
     "align": frozenset({"binning", "min_std_ratio", "tilt_axis_angle"}),
     "qc_coarse": frozenset({"preview_binning", "residual_warning_px"}),
@@ -437,7 +437,9 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
                  *flag("motioncor3-gain", motion.get("gain_reference")),
                  *flag("motioncor3-gain-rotation", motion.get("gain_rotation")),
                  *flag("motioncor3-gain-flip", motion.get("gain_flip")),
-                 *flag("motioncor3-ftbin", motion.get("ftbin"))],
+                 *flag("motioncor3-ftbin", motion.get("ftbin")),
+                 *flag("motioncor3-eer-sampling", motion.get("eer_sampling")),
+                 *flag("motioncor3-eer-fractions", motion.get("eer_fractions"))],
             ),
         ]
     else:

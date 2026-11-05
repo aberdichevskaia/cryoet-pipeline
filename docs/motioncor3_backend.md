@@ -54,8 +54,50 @@ Outputs are written under:
 ```text
 corrected/<tilt-series>/*_mc3.mrc|zarr
 motion/motioncor3/<tilt-series>/alignment/
+motion/motioncor3/<tilt-series>/*.fmint      (EER movies only)
 logs/motioncor3/<tilt-series>/*.log
 ```
+
+When a gain is given, MotionCor3's output is read for whether it used it. It
+only warns when it cannot (any mode but 32-bit float) and sums without one, so
+"Gain reference not found" stops the step; "Gain reference has been loaded"
+is recorded as `gain_loaded: true` in the artifact. A build that words it
+otherwise leaves `gain_loaded` null.
+
+## EER movies
+
+EER movies (Falcon cameras, `.eer`) are passed with `-InEer`. Their frame
+count, sensor size and pixel come from the file's tags and metadata, read
+without decoding; MotionCor3 decodes and sums the frames itself, and the other
+motion backends refuse them. Two settings apply:
+
+- `--motioncor3-eer-sampling` (`[motion] eer_sampling`, default 1):
+  `-EerSampling`. 1 renders the electron events on the sensor's pixels; 2 on a
+  grid twice as fine, which `--motioncor3-ftbin 2` must then bin back, since a
+  sum finer than the movie pixel is refused. 3 (16K) is not offered: MotionCor3
+  caps it at 2 for compression 65002 without changing the pixel size it reports.
+- `--motioncor3-eer-fractions` (`[motion] eer_fractions`, default 10): the
+  groups the EER frames are summed in before alignment, written per movie as
+  the `-FmIntFile` line `N G 0`. G is N // fractions: MotionCor3 adds the
+  N % G frames left over to the last groups, one each, and writes past the end
+  of its array when they outnumber the groups (`DataUtil/CFmIntParam.cpp`).
+  The dose column is 0, as `-FmDose` is: no dose weighting.
+
+An mdoc's `NumSubFrames` does not count EER frames (Tomography writes 1 for a
+movie of 728), so `cryoet init` takes the count from each file and keeps the
+mdoc's in the image's metadata as `mdoc_num_subframes`.
+
+The gain of a Falcon EER dataset is usually a TIFF named `*.gain`, 32-bit float
+at the sensor size. By the sources, MotionCor3 reads a TIFF bottom row first
+(`TiffUtil/CLoadTiffImage.cpp`) and decodes EER frames top row first
+(`EerUtil/CDecodeEerFrame.cpp`), so the gain should need `--motioncor3-gain-flip
+1`. That is not yet measured: `scripts/eer_gain_flip.sbatch` decides it with the
+MotionCor3 that runs the lanes, on EMPIAR-11830.
+
+The sums keep the EER files' row order. IMOD reads an EER file as any TIFF,
+bottom row first, and its alignframes can apply the files' TIFF Orientation tag
+(2 on EMPIAR-11830), so its sums of the same movies differ from MotionCor3's by
+a flip; the tilt axis and the hand belong to the orientation the sums have.
 
 ## Tests
 

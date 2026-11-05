@@ -1796,8 +1796,9 @@ and proposes them for the user to confirm:
    motion correction (`[lane] input = "frames"`, first stage from
    `prepare-tilt-series`). An assembled stack starts at `import-tilt-stack`
    (`input = "stack"`). One summed image per tilt has no entry yet: it would
-   need a stack assembled without motion correction. EER is not read yet. Where
-   there is no entry, the agent says so instead of bending the data into one.
+   need a stack assembled without motion correction. EER movies are read since
+   5 November 2026 (frames lanes, motion backend motioncor3 only). Where there
+   is no entry, the agent says so instead of bending the data into one.
 
 The proposal is a config fragment (`[lane] input`, `[data]`, `[run] series`,
 the first stage) plus what it implies: series found, tilts per series, angle

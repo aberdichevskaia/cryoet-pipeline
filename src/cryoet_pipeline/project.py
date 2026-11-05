@@ -79,16 +79,43 @@ def find_tilt_series(config: ProjectConfig) -> list[str]:
     assert config.mdocs_dir is not None
     if not config.mdocs_dir.is_dir():
         raise FileNotFoundError(f"mdocs directory not found: {config.mdocs_dir}")
-    # The same name load_tilt_series_manifest looks for.
-    suffix = ".mrc.mdoc"
-    found = sorted(
-        path.name[: -len(suffix)]
-        for path in config.mdocs_dir.iterdir()
-        if path.is_file() and path.name.endswith(suffix) and not path.name.startswith(".")
-    )
+    found: dict[str, Path] = {}
+    for path in sorted(config.mdocs_dir.iterdir()):
+        series = _mdoc_series_id(path.name)
+        if series is None or not path.is_file() or path.name.startswith("."):
+            continue
+        if series in found:
+            raise ValueError(f"two mdocs for {series}: {found[series].name} and {path.name}")
+        found[series] = path
     if not found:
-        raise ValueError(f"no *{suffix} files in {config.mdocs_dir}")
-    return found
+        raise ValueError(f"no *{' or *'.join(_MDOC_SUFFIXES)} files in {config.mdocs_dir}")
+    return sorted(found)
+
+
+# SerialEM names an mdoc after its stack, <id>.mrc.mdoc; Thermo Fisher's
+# Tomography after the series, <id>.mdoc (EMPIAR-11830).
+_MDOC_SUFFIXES = (".mrc.mdoc", ".mdoc")
+
+
+def _mdoc_series_id(name: str) -> str | None:
+    for suffix in _MDOC_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return None
+
+
+def _mdoc_path(mdocs_dir: Path, tilt_series_id: str) -> Path:
+    paths = [mdocs_dir / f"{tilt_series_id}{suffix}" for suffix in _MDOC_SUFFIXES]
+    existing = [path for path in paths if path.exists()]
+    if len(existing) > 1:
+        raise ValueError(
+            f"two mdocs for {tilt_series_id}: {existing[0].name} and {existing[1].name}"
+        )
+    if not existing:
+        raise FileNotFoundError(
+            f"missing mdoc file for {tilt_series_id}: {paths[0]} or {paths[1].name}"
+        )
+    return existing[0]
 
 
 def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> TiltSeriesManifest:
@@ -101,9 +128,7 @@ def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> Til
         )
 
     assert config.mdocs_dir is not None
-    mdoc_path = config.mdocs_dir / f"{tilt_series_id}.mrc.mdoc"
-    if not mdoc_path.exists():
-        raise FileNotFoundError(f"missing mdoc file for {tilt_series_id}: {mdoc_path}")
+    mdoc_path = _mdoc_path(config.mdocs_dir, tilt_series_id)
 
     manifest = parse_mdoc_text(
         mdoc_path.read_text(),
@@ -112,6 +137,7 @@ def load_tilt_series_manifest(config: ProjectConfig, tilt_series_id: str) -> Til
         frames_dir=config.frames_dir,
     )
     _require_local_frame_files(manifest)
+    manifest = _with_eer_frame_counts(manifest)
     pixel_spacing = config.raw_pixel_spacing_angstrom
     if pixel_spacing is None:
         pixel_spacing = common_pixel_spacing(
@@ -144,6 +170,50 @@ def validate_tilt_series_manifest(manifest: TiltSeriesManifest) -> None:
             f"{manifest.tilt_series_id}: {len(mismatched)} movies have another frame "
             f"count than declared; first: {mismatched[0]}"
         )
+
+
+def _with_eer_frame_counts(manifest: TiltSeriesManifest) -> TiltSeriesManifest:
+    """The frame count of each EER movie as its file holds it.
+
+    An mdoc counts an EER movie's frames its own way: Tomography writes
+    NumSubFrames = 1 for movies of 728 EER frames (EMPIAR-11830). The file is
+    what MotionCor3 sums, so its count replaces the mdoc's, which each image
+    keeps in its metadata as mdoc_num_subframes.
+    """
+
+    images = []
+    counts: set[int] = set()
+    declared: set[int] = set()
+    for image in manifest.images:
+        path = image.local_frame_file
+        if path is None or path.suffix.lower() != ".eer":
+            images.append(image)
+            continue
+        frames = inspect_movie(path).shape[0]
+        counts.add(frames)
+        if frames == image.num_subframes:
+            images.append(image)
+            continue
+        declared.add(image.num_subframes)
+        images.append(
+            image.model_copy(
+                update={
+                    "num_subframes": frames,
+                    "metadata": {**image.metadata, "mdoc_num_subframes": image.num_subframes},
+                }
+            )
+        )
+    if not declared:
+        return manifest
+    held = (
+        str(min(counts)) if len(counts) == 1 else f"{min(counts)} to {max(counts)}"
+    )
+    note = (
+        f"EER movies: frame counts read from the files ({held} EER frames per tilt); the "
+        f"mdoc's NumSubFrames ({', '.join(str(n) for n in sorted(declared))}) is kept in "
+        "each image's metadata as mdoc_num_subframes"
+    )
+    return manifest.model_copy(update={"images": images, "notes": [*manifest.notes, note]})
 
 
 def _require_local_frame_files(manifest: TiltSeriesManifest) -> None:

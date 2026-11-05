@@ -185,9 +185,17 @@ def _projection_frame_binning(
     projections: Sequence[Artifact],
     manifest: TiltSeriesManifest,
 ) -> int:
-    """The binning motion correction applied (MotionCor3 -FtBin); 1 when none."""
+    """The sums' pixel over the movies'; 1 when motion correction kept it.
 
-    binnings = {artifact.parameters.get("ftbin", 1) for artifact in projections}
+    MotionCor3 records it as frame_binning: its -FtBin, less the finer grid an
+    EER movie was rendered on. Projections registered before EER was read
+    record only ftbin, which was the same thing then.
+    """
+
+    binnings = {
+        artifact.parameters.get("frame_binning", artifact.parameters.get("ftbin", 1))
+        for artifact in projections
+    }
     if len(binnings) != 1:
         raise ValueError(
             f"{manifest.tilt_series_id}: corrected projections were binned differently: "

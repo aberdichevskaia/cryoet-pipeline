@@ -54,11 +54,6 @@ def test_a_one_page_tiff_is_not_a_movie(tmp_path):
         inspect_movie(path)
 
 
-def test_eer_is_refused_by_name(tmp_path):
-    with pytest.raises(ValueError, match="EER movies are not supported"):
-        inspect_movie(tmp_path / "movie.eer")
-
-
 def test_series_and_tilts_are_read_from_the_names(tmp_path):
     _write_series(tmp_path, "1")
     _write_series(tmp_path, "12")

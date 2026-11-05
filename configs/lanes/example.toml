@@ -83,7 +83,8 @@ mdocs = "data/my-dataset/mdocs"
 # stack = "data/my-dataset/stacks/{series}.mrc"
 
 [motion]
-# input = "frames" only. MRC and TIFF movies; EER is not supported yet.
+# input = "frames" only. MRC, TIFF and EER movies; EER needs backend
+# "motioncor3", which decodes it (docs/motioncor3_backend.md, "EER movies").
 backend = "motioncor3"
 patch_x = 5
 patch_y = 5
@@ -95,8 +96,11 @@ storage_policy = "working"
 # off in this backend, so MotionCor3 uses it for little else; there is normally
 # no reason to set it.
 # pixel_size_angstrom = 1.35
-# EDIT if your movies are not gain-corrected: the gain reference (MRC), and its
-# rotation (0-3) and flip (0-2) relative to the movies, as MotionCor3 defines them.
+# EDIT if your movies are not gain-corrected: the gain reference (MRC, or a
+# Falcon `.gain` TIFF for EER), and its rotation (0-3) and flip (0-2) relative to
+# the movies, as MotionCor3 defines them. A Falcon `.gain` with EER movies
+# should need gain_flip = 1 by MotionCor3's sources; scripts/eer_gain_flip.sbatch
+# measures it.
 # gain_reference = "data/my-dataset/gain.mrc"
 # gain_rotation = 0
 # gain_flip = 0
@@ -105,6 +109,12 @@ storage_policy = "working"
 # of the disk; the tilt stack, and every binning below, is then at the movie
 # pixel times this. Left unset, the sums keep the movie pixel.
 # ftbin = 2
+# EER movies only. eer_sampling 1 renders the electron events on the sensor's
+# pixels; 2 on a grid twice as fine, and then ftbin must be 2 to bring the sums
+# back to the movie pixel. eer_fractions: the groups the EER frames are summed in
+# before alignment, as many as a TIFF or MRC movie's frames.
+# eer_sampling = 1
+# eer_fractions = 10
 
 [binning]
 # EDIT. Binning factors relative to the tilt stack's pixel: the movie pixel,

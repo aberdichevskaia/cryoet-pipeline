@@ -546,7 +546,9 @@ def _tilt_axis_angle(manifest: TiltSeriesManifest, context: BackendContext) -> f
     ]
     if len(rotation_angles) != manifest.num_tilts:
         raise ValueError(
-            "tilt-axis angle is unavailable; provide tilt_axis_angle_deg explicitly"
+            "tilt-axis angle is unavailable: the manifest has no SerialEM RotationAngle "
+            "for every tilt (its notes say why when an mdoc was read); provide "
+            "tilt_axis_angle_deg explicitly ([align] tilt_axis_angle in a lane)"
         )
     first = rotation_angles[0]
     if any(not np.isclose(angle, first, atol=1e-6) for angle in rotation_angles[1:]):

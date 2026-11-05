@@ -212,7 +212,8 @@ def init(
             "--tilt-series",
             help=(
                 "Tilt-series id to include; repeat for several. Omitted: every series "
-                "found, by --frames-pattern or one per <id>.mrc.mdoc."
+                "found, by --frames-pattern or one per <id>.mrc.mdoc (SerialEM) or "
+                "<id>.mdoc (Thermo Fisher Tomography)."
             ),
         ),
     ] = None,
@@ -463,6 +464,28 @@ def correct_motion(
             ),
         ),
     ] = 1,
+    motioncor3_eer_sampling: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=2,
+            help=(
+                "EER movies: MotionCor3 -EerSampling. 1 renders the electron events on "
+                "the sensor's pixels; 2 on a grid twice as fine, which then needs "
+                "--motioncor3-ftbin 2 to bring the sums back to the movie pixel."
+            ),
+        ),
+    ] = 1,
+    motioncor3_eer_fractions: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help=(
+                "EER movies: the groups MotionCor3 sums the EER frames in before "
+                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames."
+            ),
+        ),
+    ] = 10,
 ) -> None:
     """Correct multiframe tilt movies and register corrected projections."""
 
@@ -492,6 +515,8 @@ def correct_motion(
                 gain_rotation=motioncor3_gain_rotation,
                 gain_flip=motioncor3_gain_flip,
                 ftbin=motioncor3_ftbin,
+                eer_sampling=motioncor3_eer_sampling,
+                eer_fractions=motioncor3_eer_fractions,
             ),
         },
     )
@@ -581,6 +606,28 @@ def prepare_tilt_series(
             ),
         ),
     ] = 1,
+    motioncor3_eer_sampling: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            max=2,
+            help=(
+                "EER movies: MotionCor3 -EerSampling. 1 renders the electron events on "
+                "the sensor's pixels; 2 on a grid twice as fine, which then needs "
+                "--motioncor3-ftbin 2 to bring the sums back to the movie pixel."
+            ),
+        ),
+    ] = 1,
+    motioncor3_eer_fractions: Annotated[
+        int,
+        typer.Option(
+            min=1,
+            help=(
+                "EER movies: the groups MotionCor3 sums the EER frames in before "
+                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames."
+            ),
+        ),
+    ] = 10,
 ) -> None:
     """Correct movies and prepare an alignment-ready tilt-series stack."""
 
@@ -611,6 +658,8 @@ def prepare_tilt_series(
                 gain_rotation=motioncor3_gain_rotation,
                 gain_flip=motioncor3_gain_flip,
                 ftbin=motioncor3_ftbin,
+                eer_sampling=motioncor3_eer_sampling,
+                eer_fractions=motioncor3_eer_fractions,
             ),
         },
     )
@@ -4761,12 +4810,16 @@ def _motioncor3_cli_parameters(
     gain_rotation: int,
     gain_flip: int,
     ftbin: int = 1,
+    eer_sampling: int = 1,
+    eer_fractions: int = 10,
 ) -> dict[str, object]:
     parameters: dict[str, object] = {
         "motioncor3_gpu_ids": [gpu],
         "motioncor3_patch_x": patch_x,
         "motioncor3_patch_y": patch_y,
         "motioncor3_ftbin": ftbin,
+        "motioncor3_eer_sampling": eer_sampling,
+        "motioncor3_eer_fractions": eer_fractions,
         "motioncor3_gain_rotation": gain_rotation,
         "motioncor3_gain_flip": gain_flip,
     }

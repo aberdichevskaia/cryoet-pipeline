@@ -49,10 +49,29 @@ class _MotionCor3Settings:
     gain_rotation: int
     gain_flip: int
     software_version: str
+    # Every movie of the series is in this format; the next two apply to EER.
+    movie_format: MovieFormat = MovieFormat.MRC
+    # -EerSampling: 1 renders the events on the sensor's pixels, 2 on a grid
+    # twice as fine, which -FtBin then has to bin back.
+    eer_sampling: int = 1
+    # The groups the EER frames are summed in before alignment (-FmIntFile).
+    eer_fractions: int = 10
+
+    @property
+    def render_factor(self) -> int:
+        """How much finer than the movie's pixel the frames are rendered."""
+
+        return self.eer_sampling if self.movie_format is MovieFormat.EER else 1
+
+    @property
+    def frame_binning(self) -> int:
+        """The sums' pixel over the movie's: ftbin, less the EER rendering."""
+
+        return self.ftbin // self.render_factor
 
     @property
     def output_pixel_spacing_angstrom(self) -> float:
-        return self.pixel_spacing_angstrom * self.ftbin
+        return self.pixel_spacing_angstrom * self.frame_binning
 
 
 class MotionCor3MotionCorrectionBackend:
@@ -66,8 +85,8 @@ class MotionCor3MotionCorrectionBackend:
     def correct(self, manifest: TiltSeriesManifest, context: BackendContext) -> list[Artifact]:
         """Correct every movie with MotionCor3 and canonicalize its frame sum."""
 
-        _validate_manifest_movies(manifest)
-        settings = _motioncor3_settings(manifest, context)
+        movie_format = _validate_manifest_movies(manifest, reads_eer=True)
+        settings = _motioncor3_settings(manifest, context, movie_format=movie_format)
         artifact_format = _artifact_format_parameter(context)
         overwrite = _bool_parameter(context, "overwrite", default=False)
         output_paths = [
@@ -136,6 +155,20 @@ class MotionCor3MotionCorrectionBackend:
         output_stem = f"{manifest.tilt_series_id}_{image.z_value:03d}_mc3"
         command_log_path = log_dir / f"{output_stem}.runner.log"
         motioncor3_log_path = log_dir / f"{output_stem}.log"
+        eer_parameters: dict[str, object] = {}
+        fmint_path: Path | None = None
+        if settings.movie_format is MovieFormat.EER:
+            fmint_line = motioncor3_eer_fmint(image.num_subframes, settings.eer_fractions)
+            fmint_path = work_dir / f"{output_stem}.fmint"
+            fmint_path.write_text(fmint_line)
+            group_size = int(fmint_line.split()[1])
+            eer_parameters = {
+                "eer_sampling": settings.eer_sampling,
+                "eer_fractions": settings.eer_fractions,
+                "eer_frames": image.num_subframes,
+                "eer_group_size": group_size,
+                "fmint_file": str(fmint_path),
+            }
         with tempfile.TemporaryDirectory(
             prefix=f".{output_stem}-",
             dir=work_dir.resolve(),
@@ -147,6 +180,7 @@ class MotionCor3MotionCorrectionBackend:
                 output_path=temporary_output,
                 log_dir=log_dir,
                 alignment_dir=alignment_dir,
+                fmint_path=fmint_path,
             )
             result = self._command_runner(
                 command,
@@ -160,11 +194,13 @@ class MotionCor3MotionCorrectionBackend:
                     f"MotionCor3 failed for {image.local_frame_file} with exit code "
                     f"{result.returncode}: {detail}; see {command_log_path}"
                 )
+            gain_loaded = _gain_loaded(settings, result.stdout, command_log_path)
 
             projection = _read_motioncor3_projection(
                 temporary_output,
                 input_path=image.local_frame_file,
                 ftbin=settings.ftbin,
+                render_factor=settings.render_factor,
             )
             _write_projection(
                 output_path,
@@ -201,7 +237,11 @@ class MotionCor3MotionCorrectionBackend:
                 "gpu_ids": list(settings.gpu_ids),
                 "pixel_spacing_angstrom": settings.output_pixel_spacing_angstrom,
                 "input_pixel_spacing_angstrom": settings.pixel_spacing_angstrom,
+                "movie_format": settings.movie_format.value,
                 "ftbin": settings.ftbin,
+                # The sums' pixel over the movie's, which the stack records.
+                "frame_binning": settings.frame_binning,
+                **eer_parameters,
                 "gain_reference": (
                     str(settings.gain_reference)
                     if settings.gain_reference is not None
@@ -209,6 +249,7 @@ class MotionCor3MotionCorrectionBackend:
                 ),
                 "gain_rotation": settings.gain_rotation,
                 "gain_flip": settings.gain_flip,
+                "gain_loaded": gain_loaded,
                 "dose_weighting": False,
                 "aligned_movie_saved": False,
                 "ctf_estimation": False,
@@ -397,6 +438,8 @@ def correct_and_register(
 def _motioncor3_settings(
     manifest: TiltSeriesManifest,
     context: BackendContext,
+    *,
+    movie_format: MovieFormat = MovieFormat.MRC,
 ) -> _MotionCor3Settings:
     if context.device is not DevicePreference.CUDA:
         raise ValueError(
@@ -417,6 +460,24 @@ def _motioncor3_settings(
     software_version = context.parameters.get("motioncor3_version", "unknown")
     if not isinstance(software_version, str) or not software_version.strip():
         raise TypeError("context parameter 'motioncor3_version' must be a non-empty string")
+
+    ftbin = _bounded_int_parameter(context, "motioncor3_ftbin", default=1, minimum=1)
+    # 16K rendering (-EerSampling 3) is left out: MotionCor3 caps it at 2 for
+    # compression 65002 without changing the pixel size it reports, and
+    # tomography has no use for it.
+    eer_sampling = _bounded_int_parameter(
+        context, "motioncor3_eer_sampling", default=1, minimum=1, maximum=2
+    )
+    eer_fractions = _bounded_int_parameter(
+        context, "motioncor3_eer_fractions", default=10, minimum=1
+    )
+    if movie_format is MovieFormat.EER and ftbin % eer_sampling:
+        raise ValueError(
+            f"EER sampling {eer_sampling} renders the frames on a grid {eer_sampling} times "
+            f"finer than the movie pixel, and -FtBin {ftbin} would leave the sums at a "
+            f"fraction of it; set ftbin to a multiple of {eer_sampling}, e.g. "
+            f"{eer_sampling} for sums at the movie pixel"
+        )
 
     executable = _resolve_motioncor3_executable(context)
     return _MotionCor3Settings(
@@ -439,7 +500,7 @@ def _motioncor3_settings(
         # Fourier binning of the sums: 2 brings super-resolution frames to the
         # physical pixel. Whole numbers only, so that the stack's pixel stays a
         # whole multiple of the movies' and the fiducial step can check it.
-        ftbin=_bounded_int_parameter(context, "motioncor3_ftbin", default=1, minimum=1),
+        ftbin=ftbin,
         gain_reference=_optional_existing_file_parameter(
             context,
             "motioncor3_gain_reference",
@@ -459,7 +520,57 @@ def _motioncor3_settings(
             maximum=2,
         ),
         software_version=software_version.strip(),
+        movie_format=movie_format,
+        eer_sampling=eer_sampling,
+        eer_fractions=eer_fractions,
     )
+
+
+_INPUT_FLAGS = {MovieFormat.MRC: "-InMrc", MovieFormat.TIFF: "-InTiff", MovieFormat.EER: "-InEer"}
+
+
+def motioncor3_eer_fmint(eer_frames: int, fractions: int) -> str:
+    """MotionCor3's -FmIntFile for one EER movie: its frames summed in `fractions` groups.
+
+    One line, "N G 0": the N EER frames summed G at a time, at dose 0, so that
+    nothing is dose-weighted (the pipeline passes -FmDose 0 too). G is
+    N // fractions. MotionCor3 adds the N % G frames left over to the last
+    groups, one each, and writes past the end of its array when they outnumber
+    the groups (DataUtil/CFmIntParam.cpp, mCalcIntFms: 728 frames in groups
+    of 73 leave 71 for 9 groups). N // fractions never leaves more than there
+    are groups.
+    """
+
+    if fractions < 1:
+        raise ValueError(f"EER fractions must be at least 1, not {fractions}")
+    if eer_frames < fractions:
+        raise ValueError(f"{eer_frames} EER frames cannot make {fractions} fractions")
+    return f"{eer_frames} {eer_frames // fractions} 0\n"
+
+
+def _gain_loaded(
+    settings: _MotionCor3Settings,
+    output: str | None,
+    command_log_path: Path,
+) -> bool | None:
+    """Whether MotionCor3 said it applied the gain: True, or None when it did not say.
+
+    MotionCor3 only warns when it cannot use a gain (any mode but 32-bit
+    float) and sums without one; "Gain reference not found" in its output then
+    stops the step here. The success line is the one MotionCor3's main branch
+    prints (CMain.cpp); a build that words it otherwise leaves None.
+    """
+
+    if settings.gain_reference is None:
+        return None
+    text = output or ""
+    if "Gain reference not found" in text:
+        raise RuntimeError(
+            f"MotionCor3 did not apply the gain reference {settings.gain_reference}: it "
+            "says 'Gain reference not found' (it loads 32-bit float gains only); see "
+            f"{command_log_path}"
+        )
+    return True if "Gain reference has been loaded" in text else None
 
 
 def _motioncor3_command(
@@ -469,14 +580,17 @@ def _motioncor3_command(
     output_path: Path,
     log_dir: Path,
     alignment_dir: Path,
+    fmint_path: Path | None = None,
 ) -> list[str]:
     # MotionCor3 runs in its work directory, not ours, so a relative path here
     # (a manifest written by `init --frames data/...`, a relative --out) would
     # be looked up from the wrong place: "cannot open stack file".
-    input_flag = "-InTiff" if movie_format(input_path) is MovieFormat.TIFF else "-InMrc"
+    input_format = movie_format(input_path)
+    if input_format is MovieFormat.EER and fmint_path is None:
+        raise ValueError(f"{input_path}: an EER movie needs its -FmIntFile")
     command = [
         str(settings.executable),
-        input_flag,
+        _INPUT_FLAGS[input_format],
         str(input_path.resolve()),
         "-OutMrc",
         str(output_path.resolve()),
@@ -503,6 +617,16 @@ def _motioncor3_command(
         "-OutAln",
         str(alignment_dir.resolve()),
     ]
+    if input_format is MovieFormat.EER:
+        assert fmint_path is not None
+        command.extend(
+            [
+                "-EerSampling",
+                str(settings.eer_sampling),
+                "-FmIntFile",
+                str(fmint_path.resolve()),
+            ]
+        )
     if settings.gain_reference is not None:
         command.extend(["-Gain", str(settings.gain_reference)])
     if settings.gain_rotation:
@@ -517,13 +641,16 @@ def _read_motioncor3_projection(
     *,
     input_path: Path,
     ftbin: int = 1,
+    render_factor: int = 1,
 ) -> NDArray[np.float32]:
     try:
         output_info = validate_complete_mrc(output_path)
     except (OSError, ValueError) as exc:
         raise RuntimeError(f"MotionCor3 did not produce a valid MRC output: {exc}") from exc
 
-    expected_shape = tuple(size // ftbin for size in inspect_movie(input_path).shape[1:])
+    expected_shape = tuple(
+        size * render_factor // ftbin for size in inspect_movie(input_path).shape[1:]
+    )
     with mrcfile.open(output_path, permissive=True) as mrc:
         data = np.asarray(mrc.data)
         if data.ndim == 3 and data.shape[0] == 1:
@@ -707,8 +834,19 @@ def _average_movie_frames(path: Path) -> NDArray[np.float32]:
     return cast(NDArray[np.float32], projection)
 
 
-def _validate_manifest_movies(manifest: TiltSeriesManifest) -> None:
+def _validate_manifest_movies(
+    manifest: TiltSeriesManifest,
+    *,
+    reads_eer: bool = False,
+) -> MovieFormat:
+    """Every movie is there, in one format, with the frames the manifest declares.
+
+    Returns that format. EER movies pass only for a backend that decodes them
+    (`reads_eer`), which is MotionCor3 alone.
+    """
+
     issues: list[str] = []
+    formats: set[MovieFormat] = set()
     for image in manifest.images:
         path = image.local_frame_file
         if path is None:
@@ -725,6 +863,7 @@ def _validate_manifest_movies(manifest: TiltSeriesManifest) -> None:
         except (OSError, ValueError) as exc:
             issues.append(str(exc))
             continue
+        formats.add(info.format)
 
         if image.num_subframes is not None and info.shape[0] != image.num_subframes:
             issues.append(
@@ -732,9 +871,21 @@ def _validate_manifest_movies(manifest: TiltSeriesManifest) -> None:
                 f"the movie has {info.shape[0]}"
             )
 
+    if len(formats) > 1:
+        issues.append(
+            f"{manifest.tilt_series_id}: movies in more than one format "
+            f"({', '.join(sorted(fmt.value for fmt in formats))})"
+        )
+    if MovieFormat.EER in formats and not reads_eer:
+        issues.append(
+            f"{manifest.tilt_series_id}: EER movies are decoded by the motioncor3 "
+            "backend only"
+        )
     if issues:
         details = "\n".join(f"- {issue}" for issue in issues)
         raise ValueError(f"input movie validation failed:\n{details}")
+    (movie_format,) = formats
+    return movie_format
 
 
 def _write_projection(

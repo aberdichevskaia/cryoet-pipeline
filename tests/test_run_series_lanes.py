@@ -519,6 +519,15 @@ def test_motion_binning_reaches_motioncor3():
     assert command[command.index("--motioncor3-ftbin") + 1] == "2"
 
 
+def test_eer_settings_reach_motioncor3():
+    config = copy.deepcopy(_lane("gag-bin8"))
+    config["motion"].update({"eer_sampling": 2, "ftbin": 2, "eer_fractions": 12})
+    _assert_valid_commands(config, "eer")
+    command = dict(run_series.build_steps(config, Path("p"), "TS_01"))["prepare-tilt-series"]
+    assert command[command.index("--motioncor3-eer-sampling") + 1] == "2"
+    assert command[command.index("--motioncor3-eer-fractions") + 1] == "12"
+
+
 def test_motioncor3_is_not_left_to_torch_to_find_the_gpu():
     steps = dict(run_series.build_steps(_lane("gag-bin8"), Path("p"), "TS_01"))
     command = steps["prepare-tilt-series"]

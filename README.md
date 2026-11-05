@@ -71,11 +71,16 @@ The template for picking comes from EMDB (`emdb_id`) or from a local map
 (`source_map`). Movies that are not gain-corrected take a gain reference in
 `[motion]`.
 
+Movies can be MRC, TIFF or EER (Falcon cameras). EER movies go through the
+`motioncor3` motion backend only, which decodes them itself; see
+[docs/motioncor3_backend.md](docs/motioncor3_backend.md#eer-movies). Mdocs
+written by Thermo Fisher's Tomography (`<id>.mdoc`) are read as SerialEM's
+are, except that no tilt axis is taken from them: set `[align] tilt_axis_angle`.
+
 What is not supported yet:
 
-- **Movies as TIFF or EER.** Motion correction reads MRC movies only.
 - **Metadata without a SerialEM `.mdoc`.** Tilt angles, dose and frame names all
-  come from the mdoc.
+  come from the mdoc, unless the movie names carry them (`frames_pattern`).
 - **Clusters other than ours.** The Slurm settings in the configs are for the
   Helmholtz Munich cluster: its partitions, the shared IMOD install, and the
   `cryoet-pipeline` conda environment.
