@@ -97,6 +97,9 @@ and do not call the batch scripts directly.
 - Use the bounded tools before whole logs: `scripts/show_project.py`, then
   `scripts/show_failure.py`. If you need more, read only the lines around what
   they point at.
+- Read a data folder with `scripts/show_folder.py`, not with Python of your own.
+  It reads the folder the way the lane will, writes nothing, and its refusals
+  are the pipeline's.
 - A playbook entry seen on one dataset is a lead, not a rule. Follow its "How to
   confirm" before you name its cause.
 - When two readings fit the evidence, give both and say what would tell them

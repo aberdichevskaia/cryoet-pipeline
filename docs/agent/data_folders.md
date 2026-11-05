@@ -6,6 +6,30 @@ from. The output is a config fragment that the person confirms before anything
 runs. A wrong reading mislabels tilts without any error, because alignment and
 reconstruction run on any angle list.
 
+## The tool
+
+`scripts/show_folder.py` does the reading described below, and writes nothing:
+
+```bash
+python3 scripts/show_folder.py <folder>
+python3 scripts/show_folder.py <frames folder> --pattern '<regular expression>'
+```
+
+- On a folder alone, it prints the tree and the names with their fields. It
+  looks inside three files. Where it finds mdocs, in the folder, under it or
+  beside it, it reads every series from them.
+- With `--pattern`, it reads the names as `[data] frames_pattern`.
+- Its verdict on each series is the pipeline's own: the functions that
+  `cryoet init` runs, or the checks that `import-tilt-stack` makes. A refusal
+  is printed in their words.
+- Its warnings are the checks listed under
+  [Checks before proposing a reading](#checks-before-proposing-a-reading),
+  computed from what those functions read.
+- When every series is accepted, it prints a config fragment. Copy it into
+  the config only after the person has confirmed the table of series and tilts.
+- Exit status 0 means every series was opened and accepted. With status 1
+  something was refused, has no entry, or was not checked.
+
 ## Start with the main naming schemes
 
 Most folders follow one of the four schemes below. Try them first, in this
@@ -144,7 +168,8 @@ assistant says that there is no entry. It does not bend the data into one
 
 ## Checks before proposing a reading
 
-Run the pattern over every name in the folder with `re.fullmatch`, then show:
+`show_folder.py --pattern` runs the pattern over every name in the folder, as
+`init` does, and shows:
 
 - the series found, and per series the number of tilts, the angle range and the
   step;
@@ -168,14 +193,15 @@ dropped: a short series is shown and the person is asked about it.
 
 ## When no scheme fits
 
-1. List about twenty names (sorted), the count of files per suffix, and a few
-   names from the middle and the end of the list.
-2. Split the names at `_`, `.`, `[` and `]`. For each field, say whether it is
-   constant or varies, and whether it holds digits, a signed decimal, a word or a
-   date.
+1. Run `show_folder.py` on the folder. It lists the files per suffix and names
+   from the start, the middle and the end of the sorted list.
+2. It also splits the names at `_`, `[` and `]`, but not at `.`, which belongs
+   to decimal angles and to times. For each field it says whether the field is
+   constant or varies, and whether it holds digits, a number with a sign or a
+   point, a date such as `Feb24`, a time such as `10.12.16`, or text.
 3. Propose which field is the series, which the tilt and which the angle, and
    which fields are noise to skip: a date, or a `_fractions` suffix. Write the
-   pattern, and run the checks above.
+   pattern, and run the tool again with `--pattern`.
 4. If two readings fit the names, show both and do not pick one. For example, it
    may be unclear which number is the series and which the tilt.
 5. Wait for the person to confirm before `init` runs.

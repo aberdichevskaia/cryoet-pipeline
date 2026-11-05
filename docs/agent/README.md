@@ -12,7 +12,7 @@ instructions, permission rules and skills are in
 | [pipeline_map.md](pipeline_map.md) | every lane step: keys, flags, outputs, QC, logs |
 | [rerun_recipes.md](rerun_recipes.md) | the safe ways to rerun part of a lane, and the recipe scripts that `scripts/submit_recipe.py` submits |
 | [playbook.md](playbook.md) | problems met so far: how to recognise, confirm and fix them |
-| [data_folders.md](data_folders.md) | reading a new data folder: the main naming schemes first, then field by field |
+| [data_folders.md](data_folders.md) | reading a new data folder with `scripts/show_folder.py`: the main naming schemes first, then field by field |
 | [eval_cases.md](eval_cases.md) | past failures with expected answers, to measure the assistant |
 | [templates/](templates/) | what the biologists fill in: instrument and sample cards, playbook entries, failure cases, QC ranges |
 

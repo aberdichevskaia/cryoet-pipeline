@@ -20,7 +20,7 @@ from cryoet_pipeline.models import (
     StorageRole,
     TiltSeriesManifest,
 )
-from cryoet_pipeline.mrc_validation import validate_complete_mrc
+from cryoet_pipeline.mrc_validation import MrcFileInfo, validate_complete_mrc
 from cryoet_pipeline.runtime import DevicePreference
 
 
@@ -33,6 +33,44 @@ class ExternalStackImportResult:
     artifact_registry_path: Path
     tilt_stack: Artifact
     tilt_angles: Artifact
+
+
+def check_external_tilt_stack(
+    *,
+    mdoc_path: Path,
+    stack_path: Path,
+    tilt_series_id: str,
+) -> tuple[TiltSeriesManifest, MrcFileInfo]:
+    """Everything `import_external_tilt_stack` checks before it writes anything.
+
+    The mdoc parses, the stack is a complete 3D MRC with one image per ZValue
+    tilt, and its header has a pixel size. The manifest comes back with that
+    pixel size attached. scripts/show_folder.py runs this on a data folder
+    before any lane exists, so that its verdict is the import's own.
+    """
+
+    if not mdoc_path.is_file():
+        raise FileNotFoundError(f"mdoc file not found: {mdoc_path}")
+    manifest = parse_mdoc_text(
+        mdoc_path.read_text(),
+        source_mdoc=mdoc_path,
+        tilt_series_id=tilt_series_id,
+        frames_dir=None,
+    )
+
+    stack_info = validate_complete_mrc(stack_path)
+    if len(stack_info.shape) != 3:
+        raise ValueError(
+            f"expected external tilt stack shape (tilts, y, x), got {stack_info.shape}"
+        )
+    if stack_info.shape[0] != manifest.num_tilts:
+        raise ValueError(
+            f"{tilt_series_id}: external stack has {stack_info.shape[0]} images, "
+            f"mdoc has {manifest.num_tilts} ZValue tilts"
+        )
+    if stack_info.pixel_spacing_angstrom is None:
+        raise ValueError(f"external stack MRC header has no pixel spacing: {stack_path}")
+    return with_raw_pixel_spacing(manifest, stack_info.pixel_spacing_angstrom), stack_info
 
 
 def import_external_tilt_stack(
@@ -58,28 +96,12 @@ def import_external_tilt_stack(
     verified here, only that the slice *count* matches the tilt count.
     """
 
-    if not mdoc_path.is_file():
-        raise FileNotFoundError(f"mdoc file not found: {mdoc_path}")
-    manifest = parse_mdoc_text(
-        mdoc_path.read_text(),
-        source_mdoc=mdoc_path,
-        tilt_series_id=tilt_series_id,
-        frames_dir=None,
+    manifest, stack_info = check_external_tilt_stack(
+        mdoc_path=mdoc_path, stack_path=stack_path, tilt_series_id=tilt_series_id
     )
-
-    stack_info = validate_complete_mrc(stack_path)
-    if len(stack_info.shape) != 3:
-        raise ValueError(
-            f"expected external tilt stack shape (tilts, y, x), got {stack_info.shape}"
-        )
-    if stack_info.shape[0] != manifest.num_tilts:
-        raise ValueError(
-            f"{tilt_series_id}: external stack has {stack_info.shape[0]} images, "
-            f"mdoc has {manifest.num_tilts} ZValue tilts"
-        )
-    if stack_info.pixel_spacing_angstrom is None:
-        raise ValueError(f"external stack MRC header has no pixel spacing: {stack_path}")
-    manifest = with_raw_pixel_spacing(manifest, stack_info.pixel_spacing_angstrom)
+    pixel_spacing = stack_info.pixel_spacing_angstrom
+    # check_external_tilt_stack refuses a stack whose header has no pixel size.
+    assert pixel_spacing is not None
 
     out.mkdir(parents=True, exist_ok=True)
     manifest_path = _write_manifest(out, manifest, overwrite=overwrite)
@@ -91,7 +113,7 @@ def import_external_tilt_stack(
     canonical_dtype = _write_canonical_stack(
         stack_path,
         canonical_stack_path,
-        pixel_spacing_angstrom=stack_info.pixel_spacing_angstrom,
+        pixel_spacing_angstrom=pixel_spacing,
     )
 
     context = BackendContext(

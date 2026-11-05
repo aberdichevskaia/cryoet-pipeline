@@ -23,9 +23,24 @@ the repository root.
 
 ## 2. Fill it in
 
-- **The data.** For `[lane] input` and `[data]`, read the folder as
-  `docs/agent/data_folders.md` says: the main naming schemes first, and the
-  person confirms the reading before anything runs.
+- **The data.** For `[lane] input`, `[data]` and `[run] series`, read the folder
+  with `scripts/show_folder.py`, never with Python of your own. The tool's verdict
+  comes from the pipeline's own functions, which `init` and `import-tilt-stack`
+  run:
+
+  ```bash
+  python3 scripts/show_folder.py <folder>                        # tree, names, mdocs
+  python3 scripts/show_folder.py <frames folder> --pattern '<re>' # names, no mdocs
+  ```
+
+  Without mdocs, write the pattern from the fields the tool prints, as
+  `docs/agent/data_folders.md` says (the main naming schemes first). Then run the
+  tool again with `--pattern`, until every series is accepted. Show the person
+  the table of series, tilts, angles, frames and pixel size, and its warnings.
+  Ask them to confirm that this is what was collected, and compare it with the
+  tilt scheme they describe or the instrument card. Only then copy the tool's
+  config fragment into the config. If the tool says there is no entry, or
+  refuses, say so and stop. Do not bend the data into another input.
 - **The source of every value.** Next to every value you set or change, write a
   comment saying where it came from:
   - the person (who, and when);

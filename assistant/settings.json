@@ -10,6 +10,8 @@
       "Bash(python scripts/show_failure.py *)",
       "Bash(python3 scripts/show_series.py *)",
       "Bash(python scripts/show_series.py *)",
+      "Bash(python3 scripts/show_folder.py *)",
+      "Bash(python scripts/show_folder.py *)",
       "Bash(python3 scripts/run_series.py *)",
       "Bash(python scripts/run_series.py *)",
       "Bash(python3 scripts/submit_lanes.py * --dry-run*)",
