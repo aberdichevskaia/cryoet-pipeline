@@ -7,6 +7,8 @@ own, and lay out what every run did for a person to grade.
     python3 scripts/run_cases.py --all --runs 3
     python3 scripts/run_cases.py E16 --held-out
     python3 scripts/run_cases.py E12 --dry-run      build the sandbox, show the command, run nothing
+    python3 scripts/run_cases.py --all --model glm-5.3 --base-url http://127.0.0.1:11434 \
+        --context-tokens 131072                      an open-weight model in Claude's place
 
 A case is a folder docs/agent/cases/<id>/ (see the README there): case.toml with
 the request and the grading lines, tree/ with the files its evidence consists
@@ -34,12 +36,23 @@ session this is run from.
 Everything goes into outputs/eval-runs/<UTC time>/: per run the transcript
 (stream-json), the answer, the actions it took, the Slurm calls and a record
 (case, model, client version, commit and the files changed since, the plugins
-and the memory the client used, cost, turns); and grading.md, with the case's
+and the memory the client used, cost, turns, the largest context, and the server
+when it is not Anthropic's); and grading.md, with the case's
 Pass-if and Must-not lines as boxes per run, and a flag on a run that read a
 memory kept before it or a CLAUDE.md from above its folder.
 
 --held-out removes the case's own playbook entries from the sandbox's playbook,
 to test reasoning from the evidence rather than applying what it was told.
+
+--base-url points the client at another server that speaks the Anthropic API,
+such as an open-weight model's behind Ollama; scripts/open_model_cases.sbatch
+starts one on a GPU node and runs the cases against it. Only the model changes:
+the launcher, its settings, skills and guard are the same, the client asks that
+server for --model wherever it would ask for a Claude model, and nothing goes to
+Anthropic. --context-tokens is the window the server was started with. The
+client compacts within it, so that the server never has to cut a conversation
+itself: Ollama drops the oldest messages that do not fit, and says so only in a
+debug log.
 
 Disposable, like the rest of scripts/.
 """
@@ -385,6 +398,31 @@ def run_env(case: Case, run_dir: Path) -> dict[str, str]:
     return env
 
 
+def backend_env(base_url: str | None, model: str | None,
+                context_tokens: int | None) -> dict[str, str]:
+    """What the client needs to work against another server than Anthropic's: it
+    asks that server for the model wherever it would ask for a Claude model,
+    subagents and background work included, and compacts within the server's
+    window. Ollama's page for Claude Code sets the first two
+    (docs.ollama.com/integrations/claude-code); the others are Claude Code's
+    (code.claude.com/docs/en/env-vars)."""
+    if not base_url:
+        return {}
+    env = {
+        "ANTHROPIC_BASE_URL": base_url,
+        # A local server takes any token; one that wants a key reads it from this shell.
+        "ANTHROPIC_AUTH_TOKEN": os.environ.get("ANTHROPIC_AUTH_TOKEN") or "local",
+        "CLAUDE_CODE_SUBAGENT_MODEL": str(model),
+        # The window the client assumes for an ID that does not start with claude-.
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": str(context_tokens),
+        # No updates, telemetry or error reports: a GPU node may have no internet.
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    }
+    env.update({f"ANTHROPIC_DEFAULT_{alias}_MODEL": str(model)
+                for alias in ("OPUS", "SONNET", "HAIKU", "FABLE")})
+    return env
+
+
 def make_stubs(run_dir: Path, case: Case) -> None:
     bin_dir = run_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -428,6 +466,7 @@ def read_transcript(path: Path) -> dict[str, Any]:
     calls: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     turn = 0
+    largest = 0
     for event in events:
         if event.get("type") == "system" and event.get("subtype") == "init":
             turn += 1
@@ -436,6 +475,11 @@ def read_transcript(path: Path) -> dict[str, Any]:
         ):
             results.append({**event, "_turn": max(turn, 1)})
         message = event.get("message")  # a string in a permission_denied event
+        usage = message.get("usage") if isinstance(message, dict) else None
+        if event.get("type") == "assistant" and isinstance(usage, dict):
+            # The context the reply was made from: what was new plus what was cached.
+            largest = max(largest, sum(usage.get(key) or 0 for key in (
+                "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")))
         content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
             continue
@@ -452,7 +496,7 @@ def read_transcript(path: Path) -> dict[str, Any]:
                     error=bool(block.get("is_error")), output=str(output or "")
                 )
     return {"init": init, "result": results[-1] if results else {}, "results": results,
-            "calls": [calls[key] for key in order]}
+            "calls": [calls[key] for key in order], "largest_context": largest or None}
 
 
 _SHOWN_LINES = 15
@@ -515,6 +559,7 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
     run_dir = out / f"{case.id}{'-held-out' if held_out else ''}-{number}"
     sandbox = run_dir / "sandbox"
     env = prepare_run(run_dir, case, held_out)
+    env.update(backend_env(args.base_url, args.model, args.context_tokens))
     prompts = [case.request, *case.follow_up]
     command = command_for(sandbox, case.request, args)
     record: dict[str, Any] = {
@@ -523,6 +568,8 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         # A run on a cluster node also sees the cluster (its software, its module
         # messages), so runs from different hosts are not compared.
         "host": platform.node(),
+        # Another server than Anthropic's and its window, or None; never its token.
+        "base_url": args.base_url, "context_tokens": args.context_tokens,
         "user_settings_sha256": _sha256(Path.home() / ".claude" / "settings.json"),
         "user_claude_md": (Path.home() / ".claude" / "CLAUDE.md").is_file(),
         # The client reads every CLAUDE.md from the run's folder up, these included.
@@ -576,6 +623,7 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         cost_usd=sum(cost for cost in costs if cost) if any(costs) else None,
         turn_costs_usd=costs,
         turns=sum(result.get("num_turns") or 0 for result in results) if results else None,
+        largest_context=seen["largest_context"],
         is_error=any(result.get("is_error") for result in results) if results else None,
         permission_denials=[denial for result in results
                             for denial in result.get("permission_denials") or []],
@@ -617,9 +665,11 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
 def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
                   code: dict[str, Any]) -> str:
     first = next((record for record in records if record.get("model")), {})
+    served = (f" served at {first['base_url']} with a {first['context_tokens']:,}-token window"
+              if first.get("base_url") else "")
     lines = [
         f"# Evaluation run {out.name}", "",
-        f"Model {first.get('model', '?')}, Claude Code {first.get('client', '?')}, "
+        f"Model {first.get('model', '?')}{served}, Claude Code {first.get('client', '?')}, "
         f"commit {(code['commit'] or 'unknown')[:12]}"
         + (f" with {len(code['modified'])} tracked files changed" if code["modified"] else "")
         + f", on {', '.join(sorted({str(record.get('host')) for record in records})) or '?'}.",
@@ -651,7 +701,13 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
             if record.get("untrusted"):
                 flags.append("the client did not trust the folder; see stderr.log")
             if record.get("unreachable"):
-                flags.append("the client could not reach Anthropic; run it again")
+                flags.append("the client could not reach its server; see stderr.log"
+                             if record.get("base_url")
+                             else "the client could not reach Anthropic; run it again")
+            window = record.get("context_tokens")
+            if window and (record.get("largest_context") or 0) >= 0.95 * window:
+                flags.append(f"its context reached {record['largest_context']:,} of the server's "
+                             f"{window:,} tokens, where the server may have dropped early messages")
             if record.get("max_turns_reached"):
                 flags.append("stopped at the turn limit, with no answer")
             if record.get("memory_from_before"):
@@ -682,11 +738,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only-held-out", action="store_true",
                         help="run only the held-out copies, of the cases that have them")
     parser.add_argument("--model", default=None, help="a full model ID, passed to the launcher")
+    parser.add_argument("--base-url", default=None,
+                        help="another server that speaks the Anthropic API, such as Ollama's")
+    parser.add_argument("--context-tokens", type=int, default=None,
+                        help="the window the --base-url server was started with")
     parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--timeout", type=int, default=1200, help="seconds a run may take")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the sandboxes and show the commands; run nothing")
     args = parser.parse_args(argv)
+    if args.base_url and not (args.model and args.context_tokens):
+        raise SystemExit("--base-url needs --model, the model the server serves, and "
+                         "--context-tokens, the window it was started with")
+    if args.context_tokens and not args.base_url:
+        raise SystemExit("--context-tokens is the window of a --base-url server")
 
     built = built_cases()
     if args.list:
@@ -719,9 +784,12 @@ def main(argv: list[str] | None = None) -> int:
         # Offline, every run after fails the same way: on 3 November 2026 the Mac
         # slept and 21 runs did, over three hours.
         if len(records) >= 2 and all(record.get("unreachable") for record in records[-2:]):
-            print(f"stopped: two runs in a row could not reach Anthropic, and "
-                  f"{len(plan) - len(records)} were not made; run them again once this machine "
-                  f"is online and awake (caffeinate -i on a Mac)", file=sys.stderr)
+            where, advice = ((f"the server at {args.base_url}", "see its log")
+                             if args.base_url else
+                             ("Anthropic", "run them again once this machine is online and "
+                                           "awake (caffeinate -i on a Mac)"))
+            print(f"stopped: two runs in a row could not reach {where}, and "
+                  f"{len(plan) - len(records)} were not made; {advice}", file=sys.stderr)
             print(f"{len(records)} runs; see {_shown(sheet)}")
             return 1
     print(f"{len(records)} runs; grade them in {_shown(sheet)}")

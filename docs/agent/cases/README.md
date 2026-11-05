@@ -94,7 +94,8 @@ The results go into `outputs/eval-runs/<UTC time>/`. Each run gets:
 - its answer (`answer.md`);
 - what it did (`actions.md`), with any Slurm call flagged;
 - a record (`record.json`): case, model, client version, commit and the files
-  changed since, the plugins and the memory the client used, cost, turns.
+  changed since, the plugins and the memory the client used, cost, turns, the
+  largest context, and the server when it is not Anthropic's.
 
 `grading.md` holds every case's lines as boxes per run, for the person who
 grades. It flags a run that read a memory kept before it, or a `CLAUDE.md` from
@@ -112,6 +113,31 @@ nothing about reasoning.
 
 Each run costs model use on the account the client is signed in to. Three runs of
 every built case are 21 runs.
+
+## An open-weight model in Claude's place
+
+`--base-url` points the client at another server that speaks the Anthropic API,
+such as Ollama 0.14 or later. `--model` names the model it serves and
+`--context-tokens` the window it was started with. Only the model changes: the
+launcher, its settings, skills and guard are the same. The run gets the
+variables Claude Code reads for such a server (`backend_env` in `run_cases.py`):
+every model alias and subagent goes to `--model`, the client compacts within the
+server's window, and it sends nothing else out. Its model calls go to that
+server, not to the account the client is signed in to.
+
+Ollama drops the oldest messages that do not fit its window and says so only in
+a debug log. So `record.json` keeps each run's largest context (new plus cached
+input tokens of a reply), and `grading.md` flags a run that came within 5% of
+the window. Ollama reports the cached part of a prompt separately, so the client
+sees the whole context and compacts in time (`UsageFromMetrics` in Ollama's
+`anthropic/anthropic.go`, read on 5 November 2026).
+
+`scripts/open_model_cases.sbatch` runs the cases on a GPU node. It starts Ollama
+on a port of its own and checks four things before the batch: that the model is
+pulled, that it answers a request with a tool call, that it sits wholly on the
+GPUs, and that one run of E11 gets through the client with a tool call. Given a
+`claude-` model, it runs the same cases against Anthropic with no server, so both
+arms are made on the same kind of node.
 
 ## Checks a script can run
 

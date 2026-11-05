@@ -378,6 +378,9 @@ def test_a_call_is_shown_from_the_runs_folder_with_what_came_back(tmp_path):
 CLAUDE = """#!/bin/bash
 if [[ "$1" == "--version" ]]; then echo "9.9.9 (Claude Code)"; exit 0; fi
 printf '%s\\n' "${*//$'\\n'/ }" >> "$CLAUDE_ARGS"
+if [[ -n "$ANTHROPIC_BASE_URL" ]]; then
+  env | grep -E '^(ANTHROPIC|CLAUDE_CODE)_' | sort > "$CLAUDE_ARGS.env"
+fi
 if [[ -n "$CLAUDE_OFFLINE" ]]; then
   echo "Claude Code couldn't reach Anthropic to load your organization's settings." >&2; exit 1
 fi
@@ -503,6 +506,83 @@ def test_a_run_stopped_at_the_turn_limit_is_flagged(tmp_path):
     sheet = run_cases.grading_sheet([BUILT["E08"]], [record], tmp_path,
                                     {"commit": None, "modified": []})
     assert "exit 1, stopped at the turn limit, with no answer" in sheet
+
+
+def test_a_run_against_another_server_asks_it_for_the_one_model(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-3f9a")
+    assert run_cases.main(["E18", "--runs", "1", "--model", "glm-test",
+                           "--base-url", "http://127.0.0.1:20001",
+                           "--context-tokens", "131072"]) == 0
+    seen = dict(line.split("=", 1)
+                for line in (tmp_path / "claude_args.env").read_text().splitlines())
+    assert seen["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:20001"
+    assert seen["ANTHROPIC_AUTH_TOKEN"] == "tok-3f9a"
+    # Subagents and background work too, or the client would ask the server for
+    # a Claude model it does not serve.
+    assert {seen[f"ANTHROPIC_DEFAULT_{alias}_MODEL"]
+            for alias in ("OPUS", "SONNET", "HAIKU", "FABLE")} == {"glm-test"}
+    assert seen["CLAUDE_CODE_SUBAGENT_MODEL"] == "glm-test"
+    assert seen["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "131072"
+    assert seen["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert "--model glm-test" in (tmp_path / "claude_args").read_text()
+    [run_dir] = (tmp_path / "runs").glob("*/E18-1")
+    record = json.loads((run_dir / "record.json").read_text())
+    assert (record["base_url"], record["context_tokens"]) == ("http://127.0.0.1:20001", 131072)
+    # The record names the server, never its token.
+    assert "tok-3f9a" not in (run_dir / "record.json").read_text()
+    assert "served at http://127.0.0.1:20001 with a 131,072-token window" in (
+        run_dir.parent / "grading.md").read_text()
+
+
+def test_a_claude_run_gets_no_server_from_this_shell(tmp_path, monkeypatch):
+    # The shell may point its own sessions somewhere else; a run of Claude does not follow.
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:20001")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "secret")
+    monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "131072")
+    env = run_cases.run_env(BUILT["E11"], tmp_path)
+    env.update(run_cases.backend_env(None, "claude-test", None))
+    assert not [key for key in env if key.startswith(("ANTHROPIC_", "CLAUDE_CODE_"))]
+    # A server that wants a key gets the shell's; a local one takes any.
+    assert run_cases.backend_env("http://x", "m", 1)["ANTHROPIC_AUTH_TOKEN"] == "secret"
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN")
+    assert run_cases.backend_env("http://x", "m", 1)["ANTHROPIC_AUTH_TOKEN"] == "local"
+
+
+def test_a_server_needs_its_model_and_window():
+    for argv in (["E11", "--base-url", "http://x"],
+                 ["E11", "--base-url", "http://x", "--model", "glm-test"],
+                 ["E11", "--context-tokens", "131072"]):
+        with pytest.raises(SystemExit):
+            run_cases.main(argv)
+
+
+def test_a_run_that_nears_the_servers_window_is_flagged(tmp_path):
+    # The context of a reply is what was new plus what was cached; Ollama reports
+    # the two apart (UsageFromMetrics in its anthropic/anthropic.go).
+    path = tmp_path / "transcript.jsonl"
+    path.write_text("".join(json.dumps(event) + "\n" for event in [
+        EVENTS[0],
+        {"type": "assistant", "message": {"content": [], "usage": {
+            "input_tokens": 2_000, "cache_read_input_tokens": 60_000}}},
+        {"type": "assistant", "message": {"content": [], "usage": {
+            "input_tokens": 1_000, "cache_read_input_tokens": 124_000,
+            "cache_creation_input_tokens": 500}}},
+        EVENTS[-1],
+    ]))
+    largest = run_cases.read_transcript(path)["largest_context"]
+    assert largest == 125_500
+    record = {"case": "E11", "run": 1, "held_out": False, "exit_code": 0, "prompts_sent": 2,
+              "model": "glm-test", "base_url": "http://127.0.0.1:20001",
+              "context_tokens": 131_072, "largest_context": largest}
+    code = {"commit": None, "modified": []}
+    sheet = run_cases.grading_sheet([BUILT["E11"]], [record], tmp_path, code)
+    assert ("its context reached 125,500 of the server's 131,072 tokens, where the server "
+            "may have dropped early messages") in sheet
+    # Below 95% of the window, and for Claude's runs, which have no server window.
+    for changed in ({"largest_context": 100_000}, {"base_url": None, "context_tokens": None}):
+        assert "its context reached" not in run_cases.grading_sheet(
+            [BUILT["E11"]], [{**record, **changed}], tmp_path, code)
 
 
 def test_a_case_without_follow_ups_answers_in_one_piece(tmp_path, monkeypatch):
