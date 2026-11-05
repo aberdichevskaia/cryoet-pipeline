@@ -188,7 +188,10 @@ def test_the_plan_is_made_from_the_export_as_dynamos_setup_made_it(tmp_path: Pat
     rounds = search_rounds(BOX, PIXEL, **SCHEDULE)
     assert [r.low for r in rounds] == [3, 4, 4, 6, 7]
     assert plan.settings == [r.settings(BOX) for r in rounds]
-    assert plan.mra == [True] * 5 and plan.setup["seeds"] == ["subset", "blob", "noise"]
+    assert plan.mra == [True] * 5
+    assert plan.setup["variables"]["seeds"] == ["subset", "blob", "noise"]
+    assert plan.setup["variables"]["mask_radius_px"] == 5.0
+    assert plan.setup["files"]["export"] == str(export.resolve())
 
 
 def test_the_run_keeps_its_setup_and_carries_on_from_the_plan_made_again(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ computed, or a new run set up from an export without Dynamo."""
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
@@ -55,7 +56,8 @@ def test_a_new_run_is_set_up_from_an_export_without_dynamo(tmp_path: Path) -> No
     assert "mra_n_port was set up from" in result.stdout
     run = export / "mra_n_port"
     assert (run / "log.txt").read_text() == "iteration 1 ok\n"
-    assert '"seeds": [\n  "noise",\n  "noise"\n ]' in (run / "settings" / "setup.json").read_text()
+    setup = json.loads((run / "settings" / "setup.json").read_text())
+    assert setup["variables"]["seeds"] == ["noise", "noise"]
     # Submitted again: the plan made again is the run's, and it is finished.
     again = _run(*arguments)
     assert again.returncode == 0, again.stderr

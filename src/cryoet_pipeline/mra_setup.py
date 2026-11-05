@@ -417,21 +417,37 @@ def plan_from_export(
               {**_search_fields(searched, box), "mra": int(mra[0])}.items()}
              for searched in settings]
     table = particles.table[np.argsort(particles.tags, kind="stable")]
+    sphere = mask_file is None
     setup: dict[str, Any] = {
         "made_by": "cryoet_pipeline.mra_setup.plan_from_export",
-        "export": str(Path(export).resolve()), "data_folder": data_folder,
-        "particles": count, "box_px": box, "pixel_size_angstrom": pixel_size,
-        "seeds": seeds, "reference_file": str(reference_file) if reference_file else None,
-        "subset": subset, "rng_seed": RNG_SEED, "mask": mask_note,
-        "schedule": schedule, "first_lowpass_angstrom": first_lowpass,
-        "last_lowpass_angstrom": last_lowpass, "diameter_angstrom": diameter,
-        "lowpass_steps": lowpass_steps, "global_rounds": global_rounds,
-        "global_step_deg": global_step, "global_full_box": global_full_box,
-        "cone_steps": cone_steps,
-        "rounds": [{"iterations": r.iterations, "low_px": r.low, "step_deg": r.step,
-                    "cone_range_deg": r.cone_range, "sampling_deg": r.sampling,
-                    "refine": r.refine, "dim_px": r.dim, "global": r.is_global}
-                   for r in rounds],
+        # What the plan is made from besides the files below: a run's content
+        # parameters (docs/run_records.md). Numbers as floats, so that 17 and 17.0 given
+        # by two callers declare the same plan.
+        "variables": {
+            "seeds": seeds, "subset": int(subset), "rng_seed": RNG_SEED,
+            "data_folder": data_folder, "schedule": schedule,
+            "first_lowpass_angstrom": float(first_lowpass),
+            "last_lowpass_angstrom": float(last_lowpass), "diameter_angstrom": float(diameter),
+            "lowpass_steps": lowpass_steps, "global_rounds": int(global_rounds),
+            "global_step_deg": None if global_step is None else float(global_step),
+            "global_full_box": bool(global_full_box),
+            "cone_steps": [float(step) for step in cone_steps],
+            "mask_radius_px": float(mask_radius) if sphere and mask_radius is not None else None,
+            "mask_edge_px": float(mask_edge) if sphere else None,
+        },
+        # The files it read: its inputs, known by their contents rather than their paths.
+        "files": {"export": str(Path(export).resolve()),
+                  "reference_file": str(reference_file) if reference_file else None,
+                  "mask_file": str(mask_file) if mask_file else None},
+        # What follows from both, for the record.
+        "derived": {
+            "particles": count, "box_px": box, "pixel_size_angstrom": pixel_size,
+            "mask": mask_note,
+            "rounds": [{"iterations": r.iterations, "low_px": r.low, "step_deg": r.step,
+                        "cone_range_deg": r.cone_range, "sampling_deg": r.sampling,
+                        "refine": r.refine, "dim_px": r.dim, "global": r.is_global}
+                       for r in rounds],
+        },
     }
     log(f"mra_setup: {len(settings)} iterations of {count:,} particles from "
         f"{particles.folder}, seeds {' '.join(seeds)}, schedule {schedule} ({lowpass_steps} "
