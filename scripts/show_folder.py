@@ -62,8 +62,8 @@ from cryoet_pipeline.project import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Files that can hold tilt data: the movies movies.py knows (it names EER only
-# to refuse it) and assembled stacks, which import-tilt-stack reads as MRC.
+# Files that can hold tilt data: the movies movies.py reads (MRC, TIFF, EER)
+# and assembled stacks, which import-tilt-stack reads as MRC.
 MOVIE_SUFFIXES = (".mrc", ".mrcs", ".tif", ".tiff", ".eer")
 STACK_SUFFIXES = (".mrc", ".st")
 DATA_SUFFIXES = frozenset(MOVIE_SUFFIXES + STACK_SUFFIXES)

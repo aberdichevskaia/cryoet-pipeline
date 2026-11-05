@@ -24,7 +24,9 @@ time you use it. Never guess silently.
     and its list of what never to do;
   - [playbook.md](../docs/agent/playbook.md): problems met so far;
   - [data_folders.md](../docs/agent/data_folders.md): reading a new data
-    folder.
+    folder;
+  - [lane_questions.md](../docs/agent/lane_questions.md): where each value of a
+    new lane comes from, and what to ask the person.
 - Two skills cover the two common requests:
   - `project-status`, for how a project stands and why something failed;
   - `lane-config`, for writing a config and submitting it.

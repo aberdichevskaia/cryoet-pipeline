@@ -99,12 +99,22 @@ and time are optional where the scheme has them.
      `tilt`. `init` cannot order such a series today, by its angles or by the
      times in its names. Say so, rather than inventing a tilt number.
 
-2. **EER:** the names can be read, but nothing can run on them. EER movies are
-   refused as not supported yet (`movies.py`). List the series and tilts found,
-   say that EER has no entry, and stop.
+2. **EER:** a frames lane, which MotionCor3 decodes (`[motion] backend =
+   "motioncor3"`; [motioncor3_backend.md](../motioncor3_backend.md), "EER
+   movies"). Three things differ from TIFF and MRC frames:
+   - Mdocs written by Thermo Fisher's Tomography are named `<id>.mdoc`, which
+     `init` reads.
+   - They say `NumSubFrames = 1`, so `init` takes the frame count from each
+     file.
+   - The parser does not take their RotationAngle as the tilt axis, so
+     `[align] tilt_axis_angle` has to be given.
 
-   ```text
-   Position_(?P<series>\d+)_(?P<tilt>\d+)\[(?P<angle>[-+]?\d+(?:\.\d+)?)\]_EER\.eer
+   A Falcon `.gain` should need `gain_flip = 1` by MotionCor3's sources. That
+   is not yet measured; `scripts/eer_gain_flip.sbatch` measures it. Without
+   mdocs, the names are read with:
+
+   ```toml
+   frames_pattern = 'Position_(?P<series>\d+)_(?P<tilt>\d+)\[(?P<angle>[-+]?\d+(?:\.\d+)?)\]_EER\.eer'
    ```
 
 3. **PACEtomo:** the series id has to be unique in the folder. Put the square in
@@ -131,8 +141,8 @@ and time are optional where the scheme has them.
 
 Whatever the names, one case has no entry: files that each hold **one summed
 image of a tilt** rather than its frames. It would need a stack assembled
-without motion correction, which does not exist yet. Here, as for EER, the
-assistant says that there is no entry. It does not bend the data into one
+without motion correction, which does not exist yet. Here the assistant says
+that there is no entry. It does not bend the data into one
 ([roadmap.md](../roadmap.md) section 22).
 
 ## Traps already met

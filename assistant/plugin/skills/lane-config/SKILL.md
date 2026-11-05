@@ -23,6 +23,16 @@ the repository root.
 
 ## 2. Fill it in
 
+- **A new dataset.** Follow `docs/agent/lane_questions.md`. It says, for every
+  key, whether the value comes from the data, a card, the site, a rule or the
+  person, and which questions to ask.
+  - First read what can be read: the folder (below), the closest lane at the
+    same site, and any instrument or sample card.
+  - Then show the person what was read, and ask what is left in one message,
+    each question with its default. Do not ask for a value that was read.
+  - The goal ("up to particle picking") sets the last stage's `until`.
+  - Say whether the lane's combination of input, alignment and membranes has
+    run on real data.
 - **The data.** For `[lane] input`, `[data]` and `[run] series`, read the folder
   with `scripts/show_folder.py`, never with Python of your own. The tool's verdict
   comes from the pipeline's own functions, which `init` and `import-tilt-stack`
