@@ -151,6 +151,17 @@ FIDUCIAL_PAIRS = {
     "imod-autofidseed": "imod-beadtrack",
     "imod-patch-seed": "imod-patch-track",
 }
+ALIGNMENTS = {"imod-autofidseed": "beads", "imod-patch-seed": "patches"}
+
+# The combinations of input, alignment and membranes that have run on real data,
+# as docs/agent/pipeline_map.md ("Which combinations have run on real data") and
+# the README list them; tests/test_submit_lanes.py holds pipeline_map.md to this.
+# submit_lanes.py warns a lane of any other combination, on its dry run and its
+# submission, that it is the first.
+RUN_ON_REAL_DATA = frozenset({
+    ("stack", "patches", "no membranes"),  # ribo-bin8.toml, EMPIAR-11538
+    ("frames", "beads", "membranes"),  # gag-bin8.toml, EMPIAR-10164; the RyR1 lanes at MDC
+})
 
 # Every key a lane config may set, by section. Keys are read by name, so a
 # misspelt one used to be skipped without a word: its flag was not rendered and
@@ -316,6 +327,20 @@ def _require(cfg: dict[str, Any], section: str, keys: tuple[str, ...], why: str)
     if missing:
         raise SystemExit(f"[{section}] is missing {', '.join(missing)}, which {why} needs")
     return values
+
+
+def lane_combination(cfg: dict[str, Any]) -> tuple[str, str, str]:
+    """The lane's input, alignment and membranes, named as pipeline_map.md names them."""
+    seed = cfg.get("fiducials", {}).get("seed_backend")
+    alignment = ALIGNMENTS.get(seed, str(seed))
+    return lane_input(cfg), alignment, "membranes" if "segment" in cfg else "no membranes"
+
+
+def combination_text(combination: tuple[str, str, str]) -> str:
+    """`frames + patches, no membranes`, `frames + beads + membranes`."""
+    source, alignment, membranes = combination
+    return f"{source} + {alignment}" + (" + membranes" if membranes == "membranes"
+                                        else f", {membranes}")
 
 
 def lane_input(cfg: dict[str, Any]) -> str:

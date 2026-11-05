@@ -524,3 +524,59 @@ def test_a_named_ctffind_whose_variable_is_not_set_is_refused_once(lane, capsys,
     assert code == 0
     assert f"would refuse: {lane}: $CTFFIND5 is not set (used by stage 'cpu')" in err
     assert "[executables] ctffind" not in err
+
+
+# --- Combinations that have not run on real data -----------------------------------
+
+UNTRIED = "has not run on real data yet"
+
+
+def test_a_lane_of_a_combination_that_has_run_gets_no_warning(lane, capsys):
+    code, out, _ = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert UNTRIED not in out
+
+
+def test_a_lane_of_an_untried_combination_is_warned_on_its_dry_run_and_its_submission(
+        lane, capsys):
+    # ribo-bin8's stacks, aligned on beads instead of patches: stack + beads.
+    text = lane.read_text()
+    for old, new in (('seed_backend = "imod-patch-seed"', 'seed_backend = "imod-autofidseed"'),
+                     ('track_backend = "imod-patch-track"', 'track_backend = "imod-beadtrack"')):
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    lane.write_text(text)
+
+    code, out, err = _run(capsys, lane, "--dry-run")
+    assert code == 0, err
+    warning = ("  warning: stack + beads, no membranes has not run on real data yet, so this "
+               "lane is the first")
+    # Right under the lane's own line, before its jobs.
+    lines = out.splitlines()
+    header = next(i for i, line in enumerate(lines) if line.startswith(f"# {lane}:"))
+    assert lines[header + 1].startswith(warning)
+    code, out, err = _run(capsys, lane)
+    assert code == 0, err
+    assert warning in out
+
+
+def test_the_combinations_that_have_run_are_the_ones_pipeline_map_lists():
+    text = (ROOT / "docs" / "agent" / "pipeline_map.md").read_text()
+    start = text.index("### Which combinations have run on real data")
+    section = text[start:text.index("\n### ", start + 1)]
+    listed = re.findall(r"^- \*\*(.+?):\*\*", section, flags=re.MULTILINE)
+    assert sorted(listed) == sorted(
+        submit_lanes.run_series.combination_text(combination)
+        for combination in submit_lanes.run_series.RUN_ON_REAL_DATA)
+
+
+@pytest.mark.parametrize(("name", "combination"), [
+    ("example", ("frames", "beads", "membranes")),
+    ("gag-bin8", ("frames", "beads", "membranes")),
+    ("ribo-bin8", ("stack", "patches", "no membranes")),
+    ("ryr1-bin8", ("frames", "beads", "membranes")),
+])
+def test_each_tracked_lane_is_read_as_its_combination(name, combination):
+    cfg = tomllib.loads((ROOT / "configs" / "lanes" / f"{name}.toml").read_text())
+    assert submit_lanes.run_series.lane_combination(cfg) == combination
+    assert combination in submit_lanes.run_series.RUN_ON_REAL_DATA

@@ -80,8 +80,11 @@ real data as of 27 October 2026:
   - `gag-bin8.toml`, EMPIAR-10164, MRC movies;
   - the RyR1 lanes at MDC, TIFF movies.
 
-The other six produce valid commands but have not been run. A lane using one of
-them gets a warning that it is the first. Keep this list in step with the README.
+The other six produce valid commands but have not been run.
+`scripts/submit_lanes.py` warns a lane of one of them that it is the first, in
+its dry run and when it submits. The list is `RUN_ON_REAL_DATA` in
+`scripts/run_series.py`, and a test holds this one to it. Keep the README in
+step too.
 
 ### Where things are
 

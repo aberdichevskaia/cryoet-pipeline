@@ -1045,6 +1045,12 @@ def main(argv: list[str] | None = None) -> int:
         cfg, lane, stages = one.cfg, one.lane, one.stages
         print(f"# {lane.config}: {lane.project}, "
               + (f"{len(lane.series)} series" if lane.series else "every series"))
+        combination = run_series.lane_combination(cfg)
+        if combination not in run_series.RUN_ON_REAL_DATA:
+            print(f"  warning: {run_series.combination_text(combination)} has not run on real "
+                  "data yet, so this lane is the first: expect it to need fixing, and tell the "
+                  "maintainers what happened (docs/agent/pipeline_map.md, \"Which combinations "
+                  "have run on real data\")")
         init = init_command(cfg, lane)
         try:
             if init is not None:

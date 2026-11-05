@@ -28,7 +28,7 @@ follows it.
 6. **The combination.** Say which combination of input, alignment and
    membranes the lane is. Say whether it has run on real data, from
    [pipeline_map.md](pipeline_map.md), "Which combinations have run on real
-   data".
+   data". The dry run warns about it too.
 7. **The check.** Run `run_series.py --list-steps`, then the dry run, as the
    `lane-config` skill says.
 
