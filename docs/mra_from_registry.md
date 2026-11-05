@@ -116,5 +116,16 @@ voxels the stacks'; the two runs keep the same classes and members, with seeds
 within 1e-6 and poses within 1e-6 deg of each other (the tests' bounds).
 `scripts/compare_export_registry.py <export>` checks an export against its project's
 registry (its table to the 12 digits it wrote, each tag's stack and index, every
-voxel) and prints the SOURCE, LANE and SERIES that read the same particles. Not run
-on max yet.
+voxel) and prints the SOURCE, LANE and SERIES that read the same particles.
+
+On max, 2026-11-05: one plan (subset subset noise, coarse_to_fine 53.76 to 29.4 A,
+diameter 340 A, no global rounds) run from the registry of outputs/ryr1 (label
+bin8-2x, series 039 096 097 125 161, 2,384 particles; job 3891692,
+outputs/ryr1/mra/regcheck_registry) and from the export bin8-2x-pad made of the same
+stacks (job 3891678, regcheck_export), on the same four A40s of maxg21. Every one of
+the 5 iterations put all 2,384 particles in the same class, with CC differences
+exactly 0 and poses equal as far as the comparison prints them (0.001 deg, 0.001 px);
+each tag's series, stack and index agreed in both runs. The export's 12-digit table
+moved nothing the float32 search sees. The run from the registry took 21 minutes,
+the one from the export 24.5, the difference before the first iteration (the GPUs
+idle about 2 minutes against 5, from their samples; not measured further).
