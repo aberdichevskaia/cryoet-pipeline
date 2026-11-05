@@ -25,9 +25,11 @@ outputs/
 *.tar
 
 
-# EMPIAR download layouts are per-user/exploratory; keep only the example.
+# EMPIAR download layouts are per-user/exploratory; keep only the example, and
+# EMPIAR-11830's, the EER example dataset that scripts/eer_gain_flip.sbatch reads.
 configs/empiar-layouts/*
 !configs/empiar-layouts/example.yaml
+!configs/empiar-layouts/11830.yaml
 
 # membrain-pick output
 mesh_data/

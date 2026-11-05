@@ -1,9 +1,10 @@
 # Template for `cryoet download-empiar --layout <this file>`.
 #
 # Copy this to a new, non-tracked file (e.g. 11538-untreated.yaml) and edit it
-# for your deposition. Only this example.yaml is committed; real layout files
-# are gitignored, since most are one-off/exploratory rather than a fixed part
-# of the pipeline (EMPIAR-10164 has a built-in layout and does not need one).
+# for your deposition. Only this example.yaml and 11830.yaml are committed;
+# real layout files are gitignored, since most are one-off/exploratory rather
+# than a fixed part of the pipeline (EMPIAR-10164 has a built-in layout and
+# does not need one).
 #
 # Each group names one remote subdirectory, relative to the deposition's
 # `data/` root (browse it at
@@ -12,6 +13,12 @@
 # within it. `{tilt_series}` is substituted with the id before matching;
 # `*`/`?` wildcards are supported for depositions with multiple files per
 # tilt-series (e.g. EMPIAR-10164's per-frame files).
+#
+# Where each series has a folder of its own, `{tilt_series}` goes in
+# remote_dir instead. Optional per group: `local_dir: frames` saves the files
+# in that folder under --out (otherwise in data/<remote_dir>), and
+# `shared: true` fetches a file once for all series, such as a gain
+# reference; such a group must not name the series. 11830.yaml uses both.
 
 groups:
   - remote_dir: mdoc_files

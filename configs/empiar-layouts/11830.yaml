@@ -1,0 +1,42 @@
+# EMPIAR-11830: in situ cryo-ET of Chlamydomonas reinhardtii, Falcon 4 EER
+# frames with mdocs written by Tomo5. The pipeline's EER example dataset.
+#
+#   cryoet download-empiar --out data/empiar-11830 --empiar-id 11830 \
+#       --layout configs/empiar-layouts/11830.yaml \
+#       --tilt-series 01082023_BrnoKrios_Arctis_WebUI_Position_1 --dry-run
+#
+# Each series has a folder of its own under chlamy_visual_proteomics/, named by
+# its id: the mdoc lies in it, beside frames/, which holds one .eer file per
+# tilt (41 of 115-175 MB for the series above, ~6.5 GB). The ids are listed at
+# https://ftp.ebi.ac.uk/empiar/world_availability/11830/data/chlamy_visual_proteomics/
+#
+# Gain references are kept per session, one file each, in
+# chlamy_visual_proteomics/<DDMMYYYY>/gainref/. The session is the date the
+# series id starts with; the 111 series named 20230904_... are the exception,
+# and their gain is the one in 04092023/gainref/. Checked against the authors'
+# tomolist.star on 4 November 2026: every session's series used one gain, the
+# one in that folder. The gain group below is the 01082023 session's; for a
+# series from another session, change its remote_dir.
+#
+# The files land in three folders under --out: frames/ (every series together;
+# the EER names carry the acquisition date and time, and the download refuses
+# two files bound for one name), mdocs/ and gain/.
+#
+# Known traps, for when the EER input is read:
+# - The mdocs are named <id>.mdoc, not <id>.mrc.mdoc, and say NumSubFrames = 1:
+#   the EER frame count is in the .eer files only (728 per tilt here).
+# - Their PixelSpacing is the scope's nominal value (1.82-1.97 A, by scope)
+#   and the EER headers carry 1.9037 A; the authors used 1.96 A for every series.
+# - The tilt axis rule for SerialEM mdocs (RotationAngle - 90) does not hold
+#   for these mdocs.
+groups:
+  - remote_dir: "chlamy_visual_proteomics/{tilt_series}"
+    file_pattern: "{tilt_series}.mdoc"
+    local_dir: mdocs
+  - remote_dir: "chlamy_visual_proteomics/{tilt_series}/frames"
+    file_pattern: "*.eer"
+    local_dir: frames
+  - remote_dir: "chlamy_visual_proteomics/01082023/gainref"
+    file_pattern: "*.gain"
+    local_dir: gain
+    shared: true

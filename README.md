@@ -324,8 +324,37 @@ supported for depositions with multiple files per tilt-series (like
 EMPIAR-10164's per-frame files). Copy
 [`configs/empiar-layouts/example.yaml`](configs/empiar-layouts/example.yaml)
 to a new file under the same directory and edit it for your deposition; only
-that example is tracked in git (see `.gitignore`) since most layouts are
-one-off/exploratory rather than a fixed part of the pipeline.
+that example and EMPIAR-11830's layout are tracked in git (see `.gitignore`),
+since most layouts are one-off/exploratory rather than a fixed part of the
+pipeline.
+
+Some depositions keep each series in a folder of its own. `{tilt_series}` may
+then stand in `remote_dir` instead of the file pattern, and two optional keys
+cover the rest: `local_dir` puts a group's files in a folder of your choice
+under `--out` (by default they keep the deposition's own folders, under
+`data/`), and `shared: true` marks a file fetched once for all series, such as
+a session's gain reference. Every other group must name the series in its
+folder or its pattern. EMPIAR-11830, the EER example dataset, needs all of it
+([`configs/empiar-layouts/11830.yaml`](configs/empiar-layouts/11830.yaml)):
+
+```yaml
+groups:
+  - remote_dir: "chlamy_visual_proteomics/{tilt_series}"
+    file_pattern: "{tilt_series}.mdoc"
+    local_dir: mdocs
+  - remote_dir: "chlamy_visual_proteomics/{tilt_series}/frames"
+    file_pattern: "*.eer"
+    local_dir: frames
+  - remote_dir: "chlamy_visual_proteomics/01082023/gainref"
+    file_pattern: "*.gain"
+    local_dir: gain
+    shared: true
+```
+
+Files are saved under their real names: EBI's listing escapes characters
+such as brackets (`%5b-10.00%5d`), and an mdoc's `SubFramePath` does not. A
+download that stops before the size the server announced stays a `.part` file
+and resumes on the next run.
 
 Initialize a local project manifest after the files are present:
 
