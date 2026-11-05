@@ -11,8 +11,8 @@
         sbatch --export=ALL --job-name=refine_h1 --gres=gpu:a40:1 scripts/mra_port_run.sbatch
     (and the same for half 2, NAME=refine_h2)
     python scripts/consensus_halves.py maps \\
-        outputs/ryr1/dynamo/ryr1-consensus-half1/refine_h1_port \\
-        outputs/ryr1/dynamo/ryr1-consensus-half2/refine_h2_port \\
+        outputs/ryr1/dynamo/ryr1-consensus-half1/refine_h1 \\
+        outputs/ryr1/dynamo/ryr1-consensus-half2/refine_h2 \\
         --out outputs/ryr1/dynamo/ryr1-consensus
 
 `split` takes the members of one class, PROJECT:CHANNEL, after the last iteration its
@@ -31,7 +31,8 @@ that iteration, low-passed to --start-lowpass (A) with a raised-cosine edge
 (cryoet_pipeline.filters.low_pass_filter_volume). Each half is then refined on its
 own from that start, one channel and no MRA, by the pipeline's port without Dynamo:
 scripts/mra_port_run.sbatch with EXPORT=<half>, SEEDS=map and
-REFERENCE=<half>/start_reference.mrc, the run <half>/<NAME>_port. Until 2026-11-02
+REFERENCE=<half>/start_reference.mrc, the run <half>/<NAME> (<half>/<NAME>_port for
+runs begun before 2026-11-05, in Dynamo's layout). Until 2026-11-02
 Dynamo refined them (scripts/dynamo_mra_mdc.sbatch with the same variables, which
 it still can as a control), as refine_h1 and refine_h2 of RyR1 at bin8 were. The
 port ran those two again on max (PROJECT=, 2026-11-02), and `maps` read the same:
@@ -39,8 +40,9 @@ FSC unmasked through 0.5 at 54.4 A and 0.143 at 39.1 A in both, masked at 36.8 a
 32.9 A against Dynamo's 36.9 and 33.0, the particles turned from the start by a
 median 1.7 and 1.6 deg and shifted by 0.12 and 0.11 px in both.
 
-`maps` reads the last iteration the two half projects finished (the port's runs, or
-Dynamo's projects) and writes, as MRC at
+`maps` reads the last iteration the two half runs finished (the port's runs in either
+layout, or Dynamo's projects, all through reports.classification_reader) and writes,
+as MRC at
 the export's pixel size: <out>_half1.mrc and <out>_half2.mrc, their mean
 <out>_mean.mrc to look at, and <out>_mask.mrc, the halves' alignment mask. It prints
 how far each half moved its particles from their starting poses and where the FSC
@@ -80,13 +82,8 @@ from split_export_by_view import write_subexport
 
 from cryoet_pipeline.backends.dynamo_search import _half_map_fsc, euler_matrix
 from cryoet_pipeline.filters import low_pass_filter_volume
-from cryoet_pipeline.reports.classification import ClassificationRun
-from cryoet_pipeline.reports.dynamo_project import (
-    _starting_table,
-    read_dynamo_classification,
-    read_em,
-    read_table,
-)
+from cryoet_pipeline.reports.classification import ClassificationRun, Pose, PoseTable
+from cryoet_pipeline.reports.classification_reader import read_classification
 
 POSE = slice(3, 9)
 LEVELS = (0.5, 0.143)
@@ -101,7 +98,7 @@ def _class_spec(text: str) -> tuple[Path, int]:
 
 
 def _last_classes(project: Path) -> tuple[ClassificationRun, int]:
-    run = read_dynamo_classification(project, compute_initial_average=False)
+    run = read_classification(project, compute_initial_average=False)
     if not run.iterations:
         raise SystemExit(f"{project}: no finished iteration")
     for problem in run.problems:
@@ -123,8 +120,13 @@ def _members(project: Path, channel: int) -> tuple[ClassificationRun, int, set[i
     return run, number, members
 
 
-def _results(project: Path, number: int) -> Path:
-    return project / "results" / f"ite_{number:04d}" / "averages"
+def _poses(run: ClassificationRun, pose: Pose) -> dict[int, np.ndarray]:
+    """Each tag's shifts and angles at `pose`, as columns 4-9 of a Dynamo table hold them."""
+
+    assert run.poses is not None
+    table: PoseTable = run.poses(pose)
+    rows = np.column_stack([table.shifts, table.angles])
+    return {int(tag): row for tag, row in zip(table.tags, rows, strict=True)}
 
 
 def _write_mrc(path: Path, volume: np.ndarray, spacing: float) -> None:
@@ -159,8 +161,7 @@ def split(args: argparse.Namespace) -> int:
         raise SystemExit(f"--start-lowpass {args.start_lowpass} A is not coarser than Nyquist "
                          f"({2 * spacing:.2f} A)")
 
-    refined = {int(row[0]): row for row in read_table(
-        _results(project, number) / f"refined_table_ref_{channel:03d}_ite_{number:04d}.tbl")}
+    refined = _poses(run, (number, channel))
     lines = {int(float(line.split()[0])): line
              for line in (export / "initial.tbl").read_text().splitlines() if line.strip()}
     manifest = json.loads((export / "export_manifest.json").read_text())
@@ -172,7 +173,7 @@ def split(args: argparse.Namespace) -> int:
 
     def posed(tag: int) -> str:
         tokens = lines[tag].split()
-        tokens[POSE] = [f"{value:.12g}" for value in refined[tag][POSE]]
+        tokens[POSE] = [f"{value:.12g}" for value in refined[tag]]
         return " ".join(tokens)
 
     # Dealt alternately after a shuffle within each series. A series with an odd count
@@ -190,7 +191,10 @@ def split(args: argparse.Namespace) -> int:
         if len(by_series[name]) % 2:
             first = 3 - first
 
-    average = read_em(_results(project, number) / f"average_ref_{channel:03d}_ite_{number:04d}.em")
+    found = run.iterations[-1].classes[channel].average
+    if found is None:
+        raise SystemExit(f"{project}: iteration {number} wrote no average of class {channel}")
+    average = found.load()
     start = low_pass_filter_volume(torch.from_numpy(average), cutoff_angstrom=args.start_lowpass,
                                    pixel_spacing_angstrom=spacing).numpy()
     start_note = (f"{project.name}'s class {channel} average of iteration {number}, low-passed "
@@ -241,17 +245,17 @@ def _half(project: Path) -> tuple[ClassificationRun, int, np.ndarray, dict[str, 
     return run, number, result.average.load(), record
 
 
-def _moves(project: Path, number: int) -> tuple[np.ndarray, np.ndarray]:
+def _moves(run: ClassificationRun, number: int) -> tuple[np.ndarray, np.ndarray]:
     """Each particle's turn (deg) and shift (px) from its starting pose to the last refined one."""
 
-    starting = {int(row[0]): row for row in _starting_table(project, [])}
-    final = read_table(_results(project, number) / f"refined_table_ref_001_ite_{number:04d}.tbl")
+    starting = _poses(run, None)
+    (channel,) = run.iterations[-1].classes
     turns, shifts = [], []
-    for row in final:
-        before = starting[int(row[0])]
-        product = euler_matrix(row[6:9]) @ euler_matrix(before[6:9]).T
+    for tag, row in _poses(run, (number, channel)).items():
+        before = starting[tag]
+        product = euler_matrix(row[3:6]) @ euler_matrix(before[3:6]).T
         turns.append(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(product) - 1) / 2)))))
-        shifts.append(float(np.linalg.norm(row[3:6] - before[3:6])))
+        shifts.append(float(np.linalg.norm(row[:3] - before[:3])))
     return np.array(turns), np.array(shifts)
 
 
@@ -266,7 +270,10 @@ def maps(args: argparse.Namespace) -> int:
     if number != other_number:
         raise SystemExit(f"the halves finished different iterations, {number} and "
                          f"{other_number}; compare them once both have finished the same")
-    masks = [read_em(project / "settings" / "mask.em") for project in projects]
+    runs = [run for run, _, _, _ in found]
+    if any(one.mask is None for one in runs):
+        raise SystemExit("a half has no alignment mask to read")
+    masks = [one.mask.load() for one in runs if one.mask is not None]
     if not np.array_equal(*masks):
         raise SystemExit("the two halves were refined under different masks")
     spacing = run.pixel_size_angstrom
@@ -285,8 +292,8 @@ def maps(args: argparse.Namespace) -> int:
     print(f"iteration {number} of both halves, {spacing:g} A/px: "
           + ", ".join(str(path) for path in paths.values()))
 
-    for project, (_, _, _, own) in zip(projects, found, strict=True):
-        turns, shifts = _moves(project, number)
+    for project, (half_run, _, _, own) in zip(projects, found, strict=True):
+        turns, shifts = _moves(half_run, number)
         print(f"half {own['half']} ({project.name}, {len(turns):,} particles) moved from its "
               f"start: turned median {np.median(turns):.1f} deg (90% within "
               f"{np.percentile(turns, 90):.1f}), shifted median {np.median(shifts):.2f} px "

@@ -17,6 +17,7 @@ from test_classification_report import write_em
 
 from cryoet_pipeline.dynamo_mra_project import run_mra_project
 from cryoet_pipeline.filters import low_pass_filter_volume
+from cryoet_pipeline.mra_runs import run_plan
 from cryoet_pipeline.mra_setup import plan_from_export
 from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification, read_em
 
@@ -275,10 +276,12 @@ def test_maps_writes_the_halves_and_their_fsc(tmp_path: Path) -> None:
     assert same.returncode != 0 and "not the two halves of one split" in same.stderr
 
 
-def test_the_halves_refined_by_the_port_give_their_maps(tmp_path: Path) -> None:
+@pytest.mark.parametrize("layout", ["run records", "dynamo"])
+def test_the_halves_refined_by_the_port_give_their_maps(tmp_path: Path, layout: str) -> None:
     # Each half set up and refined by the pipeline's port, as mra_port_run.sbatch does
     # with EXPORT=<half>, SEEDS=map and REFERENCE=<half>/start_reference.mrc (one
-    # iteration here), and read by `maps` as Dynamo's half projects are read.
+    # iteration here), and read by `maps` as Dynamo's half projects are read: in the
+    # run-record layout the job writes since 2026-11-05, and in Dynamo's, as before.
     export = tmp_path / "export"
     _export(export)
     rng = np.random.default_rng(3)
@@ -298,15 +301,23 @@ def test_the_halves_refined_by_the_port_give_their_maps(tmp_path: Path) -> None:
                                 schedule="coarse_to_fine", first_lowpass=72.0, last_lowpass=30.0,
                                 mask_radius=5, log=lambda _: None)
         assert plan.mra == [False] * 5
-        runs.append(folder / f"refine_h{half}_port")
-        run_mra_project(replace(plan, settings=plan.settings[:1]), runs[-1], spacing=SPACING,
-                        log=lambda _: None)
+        plan = replace(plan, settings=plan.settings[:1], cards=plan.cards[:1], mra=plan.mra[:1])
+        if layout == "dynamo":
+            runs.append(folder / f"refine_h{half}_port")
+            run_mra_project(plan, runs[-1], spacing=SPACING, log=lambda _: None)
+        else:
+            runs.append(folder / f"refine_h{half}")
+            run_plan(plan, runs[-1], log=lambda _: None)
 
     result = _run("maps", *runs, "--out", tmp_path / "maps" / "consensus")
     assert result.returncode == 0, result.stderr
     for half, run in zip((1, 2), runs, strict=True):
         written = mrcfile.read(tmp_path / "maps" / f"consensus_half{half}.mrc")
-        average = run / "results" / "ite_0001" / "averages" / "average_ref_001_ite_0001.em"
-        assert np.array_equal(written, read_em(average))
+        if layout == "dynamo":
+            average = read_em(run / "results" / "ite_0001" / "averages"
+                              / "average_ref_001_ite_0001.em")
+        else:
+            average = mrcfile.read(run / "ite_0001" / "average_1.mrc")
+        assert np.array_equal(written, average)
     assert "iteration 1 of both halves, 13.44 A/px" in result.stdout
     assert "FSC unmasked : " in result.stdout and "FSC masked   : " in result.stdout

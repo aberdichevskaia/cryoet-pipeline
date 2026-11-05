@@ -144,6 +144,27 @@ log, and each record keeps its own commit.
 (`cryoet_pipeline.particle_tables`, pyarrow) and the MRA in this layout with its
 carrying on (`cryoet_pipeline.mra_runs.run_plan`) exist and are tested, the first
 iteration equal to the last bit to what the Dynamo layout's writer computes from the
-same plan. Still in Dynamo's layout: what `scripts/mra_port_run.py` writes, and
-what the report and the comparisons read. Next: the reader for both layouts, then
-the job's switch to this one.
+same plan.
+
+Then, the same day: `reports.classification_reader.read_classification` reads either
+layout into `ClassificationRun`, which now also carries the poses behind its
+galleries (`PoseTable`) and the alignment mask. Read from both layouts, one plan
+gives the same classes and members, the same averages, starting average and turned
+particles, and poses within the old layout's 12 digits (tests/test_classification_reader.py).
+An iteration is read once its record succeeded and names the node before it as its
+input; its classes are its record's selections; a failed attempt at the next one is
+reported with its error. The report, `scripts/mra_port_run.py`'s comparison,
+`compare_dynamo_classes.py`, `consensus_halves.py`, `extraction_losses.py` and
+`starting_pose_average.py` read through it; `class_orientations.py` still reads
+Dynamo's tables.
+
+`scripts/mra_port_run.py` and `.sbatch` now write this layout: `<export>/<NAME>` for a
+new run, `<project>_port` for the port's run of a Dynamo project. A run the port began
+in Dynamo's layout (its `settings/mirrors.json`) is carried on in it, and
+`mra_port_run.sbatch` keeps such a run's name `<NAME>_port`. `run_plan` refuses a
+folder with files and no `plan.json` (a Dynamo project, say), checks every finished
+node before it writes `plan.json`, so a refused job leaves it as it was, and keeps
+a longer request's `plan.json` when the run is carried on with fewer iterations. A
+new run's lock is `<export>/<NAME>.lock`, the one Dynamo's own job takes for a project
+of that name. pyarrow has to be in the env on max and in Munich before a job of
+this layout runs there.

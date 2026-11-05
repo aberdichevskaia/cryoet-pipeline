@@ -54,4 +54,23 @@ def read_particle_table(path: Path) -> tuple[dict[str, np.ndarray], dict[str, An
     return columns, json.loads(raw) if raw else {}
 
 
-__all__ = ["DYNAMO_POSES", "read_particle_table", "write_particle_table"]
+def select_rows(columns: Mapping[str, np.ndarray], definition: Mapping[str, Any]) -> np.ndarray:
+    """The rows a selection's definition names (docs/run_records.md), as a boolean mask:
+    `{"column": c, "equals": v}` the rows whose `c` is `v`, and with `"where": w` only
+    those of them whose `w` is true. Any other definition is refused, not guessed at."""
+
+    keys = set(definition)
+    if not {"column", "equals"} <= keys or keys - {"column", "equals", "where"}:
+        raise ValueError(f"a selection defined as {dict(definition)} is not one this reader "
+                         "knows")
+    missing = [definition[key] for key in ("column", "where")
+               if key in definition and definition[key] not in columns]
+    if missing:
+        raise ValueError(f"the table has no column {', '.join(map(str, missing))}")
+    rows = np.asarray(columns[definition["column"]]) == definition["equals"]
+    if "where" in definition:
+        rows &= np.asarray(columns[definition["where"]], dtype=bool)
+    return np.asarray(rows, dtype=bool)
+
+
+__all__ = ["DYNAMO_POSES", "read_particle_table", "select_rows", "write_particle_table"]

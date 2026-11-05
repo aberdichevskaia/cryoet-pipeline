@@ -163,7 +163,7 @@ def main() -> int:
               f"{100 * above / len(entries):.0f}% above the one-false-positive height")
 
     if args.mra is not None:
-        from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification
+        from cryoet_pipeline.reports.classification_reader import read_classification
 
         export = json.loads((args.mra.parent / "export_manifest.json").read_text())
         where: dict[int, tuple[str, float]] = {}
@@ -172,7 +172,7 @@ def main() -> int:
             if entry.get("decoy") or entry.get("run") not in depth_of or "z_px" not in record:
                 continue
             where[int(entry["tag"])] = (str(entry["run"]), float(record["z_px"]))
-        run = read_dynamo_classification(args.mra, compute_initial_average=False)
+        run = read_classification(args.mra, compute_initial_average=False)
         last = run.iterations[-1]
         print(f"\n{run.name}, iteration {last.number}: class by distance from the nearer z face "
               "(extracted particles only)")

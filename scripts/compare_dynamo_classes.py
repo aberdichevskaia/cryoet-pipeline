@@ -1,10 +1,12 @@
-"""Do two Dynamo classifications put the same particles in the same classes?
+"""Do two classifications put the same particles in the same classes?
 
     python scripts/compare_dynamo_classes.py <export>/mra_sbb <export_decoy>/mra_sbb_decoy \\
         --group-first 2,3 --group-second 2,3
 
-compares the classes of two Dynamo projects particle by particle, after the last
-iteration each finished (or `--iteration-first/--iteration-second`):
+compares the classes of two runs particle by particle, after the last iteration each
+finished (or `--iteration-first/--iteration-second`). A run is a Dynamo project or a
+run of the pipeline's port, in either of the layouts reports.classification_reader
+reads (a run of the run-record layout holds a plan.json):
 
 - a table of how many particles each pair of classes shares, with the number two
   independent runs with these class sizes would share by chance;
@@ -44,7 +46,7 @@ from cryoet_pipeline.class_comparison import (
     shuffled_null,
 )
 from cryoet_pipeline.reports.classification import ClassificationRun
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification
+from cryoet_pipeline.reports.classification_reader import read_classification
 
 
 def labels(run: ClassificationRun, iteration: int | None) -> tuple[int, dict[int, int]]:
@@ -144,8 +146,8 @@ def compare_groups(first: np.ndarray, second: np.ndarray, group_first: set[int],
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("first", type=Path, help="a Dynamo project folder")
-    parser.add_argument("second", type=Path, help="another Dynamo project folder")
+    parser.add_argument("first", type=Path, help="a Dynamo project or a run of the port")
+    parser.add_argument("second", type=Path, help="another")
     parser.add_argument("--iteration-first", type=int, help="default: its last finished one")
     parser.add_argument("--iteration-second", type=int, help="default: its last finished one")
     parser.add_argument("--group-first", help="channels of the first run forming one group, "
@@ -160,7 +162,7 @@ def main() -> int:
     if (args.group_first is None) != (args.group_second is None):
         parser.error("give --group-first and --group-second together")
 
-    runs = [read_dynamo_classification(path.resolve(), compute_initial_average=False)
+    runs = [read_classification(path.resolve(), compute_initial_average=False)
             for path in (args.first, args.second)]
     (first_number, first_labels), (second_number, second_labels) = (
         labels(runs[0], args.iteration_first), labels(runs[1], args.iteration_second))

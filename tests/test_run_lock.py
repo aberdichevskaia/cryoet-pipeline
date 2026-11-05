@@ -276,11 +276,11 @@ def _calls(repo: Path) -> list[str]:
     return path.read_text().splitlines() if path.exists() else []
 
 
-def _setup_call(job: str, export: Path, setup: str = "") -> str:
-    """The port asked for a new run: its plan made from the export, without Dynamo."""
+def _setup_call(job: str, export: Path, setup: str = "", name: str = "mra_t") -> str:
+    """The port asked for a run set up from the export, without Dynamo."""
     return (
         f"port {job} env=active --export {export} --seeds subset subset noise{setup} "
-        "--name mra_t_port --device cuda --dtype float32 --per-gpu 1 --workers 1"
+        f"--name {name} --device cuda --dtype float32 --per-gpu 1 --workers 1"
     )
 
 
@@ -327,7 +327,7 @@ def test_a_new_run_is_set_up_without_dynamo_and_a_second_job_of_it_is_refused(
         second = _job(repo, "2", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
         _, err = second.communicate(timeout=60)
         assert second.returncode == 1
-        assert f"REFUSED: {export}/mra_t_port is taken by job 1 (mra_t) on " in err
+        assert f"REFUSED: {export}/mra_t is taken by job 1 (mra_t) on " in err
     finally:
         (tmp_path / "release").write_text("")
     out, err = first.communicate(timeout=60)
@@ -345,6 +345,16 @@ def test_a_new_run_is_set_up_without_dynamo_and_a_second_job_of_it_is_refused(
         _, err = refused.communicate(timeout=60)
         assert refused.returncode == 1 and variable in err
     assert len(_calls(repo)) == 1
+
+    # The run is there (its plan.json): it carries on, whatever Dynamo files of its name
+    # turned up since.
+    (export / "mra_t").mkdir()
+    (export / "mra_t" / "plan.json").write_text("{}\n")
+    (export / "mra_t_seeds").mkdir()
+    again = _job(repo, "4", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
+    _, err = again.communicate(timeout=60)
+    assert again.returncode == 0, err
+    assert _calls(repo)[-1] == _setup_call("4", export)
 
 
 def test_a_second_dynamo_job_of_a_project_is_refused_while_the_first_computes_it(
@@ -407,11 +417,11 @@ def test_a_new_run_of_a_name_dynamo_is_setting_up_or_has_is_refused(tmp_path: Pa
     dynamo = _dynamo_job(repo, "21")
     try:
         _wait_until(lambda: _calls(repo) == ["dynamo 21 project=mra_t cores=4 env=none"], dynamo)
+        # A new run of the NAME takes the lock Dynamo's job holds on it.
         port = _job(repo, "22", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
         _, err = port.communicate(timeout=60)
         assert port.returncode == 1
-        assert f"REFUSED: {export} holds Dynamo's mra_t_seeds, a Dynamo project" in err
-        assert f"PROJECT={export}/mra_t" in err
+        assert f"REFUSED: {export}/mra_t is taken by job 21 (mra_t) on " in err
         assert _calls(repo) == ["dynamo 21 project=mra_t cores=4 env=none"]
     finally:
         (tmp_path / "setup_release").write_text("")
@@ -422,10 +432,12 @@ def test_a_new_run_of_a_name_dynamo_is_setting_up_or_has_is_refused(tmp_path: Pa
     port = _job(repo, "23", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
     _, err = port.communicate(timeout=60)
     assert port.returncode == 1 and "holds Dynamo's mra_t mra_t_seeds" in err
-    # ...but a run the pipeline set up before carries on, whatever Dynamo made since.
+    assert f"PROJECT={export}/mra_t" in err
+    # ...but a run the pipeline set up before 2026-11-05, in Dynamo's layout as mra_t_port,
+    # carries on under that name, whatever Dynamo made since.
     (export / "mra_t_port" / "settings").mkdir(parents=True)
     (export / "mra_t_port" / "settings" / "setup.json").write_text("{}\n")
     port = _job(repo, "24", EXPORT=str(export), NAME="mra_t", SEEDS="subset subset noise")
     _, err = port.communicate(timeout=60)
     assert port.returncode == 0, err
-    assert _calls(repo)[-1] == _setup_call("24", export)
+    assert _calls(repo)[-1] == _setup_call("24", export, name="mra_t_port")

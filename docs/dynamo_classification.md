@@ -17,17 +17,24 @@ EXPORT=<export folder> NAME=mra_nss SEEDS="subset subset noise" sbatch --export=
 
 The job makes the plan from the export with the pipeline's setup
 (`cryoet_pipeline.mra_setup`, `scripts/dynamo_mra_setup.m` in Python), computes
-it with the pipeline's port of Dynamo's MRA on the job's GPUs as
-`<EXPORT>/<NAME>_port`, laid out as a Dynamo project, and writes the report beside
-it. The plan is the one Dynamo's setup made from the same variables: the same
+it with the pipeline's port of Dynamo's MRA on the job's GPUs as `<EXPORT>/<NAME>`
+in the run-record layout ([run_records.md](run_records.md): `plan.json`, then
+`setup/`, `ite_0001/`, ... each with its `run.json`, the poses as Parquet and the
+maps as MRC), and writes the report beside it, `<EXPORT>/<NAME>_classification_report.pdf`.
+Runs begun before 2026-11-05 were laid out as Dynamo projects, as
+`<EXPORT>/<NAME>_port`; such a run is carried on in that layout under that name,
+and the report, the comparisons and the consensus halves read both layouts
+(`reports.classification_reader`). The plan is the one Dynamo's setup made from the
+same variables: the same
 particles in each subset or blob seed (MATLAB's `rand` and `randperm` after
 `rng(20261016)` are numpy's `RandomState`, measured), averaged as `dynamo_average`
 averages, the same mask (`dynamo_sphere`'s, bit for bit) and the same search in
 every iteration. Two things differ: a noise seed is new noise (MATLAB's `randn` is
 not numpy's), and the starting table keeps the export's digits where Dynamo's
 projects rounded it to five significant digits. The run keeps the variables in
-`settings/setup.json`; a job submitted again makes the plan again and carries the
-run on only if it comes out the same. `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
+`plan.json` and each node's fingerprint in its `run.json`; a job submitted again
+makes the plan again and carries the run on only if its finished nodes come out the
+same. `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
 refused (the port models no symmetry and searches on every GPU of the job), and
 so is a `NAME` Dynamo has a project of in the export: that project's port run is
 made with `PROJECT=<export>/<name>` (the header of `scripts/mra_port_run.sbatch`).

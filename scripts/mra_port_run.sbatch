@@ -23,27 +23,35 @@
 # search in every iteration, but new noise in a noise seed (MATLAB's randn is not
 # numpy's) and the export's own digits in the starting table, where Dynamo's were
 # rounded to five; scripts/compare_mra_setup.py checks a plan against a project
-# Dynamo's setup made. It then computes the plan with the port as
-# $EXPORT/${NAME}_port, which keeps the setup's variables in settings/setup.json,
-# and writes $EXPORT/${NAME}_port_classification_report.pdf, TEMPLATE drawn in it as
-# in Dynamo's reports. GPUS, Dynamo's own GPU setting, is refused here: the port
+# Dynamo's setup made. It then computes the plan with the port as $EXPORT/$NAME, in
+# the run-record layout (docs/run_records.md): plan.json, then setup/, ite_0001/, ...,
+# each with its run.json, the poses as Parquet and the maps as MRC; and writes
+# $EXPORT/${NAME}_classification_report.pdf, TEMPLATE drawn in it as in Dynamo's
+# reports. A run begun before 2026-11-05 in Dynamo's layout, $EXPORT/${NAME}_port
+# with its settings/setup.json, is carried on in that layout under that name.
+# GPUS, Dynamo's own GPU setting, is refused here: the port
 # searches on every GPU the job has; so are SYMMETRY (but c1) and AXIS_OFFSET, which
 # the port does not model. A NAME that Dynamo has a project of in EXPORT, or a setup
 # under way (its ${NAME}_seeds and the rest), is refused for a new run: that
 # project's port run is made and carried on with PROJECT, below.
 #
 # A job that runs out of time, or stops, is submitted again as it was: the plan is
-# made again from the same variables, and must come out as the run's (seeds and mask
-# to float32's last bits, the starting table and every finished iteration's search
-# exactly), and the port carries on from its last finished iteration
-# (`iteration N ok` in ${NAME}_port/log.txt). Every iteration starts from what the
+# made again from the same variables and must be the run's (each finished node's
+# run.json holds the fingerprint of what it was computed from: the setup's variables
+# and the export's table and manifest, each iteration's search), and the port carries
+# on after its last finished node; a node of another plan is refused. (A run in
+# Dynamo's layout is checked as it was: seeds and mask to float32's last bits, the
+# starting table and every finished iteration's search exactly, `iteration N ok` in
+# its log.txt.) Every iteration starts from what the
 # one before it wrote, as Dynamo's do, so the run ends as an unstopped one would:
 # g2atan2's first job ran out of time in iteration 2 (2026-10-29), the next carried
 # it on from iteration 1 and agreed with Dynamo's g2atan as the unstopped mirror
 # did, iteration by iteration. A run that finished is only reported again.
 #
 # One job at a time on a run. The job holds a lock on <run>.lock, beside the run
-# folder (${NAME}_port.lock for a new run), from the setup to the report
+# folder ($NAME.lock for a new run: the lock scripts/dynamo_mra_mdc.sbatch takes for a
+# Dynamo project of that NAME, so neither starts while the other runs), from the
+# setup to the report
 # (scripts/hold_run_lock.py). A second job of the same run, started while the
 # first is on it, stops at once with REFUSED, the first job's number, node and
 # start, having run nothing; one that waited in the queue and starts after the
@@ -100,7 +108,14 @@ if [[ -n "${EXPORT:-}" ]]; then
         echo "SYMMETRY and AXIS_OFFSET are Dynamo's; the port models no symmetry" >&2
         exit 1
     fi
-    name=${NAME}_port
+    # A run begun in Dynamo's layout before 2026-11-05 is carried on in it, under its
+    # name; every other run is NAME, in the run-record layout.
+    if [[ -f "$EXPORT/${NAME}_port/settings/setup.json" && ! -e "$EXPORT/$NAME/plan.json" ]]
+    then
+        name=${NAME}_port
+    else
+        name=$NAME
+    fi
     run=$EXPORT/$name
 else
     : "${PROJECT:?set PROJECT to a Dynamo project, or EXPORT and NAME for a new run}"
@@ -116,7 +131,7 @@ if [[ "${MRA_PORT_RUN_LOCK:-}" != "$run.lock" ]]; then
         || { echo "REFUSED: no pipeline env found to hold $run.lock with" >&2; exit 1; }
     exec "$holder" scripts/hold_run_lock.py "$run.lock" -- bash "$script"
 fi
-if [[ -n "${EXPORT:-}" && ! -f "$run/settings/setup.json" ]]; then
+if [[ -n "${EXPORT:-}" && ! -f "$run/plan.json" && ! -f "$run/settings/setup.json" ]]; then
     # A new run. Dynamo's own files of the name belong to a Dynamo project, or to a
     # setup a Dynamo job is making, whose port run is PROJECT's.
     dynamo=()

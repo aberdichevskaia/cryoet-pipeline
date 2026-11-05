@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Write the average of a Dynamo project's particles at their starting poses to a file.
+"""Write the average of an MRA run's particles at their starting poses to a file: a
+Dynamo project's, or a run of the port's in either layout (reports.classification_reader).
 
     python scripts/starting_pose_average.py outputs/ryr1/dynamo/bin8-2x/mra_bbn \\
         --out outputs/ryr1/dynamo/bin8-2x/tm_pose_average.mrc
 
 The map the classification report draws as the average of all particles
 (scripts/dynamo_classification_report.py, the page after the particles), made
-the same way: read_dynamo_classification averages the project's starting table
+the same way: the reader averages the run's starting poses
 as Dynamo's console dynamo_average would (fcompensate, fmin 1, normalised under
 the project's alignment mask), and this writes it as MRC with the project's
 pixel size instead of only drawing it. About a minute for 2,700 particles of 48^3.
@@ -30,22 +31,23 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification
+from cryoet_pipeline.reports.classification_reader import read_classification
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("project", type=Path, help="the Dynamo project folder")
+    parser.add_argument("project", type=Path,
+                        help="the Dynamo project, or a run of the port (its plan.json)")
     parser.add_argument("--out", type=Path, required=True, help="the average, .mrc")
     parser.add_argument("--manifest", type=Path,
                         help="export_manifest.json; default the one beside the project, if any")
     args = parser.parse_args()
 
-    run = read_dynamo_classification(args.project, manifest=args.manifest)
+    run = read_classification(args.project, manifest=args.manifest)
     if run.initial_average is None:
-        raise SystemExit(f"{args.project}: no particles folder or settings/mask.em to "
+        raise SystemExit(f"{args.project}: no particles folder or alignment mask to "
                          "average the starting poses with")
     print(f"averaging {len(run.tags):,} particles of {run.name} at their starting poses")
     average = np.asarray(run.initial_average.load(), dtype=np.float32)

@@ -127,10 +127,32 @@ def test_a_plan_carries_on_into_more_iterations_and_never_into_another(tmp_path:
     other = _plan(export)
     other = _short(replace(other, settings=[replace(other.settings[0], low=4.0),
                                             *other.settings[1:]]), 2)
+    asked = (run / "plan.json").read_text()
     with pytest.raises(ValueError, match="ite_0001 holds a node of another plan"):
         run_plan(other, run, **QUIET)
     with pytest.raises(ValueError, match="setup holds a node of another plan"):
         run_plan(_short(_plan(export, mask_radius=4), 2), run, **QUIET)
+    # Refused before plan.json was written: it still says what the run is.
+    assert (run / "plan.json").read_text() == asked
+
+    # Carried on with fewer iterations than it once was asked for: nothing to compute, and
+    # plan.json keeps the longer request.
+    lines: list[str] = []
+    run_plan(_short(_plan(export), 1), run, log=lines.append)
+    assert lines == ["mra_x: all 1 iterations finished before; nothing to compute"]
+    assert (run / "plan.json").read_text() == asked
+
+
+def test_a_folder_of_another_layout_is_refused(tmp_path: Path) -> None:
+    plan = _short(_plan(_export(tmp_path)), 1)
+    run_mra_project(plan, tmp_path / "old", **QUIET)
+    with pytest.raises(ValueError, match="holds files but no plan.json, so it is not a run"):
+        run_plan(plan, tmp_path / "old", **QUIET)
+    assert not (tmp_path / "old" / "setup").exists()
+    # An empty folder is a new run's.
+    (tmp_path / "empty").mkdir()
+    run_plan(plan, tmp_path / "empty", **QUIET)
+    assert completed(tmp_path / "empty" / "ite_0001") is not None
 
 
 def test_a_dynamo_projects_starting_state_is_the_setups_input(tmp_path: Path) -> None:

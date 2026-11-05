@@ -1,12 +1,15 @@
-"""Write a PDF report of a Dynamo multireference classification (MRA) project.
+"""Write a PDF report of a multireference classification (MRA): a Dynamo project, or
+a run of the pipeline's port.
 
     python scripts/dynamo_classification_report.py <export>/mra_nss
 
-reads the project folder, and the export manifest of scripts/export_dynamo.py
-beside it if there is one (pixel size, tilt-series and picking score of every
-particle), and writes <export>/mra_nss_classification_report.pdf. It changes
-nothing in the project, so it can run while Dynamo is still iterating: it
-reports the iterations finished so far.
+reads the run's folder through reports.classification_reader, a run of the
+run-record layout when it holds a plan.json (docs/run_records.md) and a Dynamo
+project otherwise, and the export manifest of scripts/export_dynamo.py beside it if
+there is one (pixel size, tilt-series and picking score of every particle), and
+writes <export>/mra_nss_classification_report.pdf. It changes nothing in the run,
+so it can run while the run is still iterating: it reports the iterations finished
+so far.
 
 The pages: parameters; particles at their starting poses; the average of all
 of them (computed here in about a minute for 2,700 particles of 48^3, unless
@@ -37,7 +40,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 
 from cryoet_pipeline.reports.classification import write_classification_report
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification
+from cryoet_pipeline.reports.classification_reader import read_classification
 
 
 def software() -> str:
@@ -56,7 +59,8 @@ def software() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("project", type=Path, help="the Dynamo project folder")
+    parser.add_argument("project", type=Path,
+                        help="the run: a Dynamo project, or a run of the port (its plan.json)")
     parser.add_argument("--out", type=Path,
                         help="the PDF; default <project>_classification_report.pdf beside it")
     parser.add_argument("--manifest", type=Path,
@@ -76,7 +80,7 @@ def main() -> None:
     out = args.out or project.parent / f"{project.name}_classification_report.pdf"
     if out.exists():
         print(f"replacing {out}")
-    run = read_dynamo_classification(
+    run = read_classification(
         project,
         manifest=args.manifest,
         pixel_size_angstrom=args.pixel_size,

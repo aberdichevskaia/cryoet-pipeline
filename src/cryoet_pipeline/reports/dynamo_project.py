@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from functools import cache, partial
@@ -53,6 +53,7 @@ from cryoet_pipeline.reports.classification import (
     Parameter,
     ParticleLocations,
     Pose,
+    PoseTable,
     Volume,
     template_in_box,
 )
@@ -307,14 +308,15 @@ def read_dynamo_classification(
 
     def aligned(tag: int, pose: Pose) -> np.ndarray:
         row = pose_row(tag, pose)
-        particle = read_map(_particle_path(particles, tag, extension))
-        # As dynamo_average turns a particle, the MEX's coordinates (docs/dynamo_search.md).
-        volume, valid = resample(  # type: ignore[no-untyped-call]
-            particle, -row[ANGLES][::-1], -row[SHIFTS], coordinates_in_double=True
-        )
-        result = np.asarray(volume, dtype=np.float32)
-        result[~np.asarray(valid, dtype=bool)] = np.nan
-        return result
+        return aligned_volume(_particle_path(particles, tag, extension), row[ANGLES],
+                              row[SHIFTS])
+
+    def poses(pose: Pose) -> PoseTable:
+        table = starting if pose is None else refined[pose]
+        rows = table[np.argsort(table[:, TAG], kind="stable")]
+        return PoseTable(rows[:, TAG].astype(int), rows[:, ANGLES].astype(float),
+                         rows[:, SHIFTS].astype(float),
+                         np.full(len(rows), np.nan) if pose is None else rows[:, CC].astype(float))
 
     template_volume, template_note = (_template(template, box, spacing, problems)
                                       if template is not None else (None, None))
@@ -363,7 +365,36 @@ def read_dynamo_classification(
         template=template_volume,
         problems=problems,
         locations=locations,
+        poses=poses,
+        mask=Volume(_relative(mask_path, base), partial(read_em, mask_path))
+        if mask_path.exists() else None,
     )
+
+
+def aligned_volume(path: Path, angles: np.ndarray, shifts: np.ndarray) -> np.ndarray:
+    """The particle in `path` turned and shifted from its pose into the references' frame,
+    as (z, y, x), NaN where no voxel of it reaches: as dynamo_average turns a particle,
+    with the MEX's coordinates (docs/dynamo_search.md)."""
+
+    volume, valid = resample(  # type: ignore[no-untyped-call]
+        read_map(path), -np.asarray(angles)[::-1], -np.asarray(shifts),
+        coordinates_in_double=True,
+    )
+    result = np.asarray(volume, dtype=np.float32)
+    result[~np.asarray(valid, dtype=bool)] = np.nan
+    return result
+
+
+def average_at_poses(paths: Sequence[Path], angles: np.ndarray, shifts: np.ndarray,
+                     tilt_ranges: Sequence[tuple[float, float]], mask: np.ndarray) -> np.ndarray:
+    """The particles in `paths` averaged at their poses, as Dynamo's console
+    `dynamo_average` would (fcompensate, fmin 1, normalised under `mask`), through the
+    pipeline's port of it."""
+
+    result = average_class(
+        (read_map(path) for path in paths), angles, shifts, list(tilt_ranges), mask, fmin=1
+    )
+    return np.asarray(result.average, dtype=np.float32)
 
 
 def _iterations(
@@ -545,18 +576,12 @@ def _initial_average(starting: np.ndarray, particles: Path, extension: str,
                      mask_path: Path) -> np.ndarray:
     if not np.all(starting[:, FTYPE] == 1):
         raise ValueError("only single-axis wedges (ftype 1) are averaged here")
-    order = np.argsort(starting[:, TAG])
-    rows = starting[order]
-    volumes = (read_map(_particle_path(particles, int(tag), extension)) for tag in rows[:, TAG])
-    result = average_class(
-        volumes,
-        rows[:, ANGLES],
-        rows[:, SHIFTS],
-        [tuple(pair) for pair in rows[:, TILT_RANGE]],
+    rows = starting[np.argsort(starting[:, TAG])]
+    return average_at_poses(
+        [_particle_path(particles, int(tag), extension) for tag in rows[:, TAG]],
+        rows[:, ANGLES], rows[:, SHIFTS], [tuple(pair) for pair in rows[:, TILT_RANGE]],
         read_em(mask_path),
-        fmin=1,
     )
-    return np.asarray(result.average, dtype=np.float32)
 
 
 def _template(path: Path, box: int, spacing: float | None,
@@ -683,7 +708,7 @@ def _particle_locations(manifest: Path, mask: Path, spacing: float | None, box: 
         tomogram = tomogram.model_copy(update={"path": _anchored(tomogram.path, Path(source))})
         tomograms[series] = cache(partial(load_tomogram_info, tomogram))
     if mask.exists():
-        radius_px = _sphere_radius(read_em(mask))
+        radius_px = _sphere_radius(read_map(mask))
         note = "the volume of the classification's alignment mask"
     else:
         radius_px = box / 4.0
@@ -707,10 +732,14 @@ def _anchored(path: Path, project: Path) -> Path:
 
 
 def _seed_notes(path: Path) -> dict[int, str]:
-    if not path.exists():
-        return {}
+    return seed_notes(path.read_text().splitlines()) if path.exists() else {}
+
+
+def seed_notes(lines: Sequence[str]) -> dict[int, str]:
+    """Each channel's seed in words, from the lines of a seed_kinds.txt ("2 blob 300")."""
+
     notes = {}
-    for line in path.read_text().splitlines():
+    for line in lines:
         parts = line.split()
         if len(parts) >= 2 and parts[0].isdigit():
             kind = parts[1]

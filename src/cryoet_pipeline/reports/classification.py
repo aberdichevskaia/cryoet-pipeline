@@ -14,8 +14,9 @@ inverted). A particle in a gallery is rotated and shifted into the references'
 frame by its pose, then shown as the mean of its 10 central z sections, smoothed
 by one voxel, on one grey scale per page.
 
-The pages see only `ClassificationRun`. `reports.dynamo_project` fills it from a
-Dynamo project; the pipeline's own classification can fill it the same way.
+The pages see only `ClassificationRun`. `reports.classification_reader` fills it
+from either layout a classification is written in: a Dynamo project
+(`reports.dynamo_project`) or a run of the run-record layout (`mra_runs`).
 """
 
 from __future__ import annotations
@@ -139,6 +140,20 @@ pose after that iteration."""
 
 
 @dataclass(frozen=True)
+class PoseTable:
+    """Every particle's pose at one `Pose`, by tag ascending: the starting table, or one
+    channel's search in one iteration (every particle that channel searched)."""
+
+    tags: np.ndarray
+    angles: np.ndarray
+    """(particles, 3): tdrot, tilt, narot in degrees, Dynamo's convention."""
+    shifts: np.ndarray
+    """(particles, 3): x, y, z in pixels of the particles' box."""
+    cc: np.ndarray
+    """The search's cross-correlation; NaN at the starting poses."""
+
+
+@dataclass(frozen=True)
 class ParticleLocations:
     """Where the particles were picked: each tomogram, and each particle's place in it."""
 
@@ -190,6 +205,10 @@ class ClassificationRun:
     """Everything that could not be read, one line each."""
     locations: ParticleLocations | None = None
     """Where the particles were picked, when the tomograms are at hand."""
+    poses: Callable[[Pose], PoseTable] | None = None
+    """The poses behind `aligned_particle`, a table at a time, for comparisons of runs."""
+    mask: Volume | None = None
+    """The alignment mask the iterations searched and averaged under."""
 
 
 @dataclass(frozen=True)

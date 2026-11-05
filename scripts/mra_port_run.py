@@ -16,10 +16,16 @@ run is written to <export>/<name>, with nothing to compare. That is how the
 pipeline's own runs are made (scripts/mra_port_run.sbatch with EXPORT and NAME). The
 rest of this text is about a Dynamo project given instead.
 
+A run is written in the run-record layout (docs/run_records.md, `mra_runs.run_plan`):
+plan.json, then setup/ and ite_0001/, ite_0002/, ... each with its run.json, the
+particles' poses as Parquet and the maps as MRC. A run begun in Dynamo's layout before
+2026-11-05 (settings/, results/, log.txt) is carried on in it to its end, by the writer
+that began it (`dynamo_mra_project.run_mra_project`).
+
 reads the Dynamo project's plan (dynamo_mra_project.plan_from_dynamo: its starting
 table, seeds, soft mask, particles, and every iteration's search from that
 iteration's card), runs it with the port and writes the run beside the Dynamo
-project, as a project of the same layout, named --name (default <project>_port):
+project, named --name (default <project>_port):
 
 - --device cuda (or mps, cpu): the torch kernel, float32 unless --dtype float64,
   with the particles dealt among --gpus devices (all the GPUs the job sees unless
@@ -50,7 +56,8 @@ finished), or it is refused. Each iteration starts from what the one before it
 wrote, as Dynamo's do, so the run carried on ends as the unstopped one would have,
 bit for bit wherever the kernel repeats itself bit for bit (the numpy one does, and
 so did the two cone5 runs on A40s). A run that finished every iteration computes
-nothing and is compared again.
+nothing and is compared again. Both layouts are read through
+`reports.classification_reader`, so either can be compared with a Dynamo project.
 
 The comparison of classes alone, with chance levels, is
 scripts/compare_dynamo_classes.py; the report, scripts/dynamo_classification_report.py.
@@ -69,9 +76,16 @@ from typing import Any
 import numpy as np
 
 from cryoet_pipeline.backends.dynamo_search import euler_matrix, search_particles
-from cryoet_pipeline.dynamo_mra_project import plan_from_dynamo, run_mra_project, torch_search
+from cryoet_pipeline.dynamo_mra_project import (
+    MraPlan,
+    plan_from_dynamo,
+    run_mra_project,
+    torch_search,
+)
+from cryoet_pipeline.mra_runs import Refused, run_plan
 from cryoet_pipeline.mra_setup import plan_from_export
-from cryoet_pipeline.reports.dynamo_project import read_dynamo_classification, read_table
+from cryoet_pipeline.reports.classification import ClassificationRun, PoseTable
+from cryoet_pipeline.reports.classification_reader import read_classification
 
 
 def _angle(first: np.ndarray, second: np.ndarray) -> float:
@@ -79,10 +93,9 @@ def _angle(first: np.ndarray, second: np.ndarray) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, (float(np.trace(relative)) - 1) / 2))))
 
 
-def _classes(project: Path) -> dict[int, dict[int, int]]:
+def _classes(run: ClassificationRun) -> dict[int, dict[int, int]]:
     """Each finished iteration's class of every particle."""
 
-    run = read_dynamo_classification(project, compute_initial_average=False)
     return {iteration.number: {int(tag): channel for channel, result in iteration.classes.items()
                                for tag in result.members}
             for iteration in run.iterations}
@@ -97,26 +110,29 @@ def computed_by_dynamo(project: Path) -> bool:
 def compare(ours: Path, theirs: Path) -> None:
     """Iteration by iteration: same class, and for those, the poses and CCs."""
 
-    mine, dynamo = _classes(ours), _classes(theirs)
+    runs = [read_classification(path, compute_initial_average=False) for path in (ours, theirs)]
+    mine, dynamo = (_classes(run) for run in runs)
     print(f"{ours.name} against {theirs.name}:")
     for number in sorted(set(mine) & set(dynamo)):
         tags = sorted(set(mine[number]) & set(dynamo[number]))
         same = [tag for tag in tags if mine[number][tag] == dynamo[number][tag]]
         angles, shifts, ccs = [], [], []
-        tables: dict[tuple[str, int], dict[int, np.ndarray]] = {}
+        tables: dict[tuple[int, int], tuple[PoseTable, dict[int, int]]] = {}
         for tag in same:
             channel = mine[number][tag]
             rows = []
-            for label, project in (("ours", ours), ("dynamo", theirs)):
-                key = (label, channel)
-                if key not in tables:
-                    path = (project / "results" / f"ite_{number:04d}" / "averages"
-                            / f"refined_table_ref_{channel:03d}_ite_{number:04d}.tbl")
-                    tables[key] = {int(row[0]): row for row in read_table(path)}
-                rows.append(tables[key][tag])
-            angles.append(_angle(rows[0][6:9], rows[1][6:9]))
-            shifts.append(float(np.linalg.norm(rows[0][3:6] - rows[1][3:6])))
-            ccs.append(float(rows[0][9] - rows[1][9]))
+            for side, run in enumerate(runs):
+                if (side, channel) not in tables:
+                    assert run.poses is not None
+                    table = run.poses((number, channel))
+                    tables[(side, channel)] = (table, {int(one): row
+                                                       for row, one in enumerate(table.tags)})
+                table, index = tables[(side, channel)]
+                rows.append((table, index[tag]))
+            (first, i), (second, j) = rows
+            angles.append(_angle(first.angles[i], second.angles[j]))
+            shifts.append(float(np.linalg.norm(first.shifts[i] - second.shifts[j])))
+            ccs.append(float(first.cc[i] - second.cc[j]))
         if not same:
             print(f"  iteration {number}: no particle in the same class")
             continue
@@ -135,11 +151,13 @@ def _spacing(export: Path) -> float | None:
             if manifest.exists() else None)
 
 
-def _kernel(args: argparse.Namespace) -> tuple[Any, str]:
-    """The search the arguments ask for, and its name for the run's cards."""
+def _kernel(args: argparse.Namespace) -> tuple[Any, str, dict[str, Any]]:
+    """The search the arguments ask for, its name for the cards of a run in Dynamo's
+    layout, and the execution parameters a run record keeps."""
 
     if args.device == "numpy":
-        return search_particles, f"cryoet-pipeline numpy, {args.workers} workers"
+        return (search_particles, f"cryoet-pipeline numpy, {args.workers} workers",
+                {"kernel": "numpy", "workers": args.workers})
     devices = max(1, args.gpus)
     if args.device == "cuda" and args.gpus == 0:
         import torch
@@ -150,7 +168,35 @@ def _kernel(args: argparse.Namespace) -> tuple[Any, str]:
     destination = f"cryoet-pipeline torch {args.device} {args.dtype} x{devices}"
     if args.per_gpu > 1:
         destination += f", {args.per_gpu} processes each"
-    return search, destination
+    return search, destination, {"kernel": "torch", "device": args.device, "dtype": args.dtype,
+                                 "devices": devices, "per_device": args.per_gpu,
+                                 "chunk": args.chunk}
+
+
+def dynamo_layout(run: Path) -> bool:
+    """A run of the port begun in Dynamo's layout, before 2026-11-05, which is carried on
+    in it: the port's writer of that layout marked each of its runs with
+    settings/mirrors.json, which Dynamo's own projects do not have. Any other folder
+    with files in it, a Dynamo project included, is refused by `run_plan`."""
+
+    return (run / "settings" / "mirrors.json").is_file()
+
+
+def compute(plan: MraPlan, run: Path, args: argparse.Namespace, spacing: float | None) -> None:
+    """The plan into `run`, from where it stopped: in the run-record layout, or in Dynamo's
+    for a run begun in it."""
+
+    search, destination, execution = _kernel(args)
+    if dynamo_layout(run):
+        print(f"{run.name} was begun in Dynamo's layout (before 2026-11-05) and is carried on "
+              "in it")
+        run_mra_project(plan, run, search=search, destination=destination,
+                        workers=args.workers, spacing=spacing, resume=True)
+        return
+    try:
+        run_plan(plan, run, search=search, execution=execution, workers=args.workers)
+    except Refused as error:
+        raise SystemExit(f"REFUSED: {error}") from None
 
 
 def new_run(args: argparse.Namespace) -> int:
@@ -174,9 +220,7 @@ def new_run(args: argparse.Namespace) -> int:
         first = slice(0, args.iterations)
         plan = replace(plan, settings=plan.settings[first], cards=plan.cards[first],
                        mra=plan.mra[first])
-    search, destination = _kernel(args)
-    run_mra_project(plan, export / args.name, search=search, destination=destination,
-                    workers=args.workers, spacing=_spacing(export), resume=True)
+    compute(plan, export / args.name, args, _spacing(export))
     print(f"{args.name} was set up from {export}: no Dynamo project to compare it with")
     return 0
 
@@ -250,10 +294,8 @@ def main() -> int:
     if args.compare_only and not computed:
         raise SystemExit(f"{project}: Dynamo has not computed it, so there is nothing to compare")
     if not args.compare_only:
-        plan = plan_from_dynamo(project, iterations=args.iterations)
-        search, destination = _kernel(args)
-        run_mra_project(plan, out, search=search, destination=destination,
-                        workers=args.workers, spacing=_spacing(project.parent), resume=True)
+        compute(plan_from_dynamo(project, iterations=args.iterations), out, args,
+                _spacing(project.parent))
     if not computed:
         print(f"{project.name} was set up and not computed by Dynamo: nothing to compare")
         return 0

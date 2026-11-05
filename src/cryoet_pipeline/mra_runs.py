@@ -63,6 +63,11 @@ TAG, SHIFTS, ANGLES, TILTS, TOMOGRAM, POSITION, PIXEL = (
 """The columns of the plan's starting table (a Dynamo table) the setup names."""
 
 
+class Refused(ValueError):
+    """A run not written where it was asked to be: that folder holds another plan's
+    nodes, or files of another kind."""
+
+
 def node_folder(run: Path, number: int) -> Path:
     """The setup for 0, iteration `number` otherwise."""
 
@@ -149,6 +154,40 @@ def plan_record(plan: MraPlan) -> dict[str, Any]:
         "iterations": [_iteration_content(plan, number)
                        for number in range(1, len(plan.settings) + 1)],
     }
+
+
+def _write_plan(path: Path, plan: MraPlan) -> None:
+    """plan.json, unless the one there asks for the same and more: a run carried on with
+    fewer iterations than it was once asked for keeps the longer request."""
+
+    record = json.loads(canonical_json(plan_record(plan)))
+    if path.exists():
+        before = json.loads(path.read_text())
+        asked = record["iterations"]
+        if ({key: value for key, value in before.items() if key != "iterations"}
+                == {key: value for key, value in record.items() if key != "iterations"}
+                and before.get("iterations", [])[:len(asked)] == asked):
+            return
+    _write_json(path, record)
+
+
+def _finished(plan: MraPlan, run: Path) -> list[RunRecord]:
+    """The records of the nodes finished before, from the setup on as far as they go
+    unbroken. A node there of another plan is refused before anything is written."""
+
+    done: list[RunRecord] = []
+    for number in range(len(plan.settings) + 1):
+        record = completed(node_folder(run, number))
+        if record is None:
+            break
+        step, step_version, content, inputs = _identity(plan, run, number,
+                                                        done[-1] if done else None)
+        if record.fingerprint != fingerprint(step, step_version, BACKEND, BACKEND_VERSION,
+                                             content, inputs):
+            raise Refused(f"{node_folder(run, number)} holds a node of another plan; give "
+                          "the run a new name")
+        done.append(record)
+    return done
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -343,14 +382,20 @@ def run_plan(
     """
 
     run = run.resolve()
+    if run.is_dir() and not (run / PLAN).is_file() and any(run.iterdir()):
+        raise Refused(f"{run} holds files but no {PLAN}, so it is not a run of this layout "
+                      "(a Dynamo project, or a run of the port in Dynamo's layout); give the "
+                      "run a new name")
     run.mkdir(parents=True, exist_ok=True)
     execution = dict(execution or {})
     commit = code_record().get("commit")
     tags = plan.table[:, TAG].astype(np.int64)
     particles: list[np.ndarray] | None = None
     previous: RunRecord | None = None
+    computed = 0
     try:
-        _write_json(run / PLAN, plan_record(plan))
+        _finished(plan, run)
+        _write_plan(run / PLAN, plan)
         for number in range(len(plan.settings) + 1):
             folder = node_folder(run, number)
             step, step_version, content, inputs = _identity(plan, run, number, previous)
@@ -358,8 +403,8 @@ def run_plan(
             record = completed(folder)
             if record is not None:
                 if record.fingerprint != expected:
-                    raise ValueError(f"{folder} holds a node of another plan; give the run a "
-                                     "new name")
+                    raise Refused(f"{folder} holds a node of another plan; give the run a "
+                                  "new name")
                 if record.code.get("commit") != commit:
                     log(f"{folder.name}: done before under commit "
                         f"{record.code.get('commit', '?')}, carrying on under {commit or '?'}")
@@ -383,11 +428,15 @@ def run_plan(
                                             attempt.add, attempt.selections, attempt.metrics)
             log(f"{folder.name}: {line}")
             previous = completed(folder)
+            computed += 1
+        if not computed:
+            log(f"{run.name}: all {len(plan.settings)} iterations finished before; nothing to "
+                "compute")
     finally:
         close = getattr(search, "close", None)
         if callable(close):
             close()
 
 
-__all__ = ["State", "export_fingerprint", "node_folder", "plan_record", "read_state",
-           "run_plan"]
+__all__ = ["Refused", "State", "export_fingerprint", "node_folder", "plan_record",
+           "read_state", "run_plan"]
