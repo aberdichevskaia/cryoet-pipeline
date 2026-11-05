@@ -26,6 +26,18 @@
 #   CLAUDE_CODE_AUTO_CONNECT_IDE=false
 #                           no editor either (VS Code over SSH, say): its tools
 #                           are not shell commands, so the guard never sees them
+#   CRYOET_LIBRARY          the reference library (docs/library.md): the folder
+#                           that holds its snapshots, or "none" for a session
+#                           without it. Unset, a session for a person takes the
+#                           first site folder in LIBRARY_SITES that exists, and a
+#                           headless run (-p) takes none, so that an evaluation
+#                           reads the library only when it says so. The snapshot
+#                           `current` names at the start is the one the session
+#                           reads, by its own name: --add-dir lets the session
+#                           read it, assistant/library.md and its path join the
+#                           instructions, and CRYOET_LIBRARY_ROOT and
+#                           CRYOET_LIBRARY_SNAPSHOT tell assistant/guard.py what
+#                           is never to be written
 #
 # Other options pass on to claude, except the ones that would undo the above.
 # --permission-mode acceptEdits passes only with -p, for a headless run such as
@@ -127,11 +139,43 @@ options=(
     --plugin-dir "$REPO/assistant/plugin"
     --strict-mcp-config
 )
-if ((accept_edits)); then
-    headless=0
-    for arg in ${passed[@]+"${passed[@]}"}; do
-        [[ "$arg" == -p || "$arg" == --print ]] && headless=1
+headless=0
+for arg in ${passed[@]+"${passed[@]}"}; do
+    if [[ "$arg" == -p || "$arg" == --print ]]; then headless=1; fi
+done
+
+# The reference library's folders on the sites; assistant/guard.py guards the
+# same ones.
+LIBRARY_SITES=(/fast/AG_Kudryashev/cryoet-library)
+unset CRYOET_LIBRARY_ROOT CRYOET_LIBRARY_SNAPSHOT
+library=${CRYOET_LIBRARY-}
+if [[ -z "$library" ]] && ((!headless)); then
+    for site in "${LIBRARY_SITES[@]}"; do
+        if [[ -d "$site" ]]; then
+            library=$site
+            break
+        fi
     done
+fi
+snapshot=
+if [[ -n "$library" && "$library" != none ]]; then
+    if [[ -f "$library/current/library.json" ]]; then
+        snapshot=$(cd "$library/current" && pwd -P)
+        root=$(cd "$library" && pwd -P)
+        export CRYOET_LIBRARY_ROOT=$root CRYOET_LIBRARY_SNAPSHOT=$snapshot
+        options+=(--add-dir "$snapshot")
+    else
+        echo "scripts/assistant: no library snapshot at $library/current; the session" \
+            "starts without the library" >&2
+    fi
+fi
+prompt=$(cat "$REPO/assistant/instructions.md")
+if [[ -n "$snapshot" ]]; then
+    prompt+=$'\n\n'"$(cat "$REPO/assistant/library.md")"
+    prompt+=$'\n\n'"This session's library is $snapshot (snapshot ${snapshot##*/})."
+fi
+
+if ((accept_edits)); then
     if ((!headless)); then
         echo "scripts/assistant: --permission-mode acceptEdits is for a headless run (-p)," \
             "where nobody can approve an edit; a session asks the person instead" >&2
@@ -142,16 +186,29 @@ fi
 if ((print_only)); then
     printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
         "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"
-    printf 'ENABLE_CLAUDEAI_MCP_SERVERS=false\nCLAUDE_CODE_AUTO_CONNECT_IDE=false\ncd %q\n' "$REPO"
+    printf 'ENABLE_CLAUDEAI_MCP_SERVERS=false\nCLAUDE_CODE_AUTO_CONNECT_IDE=false\n'
+    if [[ -n "$snapshot" ]]; then
+        printf 'CRYOET_LIBRARY_ROOT=%q\nCRYOET_LIBRARY_SNAPSHOT=%q\n' "$root" "$snapshot"
+    fi
+    printf 'cd %q\n' "$REPO"
     printf '%q' "$claude"
     printf ' %q' "${options[@]}"
-    printf ' --append-system-prompt "$(cat assistant/instructions.md)" --name cryoet-assistant'
+    if [[ -n "$snapshot" ]]; then
+        printf ' --append-system-prompt "$(cat assistant/instructions.md assistant/library.md)'
+        printf ' and the library'\''s path"'
+    else
+        printf ' --append-system-prompt "$(cat assistant/instructions.md)"'
+    fi
+    printf ' --name cryoet-assistant'
     # printf repeats its format at least once, so with nothing passed on it
     # would print an empty argument.
     if ((${#passed[@]})); then printf ' %q' "${passed[@]}"; fi
     printf '\n'
     exit 0
 fi
+if [[ -n "$snapshot" ]]; then
+    echo "scripts/assistant: library snapshot ${snapshot##*/}, read-only" >&2
+fi
 exec "$claude" "${options[@]}" \
-    --append-system-prompt "$(cat "$REPO/assistant/instructions.md")" \
+    --append-system-prompt "$prompt" \
     --name cryoet-assistant ${passed[@]+"${passed[@]}"}

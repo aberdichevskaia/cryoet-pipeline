@@ -32,7 +32,9 @@
       "Bash(sinfo)",
       "Bash(sinfo *)",
       "Bash(ls)",
-      "Bash(ls *)"
+      "Bash(ls *)",
+      "Bash(python3 scripts/search_library.py *)",
+      "Bash(python scripts/search_library.py *)"
     ],
     "ask": [
       "Bash(scancel *)",
@@ -54,13 +56,25 @@
       "Edit(tests/**)",
       "Edit(docs/**)",
       "Edit(assistant/**)",
-      "Edit(.claude/**)"
+      "Edit(.claude/**)",
+      "Bash(python3 scripts/build_library.py *)",
+      "Bash(python scripts/build_library.py *)",
+      "Edit(//fast/AG_Kudryashev/cryoet-library/**)"
     ]
   },
   "hooks": {
     "PreToolUse": [
       {
         "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/assistant/guard.py\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",

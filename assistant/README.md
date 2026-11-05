@@ -70,6 +70,18 @@ or another client can read as well.
   `--dangerously-skip-permissions`, `--permission-mode`, `--settings`,
   `--allowed-tools`, `--system-prompt`, `--plugin-dir`, `--mcp-config`, `--ide`,
   `--safe-mode` and `--bare`.
+- **The reference library, read-only** ([docs/library.md](../docs/library.md)).
+  - `CRYOET_LIBRARY` names the folder of snapshots, or `none` for a session
+    without it.
+  - Unset, a session for you takes the site's folder, such as MDC's
+    `/fast/AG_Kudryashev/cryoet-library`. A headless run (`-p`) takes one only
+    when the variable names it.
+  - The session reads the snapshot `current` names, given with `--add-dir`. The
+    instructions gain `library.md` and the snapshot's path, and the launcher
+    prints the snapshot's name.
+  - The assistant searches the library with `scripts/search_library.py`.
+  - `guard.py` refuses every write to the library, by any tool, and
+    `scripts/build_library.py` in any form.
 
 ## Two layers, neither of them a sandbox
 

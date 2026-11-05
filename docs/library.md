@@ -19,10 +19,22 @@ anything up. Claude reads the same library.
 Status, 2026-11-05:
 
 - **Built:** the installation channel and the site card, by
-  `scripts/build_library.py` from the sources in `configs/library.toml`,
-  tested on the Mac.
-- **Not built yet:** a snapshot on a cluster, the web sources, the assistant's
-  access, and search.
+  `scripts/build_library.py` from the sources in `configs/library.toml`.
+  Tested on the Mac. The first cluster snapshot is MDC's `mdc-2026-11-05`.
+  It was built on max025, from a shell that had the tool variables; the login
+  shell of the first dry run had none of them. The snapshot holds 380
+  documents. Every tool was found with its version, and there were no problems
+  and no notes: IMOD's manual has a page for every IMOD program the pipeline
+  runs, and the node has all the manual pages asked for.
+- **Built:** the assistant's read access, read-only, and its search:
+  - `scripts/assistant` finds the snapshot;
+  - `assistant/guard.py` refuses every write to the library;
+  - `scripts/search_library.py` searches it.
+
+  A real headless run on the Mac checked all three. See
+  [Read only, enforced in layers](#read-only-enforced-in-layers) and
+  [Search](#search).
+- **Not built yet:** the web sources and the git channel.
 
 ## Core rule
 
@@ -217,28 +229,45 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
 
 ## Read only, enforced in layers
 
-The rule is decided. The layers are proposed, and all of them are in place
-before the assistant is given the library.
+The rule is decided. Layers 1–5 are built (2026-11-05); layer 6 is still to be
+checked.
 
 1. **File permissions.** The builder is the only writer. A finished snapshot
    loses its write bits, and the group can only read. For every user except
-   the snapshot's owner this holds without any software of ours.
-2. **Deny rules** in `assistant/settings.json`, such as
-   `Edit(//fast/AG_Kudryashev/cryoet-library/**)`, one for each site's path. An
-   `Edit` rule covers every file-editing tool. A deny rule holds in every mode
-   and over any allow rule.
-3. **The guard hook** (`assistant/guard.py`) refuses any Bash command that names
-   a library path, unless it is one of a few read-only commands: `cat`, `head`,
-   `tail`, `grep`, `ls`, `find` without `-delete` or `-exec`, and the search
-   script.
-4. **The launcher** refuses options that would drop layer 2 or 3, as it already
-   does for `--settings` and the bypass modes. The builder is denied to the
-   assistant.
-5. **Tests** in `tests/test_assistant.py` check layers 2–4 and are
-   mutation-checked, so a change that weakens them fails.
+   the snapshot's owner this holds without any software of ours. Whether ACLs
+   on `/fast` change this is still to be checked.
+2. **Deny rules** in `assistant/settings.json`:
+   `Edit(//fast/AG_Kudryashev/cryoet-library/**)` for MDC's folder, and
+   `scripts/build_library.py` under `python3` and `python`. An `Edit` rule
+   covers every file-editing tool. A deny rule holds in every mode and over any
+   allow rule.
+3. **The guard hook** (`assistant/guard.py`) runs before every Bash call and
+   every Edit, Write, MultiEdit and NotebookEdit call.
+   - It refuses an edit of a file in the library, by any of those tools.
+   - It refuses scripts/build_library.py in any form.
+   - A command line that names the library may run only commands that read:
+     `cat`, `head`, `tail`, `grep`, `ls`, `find` without its actions, `wc`,
+     `stat` and the like. No output may be redirected into the library either.
+   - "Names" covers the folder in the text, its variables
+     (`$CRYOET_LIBRARY_SNAPSHOT`), and any word that resolves into it: globs
+     expanded, links followed, and a relative path taken from the folder the
+     call runs in.
+   - It guards the session's library (`CRYOET_LIBRARY_ROOT`) and the sites'
+     folders, also when a session names none.
+4. **The launcher** refuses options that would drop layer 2 or 3, as it does for
+   `--settings` and the bypass modes.
+5. **Tests** in `tests/test_assistant.py` check layers 2–4. They were
+   mutation-checked: 11 of 12 mutations were caught. The 12th dropped the check
+   of the call's folder, which the per-word resolution already covers.
 6. **To check:** Claude Code's Bash sandbox (`sandbox.enabled`) would stop
    writes outside the working directory at the OS level, the owner's included,
    if it runs on the login nodes.
+
+A real headless run checked it (Claude Code 2.1.312, claude-haiku-5-5, on the
+Mac, 2026-11-05):
+- a Write and a `touch` into the snapshot were both stopped by the guard;
+- Read worked through `--add-dir`, with no question asked;
+- nothing was written.
 
 Limits:
 
@@ -252,10 +281,9 @@ Limits:
 
 The folder is decided; the rest is proposed.
 
-- **Location.** At MDC: `/fast/AG_Kudryashev/cryoet-library/`. The subfolder
-  is not chosen yet; it should be a group folder, not a personal one. Inside,
-  each snapshot is `<site>-<date>/`; a second build on the same day gets a
-  suffix. `current` points at the latest.
+- **Location.** At MDC: `/fast/AG_Kudryashev/cryoet-library/`, a group folder
+  rather than a personal one. Inside, each snapshot is `<site>-<date>/`; a
+  second build on the same day gets a suffix. `current` points at the latest.
 - **Permissions.** The group can read. The directory has setgid, so that new
   files take the group. A built snapshot loses its write bits (see
   [Read only, enforced in layers](#read-only-enforced-in-layers)).
@@ -263,32 +291,51 @@ The folder is decided; the rest is proposed.
   snapshots do too. An eval run on a Mac uses a copy of the snapshot of the
   case's cluster, not one built on the Mac. The cluster is the `cluster` field
   in [cases.toml](agent/cases/cases.toml).
-- **Finding it, for now.** The launcher (`scripts/assistant`) looks in this
-  order:
-  1. `CRYOET_LIBRARY`, if it is set;
-  2. otherwise the first site path that exists;
-  3. with neither, it runs without a library and says so.
+- **Finding it, for now** (built in `scripts/assistant`):
+  1. `CRYOET_LIBRARY` names the folder of snapshots, or `none` for a session
+     without the library.
+  2. Unset, a session for a person takes the first site folder in
+     `LIBRARY_SITES` that exists.
+  3. A headless run (`-p`) takes a library only when `CRYOET_LIBRARY` names
+     one. An evaluation therefore reads it only when it says so, and
+     scripts/run_cases.py does not pass the variable on.
 
-  It does not rely on a user's shell startup files. Once installing the
-  pipeline on a host sets the folder, that setting replaces the list of site
-  paths. Read access is given with `--add-dir`; write access never is.
+  The session reads the snapshot that `current` names when it starts, by its
+  own name, so a build during a session changes nothing it reads. The launcher
+  then:
+  - gives that snapshot with `--add-dir`, read-only;
+  - adds `assistant/library.md` and the snapshot's path to the instructions;
+  - exports `CRYOET_LIBRARY_ROOT` and `CRYOET_LIBRARY_SNAPSHOT` for the guard;
+  - prints the snapshot's name.
+
+  With no library it adds nothing, and the instructions are the same as
+  before. It does not rely on a user's shell startup files. Once installing the
+  pipeline on a host sets the folder, that setting replaces the site list.
 - **Retention.** A snapshot that an eval record names is kept. This is
   garbage collection by reachability from roots, as in database_design.md.
 
-## Search (proposed)
+## Search
 
 - **No index now.** IMOD's manual is 5.6 MB of HTML and 4.3 MB of text, about
   1.1 million tokens. That is far too much for any context and trivial for
   grep. All the manuals together come to an estimated tens of megabytes.
-- **Search order.**
-  1. The assistant searches a snapshot with its own tools.
-  2. A script in `scripts/` comes when runs show the model's own searches
-     missing. It returns passages with their source and version, ranked
-     lexically.
-  3. Embeddings come only if a case fails on a paraphrase.
+- **The search script came first.** Claude Code 2.1.312 has no Grep tool of its
+  own, and `grep` through Bash is not on the assistant's allow list, so it would
+  ask the person. `scripts/search_library.py` is on the list:
+  - it searches the session's snapshot line by line, ignoring case, as plain
+    text or with `--regex`;
+  - `--tool` limits it to one tool's pages, and `-e` takes a flag that starts
+    with "-";
+  - pages with more matching lines come first, each shown with its tool, the
+    tool's version and its source, then its lines with their numbers;
+  - its output is bounded.
 
-  None of the cryo-EM agents read on 2026-11-04 describes embeddings. Claude
-  Code is reported to have dropped a local vector index for its own search.
+  In the run checked above, the assistant answered a question about a newstack
+  option from the page and cited "IMOD 5.1.12, man/newstack.html, line 479",
+  with no question asked of the person.
+- **Embeddings** come only if a case fails on a paraphrase. None of the cryo-EM
+  agents read on 2026-11-04 describes embeddings. Claude Code is reported to
+  have dropped a local vector index for its own search.
 - **Papers would need an index.** Open full text comes to about 0.2–0.3
   billion tokens (a Europe PMC count from 2026-11-03).
   - The index would be a derived file, opened read-only and rebuilt from the
@@ -309,6 +356,13 @@ numpy, torch, zarr, mrcfile                     the installed package versions
 ```
 
 So the documentation for the version that ran a step cannot be looked up yet.
+Every one of these tools does state its version when asked. At MDC on
+2026-11-05 the builder read:
+
+```text
+IMOD 5.1.12, CTFFIND 5.0.2, MotionCor3 1.2.4, pytom-match-pick 0.14.0,
+MemBrain-seg 0.0.10, Slurm 26.05.4, bash 5.1.8
+```
 
 Recording these versions is not needed to build the library, because the
 builder finds the versions on its own. It is needed to match a run to the
@@ -366,16 +420,36 @@ before citing it.
 None of the three cryo-EM papers measures what its knowledge part adds. The
 arms above are for measuring that.
 
+## Later
+
+Parked on 2026-11-05, while the work is at MDC.
+
+- **Munich's site wiki.** It is most likely a GitLab Pages site built from a
+  repository, behind the institute's GitLab sign-in. Its address is kept
+  outside this repository. The builder is to clone that repository with the
+  user's own key, pin the commit, and convert its pages. That is the git
+  channel, which the builder does not have yet.
+- **CTFFIND's questions.** `ctffind --help` lists only CTFFIND's command-line
+  flags, and ends with "Unknown long option 'help'". The parameters CTFFIND
+  asks for interactively are not in that output. They have to come from the
+  web channel, that is, from cisTEM's documentation.
+
 ## Open questions
 
-1. The subfolder at MDC, and the folder in Munich.
+1. The folder in Munich.
 2. Which snapshot the constructed cases (cluster `none`) use.
-3. Measure that `--add-dir` gives read access while layers 2 and 3 refuse
-   every write.
-4. Recording the real versions of external tools (see
+3. Recording the real versions of external tools (see
    [Versions](#versions-the-pipeline-records-today)).
-5. Which sources the first snapshot holds.
-6. How MotionCor3 reports its version.
-7. Whether the site wikis are git repositories. Munich's sits behind a GitLab
-   sign-in.
-8. Whether Claude Code's Bash sandbox runs on the login nodes.
+4. Which of MotionCor3's outputs the 1.2.4 was read from: `version_from` in
+   MDC's `library.json`.
+5. The MDC snapshot documents the installs of the shell it was built from.
+   IMOD and pytom-match-pick there come from a personal folder and a personal
+   environment, while CTFFIND, MotionCor3 and MemBrain-seg come from the
+   group's `software/`. Do the group's lanes run the same installs?
+6. Whether MDC's cluster has a wiki of its own (Munich's: see
+   [Later](#later)).
+7. Whether Claude Code's Bash sandbox runs on the login nodes.
+8. Whether the snapshot's permissions hold on GPFS: `/fast` may carry ACLs
+   beside the mode bits.
+9. A first session at MDC with the library: whether the assistant finds it,
+   searches it and cites it there as it did on the Mac.

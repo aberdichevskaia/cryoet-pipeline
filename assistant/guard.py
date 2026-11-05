@@ -1,28 +1,35 @@
 #!/usr/bin/env python3
-"""A second guard on the assistant's shell commands.
+"""A second guard on what the assistant's tools change.
 
-Claude Code runs this before every Bash call of a session that scripts/assistant
-started (assistant/settings.json, PreToolUse), with the call as JSON on stdin.
-Exit 2 blocks the call and shows the assistant the message on stderr; exit 0
-leaves it to the session's permission rules.
+Claude Code runs this, with the call as JSON on stdin, before every Bash call
+and every Edit, Write, MultiEdit and NotebookEdit call of a session that
+scripts/assistant started (assistant/settings.json, PreToolUse). Exit 2 blocks
+the call and shows the assistant the message on stderr. Exit 0 leaves the call
+to the session's permission rules.
 
-It blocks three things the assistant must never do itself, wherever they sit in
-a command line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c`:
+It blocks what the assistant must never do itself, wherever it sits in a command
+line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c`:
 
 * starting a Slurm job (sbatch, srun, salloc), which would skip the checks and
   the journal of scripts/submit_lanes.py and scripts/submit_recipe.py;
 * running a batch script (*.sbatch) directly;
-* writing a project's journal.jsonl, which only those two scripts write.
+* writing a project's journal.jsonl, which only those two scripts write;
+* running scripts/build_library.py, which writes the reference library;
+* changing the reference library (docs/library.md). A command line that names
+  the library, or runs inside it, may run only commands that read. An edit of a
+  file in the library is refused, whatever the tool.
 
 Like the permission rules, this is a second layer and not a sandbox: a command
 that hides the call (a Python one-liner that runs sbatch, say) gets past it.
 Such a command is not on the session's allow list, so the person is asked for
-it. The first layer is the scripts' own checks.
+it. The first layer is the scripts' own checks, and for the library its file
+permissions, since a snapshot is written read-only.
 
 Written for the python3 of a login node, which may be old: standard library only,
 nothing newer than Python 3.6.
 """
 
+import glob
 import json
 import os
 import re
@@ -49,6 +56,24 @@ COPIERS = {"cp", "ln", "install", "rsync"}
 _WRAPPER_ARGUMENT = re.compile(r"^(-.*|[A-Za-z_][A-Za-z0-9_]*=.*|\d+(\.\d+)?[smhd]?)$")
 JOURNAL = "journal.jsonl"
 _SLURM_WORD = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(sbatch|srun|salloc)(?=$|[\s;&|)`])")
+
+# The reference library's folders on the sites; scripts/assistant has the same
+# list. A session's own library comes in CRYOET_LIBRARY_ROOT.
+LIBRARY_SITES = ("/fast/AG_Kudryashev/cryoet-library",)
+LIBRARY_VARIABLES = ("CRYOET_LIBRARY", "CRYOET_LIBRARY_ROOT", "CRYOET_LIBRARY_SNAPSHOT")
+# What may run in a command line that names the library: commands that only read.
+READERS = {
+    "cat", "head", "tail", "grep", "egrep", "fgrep", "zgrep", "ls", "find", "wc", "stat",
+    "file", "du", "diff", "cmp", "cut", "tr", "nl", "column", "jq", "readlink", "realpath",
+    "basename", "dirname", "cd", "pwd", "echo", "printf", "test", "[", "true", "false",
+    "sha256sum", "shasum", "md5sum",
+}
+# find's actions that run or write something.
+FIND_ACTIONS = {
+    "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls",
+}
+BUILDER = "build_library.py"
+FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 def tokens(command):
@@ -155,15 +180,175 @@ def journal_message():
     )
 
 
+def commands_in(command, depth=0):
+    """Every command a line runs, as (its name, the words after it up to the
+    next separator), the commands of a `bash -c` script among them. None for a
+    line that cannot be read, such as one with a quote that does not close."""
+    try:
+        words = tokens(command)
+    except ValueError:
+        return None
+    found = []
+    starts, previous, i = True, None, 0
+    while i < len(words):
+        word = words[i]
+        if word.startswith("`"):
+            word, starts = word.lstrip("`"), True
+        if word in SEPARATORS:
+            starts, previous = True, word
+            i += 1
+            continue
+        if not starts or ("=" in word and not word.startswith("-") and previous not in WRAPPERS):
+            previous = word
+            i += 1
+            continue
+        name = os.path.basename(word)
+        if name in WRAPPERS:
+            previous = name
+            i += 1
+            while i < len(words) and _WRAPPER_ARGUMENT.match(words[i]):
+                i += 1
+            continue
+        end = i + 1
+        while end < len(words) and words[end] not in SEPARATORS and not words[end].startswith("`"):
+            end += 1
+        rest = words[i + 1:end]
+        found.append((name, rest))
+        if name in SHELLS and "-c" in rest and depth < 3:
+            at = rest.index("-c") + 1
+            inner = commands_in(rest[at], depth + 1) if at < len(rest) else []
+            if inner is None:
+                return None
+            found.extend(inner)
+        starts, previous, i = False, word, end
+    return found
+
+
+def builder_problem(command):
+    """scripts/build_library.py run in any form: it writes the library."""
+    commands = commands_in(command)
+    if commands is None:
+        return builder_message() if re.search(r"\bbuild_library\.py\b", command) else None
+    for name, rest in commands:
+        script = name
+        if name.startswith("python"):
+            script = next((one for one in rest if not one.startswith("-")), "")
+        if os.path.basename(script) == BUILDER:
+            return builder_message()
+    return None
+
+
+def builder_message():
+    return (
+        "scripts/build_library.py writes the reference library. The person builds "
+        "it; the assistant only reads it."
+    )
+
+
+def library_roots(environ):
+    """The folders that hold the library, as named and as resolved."""
+    named = [environ.get(name) for name in ("CRYOET_LIBRARY", "CRYOET_LIBRARY_ROOT")]
+    roots = set()
+    for one in named + list(LIBRARY_SITES):
+        if one and one != "none":
+            for form in (os.path.normpath(one), os.path.realpath(one)):
+                if form != os.sep:
+                    roots.add(form)
+    return roots
+
+
+def inside(path, roots):
+    return any(path == root or path.startswith(root.rstrip(os.sep) + os.sep) for root in roots)
+
+
+def resolve(word, cwd):
+    return os.path.realpath(os.path.join(cwd, os.path.expanduser(os.path.expandvars(word))))
+
+
+def names_library(command, cwd, roots):
+    """Whether a command line names the library or runs inside it. Read from its
+    text, its variables, and each word as the path it resolves to: globs
+    expanded, links followed, a relative path taken from the call's folder."""
+    if inside(os.path.realpath(cwd), roots):
+        return True
+    if any(root in command for root in roots):
+        return True
+    if any("$" + name in command or "${" + name in command for name in LIBRARY_VARIABLES):
+        return True
+    try:
+        words = tokens(command)
+    except ValueError:
+        return False
+    for word in words:
+        word = word.strip("`")
+        if not word or word in SEPARATORS:
+            continue
+        if any(char in word for char in "*?["):
+            paths = glob.glob(os.path.join(cwd, os.path.expanduser(word))) or [resolve(word, cwd)]
+        else:
+            paths = [resolve(word, cwd)]
+        if any(inside(os.path.realpath(path), roots) for path in paths):
+            return True
+    return False
+
+
+def library_problem(command, cwd, environ):
+    """A command line that names the library and does more than read it."""
+    roots = library_roots(environ)
+    if not names_library(command, cwd, roots):
+        return None
+    commands = commands_in(command)
+    if commands is None:
+        return library_message("a command line that cannot be read")
+    for name, rest in commands:
+        if name not in READERS:
+            return library_message("`%s`" % name)
+        action = next((one for one in rest if one in FIND_ACTIONS), None) if name == "find" else None
+        if action:
+            return library_message("`find %s`" % action)
+        for at, one in enumerate(rest):
+            if one in REDIRECTS and at + 1 < len(rest) and inside(resolve(rest[at + 1], cwd), roots):
+                return library_message("writing to " + rest[at + 1])
+    return None
+
+
+def library_message(what):
+    return (
+        what + " in a command line that names the reference library, which is read-only "
+        "(docs/library.md). Search it with scripts/search_library.py and read it with "
+        "Read, or with cat, head, grep, ls and find; never write, move or delete anything in it."
+    )
+
+
+def file_problem(tool_input, cwd, environ):
+    """An edit, by any tool, of a file in the library."""
+    path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+    if path and inside(resolve(path, cwd), library_roots(environ)):
+        return (
+            "%s is in the reference library, which is read-only (docs/library.md): "
+            "no tool edits it." % path
+        )
+    return None
+
+
 def main():
     try:
         call = json.load(sys.stdin)
     except ValueError:
         return 0
-    if not isinstance(call, dict) or call.get("tool_name") != "Bash":
+    if not isinstance(call, dict):
         return 0
-    command = (call.get("tool_input") or {}).get("command") or ""
-    found = problem(command)
+    tool = call.get("tool_name")
+    tool_input = call.get("tool_input") or {}
+    cwd = call.get("cwd") or os.getcwd()
+    if tool == "Bash":
+        command = tool_input.get("command") or ""
+        found = (problem(command) or builder_problem(command)
+                 or library_problem(command, cwd, os.environ))
+    elif tool in FILE_TOOLS:
+        found = file_problem(tool_input, cwd, os.environ)
+    else:
+        return 0
     if found:
         print(f"Blocked by assistant/guard.py: {found}", file=sys.stderr)
         return 2
