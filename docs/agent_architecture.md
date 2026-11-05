@@ -469,6 +469,11 @@ with a model at the edges rather than model-driven: that is the intended shape.
 - Pick the winner when comparing variants. The users were explicit that this is
   their decision, not an automatic one; the agent may rank, present, and explain.
 - Write to canonical artifacts. Scratch and export only.
+- Write to the reference library ([library.md](library.md)). The assistant reads
+  it and nothing more, in every mode and under every setting.
+  - This is enforced below the prompt, by file permissions, deny rules, the
+    guard hook and tests.
+  - All of these are in place before the assistant is given the library.
 - Submit jobs by any path other than the one a person uses. Until the controller
   exists that path is `submit_lanes.py`, or `submit_recipe.py` for a recipe, after
   a dry-run and an explicit yes; afterwards it is `create_run`.
@@ -714,12 +719,17 @@ enough has to be measured rather than argued. Seven rules keep it so.
    user could call `sbatch` directly, and only its own deny rules and the hook
    `assistant/guard.py` stop that. Both layers are needed; only the first moves
    with us.
-2. **Knowledge is plain markdown in the repository** — the pipeline map (step,
-   keys, flags, outputs, QC, logs), the playbooks, the instrument and sample
-   cards — readable by any model and by a person. Skills are thin `SKILL.md`
-   wrappers that point at it; the format is an open standard
-   ([agentskills.io](https://agentskills.io)), and other clients read the same
-   files.
+2. **Knowledge is plain markdown**, readable by any model and by a person.
+   - **Our own knowledge is in the repository**: the pipeline map (step, keys,
+     flags, outputs, QC, logs), the playbooks, and the instrument and sample
+     cards. Skills are thin `SKILL.md` wrappers that point at it. The format is
+     an open standard ([agentskills.io](https://agentskills.io)), and other
+     clients read the same files.
+   - **The tools' documentation is plain markdown too, but the repository holds
+     only its recipe**: the list of sources, and the scripts that download them
+     and convert them to markdown. Each site builds its own snapshots outside
+     the repository, because the repository is public and the sources carry
+     their own licences ([library.md](library.md)).
 3. **Tools are our scripts, with bounded, machine-readable output**: the summary
    and the excerpt above rather than a 50 MB log, JSON wherever a program reads
    it. A smaller model with a shorter context needs this more, and every model
