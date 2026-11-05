@@ -16,7 +16,13 @@ library the assistant can search:
 The first user is an open-weight model at MDC, which has no other way to look
 anything up. Claude reads the same library.
 
-Status, 2026-11-05: design only. Nothing has been built or downloaded.
+Status, 2026-11-05:
+
+- **Built:** the installation channel and the site card, by
+  `scripts/build_library.py` from the sources in `configs/library.toml`,
+  tested on the Mac.
+- **Not built yet:** a snapshot on a cluster, the web sources, the assistant's
+  access, and search.
 
 ## Core rule
 
@@ -101,7 +107,7 @@ The programs listed here are the ones the code and the lane files call, as of
 
 | Source | Contents | Channel |
 |---|---|---|
-| IMOD | The whole manual (5.6 MB of HTML, 4.3 MB of text). The code calls newstack, tilt, tiltalign, tiltxcorr, beadtrack, autofidseed, xftoxg, xfproduct, ctfplotter, ctfphaseflip, imodinfo, point2model and model2point. | installation: `$IMOD_DIR`, i.e. `VERSION`, `autodoc/`, `man/` and `html/`. The Mac install keeps `IMOD.qch` in `html/`; the cluster installs are still to be checked. |
+| IMOD | The whole manual (5.6 MB of HTML, 4.3 MB of text). The code calls newstack, tilt, tiltalign, tiltxcorr, beadtrack, autofidseed, xftoxg, xfproduct, ctfplotter, ctfphaseflip, imodinfo, point2model and model2point. | installation: `VERSION`, and `html/IMOD.qch` or the HTML files in `html/`, else the formatted pages in `man/`. The Mac install has `IMOD.qch`; the cluster installs show theirs in a dry run. |
 | MotionCor3 | README, usage text | web; installation |
 | CTFFIND5 | cisTEM documentation, usage text | web; installation |
 | pytom-match-pick | Documentation of the installed version; usage text of the four `pytom_*.py` scripts | web; installation |
@@ -143,9 +149,17 @@ web, pinned    a source kept in git, at the tag or commit that matches          
 web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's       retrieval date + sha256
 ```
 
-- **Runs.** The builder runs on each site, on a login node. A dry run first
-  prints what it found and what it would write, and writes nothing, as
-  `submit_lanes.py` does. The same run collects the site card.
+- **Runs.** The builder runs on each site, on a login node, in the pipeline's
+  environment:
+
+  ```bash
+  python3 scripts/build_library.py --site mdc --dry-run
+  python3 scripts/build_library.py --site mdc --root /fast/AG_Kudryashev/cryoet-library
+  ```
+
+  The dry run prints what was found and what would be read, and writes
+  nothing, as `submit_lanes.py` does. `--config` adds lane configs whose
+  executables to document. The real run also collects the site card.
 - **Versions.** The builder resolves each executable the way the pipeline
   does: from a lane config and the tool variables (`IMOD_DIR`, `CTFFIND5`,
   `MOTIONCOR3`, `PYTOMO_MP_DIR`, `MEMBRAIN_EXE`). Then it asks the tool itself:
@@ -162,10 +176,10 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
 
   A version the builder cannot find is listed in the dry run. A command-line
   option supplies it, or it stays `unknown`. The builder never prompts.
-- **IMOD's installation** holds more than its HTML manual. `autodoc/` has 136
-  files on the Mac, one per program, with each option as a structured field.
-  `man/` has the manual pages already formatted as text. Neither needs HTML
-  parsing.
+- **IMOD's manual.** The builder reads `html/IMOD.qch` (Qt help: SQLite, each
+  page zlib-compressed), else the HTML files in `html/`, else the formatted
+  pages in `man/`. On the Mac that gives 364 pages, 5.1 MB of markdown, in
+  about 4 s. `autodoc/` holds the same options again, so it is not read.
 - **Web sources** are fetched by the same run, from the list of sources. A
   pinned source is fetched at the tag its version names, a dated page as it is
   on that day. Nobody downloads them by hand.
@@ -191,10 +205,13 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
 - **Failures.** A source that has disappeared or changed shape fails the build
   loudly, and the previous snapshot stays. A diff between two snapshots lists
   what changed in the documentation.
-- **Coverage test.** Every program the code calls must have a source in the
-  list, so that a new backend cannot arrive without its documentation. When
-  the test fails, it names the program; the fix is one line in the list of
-  sources.
+- **Coverage.** Every program the code calls must have a source, so that a new
+  backend cannot arrive without its documentation. Two checks keep this:
+  - `tests/test_build_library.py` fails when a lane executable key in
+    `run_series.LANE_KEYS` has no tool in the list of sources. The fix is one
+    line in `configs/library.toml`.
+  - Each build lists, as a problem, any IMOD program the code resolves
+    (`resolve_imod_executable("…")`) that has no page in the installed manual.
 - **Politeness.** Downloads go one request at a time, under a generic client
   name. Each site's terms are checked when its source is added.
 

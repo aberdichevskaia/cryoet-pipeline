@@ -1,0 +1,42 @@
+# The sources of the assistant's reference library (docs/library.md), read by
+# scripts/build_library.py.
+#
+# This first part is the installation channel: what this site's own installation
+# says, at the version installed here. Web sources come later. A section names a
+# tool; scripts/build_library.py finds the tool on this host and asks it for its
+# version.
+#
+#   manual = true   the tool's installed manual (IMOD: $IMOD_DIR/html, else the
+#                   formatted pages in $IMOD_DIR/man)
+#   man             manual pages to read with `man`; a page `man` does not have
+#                   is asked for its `--help` instead
+#   usage           argument lists to run the tool with; each run's output is kept
+#   scripts         for pytom-match-pick: the scripts to ask, from the folder its
+#                   pytom_match_template.py is in
+
+[imod]
+manual = true
+
+[ctffind]
+usage = [["--help"]]
+
+[motioncor3]
+usage = [["--help"]]
+
+[pytom-match-pick]
+scripts = [
+    "pytom_create_template.py",
+    "pytom_create_mask.py",
+    "pytom_match_template.py",
+    "pytom_extract_candidates.py",
+]
+usage = [["--help"]]
+
+[membrain-seg]
+usage = [["--help"], ["segment", "--help"]]
+
+[slurm]
+man = ["sbatch", "srun", "scancel", "squeue", "sacct", "sinfo", "scontrol"]
+
+[bash]
+man = ["bash"]
