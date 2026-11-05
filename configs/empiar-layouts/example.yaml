@@ -14,6 +14,11 @@
 # `*`/`?` wildcards are supported for depositions with multiple files per
 # tilt-series (e.g. EMPIAR-10164's per-frame files).
 #
+# Check a layout before downloading:
+#   python3 scripts/show_empiar.py <empiar_id> --layout <this file> --series <id>
+# shows, per series, what the download would take and its size, and compares
+# the frames the series' mdoc names with the frames the layout takes.
+#
 # Where each series has a folder of its own, `{tilt_series}` goes in
 # remote_dir instead. Optional per group: `local_dir: frames` saves the files
 # in that folder under --out (otherwise in data/<remote_dir>), and

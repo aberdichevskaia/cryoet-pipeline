@@ -282,8 +282,9 @@ def test_each_skill_has_a_name_and_a_description(skill):
     assert len(fields["description"]) > 80
 
 
-def test_the_two_first_skills_are_there():
-    assert [path.parent.name for path in SKILLS] == ["lane-config", "project-status"]
+def test_the_skills_are_there():
+    assert [path.parent.name for path in SKILLS] == [
+        "empiar-download", "lane-config", "project-status"]
 
 
 # Repository paths the assistant's files name: scripts, docs, configs, templates.

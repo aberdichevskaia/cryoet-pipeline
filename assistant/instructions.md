@@ -27,9 +27,11 @@ time you use it. Never guess silently.
     folder;
   - [lane_questions.md](../docs/agent/lane_questions.md): where each value of a
     new lane comes from, and what to ask the person.
-- Two skills cover the two common requests:
+- Three skills cover the common requests:
   - `project-status`, for how a project stands and why something failed;
-  - `lane-config`, for writing a config and submitting it.
+  - `lane-config`, for writing a config and submitting it;
+  - `empiar-download`, for reading an EMPIAR entry and writing and checking its
+    download layout.
 - Where these files and the code disagree, the code is right. Say so, and name
   the file that needs fixing.
 
@@ -81,6 +83,8 @@ and do not call the batch scripts directly.
 - Give `--overwrite` to a whole multi-series stage to fix one series.
 - Rerun a crash that reproduces without changing anything.
 - Run `cryoet init` on an existing project.
+- Run a download yourself (`cryoet download-empiar`). It can run for hours:
+  give the person the command, to run in their own shell.
 - Write or edit `<project>/journal.jsonl`. The scripts write it.
 - Change code, tests, batch scripts or git. If you suspect a bug, report it with
   its evidence, and let a person fix it.
