@@ -157,7 +157,8 @@ ALIGNMENTS = {"imod-autofidseed": "beads", "imod-patch-seed": "patches"}
 # as docs/agent/pipeline_map.md ("Which combinations have run on real data") and
 # the README list them; tests/test_submit_lanes.py holds pipeline_map.md to this.
 # submit_lanes.py warns a lane of any other combination, on its dry run and its
-# submission, that it is the first.
+# submission, that it is the first. The frames here were MRC and TIFF movies: a
+# lane of EER movies is "EER frames" (lane_combination), which has run in none.
 RUN_ON_REAL_DATA = frozenset({
     ("stack", "patches", "no membranes"),  # ribo-bin8.toml, EMPIAR-11538
     ("frames", "beads", "membranes"),  # gag-bin8.toml, EMPIAR-10164; the RyR1 lanes at MDC
@@ -329,11 +330,21 @@ def _require(cfg: dict[str, Any], section: str, keys: tuple[str, ...], why: str)
     return values
 
 
-def lane_combination(cfg: dict[str, Any]) -> tuple[str, str, str]:
-    """The lane's input, alignment and membranes, named as pipeline_map.md names them."""
+def lane_combination(
+    cfg: dict[str, Any], movies: frozenset[str] = frozenset()
+) -> tuple[str, str, str]:
+    """The lane's input, alignment and membranes, named as pipeline_map.md names them.
+
+    `movies` are the formats of a frames lane's movies (submit_lanes.movie_formats).
+    EER movies make the input "EER frames", an input of its own: the frames lanes
+    that have run had MRC and TIFF movies, and no lane of EER movies has run yet.
+    """
     seed = cfg.get("fiducials", {}).get("seed_backend")
     alignment = ALIGNMENTS.get(seed, str(seed))
-    return lane_input(cfg), alignment, "membranes" if "segment" in cfg else "no membranes"
+    source = lane_input(cfg)
+    if source == "frames" and "eer" in movies:
+        source = "EER frames"
+    return source, alignment, "membranes" if "segment" in cfg else "no membranes"
 
 
 def combination_text(combination: tuple[str, str, str]) -> str:

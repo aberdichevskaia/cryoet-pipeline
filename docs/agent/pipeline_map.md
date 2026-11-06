@@ -80,11 +80,15 @@ real data as of 27 October 2026:
   - `gag-bin8.toml`, EMPIAR-10164, MRC movies;
   - the RyR1 lanes at MDC, TIFF movies.
 
-The other six produce valid commands but have not been run.
-`scripts/submit_lanes.py` warns a lane of one of them that it is the first, in
-its dry run and when it submits. The list is `RUN_ON_REAL_DATA` in
-`scripts/run_series.py`, and a test holds this one to it. Keep the README in
-step too.
+The other six produce valid commands but have not been run. Nor has any lane
+of EER movies, which `cryoet init` has read since 5 November 2026. A frames
+lane whose `[data] frames` folder holds EER movies counts as an input of its
+own, "EER frames", in each of its four combinations.
+
+`scripts/submit_lanes.py` warns a lane of any combination not listed here that
+it is the first, in its dry run and when it submits. The list is
+`RUN_ON_REAL_DATA` in `scripts/run_series.py`, and a test holds this one to it.
+Keep the README in step too.
 
 ### Where things are
 

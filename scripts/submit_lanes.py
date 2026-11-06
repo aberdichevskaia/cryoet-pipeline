@@ -244,6 +244,33 @@ def stack_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
     return tuple(found)
 
 
+def movie_formats(cfg: dict[str, Any]) -> frozenset[str]:
+    """The formats of the movies in a frames lane's [data] frames folder.
+
+    A file's format is the pipeline's own reading of its suffix
+    (cryoet_pipeline.movies.movie_format), so a file it does not take for a movie,
+    such as an mdoc or a `.gain`, does not count. Empty for a stack lane, and when
+    the folder cannot be listed; for a new project, problems() says so.
+    """
+    folder = cfg.get("data", {}).get("frames")
+    if run_series.lane_input(cfg) != "frames" or not isinstance(folder, str):
+        return frozenset()
+    try:
+        paths = list((ROOT / folder).iterdir())
+    except OSError:
+        return frozenset()
+    # Here, not at the top: only a frames lane needs the package and its numpy.
+    from cryoet_pipeline.movies import movie_format
+
+    formats = set()
+    for path in paths:
+        try:
+            formats.add(movie_format(path).value)
+        except ValueError:
+            continue
+    return frozenset(formats)
+
+
 def project_series(project: str) -> tuple[str, ...]:
     """The series a project has manifests for: what init wrote, or import-tilt-stack."""
 
@@ -1045,7 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg, lane, stages = one.cfg, one.lane, one.stages
         print(f"# {lane.config}: {lane.project}, "
               + (f"{len(lane.series)} series" if lane.series else "every series"))
-        combination = run_series.lane_combination(cfg)
+        combination = run_series.lane_combination(cfg, movie_formats(cfg))
         if combination not in run_series.RUN_ON_REAL_DATA:
             print(f"  warning: {run_series.combination_text(combination)} has not run on real "
                   "data yet, so this lane is the first: expect it to need fixing, and tell the "

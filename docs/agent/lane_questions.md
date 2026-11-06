@@ -26,7 +26,8 @@ follows it.
 5. **The questions.** Show the person what was read, then ask what is left in
    one message, each question with its default.
 6. **The combination.** Say which combination of input, alignment and
-   membranes the lane is. Say whether it has run on real data, from
+   membranes the lane is; EER movies are an input of their own, "EER frames".
+   Say whether it has run on real data, from
    [pipeline_map.md](pipeline_map.md), "Which combinations have run on real
    data". The dry run warns about it too.
 7. **The check.** Run `run_series.py --list-steps`, then the dry run, as the

@@ -580,3 +580,63 @@ def test_each_tracked_lane_is_read_as_its_combination(name, combination):
     cfg = tomllib.loads((ROOT / "configs" / "lanes" / f"{name}.toml").read_text())
     assert submit_lanes.run_series.lane_combination(cfg) == combination
     assert combination in submit_lanes.run_series.RUN_ON_REAL_DATA
+
+
+def _frames_lane(lane: Path, monkeypatch, movies: tuple[str, ...]) -> Path:
+    """gag-bin8 moved onto a folder of the files `movies` names, for a project not
+    made yet, beside the `lane` fixture, whose stand-ins it shares."""
+    frames, mdocs = lane.parent / "frames", lane.parent / "mdocs"
+    frames.mkdir()
+    mdocs.mkdir()
+    for name in movies:
+        (frames / name).write_bytes(b"")
+    text = (ROOT / "configs" / "lanes" / "gag-bin8.toml").read_text()
+    for pattern, value in (
+        (r'^project = ".*"$', f'project = "{lane.parent / "frames-project"}"'),
+        (r'^frames = ".*"$', f'frames = "{frames}"'),
+        (r'^mdocs = ".*"$', f'mdocs = "{mdocs}"'),
+    ):
+        text, count = re.subn(pattern, lambda _, v=value: v, text, count=1, flags=re.MULTILINE)
+        assert count == 1, f"gag-bin8.toml has no line {pattern}"
+    for name in ("MOTIONCOR3", "MEMBRAIN_EXE", "MEMBRAIN_CKPT"):
+        monkeypatch.setenv(name, f"/opt/{name.lower()}")
+    config = lane.parent / "frames-lane.toml"
+    config.write_text(text)
+    return config
+
+
+def test_a_lane_of_eer_movies_is_warned_although_its_combination_ran_on_others(
+        lane, monkeypatch, capsys):
+    # frames + beads + membranes has run, on MRC and TIFF movies; no EER lane has.
+    config = _frames_lane(lane, monkeypatch,
+                          ("TS_01_001.eer", "TS_01_002.eer", "gain.gain", "TS_01.mdoc"))
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0, err
+    assert "would refuse" not in err
+    lines = out.splitlines()
+    header = next(i for i, line in enumerate(lines) if line.startswith(f"# {config}:"))
+    assert lines[header + 1].startswith(
+        "  warning: EER frames + beads + membranes has not run on real data yet, so this "
+        "lane is the first")
+
+
+def test_a_lane_of_tiff_movies_beside_an_mrc_gain_is_not_warned(lane, monkeypatch, capsys):
+    config = _frames_lane(lane, monkeypatch,
+                          ("TS_01_001.tif", "TS_01_002.tif", "CountRef.mrc", "TS_01.mrc.mdoc"))
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0, err
+    assert "would refuse" not in err
+    assert UNTRIED not in out
+
+
+def test_movie_formats_reads_the_suffixes_as_the_pipeline_does(tmp_path):
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    for name in ("a.EER", "b.tiff", "c.mrcs", "d.gain", "e.mdoc", "f.log"):
+        (frames / name).write_bytes(b"")
+    cfg = {"lane": {"input": "frames"}, "data": {"frames": str(frames)}}
+    assert submit_lanes.movie_formats(cfg) == {"eer", "tiff", "mrc"}
+    # None from a folder that cannot be listed, nor from a stack lane.
+    gone = {**cfg, "data": {"frames": str(tmp_path / "gone")}}
+    assert submit_lanes.movie_formats(gone) == set()
+    assert submit_lanes.movie_formats({**cfg, "lane": {"input": "stack"}}) == set()
