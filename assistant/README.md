@@ -4,7 +4,7 @@ The pipeline's assistant for biologists is Claude Code, started by
 [`scripts/assistant`](../scripts/assistant) with its own settings,
 instructions and skills. The design is in
 [docs/agent_architecture.md](../docs/agent_architecture.md), sections *First
-increment* and *Portability*. This is its first increment: two skills, and the
+increment* and *Portability*. This is its first increment: four skills, and the
 rules around them.
 
 ## Starting it
@@ -114,23 +114,47 @@ What the rules do not cover:
   allow rules add to these. Deny and ask rules win over any allow rule,
   whichever file it is in.
 - **A managed setting.** One machine-wide setting,
-  `allowManagedPermissionRulesOnly`, would void every rule here. `/status`
+  `allowManagedPermissionRulesOnly`, would void every rule here. Another,
+  `allowManagedHooksOnly`, would void the guard. `/status`
   inside a session shows what applies.
+
+## Sessions so far
+
+- **Munich, 28 October 2026**, on a login node, with Claude Code 2.1.312 and a
+  Helmholtz Munich Enterprise seat, which includes Claude Code. The rules, the
+  guard and the skill worked, and it read a picking failure right. The MCP and
+  editor switches above came after it.
+- **Munich, 29 October.** This session checked those switches: `/mcp` listed no
+  servers, and `/status` gave the VS Code extension as installed, not
+  connected.
+- **MDC, 5 November**, on a login node, with Claude Code 2.1.318 and the
+  library. Asked what newstack does, it searched the snapshot with
+  `scripts/search_library.py` and answered from the manual page, citing
+  "IMOD 5.1.12, man/newstack.html". MDC's sessions open with Claude Code's note
+  that the organization may apply global configuration. The guard still ran
+  there: it refused a `python3` command that named the library
+  ([docs/library.md](../docs/library.md), *Read only, enforced in layers*).
+
+## Evaluation
+
+The cases are in [docs/agent/eval_cases.md](../docs/agent/eval_cases.md). Their
+evidence and how to run them are in
+[docs/agent/cases/](../docs/agent/cases/README.md). `scripts/run_cases.py` runs
+each case headless, in its own copy of the repository, with stand-ins for
+Slurm. Batches have run on the Mac since 30 October 2026. Their records are in
+`outputs/eval-runs/`, which git leaves out.
 
 ## Not done yet
 
-- **Two sessions so far.** The first ran on 28 October 2026 on a Munich login
-  node, with Claude Code 2.1.312 and a Helmholtz Munich Enterprise seat, which
-  includes Claude Code. The rules, the guard and the skill worked, and it read a
-  picking failure right. The MCP and editor switches above came after it. A
-  second session there on 29 October checked them: `/mcp` listed no servers,
-  and `/status` gave the VS Code extension as installed, not connected.
-- **Two of the four planned skills are missing:** reading a data folder
-  ([docs/agent/data_folders.md](../docs/agent/data_folders.md) is its
-  knowledge), and proposing a template from EMDB (roadmap section 23).
-- **No eval run yet.** The cases are in
-  [docs/agent/eval_cases.md](../docs/agent/eval_cases.md), and none of them has
-  been run against the assistant.
+- **The grades are drafts.** A model of the same family drafted them, and
+  `scripts/grade_cases.py` pre-ticks the boxes a script can check. A tick is a
+  pointer; the grade is a person's.
+- **The latest held-out runs are not graded.** These are the runs that go
+  without every line naming their case's answer, which they have done since
+  4 November.
+- **Five cases have no evidence yet:** E06, E07, E09, E10 and E15.
+- **No run against an open-weight model.** `scripts/run_cases.py --base-url`
+  and `scripts/open_model_cases.sbatch` are written, and nothing has run on max.
 - **Stricter loading needs a newer Claude Code.** Claude Code 2.1.248 and later
   has `--restricted`, which loads only managed settings and `--settings`, so
   even the person's own settings would stay out. It also removes Bash unless
