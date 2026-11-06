@@ -9,7 +9,38 @@ Paths are from the repository root. The keys, and how to choose them, are in
 `configs/lanes/example.toml` and `docs/agent/pipeline_map.md`. The safe ways to
 rerun are in `docs/agent/rerun_recipes.md`.
 
-## 1. Start from the closest config
+## 1. A rerun: first, is a job on the series?
+
+A rerun is anything submitted to a project that already exists: a changed
+parameter, a resume, a recipe, a new lane on the same project. Follow "Before
+any rerun" in `docs/agent/rerun_recipes.md`. Do its first step before you ask a
+question or propose a plan: check that no job is working on the series.
+
+```bash
+squeue --me                                # your queued and running jobs
+python3 scripts/show_project.py <config>   # the project's jobs and their logs
+```
+
+The `series` line at the top of a job's log names the series it works on.
+`show_project.py` prints the log's path from the repository root. A job still
+queued has no log yet: the `submitted` entry of `<project>/journal.jsonl` that
+holds its ID names its series. Count a job of the project whose series nothing
+names as working on all of them.
+
+If a job is working on a series the request touches:
+
+- Do not submit now. Name the job: its ID, name, state and series.
+- Say why as what would happen, not only as a rule. Both jobs would write the
+  same files, and the registry refuses the later of their two commits: that
+  step fails with nothing registered, and has to run again once the other job
+  has ended.
+- Offer to prepare the config copy now. The dry run, the yes and the
+  submission wait until the job has ended: the dry run refuses a busy series,
+  and a submission must follow its dry run within 30 minutes.
+- Cancelling the job needs its own explicit yes. Say first what it stops:
+  everything the job has left, on every series, not only this one.
+
+## 2. Start from the closest config
 
 | The person wants | Start from | Written to |
 |---|---|---|
@@ -21,7 +52,7 @@ Never edit an existing file in `configs/lanes/`. A lane file is the record of
 how the lane's results were made. Paths inside a config copy stay relative to
 the repository root.
 
-## 2. Fill it in
+## 3. Fill it in
 
 - **A new dataset.** Follow `docs/agent/lane_questions.md`. It says, for every
   key, whether the value comes from the data, a card, the site, a rule or the
@@ -69,7 +100,7 @@ the repository root.
 - **Values you cannot fill in.** Ask. Do not leave a placeholder from
   `example.toml` in a config you submit.
 
-## 3. Check it
+## 4. Check it
 
 ```bash
 python3 scripts/run_series.py --project <project> --config <config> --series <TS> --list-steps
@@ -79,7 +110,7 @@ This lists the steps the config's choices give. It also refuses any key the
 pipeline does not read, names it, and suggests what it was probably meant to
 be. Fix every key it names.
 
-## 4. Dry run, yes, submit
+## 5. Dry run, yes, submit
 
 A lane:
 
@@ -100,7 +131,8 @@ Then:
    - the jobs and their stages;
    - every "would refuse" line, and what it means;
    - with `--overwrite`, the outputs it may replace.
-2. If it refused anything, fix the cause and run the dry run again.
+2. If it refused anything, fix the cause and run the dry run again. If it
+   refused a busy series, wait for the job, as section 1 says.
 3. Ask whether to submit, naming `--overwrite` if it is there. That needs its
    own yes.
 4. After an explicit yes, run the same command without `--dry-run`, within 30
