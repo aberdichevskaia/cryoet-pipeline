@@ -428,6 +428,12 @@ def test_the_guard_blocks_the_library_builder(command):
     "rm {tmp}/cryoet-lib*/current",
     "grep -rn newstack {snapshot}/text > {snapshot}/hits.txt",
     "rm /fast/AG_Kudryashev/cryoet-library/current",
+    # The search is a reader only as itself: not a copy of the same name, not
+    # with code run before it, and not writing into the library.
+    "python3 {tmp}/search_library.py x --snapshot {snapshot}",
+    "python3 -c 'import os' scripts/search_library.py x --snapshot {snapshot}",
+    "python3 -c scripts/search_library.py x --snapshot {snapshot}",
+    "python3 scripts/search_library.py x --snapshot {snapshot} > {snapshot}/out.txt",
 ])
 def test_the_guard_blocks_every_write_to_the_library(library, command):
     result = _guard(command.format(**library), env=library_env(library))
@@ -445,6 +451,10 @@ def test_the_guard_blocks_every_write_to_the_library(library, command):
     "grep -c newstack {snapshot}/text/imod/newstack.md > /dev/null",
     "rm -f {tmp}/scratch.txt",
     "cat scripts/build_library.py",
+    # The library's own search, given the snapshot by its path.
+    "python3 scripts/search_library.py -e -bin --snapshot {snapshot}",
+    "python3 -I scripts/search_library.py -e -bin --snapshot {snapshot}",
+    "python3 scripts/search_library.py newstack --snapshot $CRYOET_LIBRARY_SNAPSHOT | head -20",
 ])
 def test_the_guard_lets_the_library_be_read(library, command):
     assert _guard(command.format(**library), env=library_env(library)).returncode == 0, command

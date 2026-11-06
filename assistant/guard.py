@@ -74,6 +74,12 @@ FIND_ACTIONS = {
 }
 BUILDER = "build_library.py"
 FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# The library's own search, which only reads: run as `python3 <it>`, it counts
+# as a reader even when its command line names the library. Only this file
+# counts, not another script that happens to have its name.
+SEARCH = os.path.realpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "search_library.py")
+)
 
 
 def tokens(command):
@@ -301,15 +307,31 @@ def library_problem(command, cwd, environ):
     if commands is None:
         return library_message("a command line that cannot be read")
     for name, rest in commands:
-        if name not in READERS:
-            return library_message("`%s`" % name)
-        action = next((one for one in rest if one in FIND_ACTIONS), None) if name == "find" else None
-        if action:
-            return library_message("`find %s`" % action)
-        for at, one in enumerate(rest):
-            if one in REDIRECTS and at + 1 < len(rest) and inside(resolve(rest[at + 1], cwd), roots):
+        if name not in READERS and not runs_search(name, rest, cwd):
+            return library_message(f"`{name}`")
+        if name == "find":
+            action = next((one for one in rest if one in FIND_ACTIONS), None)
+            if action:
+                return library_message(f"`find {action}`")
+        for at, one in enumerate(rest[:-1]):
+            if one in REDIRECTS and inside(resolve(rest[at + 1], cwd), roots):
                 return library_message("writing to " + rest[at + 1])
     return None
+
+
+# Python's options that change nothing about which code runs.
+QUIET_FLAGS = {"-I", "-u", "-B", "-E", "-s", "-S", "-O", "-OO", "-q", "-b", "-bb", "-P"}
+
+
+def runs_search(name, rest, cwd):
+    """Whether a command is Python running scripts/search_library.py, this
+    repository's own, with no option before it that runs other code (-c, -m)."""
+    if not name.startswith("python"):
+        return False
+    words = list(rest)
+    while words and words[0] in QUIET_FLAGS:
+        words.pop(0)
+    return bool(words) and not words[0].startswith("-") and resolve(words[0], cwd) == SEARCH
 
 
 def library_message(what):
@@ -325,8 +347,8 @@ def file_problem(tool_input, cwd, environ):
     path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if path and inside(resolve(path, cwd), library_roots(environ)):
         return (
-            "%s is in the reference library, which is read-only (docs/library.md): "
-            "no tool edits it." % path
+            f"{path} is in the reference library, which is read-only (docs/library.md): "
+            "no tool edits it."
         )
     return None
 
