@@ -364,6 +364,23 @@ def test_correct_motion_command_passes_motioncor3_configuration(
     assert context.parameters["motioncor3_gain_flip"] == 2
 
 
+def test_an_unset_gain_flip_is_left_to_the_motioncor3_backend() -> None:
+    def parameters(gain_flip: int | None) -> dict[str, object]:
+        return cli._motioncor3_cli_parameters(
+            executable=None,
+            gpu=0,
+            patch_x=5,
+            patch_y=5,
+            pixel_size=None,
+            gain=None,
+            gain_rotation=0,
+            gain_flip=gain_flip,
+        )
+
+    assert "motioncor3_gain_flip" not in parameters(None)
+    assert parameters(0)["motioncor3_gain_flip"] == 0
+
+
 def test_motion_backend_selector_supports_motioncor3() -> None:
     assert isinstance(cli._motion_backend("motioncor3"), MotionCor3MotionCorrectionBackend)
 

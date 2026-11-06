@@ -98,9 +98,9 @@ storage_policy = "working"
 # pixel_size_angstrom = 1.35
 # EDIT if your movies are not gain-corrected: the gain reference (MRC, or a
 # Falcon `.gain` TIFF for EER), and its rotation (0-3) and flip (0-2) relative to
-# the movies, as MotionCor3 defines them. A Falcon `.gain` with EER movies
-# should need gain_flip = 1 by MotionCor3's sources; scripts/eer_gain_flip.sbatch
-# measures it.
+# the movies, as MotionCor3 defines them. Left unset, gain_flip is 1 for a
+# Falcon `.gain` with EER movies (MotionCor3 reads it upside down against their
+# frames; measured on EMPIAR-11830) and 0 otherwise.
 # gain_reference = "data/my-dataset/gain.mrc"
 # gain_rotation = 0
 # gain_flip = 0

@@ -88,11 +88,33 @@ movie of 728), so `cryoet init` takes the count from each file and keeps the
 mdoc's in the image's metadata as `mdoc_num_subframes`.
 
 The gain of a Falcon EER dataset is usually a TIFF named `*.gain`, 32-bit float
-at the sensor size. By the sources, MotionCor3 reads a TIFF bottom row first
+at the sensor size. MotionCor3 reads a TIFF bottom row first
 (`TiffUtil/CLoadTiffImage.cpp`) and decodes EER frames top row first
-(`EerUtil/CDecodeEerFrame.cpp`), so the gain should need `--motioncor3-gain-flip
-1`. That is not yet measured: `scripts/eer_gain_flip.sbatch` decides it with the
-MotionCor3 that runs the lanes, on EMPIAR-11830.
+(`EerUtil/CDecodeEerFrame.cpp`), so such a gain has to be turned upside down.
+With EER movies and a `.gain`, the backend passes `-FlipGain 1` unless
+`--motioncor3-gain-flip` (`[motion] gain_flip`) gives a flip, and the artifact
+records `gain_flip_given: false`. An MRC gain keeps MotionCor3's default, 0: it
+lies the way whatever wrote it laid it. TIFF movies go through the same reader
+as the gain and need no flip by the sources (not measured).
+
+Measured on 5 November 2026 by `scripts/eer_gain_flip.sbatch` (job 3890116, the
+MotionCor3 the MDC lanes run, which printed "Gain reference has been loaded"),
+from `-Align 0` sums of three EMPIAR-11830 movies with no gain and with each
+flip:
+
+- over the three movies, only the flipped gain anticorrelates with the counts
+  (r −0.016 against −0.0005, where 1/√n is 0.00025);
+- each movie's sum is flatter with `-FlipGain 1`, and so are the three summed;
+  the gap (in squared high-passed spread over the mean, 1.4×10⁻⁴) is the same
+  at 6.5 and at 19.5 electrons per pixel, as a fixed pattern of the sensor
+  gives;
+- the applied gain read off the sums (corrected over uncorrected) turns exactly
+  upside down with the flag (correlation 0.997), and it does not look the same
+  upside down (0.004), so the flag matters.
+
+Read from one movie alone, the applied gain does not come out as the gain
+(0.15–0.19 in the same upside-down test), so that script's per-movie verdicts
+are not used; why one movie differs is not known.
 
 The sums keep the EER files' row order. IMOD reads an EER file as any TIFF,
 bottom row first, and its alignframes can apply the files' TIFF Orientation tag

@@ -73,7 +73,9 @@ The template for picking comes from EMDB (`emdb_id`) or from a local map
 
 Movies can be MRC, TIFF or EER (Falcon cameras). EER movies go through the
 `motioncor3` motion backend only, which decodes them itself; see
-[docs/motioncor3_backend.md](docs/motioncor3_backend.md#eer-movies). Mdocs
+[docs/motioncor3_backend.md](docs/motioncor3_backend.md#eer-movies). Their
+Falcon `.gain` is turned upside down for MotionCor3 unless `[motion] gain_flip`
+says otherwise. Mdocs
 written by Thermo Fisher's Tomography (`<id>.mdoc`) are read as SerialEM's
 are, except that no tilt axis is taken from them: set `[align] tilt_axis_angle`.
 

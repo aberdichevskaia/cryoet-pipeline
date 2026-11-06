@@ -51,6 +51,9 @@ class _MotionCor3Settings:
     software_version: str
     # Every movie of the series is in this format; the next two apply to EER.
     movie_format: MovieFormat = MovieFormat.MRC
+    # False when gain_flip is the pipeline's default (_default_gain_flip), not
+    # one the lane or the command line gave.
+    gain_flip_given: bool = True
     # -EerSampling: 1 renders the events on the sensor's pixels, 2 on a grid
     # twice as fine, which -FtBin then has to bin back.
     eer_sampling: int = 1
@@ -249,6 +252,7 @@ class MotionCor3MotionCorrectionBackend:
                 ),
                 "gain_rotation": settings.gain_rotation,
                 "gain_flip": settings.gain_flip,
+                "gain_flip_given": settings.gain_flip_given,
                 "gain_loaded": gain_loaded,
                 "dose_weighting": False,
                 "aligned_movie_saved": False,
@@ -480,6 +484,13 @@ def _motioncor3_settings(
         )
 
     executable = _resolve_motioncor3_executable(context)
+    gain_reference = _optional_existing_file_parameter(context, "motioncor3_gain_reference")
+    gain_flip_given = context.parameters.get("motioncor3_gain_flip") is not None
+    gain_flip = (
+        _bounded_int_parameter(context, "motioncor3_gain_flip", default=0, minimum=0, maximum=2)
+        if gain_flip_given
+        else _default_gain_flip(gain_reference, movie_format)
+    )
     return _MotionCor3Settings(
         executable=executable,
         executable_sha256=_sha256_file(executable),
@@ -501,10 +512,7 @@ def _motioncor3_settings(
         # physical pixel. Whole numbers only, so that the stack's pixel stays a
         # whole multiple of the movies' and the fiducial step can check it.
         ftbin=ftbin,
-        gain_reference=_optional_existing_file_parameter(
-            context,
-            "motioncor3_gain_reference",
-        ),
+        gain_reference=gain_reference,
         gain_rotation=_bounded_int_parameter(
             context,
             "motioncor3_gain_rotation",
@@ -512,18 +520,36 @@ def _motioncor3_settings(
             minimum=0,
             maximum=3,
         ),
-        gain_flip=_bounded_int_parameter(
-            context,
-            "motioncor3_gain_flip",
-            default=0,
-            minimum=0,
-            maximum=2,
-        ),
+        gain_flip=gain_flip,
         software_version=software_version.strip(),
         movie_format=movie_format,
+        gain_flip_given=gain_flip_given,
         eer_sampling=eer_sampling,
         eer_fractions=eer_fractions,
     )
+
+
+def _default_gain_flip(gain_reference: Path | None, movie_format: MovieFormat) -> int:
+    """-FlipGain when none is given: 1 for a Falcon `.gain` with EER movies, else 0.
+
+    MotionCor3 reads a `.gain`, a TIFF, bottom row first (TiffUtil/CLoadTiffImage.cpp)
+    and decodes EER frames top row first (EerUtil/CDecodeEerFrame.cpp), so the gain
+    has to be turned upside down to meet the frames. Measured on 5 November 2026 with
+    the MotionCor3 the MDC lanes run, on three EMPIAR-11830 movies
+    (scripts/eer_gain_flip.sbatch, job 3890116): over the three, only the flipped gain
+    anticorrelates with the counts (r -0.016 against -0.0005; 1/sqrt(n) 0.00025), and
+    each movie's sum is flatter with it. TIFF movies go through the same reader as the
+    gain, so by the sources they need no flip (not measured); an MRC gain lies the way
+    whatever wrote it laid it, so it keeps MotionCor3's default.
+    """
+
+    if (
+        movie_format is MovieFormat.EER
+        and gain_reference is not None
+        and gain_reference.suffix.lower() == ".gain"
+    ):
+        return 1
+    return 0
 
 
 _INPUT_FLAGS = {MovieFormat.MRC: "-InMrc", MovieFormat.TIFF: "-InTiff", MovieFormat.EER: "-InEer"}

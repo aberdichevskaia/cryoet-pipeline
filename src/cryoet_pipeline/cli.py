@@ -443,16 +443,26 @@ def correct_motion(
     ] = None,
     motioncor3_gain: Annotated[
         Path | None,
-        typer.Option(help="Optional gain-reference MRC passed to MotionCor3."),
+        typer.Option(
+            help="Optional gain reference passed to MotionCor3: an MRC, or a Falcon .gain."
+        ),
     ] = None,
     motioncor3_gain_rotation: Annotated[
         int,
         typer.Option(min=0, max=3, help="MotionCor3 gain rotation: 0, 1, 2, or 3."),
     ] = 0,
     motioncor3_gain_flip: Annotated[
-        int,
-        typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
-    ] = 0,
+        int | None,
+        typer.Option(
+            min=0,
+            max=2,
+            help=(
+                "MotionCor3 gain flip: 0, 1 (upside down) or 2 (left to right). "
+                "Unset: 1 for a Falcon .gain with EER movies, which MotionCor3 "
+                "reads upside down against their frames; 0 otherwise."
+            ),
+        ),
+    ] = None,
     motioncor3_ftbin: Annotated[
         int,
         typer.Option(
@@ -585,16 +595,26 @@ def prepare_tilt_series(
     ] = None,
     motioncor3_gain: Annotated[
         Path | None,
-        typer.Option(help="Optional gain-reference MRC passed to MotionCor3."),
+        typer.Option(
+            help="Optional gain reference passed to MotionCor3: an MRC, or a Falcon .gain."
+        ),
     ] = None,
     motioncor3_gain_rotation: Annotated[
         int,
         typer.Option(min=0, max=3, help="MotionCor3 gain rotation: 0, 1, 2, or 3."),
     ] = 0,
     motioncor3_gain_flip: Annotated[
-        int,
-        typer.Option(min=0, max=2, help="MotionCor3 gain flip: 0, 1, or 2."),
-    ] = 0,
+        int | None,
+        typer.Option(
+            min=0,
+            max=2,
+            help=(
+                "MotionCor3 gain flip: 0, 1 (upside down) or 2 (left to right). "
+                "Unset: 1 for a Falcon .gain with EER movies, which MotionCor3 "
+                "reads upside down against their frames; 0 otherwise."
+            ),
+        ),
+    ] = None,
     motioncor3_ftbin: Annotated[
         int,
         typer.Option(
@@ -4808,7 +4828,7 @@ def _motioncor3_cli_parameters(
     pixel_size: float | None,
     gain: Path | None,
     gain_rotation: int,
-    gain_flip: int,
+    gain_flip: int | None,
     ftbin: int = 1,
     eer_sampling: int = 1,
     eer_fractions: int = 10,
@@ -4821,8 +4841,10 @@ def _motioncor3_cli_parameters(
         "motioncor3_eer_sampling": eer_sampling,
         "motioncor3_eer_fractions": eer_fractions,
         "motioncor3_gain_rotation": gain_rotation,
-        "motioncor3_gain_flip": gain_flip,
     }
+    if gain_flip is not None:
+        # Left out, the backend picks the flip the gain and the movies need.
+        parameters["motioncor3_gain_flip"] = gain_flip
     if executable is not None:
         parameters["motioncor3_executable"] = executable
     if pixel_size is not None:

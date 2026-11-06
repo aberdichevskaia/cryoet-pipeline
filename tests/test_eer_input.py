@@ -18,6 +18,7 @@ from cryoet_pipeline.backends.alignment import _tilt_axis_angle
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
     MotionCor3MotionCorrectionBackend,
+    _motioncor3_settings,
     motioncor3_eer_fmint,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -316,6 +317,70 @@ def test_a_loaded_gain_is_recorded(tmp_path: Path) -> None:
 
     assert artifact.parameters["gain_loaded"] is True
     assert artifact.parameters["gain_flip"] == 1
+
+
+def test_a_falcon_gain_is_turned_upside_down_for_eer_frames_unless_told(
+    tmp_path: Path,
+) -> None:
+    movie = tmp_path / "frames" / EER_NAMES[0]
+    write_eer_like(movie, 728)
+    gain = tmp_path / "20230807_182744_EER_GainReference.gain"
+    gain.write_bytes(b"float gain")
+    loaded = "Gain reference has been loaded.\n"
+    (tmp_path / "default").mkdir()
+    (tmp_path / "given").mkdir()
+
+    backend, context, captured = _motioncor3(
+        tmp_path / "default", stdout=loaded, motioncor3_gain_reference=gain
+    )
+    (artifact,) = backend.correct(_eer_manifest(movie), context)
+
+    command = captured[0]
+    assert command[command.index("-Gain") + 1] == str(gain)
+    assert command[command.index("-FlipGain") + 1] == "1"
+    assert artifact.parameters["gain_flip"] == 1
+    assert artifact.parameters["gain_flip_given"] is False
+
+    backend, context, captured = _motioncor3(
+        tmp_path / "given",
+        stdout=loaded,
+        motioncor3_gain_reference=gain,
+        motioncor3_gain_flip=0,
+    )
+    (artifact,) = backend.correct(_eer_manifest(movie), context)
+
+    assert "-FlipGain" not in captured[0]
+    assert artifact.parameters["gain_flip"] == 0
+    assert artifact.parameters["gain_flip_given"] is True
+
+
+@pytest.mark.parametrize(
+    ("gain_name", "movie_format", "flip"),
+    [
+        ("gain.gain", MovieFormat.EER, 1),
+        ("GAIN.GAIN", MovieFormat.EER, 1),
+        ("gain.mrc", MovieFormat.EER, 0),
+        (None, MovieFormat.EER, 0),
+        ("gain.gain", MovieFormat.TIFF, 0),
+        ("gain.gain", MovieFormat.MRC, 0),
+    ],
+)
+def test_only_a_falcon_gain_with_eer_movies_is_flipped_by_default(
+    tmp_path: Path, gain_name: str | None, movie_format: MovieFormat, flip: int
+) -> None:
+    parameters: dict[str, object] = {}
+    if gain_name is not None:
+        gain = tmp_path / gain_name
+        gain.write_bytes(b"gain")
+        parameters["motioncor3_gain_reference"] = gain
+    _, context, _ = _motioncor3(tmp_path, **parameters)
+
+    settings = _motioncor3_settings(
+        _eer_manifest(tmp_path / EER_NAMES[0]), context, movie_format=movie_format
+    )
+
+    assert settings.gain_flip == flip
+    assert settings.gain_flip_given is False
 
 
 def test_the_other_motion_backends_leave_eer_to_motioncor3(tmp_path: Path) -> None:
