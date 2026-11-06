@@ -34,7 +34,9 @@ not numpy's), and the starting table keeps the export's digits where Dynamo's
 projects rounded it to five significant digits. The run keeps the variables in
 `plan.json` and each node's fingerprint in its `run.json`; a job submitted again
 makes the plan again and carries the run on only if its finished nodes come out the
-same. `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
+same. Every round keeps each particle within `SHIFT_LIMIT` px of its box centre (3
+unless given, Dynamo's `area_search` with `area_search_modus` 1; pixels of the
+particles' box). `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
 refused (the port models no symmetry and searches on every GPU of the job), and
 so is a `NAME` Dynamo has a project of in the export: that project's port run is
 made with `PROJECT=<export>/<name>` (the header of `scripts/mra_port_run.sbatch`).

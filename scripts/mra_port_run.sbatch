@@ -45,8 +45,11 @@
 # the run-record layout (docs/run_records.md): plan.json, then setup/, ite_0001/, ...,
 # each with its run.json, the poses as Parquet and the maps as MRC; and writes
 # $EXPORT/${NAME}_classification_report.pdf, TEMPLATE drawn in it as in Dynamo's
-# reports. A run begun before 2026-11-05 in Dynamo's layout, $EXPORT/${NAME}_port
-# with its settings/setup.json, is carried on in that layout under that name.
+# reports. SHIFT_LIMIT (px of the particles' box, 3 unless given) is how far a
+# particle may move from its box centre in every round, Dynamo's area_search with
+# area_search_modus 1. A run begun before 2026-11-05 in Dynamo's layout,
+# $EXPORT/${NAME}_port with its settings/setup.json, is carried on in that layout
+# under that name.
 # GPUS, Dynamo's own GPU setting, is refused here: the port
 # searches on every GPU the job has; so are SYMMETRY (but c1) and AXIS_OFFSET, which
 # the port does not model. A NAME that Dynamo has a project of in EXPORT, or a setup
@@ -216,7 +219,7 @@ if [[ -n "${SOURCE:-}${EXPORT:-}${SPLIT:-}" ]]; then
             DIAMETER:--diameter LOWPASS_STEPS:--lowpass-steps MASK_RADIUS:--mask-radius \
             MASK_EDGE:--mask-edge MASK_FILE:--mask-file REFERENCE:--reference \
             GLOBAL_ROUNDS:--global-rounds GLOBAL_STEP:--global-step CONE_STEPS:--cone-steps \
-            DATA_FOLDER:--data-folder; do
+            SHIFT_LIMIT:--shift-limit DATA_FOLDER:--data-folder; do
         variable=${pair%%:*}
         if [[ -n "${!variable:-}" ]]; then from+=("${pair#*:}" "${!variable}"); fi
     done

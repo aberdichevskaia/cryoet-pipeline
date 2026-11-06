@@ -61,6 +61,11 @@ from cryoet_pipeline.particle_tables import read_particle_table
 from cryoet_pipeline.reports.dynamo_project import read_map, read_table
 from cryoet_pipeline.runs import completed
 
+SHIFT_LIMIT = 3.0
+"""Pixels of the particles' box: how far a particle may move from its box centre, in
+every round (Dynamo's area_search 3 with area_search_modus 1, dynamo_mra_setup.m's).
+The integer peak is sought within that sphere; the subpixel step may leave it by
+about half a pixel, as in Dynamo."""
 SUBSET = 300
 """Particles averaged into each 'subset' or 'blob' seed."""
 RNG_SEED = 20261016
@@ -199,11 +204,11 @@ class Round:
     """The box the round searches at."""
     is_global: bool
 
-    def settings(self, box: int) -> SearchSettings:
+    def settings(self, box: int, shift_limit: float = SHIFT_LIMIT) -> SearchSettings:
         return SearchSettings(
             cone_aperture=self.cone_range, cone_sampling=self.sampling,
             inplane_range=self.cone_range, inplane_sampling=self.sampling, refine=self.refine,
-            refine_factor=2.0, high=2.0, low=float(self.low), shift_limit=3.0,
+            refine_factor=2.0, high=2.0, low=float(self.low), shift_limit=float(shift_limit),
             area_search_modus=1, dim=0 if self.dim == box else self.dim,
         )
 
@@ -425,6 +430,7 @@ def make_plan(
     global_step: float | None = None,
     global_full_box: bool = False,
     cone_steps: Sequence[float] = (3,),
+    shift_limit: float = SHIFT_LIMIT,
     subset: int = SUBSET,
     log: Callable[[str], None] = print,
 ) -> MraPlan:
@@ -439,7 +445,10 @@ def make_plan(
     from `reference_file` in one channel without MRA. The mask is a sphere of
     `mask_radius` px (the particle's radius from `diameter` plus 3 px unless given)
     with a soft edge of `mask_edge` px, or `mask_file`; it aligns, classifies and
-    averages. The search is `search_rounds`'.
+    averages. The search is `search_rounds`', every particle kept within `shift_limit`
+    px of its box centre in every round (`SHIFT_LIMIT`). The limit changes only what
+    the iterations search, which each iteration's record holds whole; it is not one of
+    the setup's variables, whose results it does not touch.
     """
 
     seeds = list(seeds)
@@ -467,6 +476,9 @@ def make_plan(
 
     particles = read()
     box, pixel_size, count = particles.box, particles.pixel_size, len(particles.table)
+    if not 0 < shift_limit < box / 2:
+        raise ValueError(f"shift_limit must be above 0 and below half the {box} px box, got "
+                         f"{shift_limit:g}")
     if schedule == "coarse_to_fine" and not 2 * pixel_size <= last_lowpass < first_lowpass:
         raise ValueError(f"last_lowpass must lie between Nyquist ({2 * pixel_size:.1f} A) and "
                          f"first_lowpass ({first_lowpass:g} A)")
@@ -541,8 +553,11 @@ def make_plan(
         notes.append(_seed_note(channel, kind, int(np.sum(group == channel)), reference_file))
     for number, round_ in enumerate(rounds, 1):
         log(round_.describe(number, box, pixel_size))
+    log(f"shifts: up to {shift_limit:g} px ({shift_limit * pixel_size:.1f} A) from the box "
+        "centre in every round")
 
-    settings = [round_.settings(box) for round_ in rounds for _ in range(round_.iterations)]
+    settings = [round_.settings(box, shift_limit) for round_ in rounds
+                for _ in range(round_.iterations)]
     mra = [nref > 1] * len(settings)
     cards = [{key: str(value) for key, value in
               {**_search_fields(searched, box), "mra": int(mra[0])}.items()}
@@ -593,6 +608,7 @@ def make_plan(
     )
 
 
-__all__ = ["ExportParticles", "Particles", "Round", "make_plan", "plan_from_export",
+__all__ = ["SHIFT_LIMIT", "ExportParticles", "Particles", "Round", "make_plan",
+           "plan_from_export",
            "plan_from_registry", "plan_from_split", "read_export", "search_rounds",
            "seed_draws", "soft_sphere"]

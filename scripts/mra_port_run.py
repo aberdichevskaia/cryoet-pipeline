@@ -90,7 +90,12 @@ from cryoet_pipeline.dynamo_mra_project import (
     torch_search,
 )
 from cryoet_pipeline.mra_runs import Refused, run_plan
-from cryoet_pipeline.mra_setup import plan_from_export, plan_from_registry, plan_from_split
+from cryoet_pipeline.mra_setup import (
+    SHIFT_LIMIT,
+    plan_from_export,
+    plan_from_registry,
+    plan_from_split,
+)
 from cryoet_pipeline.reports.classification import ClassificationRun, PoseTable
 from cryoet_pipeline.reports.classification_reader import read_classification
 
@@ -218,6 +223,7 @@ def new_run(args: argparse.Namespace) -> int:
         global_rounds=args.global_rounds, global_step=args.global_step,
         global_full_box=args.global_full_box,
         cone_steps=[float(step) for step in args.cone_steps.split()],
+        shift_limit=args.shift_limit,
     )
     try:
         if args.export is not None:
@@ -314,6 +320,9 @@ def main() -> int:
                        help="search the global rounds at the full box, not downsampled")
     setup.add_argument("--cone-steps", default="3",
                        help='the cones\' width in steps: one number or one per round, "5 5 3 3 3"')
+    setup.add_argument("--shift-limit", type=float, default=SHIFT_LIMIT,
+                       help="px of the particles' box: how far a particle may move from its "
+                       f"box centre in every round (default {SHIFT_LIMIT:g})")
     setup.add_argument("--data-folder", default="particles")
     args = parser.parse_args()
 

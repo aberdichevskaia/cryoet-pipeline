@@ -51,7 +51,7 @@ def test_a_new_run_is_set_up_from_an_export_without_dynamo(tmp_path: Path) -> No
     export = _export(tmp_path)
     arguments = ("--export", str(export), "--name", "mra_n", "--seeds", "noise noise",
                  "--mask-radius", "5", "--schedule", "coarse_to_fine", "--first-lowpass", "50",
-                 "--iterations", "1", "--device", "numpy")
+                 "--shift-limit", "2", "--iterations", "1", "--device", "numpy")
     result = _run(*arguments)
     assert result.returncode == 0, result.stderr
     assert "seed 1: noise" in result.stdout
@@ -60,8 +60,11 @@ def test_a_new_run_is_set_up_from_an_export_without_dynamo(tmp_path: Path) -> No
     assert "mra_n was set up from" in result.stdout
     run = export / "mra_n"
     assert completed(run / "ite_0001") is not None
-    setup = json.loads((run / "plan.json").read_text())["setup"]
+    asked = json.loads((run / "plan.json").read_text())
+    setup = asked["setup"]
     assert setup["variables"]["seeds"] == ["noise", "noise"]
+    assert asked["iterations"][0]["search"]["shift_limit"] == 2.0
+    assert "shifts: up to 2 px (20.0 A) from the box centre in every round" in result.stdout
     assert completed(run / "ite_0001").execution_params == {"kernel": "numpy", "workers": 1}
     # Submitted again: the plan made again is the run's, and it is finished.
     again = _run(*arguments)

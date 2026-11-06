@@ -250,3 +250,19 @@ def test_a_table_with_another_wedge_type_is_refused(tmp_path: Path) -> None:
         "\n".join(" ".join(f"{value:.12g}" for value in row) for row in table) + "\n")
     with pytest.raises(ValueError, match="ftype 1"):
         _plan(export)
+
+
+def test_the_shift_limit_reaches_every_round_and_only_the_search(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    usual, narrow = _plan(export), _plan(export, shift_limit=2)
+    assert {settings.shift_limit for settings in usual.settings} == {3.0}
+    assert {settings.shift_limit for settings in narrow.settings} == {2.0}
+    assert {settings.area_search_modus for settings in narrow.settings} == {1}
+    assert {card["area_search"] for card in narrow.cards} == {"2 2 2"}
+    # The setup's results do not depend on it: its variables, seeds and mask stay.
+    assert narrow.setup["variables"] == usual.setup["variables"]
+    for channel, reference in usual.references.items():
+        np.testing.assert_array_equal(narrow.references[channel], reference)
+    for wrong in (0, 8):
+        with pytest.raises(ValueError, match="shift_limit must be above 0 and below half"):
+            _plan(export, shift_limit=wrong)

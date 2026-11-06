@@ -13,7 +13,7 @@ from test_mra_setup import _export, _plan
 
 from cryoet_pipeline.backends import dynamo_search as core
 from cryoet_pipeline.dynamo_mra_project import plan_from_dynamo, run_mra_project
-from cryoet_pipeline.mra_runs import STEP_ITERATION, STEP_SETUP, read_state, run_plan
+from cryoet_pipeline.mra_runs import STEP_ITERATION, STEP_SETUP, Refused, read_state, run_plan
 from cryoet_pipeline.particle_tables import read_particle_table
 from cryoet_pipeline.reports.dynamo_project import read_em, read_table
 from cryoet_pipeline.runs import completed, read_record
@@ -141,6 +141,14 @@ def test_a_plan_carries_on_into_more_iterations_and_never_into_another(tmp_path:
     run_plan(_short(_plan(export), 1), run, log=lines.append)
     assert lines == ["mra_x: all 1 iterations finished before; nothing to compute"]
     assert (run / "plan.json").read_text() == asked
+
+
+def test_another_shift_limit_is_another_search_on_the_same_setup(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    run = tmp_path / "mra_x"
+    run_plan(_short(_plan(export), 1), run, **QUIET)
+    with pytest.raises(Refused, match="ite_0001 holds a node of another plan"):
+        run_plan(_short(_plan(export, shift_limit=2), 1), run, **QUIET)
 
 
 def test_a_folder_of_another_layout_is_refused(tmp_path: Path) -> None:
