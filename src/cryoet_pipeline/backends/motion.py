@@ -32,6 +32,7 @@ from cryoet_pipeline.movies import MovieFormat, inspect_movie, movie_format, rea
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
 from cryoet_pipeline.runtime import DevicePreference
 from cryoet_pipeline.storage import ArtifactFormat
+from cryoet_pipeline.tool_versions import motioncor3_version_of
 
 
 @dataclass(frozen=True)
@@ -461,8 +462,12 @@ def _motioncor3_settings(
         pixel_spacing_value,
         name="motioncor3_pixel_size_angstrom",
     )
-    software_version = context.parameters.get("motioncor3_version", "unknown")
-    if not isinstance(software_version, str) or not software_version.strip():
+    # A version given is the one recorded; otherwise MotionCor3 is asked for its
+    # own once the executable is known (tool_versions.motioncor3_version_of).
+    configured_version = context.parameters.get("motioncor3_version")
+    if configured_version is not None and (
+        not isinstance(configured_version, str) or not configured_version.strip()
+    ):
         raise TypeError("context parameter 'motioncor3_version' must be a non-empty string")
 
     ftbin = _bounded_int_parameter(context, "motioncor3_ftbin", default=1, minimum=1)
@@ -484,6 +489,11 @@ def _motioncor3_settings(
         )
 
     executable = _resolve_motioncor3_executable(context)
+    software_version = (
+        configured_version.strip()
+        if configured_version is not None
+        else motioncor3_version_of(executable) or "unknown"
+    )
     gain_reference = _optional_existing_file_parameter(context, "motioncor3_gain_reference")
     gain_flip_given = context.parameters.get("motioncor3_gain_flip") is not None
     gain_flip = (
@@ -521,7 +531,7 @@ def _motioncor3_settings(
             maximum=3,
         ),
         gain_flip=gain_flip,
-        software_version=software_version.strip(),
+        software_version=software_version,
         movie_format=movie_format,
         gain_flip_given=gain_flip_given,
         eer_sampling=eer_sampling,

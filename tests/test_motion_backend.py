@@ -366,6 +366,58 @@ def test_motioncor3_backend_runs_patch_correction_and_records_provenance(
         assert corrected.voxel_size.x == pytest.approx(0.675)
 
 
+@pytest.mark.parametrize(
+    ("says", "recorded"),
+    [
+        ('if [ "$1" = "--version" ]; then echo "MotionCor3 version 1.2.4"; fi', "1.2.4"),
+        ("echo 'CUDA version 12.5'", "unknown"),
+    ],
+)
+def test_motioncor3_records_the_version_the_binary_states(
+    tmp_path: Path, says: str, recorded: str
+) -> None:
+    """With no motioncor3_version given, the record names the version MotionCor3
+    itself states for --version; "unknown" when it states none."""
+
+    movie_path = tmp_path / "frames" / "TS_TEST_000_0.0.mrc"
+    _write_mrc(movie_path, np.ones((3, 4, 6), dtype=np.float32))
+    executable = tmp_path / "bin" / "MotionCor3"
+    executable.parent.mkdir()
+    executable.write_text(f"#!/bin/sh\n{says}\n")
+    executable.chmod(0o755)
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        output_path = Path(command[command.index("-OutMrc") + 1])
+        _write_mrc(output_path, np.arange(24, dtype=np.float32).reshape(4, 6))
+        log_dir = Path(command[command.index("-LogDir") + 1])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / f"{output_path.stem}.log").write_text("MotionCor3 log\n")
+        alignment_dir = Path(command[command.index("-OutAln") + 1])
+        alignment_dir.mkdir(parents=True, exist_ok=True)
+        (alignment_dir / f"{output_path.stem}.aln").write_text("alignment\n")
+        return subprocess.CompletedProcess(command, 0, stdout="completed", stderr="")
+
+    context = BackendContext(
+        output_dir=tmp_path / "outputs",
+        device=DevicePreference.CUDA,
+        parameters={
+            "motioncor3_executable": executable,
+            "motioncor3_pixel_size_angstrom": 0.675,
+        },
+    )
+    artifact = MotionCor3MotionCorrectionBackend(fake_runner).correct(
+        _manifest(movie_path, num_subframes=3),
+        context,
+    )[0]
+    assert artifact.software_versions["MotionCor3"] == recorded
+
+
 def test_motioncor3_backend_can_canonicalize_output_to_zarr(tmp_path: Path) -> None:
     movie_path = tmp_path / "movie.mrc"
     _write_mrc(movie_path, np.ones((2, 3, 4), dtype=np.float32))
