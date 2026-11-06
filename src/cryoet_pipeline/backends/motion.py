@@ -58,8 +58,9 @@ class _MotionCor3Settings:
     # -EerSampling: 1 renders the events on the sensor's pixels, 2 on a grid
     # twice as fine, which -FtBin then has to bin back.
     eer_sampling: int = 1
-    # The groups the EER frames are summed in before alignment (-FmIntFile).
-    eer_fractions: int = 10
+    # The groups the EER frames are summed in before alignment (-FmIntFile);
+    # None: from each movie's dose (eer_fractions_for_dose).
+    eer_fractions: int | None = None
 
     @property
     def render_factor(self) -> int:
@@ -162,15 +163,32 @@ class MotionCor3MotionCorrectionBackend:
         eer_parameters: dict[str, object] = {}
         fmint_path: Path | None = None
         if settings.movie_format is MovieFormat.EER:
-            fmint_line = motioncor3_eer_fmint(image.num_subframes, settings.eer_fractions)
+            tilt_dose = _eer_tilt_dose_e_per_a2(
+                image.local_frame_file, settings.pixel_spacing_angstrom
+            )
+            fractions = (
+                settings.eer_fractions
+                if settings.eer_fractions is not None
+                else eer_fractions_for_dose(image.num_subframes, tilt_dose)
+            )
+            fmint_line = motioncor3_eer_fmint(image.num_subframes, fractions)
             fmint_path = work_dir / f"{output_stem}.fmint"
             fmint_path.write_text(fmint_line)
             group_size = int(fmint_line.split()[1])
+            # MotionCor3 makes N // G groups, the last N % G of them one frame longer.
+            groups = image.num_subframes // group_size
             eer_parameters = {
                 "eer_sampling": settings.eer_sampling,
-                "eer_fractions": settings.eer_fractions,
+                "eer_fractions": fractions,
+                "eer_fractions_given": settings.eer_fractions is not None,
                 "eer_frames": image.num_subframes,
                 "eer_group_size": group_size,
+                "eer_groups": groups,
+                # From the movie's metadata and pixel; None when it states no dose.
+                "eer_tilt_dose_e_per_a2": tilt_dose,
+                "eer_group_dose_e_per_a2": (
+                    None if tilt_dose is None else tilt_dose / groups
+                ),
                 "fmint_file": str(fmint_path),
             }
         with tempfile.TemporaryDirectory(
@@ -477,8 +495,10 @@ def _motioncor3_settings(
     eer_sampling = _bounded_int_parameter(
         context, "motioncor3_eer_sampling", default=1, minimum=1, maximum=2
     )
-    eer_fractions = _bounded_int_parameter(
-        context, "motioncor3_eer_fractions", default=10, minimum=1
+    eer_fractions = (
+        _bounded_int_parameter(context, "motioncor3_eer_fractions", default=10, minimum=1)
+        if context.parameters.get("motioncor3_eer_fractions") is not None
+        else None
     )
     if movie_format is MovieFormat.EER and ftbin % eer_sampling:
         raise ValueError(
@@ -582,6 +602,44 @@ def motioncor3_eer_fmint(eer_frames: int, fractions: int) -> str:
     if eer_frames < fractions:
         raise ValueError(f"{eer_frames} EER frames cannot make {fractions} fractions")
     return f"{eer_frames} {eer_frames // fractions} 0\n"
+
+
+# Each group MotionCor3 aligns should carry about this dose. The rule of thumb for
+# tomography is at least 0.1-0.15 e/A^2 per aligned frame, below which the
+# frames no longer align, and tilt movies of physical frames carry 0.2-0.3. More
+# groups follow the drift more finely; fewer align more surely.
+EER_GROUP_DOSE_E_PER_A2 = 0.2
+# Groups for a movie that states no dose per pixel: the count used before the
+# dose was read.
+EER_FRACTIONS_WITHOUT_DOSE = 10
+# Never fewer, so that MotionCor3 always has frames to align (what it does
+# with a single frame was not read).
+EER_MIN_FRACTIONS = 2
+
+
+def eer_fractions_for_dose(eer_frames: int, tilt_dose_e_per_a2: float | None) -> int:
+    """How many groups to sum one EER movie's frames in, from its dose.
+
+    As many as keep each group at EER_GROUP_DOSE_E_PER_A2 or more: 9 for an
+    EMPIAR-11830 tilt (6.53 e/pixel at 1.9037 A, 1.80 e/A^2). At least
+    EER_MIN_FRACTIONS, at most one group per EER frame, and
+    EER_FRACTIONS_WITHOUT_DOSE when the dose is not known.
+    """
+
+    if tilt_dose_e_per_a2 is None:
+        fractions = EER_FRACTIONS_WITHOUT_DOSE
+    else:
+        # The small addition keeps a dose of exactly n groups' worth at n.
+        fractions = int(tilt_dose_e_per_a2 / EER_GROUP_DOSE_E_PER_A2 + 1e-9)
+    return max(1, min(max(fractions, EER_MIN_FRACTIONS), eer_frames))
+
+
+def _eer_tilt_dose_e_per_a2(movie: Path, pixel_spacing_angstrom: float) -> float | None:
+    """The dose an EER movie's metadata states, per square angstrom of the movie pixel."""
+
+    info = inspect_movie(movie)
+    dose = info.eer.total_dose_e_per_pixel if info.eer is not None else None
+    return None if dose is None else dose / pixel_spacing_angstrom**2
 
 
 def _gain_loaded(

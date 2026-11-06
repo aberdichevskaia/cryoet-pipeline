@@ -76,12 +76,22 @@ motion backends refuse them. Two settings apply:
   grid twice as fine, which `--motioncor3-ftbin 2` must then bin back, since a
   sum finer than the movie pixel is refused. 3 (16K) is not offered: MotionCor3
   caps it at 2 for compression 65002 without changing the pixel size it reports.
-- `--motioncor3-eer-fractions` (`[motion] eer_fractions`, default 10): the
-  groups the EER frames are summed in before alignment, written per movie as
-  the `-FmIntFile` line `N G 0`. G is N // fractions: MotionCor3 adds the
-  N % G frames left over to the last groups, one each, and writes past the end
-  of its array when they outnumber the groups (`DataUtil/CFmIntParam.cpp`).
-  The dose column is 0, as `-FmDose` is: no dose weighting.
+- `--motioncor3-eer-fractions` (`[motion] eer_fractions`): the groups the EER
+  frames are summed in before alignment, written per movie as the `-FmIntFile`
+  line `N G 0`. Unset, the count comes from each movie's dose: as many groups
+  as keep each at 0.2 e/Å² or more, and at least 2. The dose is the file's
+  `totalDose` in e/pixel over the movie pixel squared; a movie that states no
+  dose per pixel gets 10 groups. The rule of thumb for tomography is at least
+  0.1–0.15 e/Å² per aligned frame, below which the frames no longer align,
+  and tilt movies of physical frames carry 0.2–0.3; more groups follow the
+  drift more finely, fewer align more surely. An EMPIAR-11830 tilt, 6.53
+  e/pixel at 1.9037 Å or 1.80 e/Å², gets 9. The artifact records the tilt's
+  dose, the groups made and the dose per group, also when the count is given.
+  G is N // fractions: MotionCor3 adds the N % G frames left over to the last
+  groups, one each, and writes past the end of its array when they outnumber
+  the groups (`DataUtil/CFmIntParam.cpp`). It so makes N // G groups, a few
+  more than asked at times (50 of 728 frames gives 52). The dose column is 0,
+  as `-FmDose` is: no dose weighting.
 
 An mdoc's `NumSubFrames` does not count EER frames (Tomography writes 1 for a
 movie of 728), so `cryoet init` takes the count from each file and keeps the

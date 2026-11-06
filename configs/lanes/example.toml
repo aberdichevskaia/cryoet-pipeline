@@ -112,7 +112,9 @@ storage_policy = "working"
 # EER movies only. eer_sampling 1 renders the electron events on the sensor's
 # pixels; 2 on a grid twice as fine, and then ftbin must be 2 to bring the sums
 # back to the movie pixel. eer_fractions: the groups the EER frames are summed in
-# before alignment, as many as a TIFF or MRC movie's frames.
+# before alignment, as many as a TIFF or MRC movie's frames. Left unset, it comes
+# from each movie's dose, about 0.2 e/A^2 per group (9 for an EMPIAR-11830 tilt);
+# fewer groups align more surely, more follow the drift more finely.
 # eer_sampling = 1
 # eer_fractions = 10
 

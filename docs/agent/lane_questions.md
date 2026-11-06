@@ -122,7 +122,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[motion] pixel_size_angstrom` | rule | unset: `example.toml` gives no reason to set it |
 | `[motion] gain_reference, gain_rotation, gain_flip` | card, person | question 5; unset when the movies are gain-corrected |
 | `[motion] ftbin` | data | 2 when `show_folder.py` says the frames have the K3's super-resolution size, and with `eer_sampling = 2`; otherwise unset |
-| `[motion] eer_sampling, eer_fractions` | rule | EER only. Unset, they are 1 and 10 ([motioncor3_backend.md](../motioncor3_backend.md), "EER movies") |
+| `[motion] eer_sampling, eer_fractions` | rule | EER only. Unset, eer_sampling is 1 and eer_fractions comes from each movie's dose, about 0.2 e/Å² per group ([motioncor3_backend.md](../motioncor3_backend.md), "EER movies") |
 | `[binning] tomogram` | rule | 8, as a new dataset starts at bin8. The particle should still be a few tens of pixels across: its diameter / (stack pixel × 8). The worked examples have 30 and 46 px |
 | `[binning] ctf_fit` | rule | small enough that the fit stack's Nyquist, 2 × stack pixel × `ctf_fit`, is finer than about 6 Å. The stack pixel is the movie pixel times `ftbin` |
 | `[align] binning` | rule | the same as `[binning] tomogram` |

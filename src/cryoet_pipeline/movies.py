@@ -196,7 +196,7 @@ def _inspect_eer(path: Path) -> MovieInfo:
             compression=compression,
             orientation_tag=None if orientation is None else int(orientation),
             exposure_time_s=_optional_number(metadata.get("exposureTime")),
-            total_dose_e_per_pixel=_optional_number(metadata.get("totalDose")),
+            total_dose_e_per_pixel=_eer_dose_e_per_pixel(metadata),
             camera=None if metadata.get("commercialName") is None
             else str(metadata["commercialName"]),
             gain_reference_named=None if metadata.get("eerGainReference") is None
@@ -231,6 +231,21 @@ def _eer_pixel_spacing_angstrom(path: Path, metadata: dict[str, Any]) -> float |
 
 def _optional_number(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _eer_dose_e_per_pixel(metadata: dict[str, Any]) -> float | None:
+    """The movie's dose from an EER file's metadata, when it is given per pixel.
+
+    Thermo Fisher writes it as totalDose, unit "e/pixel": 6.38 to 6.53 on the
+    EMPIAR-11830 movies, which the counts in their MotionCor3 sums match (job
+    3890116). A dose in another unit, or none, is left out rather than guessed.
+    """
+
+    dose = metadata.get("totalDose")
+    if dose is None or metadata.get("totalDose.unit") != "e/pixel":
+        return None
+    value = float(dose)
+    return value if np.isfinite(value) and value > 0 else None
 
 
 def _tiff_pixel_spacing_angstrom(path: Path, page: Any) -> float | None:

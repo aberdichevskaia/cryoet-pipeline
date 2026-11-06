@@ -12,13 +12,14 @@ import mrcfile
 import numpy as np
 import pytest
 import tifffile
-from eer_files import write_eer_like
+from eer_files import DOSE_E_PER_PIXEL, write_eer_like
 
 from cryoet_pipeline.backends.alignment import _tilt_axis_angle
 from cryoet_pipeline.backends.motion import (
     AverageMotionCorrectionBackend,
     MotionCor3MotionCorrectionBackend,
     _motioncor3_settings,
+    eer_fractions_for_dose,
     motioncor3_eer_fmint,
 )
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -248,15 +249,80 @@ def test_motioncor3_is_given_an_eer_movie_with_its_frame_groups(tmp_path: Path) 
     assert command[command.index("-InEer") + 1] == str(movie.resolve())
     assert command[command.index("-EerSampling") + 1] == "1"
     fmint = Path(command[command.index("-FmIntFile") + 1])
-    assert fmint.read_text() == "728 72 0\n"
+    # 6.38 e/pixel at the manifest's 1.96 A is 1.66 e/A^2: 8 groups of 0.21.
+    assert fmint.read_text() == "728 91 0\n"
     assert command[command.index("-FmDose") + 1] == "0"
     assert artifact.shape == (16, 16)
     assert artifact.pixel_spacing_angstrom == pytest.approx(1.96)
-    assert artifact.parameters["movie_format"] == "eer"
-    assert artifact.parameters["frame_binning"] == 1
-    assert artifact.parameters["eer_frames"] == 728
-    assert artifact.parameters["eer_group_size"] == 72
-    assert artifact.parameters["fmint_file"] == str(fmint)
+    parameters = artifact.parameters
+    assert parameters["movie_format"] == "eer"
+    assert parameters["frame_binning"] == 1
+    assert parameters["eer_frames"] == 728
+    assert parameters["eer_fractions"] == 8
+    assert parameters["eer_fractions_given"] is False
+    assert parameters["eer_group_size"] == 91
+    assert parameters["eer_groups"] == 8
+    tilt_dose = DOSE_E_PER_PIXEL / 1.96**2
+    assert parameters["eer_tilt_dose_e_per_a2"] == pytest.approx(tilt_dose)
+    assert parameters["eer_group_dose_e_per_a2"] == pytest.approx(tilt_dose / 8)
+    assert parameters["fmint_file"] == str(fmint)
+
+
+def test_a_given_number_of_eer_groups_overrides_the_dose(tmp_path: Path) -> None:
+    movie = tmp_path / "frames" / EER_NAMES[0]
+    write_eer_like(movie, 728)
+    backend, context, captured = _motioncor3(tmp_path, motioncor3_eer_fractions=50)
+
+    (artifact,) = backend.correct(_eer_manifest(movie), context)
+
+    fmint = Path(captured[0][captured[0].index("-FmIntFile") + 1])
+    assert fmint.read_text() == "728 14 0\n"
+    parameters = artifact.parameters
+    assert parameters["eer_fractions"] == 50
+    assert parameters["eer_fractions_given"] is True
+    # Groups of 14 frames: MotionCor3 makes 52 of them, not the 50 asked for.
+    assert parameters["eer_groups"] == 52
+    # The dose is still recorded, so that a count tried by hand can be read against it.
+    assert parameters["eer_group_dose_e_per_a2"] == pytest.approx(
+        DOSE_E_PER_PIXEL / 1.96**2 / 52
+    )
+
+
+@pytest.mark.parametrize(
+    ("dose", "unit"), [(None, "e/pixel"), (DOSE_E_PER_PIXEL, "e/A^2")], ids=["none", "per-A2"]
+)
+def test_an_eer_movie_without_a_dose_per_pixel_gets_ten_groups(
+    tmp_path: Path, dose: float | None, unit: str
+) -> None:
+    movie = tmp_path / "frames" / EER_NAMES[0]
+    write_eer_like(movie, 728, dose=dose, dose_unit=unit)
+    backend, context, captured = _motioncor3(tmp_path)
+
+    assert inspect_movie(movie).eer.total_dose_e_per_pixel is None  # type: ignore[union-attr]
+    (artifact,) = backend.correct(_eer_manifest(movie), context)
+
+    fmint = Path(captured[0][captured[0].index("-FmIntFile") + 1])
+    assert fmint.read_text() == "728 72 0\n"
+    assert artifact.parameters["eer_fractions_given"] is False
+    assert artifact.parameters["eer_tilt_dose_e_per_a2"] is None
+    assert artifact.parameters["eer_group_dose_e_per_a2"] is None
+
+
+@pytest.mark.parametrize(
+    ("frames", "tilt_dose", "fractions"),
+    [
+        # An EMPIAR-11830 tilt as its EER header states it: 6.53 e/pixel at 1.9037 A.
+        (728, 6.5262 / 1.90370344**2, 9),
+        (728, 2.0, 10),
+        (728, 1.2, 6),
+        (728, 0.3, 2),
+        (728, None, 10),
+        (5, 100.0, 5),
+        (1, 0.3, 1),
+    ],
+)
+def test_eer_groups_follow_the_dose(frames: int, tilt_dose: float | None, fractions: int) -> None:
+    assert eer_fractions_for_dose(frames, tilt_dose) == fractions
 
 
 def test_eer_rendered_twice_as_fine_is_binned_back_to_the_movie_pixel(tmp_path: Path) -> None:
@@ -402,3 +468,8 @@ def test_the_frame_groups_always_outnumber_the_frames_left_over() -> None:
             assert (int(n), dose) == (frames, "0")
             assert groups >= fractions
             assert left < groups, (frames, fractions)
+    # A count from the dose can be anything up to one group per frame.
+    for frames in (40, 728, 1000, 1999):
+        for fractions in range(1, frames + 1):
+            group = int(motioncor3_eer_fmint(frames, fractions).split()[1])
+            assert frames % group < frames // group, (frames, fractions)

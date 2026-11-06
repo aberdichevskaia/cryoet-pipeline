@@ -487,15 +487,17 @@ def correct_motion(
         ),
     ] = 1,
     motioncor3_eer_fractions: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=1,
             help=(
                 "EER movies: the groups MotionCor3 sums the EER frames in before "
-                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames."
+                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames. "
+                "Unset: from each movie's dose, about 0.2 e/A^2 per group (10 when "
+                "the movie states no dose)."
             ),
         ),
-    ] = 10,
+    ] = None,
 ) -> None:
     """Correct multiframe tilt movies and register corrected projections."""
 
@@ -639,15 +641,17 @@ def prepare_tilt_series(
         ),
     ] = 1,
     motioncor3_eer_fractions: Annotated[
-        int,
+        int | None,
         typer.Option(
             min=1,
             help=(
                 "EER movies: the groups MotionCor3 sums the EER frames in before "
-                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames."
+                "aligning them (-FmIntFile), as many as a TIFF or MRC movie's frames. "
+                "Unset: from each movie's dose, about 0.2 e/A^2 per group (10 when "
+                "the movie states no dose)."
             ),
         ),
-    ] = 10,
+    ] = None,
 ) -> None:
     """Correct movies and prepare an alignment-ready tilt-series stack."""
 
@@ -4831,7 +4835,7 @@ def _motioncor3_cli_parameters(
     gain_flip: int | None,
     ftbin: int = 1,
     eer_sampling: int = 1,
-    eer_fractions: int = 10,
+    eer_fractions: int | None = None,
 ) -> dict[str, object]:
     parameters: dict[str, object] = {
         "motioncor3_gpu_ids": [gpu],
@@ -4839,9 +4843,11 @@ def _motioncor3_cli_parameters(
         "motioncor3_patch_y": patch_y,
         "motioncor3_ftbin": ftbin,
         "motioncor3_eer_sampling": eer_sampling,
-        "motioncor3_eer_fractions": eer_fractions,
         "motioncor3_gain_rotation": gain_rotation,
     }
+    if eer_fractions is not None:
+        # Left out, the backend takes the count from each movie's dose.
+        parameters["motioncor3_eer_fractions"] = eer_fractions
     if gain_flip is not None:
         # Left out, the backend picks the flip the gain and the movies need.
         parameters["motioncor3_gain_flip"] = gain_flip

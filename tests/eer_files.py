@@ -14,8 +14,9 @@ METADATA = (
     '<item name="numberOfFrames">{declared}</item>'
     '<item name="sensorPixelSize.height" unit="m">1.90370344e-10</item>'
     '<item name="sensorPixelSize.width" unit="m">1.90370344e-10</item>'
-    '<item name="totalDose" unit="e/pixel">6.3804134669928416</item></metadata>'
+    "{dose_item}</metadata>"
 )
+DOSE_E_PER_PIXEL = 6.3804134669928416
 
 
 def write_eer_like(
@@ -25,12 +26,20 @@ def write_eer_like(
     declared: int | None = None,
     integrated_first: bool = False,
     size: int = 16,
+    dose: float | None = DOSE_E_PER_PIXEL,
+    dose_unit: str = "e/pixel",
 ) -> None:
     """A BigTIFF laid out as the 11830 EER files are: one strip and one IFD per
     frame, compression 65001, TIFF Orientation 2, and the acquisition metadata in
-    tag 65001 of the first page. The strips are not real EER; nothing decodes them."""
+    tag 65001 of the first page. The strips are not real EER; nothing decodes them.
+    `dose` None leaves the totalDose item out."""
 
-    xml = METADATA.format(declared=frames if declared is None else declared).encode()
+    dose_item = (
+        "" if dose is None else f'<item name="totalDose" unit="{dose_unit}">{dose!r}</item>'
+    )
+    xml = METADATA.format(
+        declared=frames if declared is None else declared, dose_item=dose_item
+    ).encode()
     body = bytearray(xml)
     strips = []
     pages = [1] * integrated_first + [65001] * frames

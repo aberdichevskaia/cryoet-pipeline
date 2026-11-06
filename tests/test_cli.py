@@ -364,8 +364,8 @@ def test_correct_motion_command_passes_motioncor3_configuration(
     assert context.parameters["motioncor3_gain_flip"] == 2
 
 
-def test_an_unset_gain_flip_is_left_to_the_motioncor3_backend() -> None:
-    def parameters(gain_flip: int | None) -> dict[str, object]:
+def test_an_unset_gain_flip_or_eer_group_count_is_left_to_the_motioncor3_backend() -> None:
+    def parameters(gain_flip: int | None, eer_fractions: int | None) -> dict[str, object]:
         return cli._motioncor3_cli_parameters(
             executable=None,
             gpu=0,
@@ -375,10 +375,15 @@ def test_an_unset_gain_flip_is_left_to_the_motioncor3_backend() -> None:
             gain=None,
             gain_rotation=0,
             gain_flip=gain_flip,
+            eer_fractions=eer_fractions,
         )
 
-    assert "motioncor3_gain_flip" not in parameters(None)
-    assert parameters(0)["motioncor3_gain_flip"] == 0
+    unset = parameters(None, None)
+    assert "motioncor3_gain_flip" not in unset
+    assert "motioncor3_eer_fractions" not in unset
+    given = parameters(0, 10)
+    assert given["motioncor3_gain_flip"] == 0
+    assert given["motioncor3_eer_fractions"] == 10
 
 
 def test_motion_backend_selector_supports_motioncor3() -> None:
