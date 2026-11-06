@@ -104,6 +104,46 @@ What is not supported yet:
    conda activate cryoet-pipeline
    ```
 
+**At MDC (max)** each person has their own clone and their own environments.
+Only the tools in the group folder are shared.
+
+1. Your clone, and its `cryoet-pipeline` environment, with micromamba:
+
+   ```bash
+   micromamba create -n cryoet-pipeline -c conda-forge python=3.13
+   micromamba activate cryoet-pipeline
+   python -m pip install -e ".[io]"
+   ```
+
+2. Your pytom-match-pick environment, at 0.14.0. That is the version the group's
+   runs and the assistant's reference library use:
+
+   ```bash
+   micromamba create -n pytom_tm -c conda-forge python=3.12 cupy "cuda-version=12.*"
+   micromamba run -n pytom_tm python -m pip install "pytom-match-pick[plotting]==0.14.0"
+   ```
+
+3. The other tools are the group's, and
+   `/fast/AG_Kudryashev/software/cryoet-tools.sh` names them. Put these two
+   lines in your `~/.bashrc`, outside any check for the host:
+
+   ```bash
+   source /fast/AG_Kudryashev/software/cryoet-tools.sh
+   export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
+   ```
+
+   A lane's jobs take these variables from the shell you submit from, and that
+   shell is on a login node.
+
+4. Check what your shell finds. This writes nothing:
+
+   ```bash
+   python3 scripts/build_library.py --site mdc --dry-run --config configs/lanes/ryr1-bin8.toml
+   ```
+
+   Every tool should show a version, pytom-match-pick 0.14.0 among them, and
+   "Problems: none".
+
 ### 1. Get the data
 
 **From EMPIAR.** Every deposition arranges its folders differently, so first

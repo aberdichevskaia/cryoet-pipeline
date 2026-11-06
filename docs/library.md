@@ -285,7 +285,12 @@ Limits:
   (`allowManagedPermissionRulesOnly`) and layer 3 (`allowManagedHooksOnly`).
   Both keys are in Claude Code 2.1.312. Layer 1 does not depend on them.
   Sessions at MDC open with Claude Code's note that the organization may apply
-  global configuration.
+  global configuration. The guard still runs there: in an MDC session on
+  2026-11-05 (Claude Code 2.1.318), `assistant/guard.py` refused a `python3`
+  command that named the library. Since then the search script counts as a
+  reader even when its command names the library. That holds for the
+  repository's own `scripts/search_library.py` only, run with no option that
+  runs other code (`-c`, `-m`).
 
 ## Where snapshots live
 
@@ -365,7 +370,7 @@ IMOD               the VERSION file of the install its program came from (imod_v
 pytom-match-pick   package metadata in the environment its scripts run in (package_version_of)
 MemBrain-seg       package metadata in the environment it runs in (package_version_of)
 CTFFIND            the version its banner states in the run itself: estimate-ctf, and the defocus hint
-MotionCor3         still the motioncor3_version parameter, which no lane sets: "unknown"
+MotionCor3         what it states for --version (motioncor3_version_of); a motioncor3_version given overrides it
 IsoNet2            "external": its backend is a skeleton
 numpy, torch, zarr, mrcfile   the installed package versions
 ```
@@ -373,10 +378,9 @@ numpy, torch, zarr, mrcfile   the installed package versions
 "external" stays where an install states no version. Records written before 5
 November say "external" for IMOD, pytom-match-pick and MemBrain-seg.
 
-MotionCor3 is left for later. `motioncor3_version_of` is ready, but
-`backends/motion.py` holds another session's uncommitted work (EER gain flip),
-and two writers do not share a file. Once that work is committed, the parameter
-stays the override and the version is asked of the binary otherwise.
+MotionCor3 followed on 2026-11-06, once another session's work in
+`backends/motion.py` was committed. When MotionCor3 states no version, the
+record says "unknown", as before.
 
 Every one of these tools does state its version when asked. At MDC on
 2026-11-05 the builder read:
@@ -454,22 +458,27 @@ Parked on 2026-11-05, while the work is at MDC.
 - **CTFFIND's questions.** `ctffind --help` lists only CTFFIND's command-line
   flags, and ends with "Unknown long option 'help'". The parameters CTFFIND
   asks for interactively are not in that output. They have to come from the
-  web channel, that is, from cisTEM's documentation.
+  web channel, that is, from cisTEM's documentation. An MDC session asked for
+  CTFFIND's defaults on 2026-11-05. It found only that output in the library,
+  said so, and answered with the values the pipeline passes, read from
+  `backends/ctf.py`.
 
 ## Open questions
 
 1. The folder in Munich.
 2. Which snapshot the constructed cases (cluster `none`) use.
-3. MotionCor3's version in the records, once `backends/motion.py` is free (see
-   [Versions](#versions-the-pipeline-records-today)).
-4. The MDC snapshot documents the installs of the shell it was built from.
-   IMOD and pytom-match-pick there come from a personal folder and a personal
-   environment, while CTFFIND, MotionCor3 and MemBrain-seg come from the
-   group's `software/`. Do the group's lanes run the same installs?
-5. Whether MDC's cluster has a wiki of its own (Munich's: see
+3. The MDC snapshot documents the installs of the shell it was built from.
+   `namei -l` showed on 2026-11-06:
+   - IMOD, in the group folder, is open to the group;
+   - the pytom-match-pick environment, in a home folder that is `drwx------`,
+     is not.
+
+   Decided the same day: each person keeps their own clone, pipeline
+   environment and pytom-match-pick environment, at the 0.14.0 the snapshot
+   documents. The group's other tools are named in
+   `/fast/AG_Kudryashev/software/cryoet-tools.sh` (README, "0. One-time
+   setup"). Still open: that file has to exist before the README's steps work.
+   The snapshot should then be built from a shell that sources it.
+4. Whether MDC's cluster has a wiki of its own (Munich's: see
    [Later](#later)).
-6. Whether Claude Code's Bash sandbox runs on the login nodes.
-7. Whether the guard runs at MDC, given the organization's note on managed
-   settings. A `touch` into the library should be refused by
-   `assistant/guard.py`, not by the file permissions; `/status` names the
-   setting sources.
+5. Whether Claude Code's Bash sandbox runs on the login nodes.
