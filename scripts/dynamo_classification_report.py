@@ -28,11 +28,17 @@ outputs/ribo-mdc/templates/TS_0306/TS_0306_pytom_bin8_template.mrc: every page o
 particles or maps then shows it in its top right corner, drawn as that page draws
 its own and brought to the particles' box and pixel size. Without it the corner
 stays empty.
+
+--workers is how many threads compute the average of all particles; the map does
+not depend on it. By default the CPUs Slurm gave the job (SLURM_CPUS_PER_TASK), so
+the report at the end of scripts/mra_port_run.sbatch uses the job's CPUs, and one
+thread outside a job.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError
@@ -74,7 +80,13 @@ def main() -> None:
     parser.add_argument("--template", type=Path,
                         help="the template the picks were matched with (MRC or EM), drawn in "
                         "the corner of every page of particles or maps")
+    parser.add_argument("--workers", type=int,
+                        default=int(os.environ.get("SLURM_CPUS_PER_TASK") or 1),
+                        help="threads for the average of all particles (default: the job's "
+                        "SLURM_CPUS_PER_TASK, else 1); the map does not depend on them")
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error(f"--workers must be at least 1, got {args.workers}")
 
     project = args.project.resolve()
     out = args.out or project.parent / f"{project.name}_classification_report.pdf"
@@ -87,13 +99,15 @@ def main() -> None:
         initial_average=args.initial_average,
         compute_initial_average=not args.no_initial_average,
         template=args.template,
+        workers=args.workers,
     )
     finished = len(run.iterations)
     planned = f" of {run.planned_iterations}" if run.planned_iterations else ""
     print(f"{run.name}: {len(run.tags):,} particles, {len(run.references)} channels, "
           f"{finished}{planned} iterations finished")
     if run.initial_average is not None and args.initial_average is None:
-        print("computing the average of all particles at their starting poses")
+        print(f"computing the average of all particles at their starting poses on "
+              f"{args.workers} thread{'s' if args.workers > 1 else ''}")
     outcome = write_classification_report(
         out, run, written=datetime.now().strftime("%Y-%m-%d %H:%M"), software=software()
     )

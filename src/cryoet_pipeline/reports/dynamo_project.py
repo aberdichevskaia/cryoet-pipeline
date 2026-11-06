@@ -205,6 +205,7 @@ def read_dynamo_classification(
     initial_average: Path | None = None,
     compute_initial_average: bool = True,
     template: Path | None = None,
+    workers: int = 1,
 ) -> ClassificationRun:
     """Everything the classification report shows about one Dynamo project folder.
 
@@ -213,7 +214,8 @@ def read_dynamo_classification(
     project, if any. `initial_average` is a map to show as the average of all
     particles at their starting poses; without one it is computed when its page
     is drawn, as Dynamo's console `dynamo_average` would (fcompensate, fmin 1,
-    normalised under the alignment mask), through the pipeline's port of it.
+    normalised under the alignment mask), through the pipeline's port of it, its
+    per-particle work on `workers` threads (the map does not depend on them).
     `template` is the map the picks were matched with (MRC or EM), drawn in the
     corner of the pages of particles and maps; one that cannot be read is listed
     with the other problems, and the pages go without it.
@@ -329,7 +331,8 @@ def read_dynamo_classification(
     elif compute_initial_average and particles.is_dir() and mask_path.exists():
         average = Volume(
             "computed for this report",
-            _cached(partial(_initial_average, starting, particles, extension, mask_path)),
+            _cached(partial(_initial_average, starting, particles, extension, mask_path,
+                            workers=workers)),
         )
     else:
         average = None
@@ -395,11 +398,14 @@ def aligned_volume(particle: np.ndarray, angles: np.ndarray, shifts: np.ndarray)
 
 
 def average_at_poses(particles: Iterable[np.ndarray], angles: np.ndarray, shifts: np.ndarray,
-                     tilt_ranges: Sequence[tuple[float, float]], mask: np.ndarray) -> np.ndarray:
+                     tilt_ranges: Sequence[tuple[float, float]], mask: np.ndarray, *,
+                     workers: int = 1) -> np.ndarray:
     """`particles` averaged at their poses, as Dynamo's console `dynamo_average` would
-    (fcompensate, fmin 1, normalised under `mask`), through the pipeline's port of it."""
+    (fcompensate, fmin 1, normalised under `mask`), through the pipeline's port of it;
+    `workers` threads, the map not depending on them (`average_class`)."""
 
-    result = average_class(particles, angles, shifts, list(tilt_ranges), mask, fmin=1)
+    result = average_class(particles, angles, shifts, list(tilt_ranges), mask, fmin=1,
+                           workers=workers)
     return np.asarray(result.average, dtype=np.float32)
 
 
@@ -579,14 +585,14 @@ def _particle_path(folder: Path, tag: int, extension: str) -> Path:
 
 
 def _initial_average(starting: np.ndarray, particles: Path, extension: str,
-                     mask_path: Path) -> np.ndarray:
+                     mask_path: Path, *, workers: int = 1) -> np.ndarray:
     if not np.all(starting[:, FTYPE] == 1):
         raise ValueError("only single-axis wedges (ftype 1) are averaged here")
     rows = starting[np.argsort(starting[:, TAG])]
     return average_at_poses(
         (read_map(_particle_path(particles, int(tag), extension)) for tag in rows[:, TAG]),
         rows[:, ANGLES], rows[:, SHIFTS], [tuple(pair) for pair in rows[:, TILT_RANGE]],
-        read_em(mask_path),
+        read_em(mask_path), workers=workers,
     )
 
 

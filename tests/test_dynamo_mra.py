@@ -207,4 +207,42 @@ def test_parallel_iteration_is_the_serial_one(two_classes):
                 getattr(parallel.searches[k], field), getattr(serial.searches[k], field)
             )
     for k in serial.surviving:
-        np.testing.assert_array_equal(parallel.averages[k].average, serial.averages[k].average)
+        for field in ("average", "raw", "fweight"):
+            np.testing.assert_array_equal(getattr(parallel.averages[k], field),
+                                          getattr(serial.averages[k], field))
+
+
+def test_threads_average_bit_for_bit_as_one_thread(two_classes):
+    d = two_classes
+    rows = (d["angles"], d["shifts"], d["tilts"], d["mask"])
+    one = mra.average_class(d["particles"], *rows)
+    # A generator, as the seeds and the reports read particles from disk.
+    threaded = mra.average_class((p for p in d["particles"]), *rows, workers=3)
+    for field in ("average", "raw", "fweight", "fmask"):
+        np.testing.assert_array_equal(getattr(threaded, field), getattr(one, field))
+    assert (threaded.members, threaded.threshold) == (one.members, one.threshold)
+    # The project's own averaging, a channel without MRA (the consensus halves).
+    for a, b in zip(core.average_particles(d["particles"], *rows),
+                    core.average_particles(d["particles"], *rows, workers=3), strict=True):
+        np.testing.assert_array_equal(a, b)
+    with pytest.raises(ValueError, match="positive integer"):
+        mra.average_class(d["particles"], *rows, workers=0)
+    wrong = [*d["particles"][:5], np.zeros((BOX + 2,) * 3), *d["particles"][6:]]
+    with pytest.raises(ValueError, match="shapes differ"):
+        mra.average_class(wrong, *rows, workers=3)
+
+
+def test_threads_take_rows_in_order_and_read_at_most_twice_their_number_ahead():
+    drawn: list[int] = []
+
+    def rows():
+        for i in range(20):
+            drawn.append(i)
+            yield (i,)
+
+    seen = []
+    for value in core._in_order(lambda i: i * i, rows(), 3):
+        assert len(drawn) - len(seen) <= 2 * 3 + 1
+        seen.append(value)
+    assert seen == [i * i for i in range(20)]
+    assert list(core._in_order(lambda i: -i, iter([(1,), (2,)]), 1)) == [-1, -2]

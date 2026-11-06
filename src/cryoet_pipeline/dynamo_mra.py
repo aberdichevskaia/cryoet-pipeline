@@ -165,6 +165,9 @@ def mra_iteration(
     band and shift limit scaled (`downsized`), the starting shifts scaled down and
     the found ones back (`expanded_shift`). The classes are averaged from the
     particles at their own box, as the plugin averages them.
+
+    `workers` goes to the search kernel and to the averages, which run its
+    per-particle work on that many threads and do not depend on it.
     """
     if assembly not in ("mra", "project"):
         raise ValueError(f"assembly is 'mra' or 'project', got {assembly!r}")
@@ -211,15 +214,17 @@ def mra_iteration(
         members = np.flatnonzero(assignment == k)
         group = ([particles[i] for i in members], searches[k].angles[members],
                  searches[k].shifts[members], [tilt_ranges[i] for i in members])
-        averages[k] = (_project_average(*group, mask) if assembly == "project"
-                       else average_class(*group, mask, fmin=fmin))
+        averages[k] = (_project_average(*group, mask, workers=workers) if assembly == "project"
+                       else average_class(*group, mask, fmin=fmin, workers=workers))
     return MraIteration(computed, searches, assignment, surviving, averages)
 
 
-def _project_average(particles, angles, shifts, tilt_ranges, mask) -> ClassAverage:
+def _project_average(particles, angles, shifts, tilt_ranges, mask, *,
+                     workers: int = 1) -> ClassAverage:
     """`average_particles`, the project's own averaging, as a `ClassAverage`."""
 
-    average, raw, weights = average_particles(particles, angles, shifts, tilt_ranges, mask)
+    average, raw, weights = average_particles(particles, angles, shifts, tilt_ranges, mask,
+                                              workers=workers)
     return ClassAverage(average, raw, weights,
                         (weights >= FOURIER_WEIGHT_THRESHOLD).astype(float),
                         FOURIER_WEIGHT_THRESHOLD, len(particles))

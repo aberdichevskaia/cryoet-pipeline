@@ -64,12 +64,15 @@ from __future__ import annotations
 import math
 import multiprocessing
 import os
-from collections.abc import Iterable, Iterator, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from functools import lru_cache
+from functools import lru_cache, partial
+from itertools import islice
 from pathlib import Path
+from typing import Any, TypeVar
 
 import mrcfile
 import numpy as np
@@ -97,13 +100,13 @@ from cryoet_pipeline.backends.subtomogram import (
     _require_available_paths,
     _validate_particle_stack,
     _wedge_geometry_per_particle,
-    wedge_ranges_by_series,
     _write_average_mrc,
     _write_json,
     averaging_scope,
     half_set_indices,
     pose_change_summary,
     torch_device_for_preference,
+    wedge_ranges_by_series,
 )
 from cryoet_pipeline.fsc import compute_fsc_curve, rise_toward_nyquist
 from cryoet_pipeline.models import (
@@ -655,7 +658,57 @@ def search_particles(particles, reference, mask, starts, tilt_ranges, settings, 
 FOURIER_WEIGHT_THRESHOLD = 0.1
 
 
-def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_ranges, mask):
+def _particle_terms(mask, particle, angle, shift, tilts):
+    """One particle's terms of an average: the particle at its inverse pose, normalized
+    over the mask's nonzero voxels and zeroed where the rotation left the box; where it
+    is valid; and its table wedge rotated likewise, with the implicit sphere."""
+
+    if _cube(particle).shape != mask.shape:
+        raise ValueError("particle and mask shapes differ")
+    inverse_angles = -_triple(angle)[::-1]
+    aligned, valid = resample(particle, inverse_angles, -_triple(shift),
+                              coordinates_in_double=True)
+    aligned = normalize_roi(aligned, mask)
+    aligned[~valid] = 0
+    rotated_wedge, _ = resample(wedge(len(mask), tilts), inverse_angles, sphere=True,
+                                coordinates_in_double=True)
+    return aligned, valid, rotated_wedge
+
+
+_T = TypeVar("_T")
+
+
+def _in_order(work: Callable[..., _T], rows: Iterable[tuple[Any, ...]],
+              workers: int) -> Iterator[_T]:
+    """`work(*row)` for every row, on `workers` threads, yielded in the rows' order.
+
+    At most twice `workers` rows are taken ahead, so rows read from disk as they go
+    stay that way. The averages sum what this yields in the calling thread, in order,
+    so the sums are those of one thread whatever `workers` is: only the per-particle
+    work (resampling, normalization, the wedge) runs in parallel. Threads, not
+    processes: NumPy releases the GIL in most of that work, and a process would have
+    to send each particle's terms back, about 18 MB at a 102 px box. On a Mac on
+    6 November, 64 particles of 102 px: four spawned processes sending them back 1.2x
+    one thread, eight threads 2.3x.
+    """
+    if type(workers) is not int or workers < 1:
+        raise ValueError(f"workers must be a positive integer, got {workers!r}")
+    source = iter(rows)
+    if workers == 1:
+        for row in source:
+            yield work(*row)
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = deque(pool.submit(work, *row) for row in islice(source, 2 * workers))
+        while pending:
+            done = pending.popleft().result()
+            for row in islice(source, 1):
+                pending.append(pool.submit(work, *row))
+            yield done
+
+
+def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_ranges, mask, *,
+                      workers: int = 1):
     """Raw-data average and Fourier compensation; no search/interpolation reuse.
 
     Use the same helper for fixed and refined poses to avoid comparing different
@@ -668,6 +721,8 @@ def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_rang
     separately, merge them equally, compensate at weight >= 0.1, and do NOT
     re-normalize the final map. These are not independently refined half-maps.
     Returns compensated average, unweighted average, and merged weights.
+    `workers` threads do the per-particle work (`_in_order`); the result does not
+    depend on it, bit for bit.
     """
     mask = _cube(mask)
     rows = list(zip(angles, shifts, tilt_ranges, strict=True))
@@ -676,19 +731,13 @@ def average_particles(particles: Iterable[np.ndarray], angles, shifts, tilt_rang
     total = np.zeros((2, *mask.shape))
     weights, contributions = np.zeros_like(total), np.zeros_like(total)
     count = 0
-    for particle, (angle, shift, tilts) in zip(particles, rows, strict=True):
-        if _cube(particle).shape != mask.shape:
-            raise ValueError("particle and mask shapes differ")
-        inverse_angles = -_triple(angle)[::-1]
-        aligned, valid = resample(particle, inverse_angles, -_triple(shift),
-                                  coordinates_in_double=True)
-        aligned = normalize_roi(aligned, mask)
-        aligned[~valid] = 0
+    terms = _in_order(partial(_particle_terms, mask),
+                      ((particle, *row) for particle, row in zip(particles, rows, strict=True)),
+                      workers)
+    for aligned, valid, rotated_wedge in terms:
         half = count % 2
         total[half] += aligned
         contributions[half] += valid
-        rotated_wedge, _ = resample(wedge(len(mask), tilts), inverse_angles, sphere=True,
-                                    coordinates_in_double=True)
         weights[half] += rotated_wedge
         count += 1
     # Dynamo's explicitBalanceNan defaults to 1: count only valid resamplings.
@@ -726,7 +775,8 @@ def fweight_divide(volume, fweight, threshold: float) -> np.ndarray:
     return np.fft.ifftn(np.fft.ifftshift(divided)).real
 
 
-def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 1) -> ClassAverage:
+def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 1,
+                  workers: int = 1) -> ClassAverage:
     """A class average as the MRA plugin asks `dynamo_average` for it.
 
     Also the console call `dynamo_average(..., 'fcompensate', true, 'fmin', 1,
@@ -742,6 +792,11 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
     members in their given order (ascending tags in Dynamo), no odd/even halves;
     the compensation threshold `fmin / N` of the max-normalized weight, not 0.1;
     and the compensated average normalized over the mask once more.
+
+    `workers` threads do the per-particle work, at most twice `workers` particles
+    ahead of the sum (`_in_order`), so `particles` may still be a generator reading
+    them from disk; the sums are made in the members' order in the calling thread,
+    so the class average does not depend on `workers`, bit for bit.
     """
     nmask = _cube(nmask)
     if np.any(nmask < 0) or not np.any(nmask):
@@ -752,19 +807,10 @@ def average_class(particles, angles, shifts, tilt_ranges, nmask, *, fmin: int = 
     contributions = np.zeros(nmask.shape)
     weights = np.zeros(nmask.shape)
     count = 0
-    # One particle at a time, so `particles` may be a generator reading them from disk.
-    for particle, angle, shift, tilts in zip(particles, angles, shifts, tilt_ranges, strict=True):
-        if _cube(particle).shape != nmask.shape:
-            raise ValueError("particle and mask shapes differ")
-        inverse_angles = -_triple(angle)[::-1]
-        aligned, valid = resample(particle, inverse_angles, -_triple(shift),
-                                  coordinates_in_double=True)
-        aligned = normalize_roi(aligned, nmask)
-        aligned[~valid] = 0
+    rows = zip(particles, angles, shifts, tilt_ranges, strict=True)
+    for aligned, valid, rotated_wedge in _in_order(partial(_particle_terms, nmask), rows, workers):
         total += aligned
         contributions += valid
-        rotated_wedge, _ = resample(wedge(len(nmask), tilts), inverse_angles, sphere=True,
-                                    coordinates_in_double=True)
         weights += rotated_wedge
         count += 1
     if not count:

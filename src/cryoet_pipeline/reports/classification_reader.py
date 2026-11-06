@@ -73,6 +73,7 @@ def read_classification(
     initial_average: Path | None = None,
     compute_initial_average: bool = True,
     template: Path | None = None,
+    workers: int = 1,
 ) -> ClassificationRun:
     """A run of the run-record layout when `folder` holds a plan.json, else a Dynamo
     project; the options as `read_dynamo_classification` takes them."""
@@ -80,7 +81,8 @@ def read_classification(
     read = read_mra_run if (Path(folder) / PLAN).is_file() else read_dynamo_classification
     return read(folder, manifest=manifest, pixel_size_angstrom=pixel_size_angstrom,
                 initial_average=initial_average,
-                compute_initial_average=compute_initial_average, template=template)
+                compute_initial_average=compute_initial_average, template=template,
+                workers=workers)
 
 
 def read_mra_run(
@@ -91,6 +93,7 @@ def read_mra_run(
     initial_average: Path | None = None,
     compute_initial_average: bool = True,
     template: Path | None = None,
+    workers: int = 1,
 ) -> ClassificationRun:
     """Everything the classification report shows about one run of `mra_runs.run_plan`.
 
@@ -213,7 +216,8 @@ def read_mra_run(
         average: Volume | None = Volume(str(initial_average), partial(read_map, initial_average))
     elif compute_initial_average and load is not None and mask_path.exists():
         average = Volume("computed for this report",
-                         _cached(partial(_starting_average, load, starting, mask_path)))
+                         _cached(partial(_starting_average, load, starting, mask_path,
+                                         workers=workers)))
     else:
         average = None
 
@@ -409,14 +413,14 @@ def _summary(search: Mapping[str, Any], record: RunRecord, box: int,
 
 
 def _starting_average(load: Callable[[int], np.ndarray], starting: Mapping[str, np.ndarray],
-                      mask_path: Path) -> np.ndarray:
+                      mask_path: Path, *, workers: int = 1) -> np.ndarray:
     tags = starting["particle_id"].astype(int)
     return average_at_poses(
         (load(int(tag)) for tag in tags),
         _stack(starting, ANGLE_COLUMNS), _stack(starting, SHIFT_COLUMNS),
         [(float(low), float(high)) for low, high in zip(starting["tilt_min_deg"],
                                                          starting["tilt_max_deg"], strict=True)],
-        read_map(mask_path),
+        read_map(mask_path), workers=workers,
     )
 
 

@@ -274,6 +274,10 @@ def test_the_initial_average_is_dynamo_average_of_every_particle(project: Path) 
     expected = average_class(particles, np.zeros((12, 3)), np.zeros((12, 3)),
                              [(-60.0, 60.0)] * 12, sphere(6), fmin=1).average
     assert np.allclose(run.initial_average.load(), expected, atol=1e-5)
+    # On threads, the same map bit for bit.
+    threaded = read_dynamo_classification(project, workers=3).initial_average
+    assert threaded is not None
+    np.testing.assert_array_equal(threaded.load(), run.initial_average.load())
 
 
 def test_the_report_draws_every_planned_page(project: Path, tmp_path: Path) -> None:
