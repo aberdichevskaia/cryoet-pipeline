@@ -86,6 +86,10 @@ mdocs = "data/my-dataset/mdocs"
 # input = "frames" only. MRC, TIFF and EER movies; EER needs backend
 # "motioncor3", which decodes it (docs/motioncor3_backend.md, "EER movies").
 backend = "motioncor3"
+# The patch grid. prepare-tilt-series judges the patch alignment in
+# qc/<TS>/motion/: a tilt where at least half the patches moved more than 1.5 nm
+# against the whole frame has its sum cut into displaced tiles. 1 x 1 aligns
+# whole frames only (docs/motioncor3_backend.md, "Patch alignment QC").
 patch_x = 5
 patch_y = 5
 gpu = 0

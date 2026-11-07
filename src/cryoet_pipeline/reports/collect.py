@@ -47,6 +47,7 @@ class QcStep:
 
 
 QC_STEPS: tuple[QcStep, ...] = (
+    QcStep("motion_correction", "Motion correction", "Motion"),
     QcStep("coarse_alignment_report", "Coarse alignment", "Coarse"),
     QcStep("fiducial_seed", "Fiducial seeding", "Seed"),
     QcStep("fiducial_tracking", "Fiducial tracking", "Track"),

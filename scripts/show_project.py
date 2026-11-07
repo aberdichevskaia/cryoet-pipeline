@@ -56,6 +56,7 @@ import run_series  # noqa: E402
 # column. A type not listed here (denoising, pick filters, averages) is reported
 # under its own name, after the chain.
 QC_STEP = {
+    "motion_correction": "prepare-tilt-series",
     "coarse_alignment_report": "qc-coarse-alignment",
     "fiducial_seed": "generate-fiducial-seed",
     "fiducial_tracking": "track-fiducials",

@@ -32,7 +32,10 @@ For the first release:
 - no NaN or infinite values;
 - variance is nonzero;
 - small binned projection previews can be generated for selected tilts;
-- registry records backend, parameters, source frame file, size, and storage role.
+- registry records backend, parameters, source frame file, size, and storage role;
+- MotionCor3's patch alignment: a tilt fails when at least half its patches
+  moved more than 1.5 nm against the whole frame, which cuts its sum into
+  displaced tiles (`qc/<TS>/motion/`, see `motioncor3_backend.md`).
 
 ### Tilt stack
 

@@ -296,6 +296,55 @@ class TiltAlignment(BaseModel):
         return self
 
 
+class MotionPatchAlignment(BaseModel):
+    """How far MotionCor3 moved one tilt's patches against its whole frame."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    z_value: int
+    tilt_angle_deg: float
+    # MotionCor3's <movie>-Patch-Patch.log; None when it wrote none.
+    log: Path | None = None
+    frames: int | None = Field(default=None, ge=1)
+    patches: int | None = Field(default=None, ge=1)
+    # The tolerance in the pixels of the frames MotionCor3 aligned.
+    tolerance_px: float | None = Field(default=None, gt=0.0)
+    # Patches whose shift in some frame exceeds the tolerance.
+    patches_beyond: int | None = Field(default=None, ge=0)
+    # The median over patches of each one's largest shift; None if not finite.
+    median_patch_shift_px: float | None = Field(default=None, ge=0.0)
+    failed: bool | None = None
+    # Why the tilt was not judged: no patch log, an old one, one that does not read.
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def judged_or_explained(self) -> MotionPatchAlignment:
+        if (self.failed is None) == (self.error is None):
+            raise ValueError("a tilt's patch alignment is either judged or says why not")
+        return self
+
+
+class MotionCorrectionQc(BaseModel):
+    """QC of MotionCor3's patch alignment over one tilt series.
+
+    A tilt fails when at least half its patches moved more than `tolerance_nm`
+    against the whole frame in some frame: its sum is then cut into tiles put
+    back in the wrong places.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    patch_grid_xy: list[int]
+    tolerance_nm: float = Field(gt=0.0)
+    tilts: list[MotionPatchAlignment]
+    failed_z_values: list[int]
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+
 class CoarseAlignmentQc(BaseModel):
     """QC summary for a coarsely aligned tilt-series preview."""
 

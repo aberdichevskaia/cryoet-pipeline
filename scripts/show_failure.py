@@ -57,7 +57,9 @@ import show_project  # noqa: E402
 # Where each step's programs write their logs, relative to the project, with {s}
 # for the series: the folders docs/agent/pipeline_map.md lists.
 STEP_DIRS: dict[str, tuple[str, ...]] = {
-    "prepare-tilt-series": ("logs/motioncor3/{s}", "motion/motioncor3/{s}", "stacks/{s}"),
+    "prepare-tilt-series": (
+        "logs/motioncor3/{s}", "motion/motioncor3/{s}", "stacks/{s}", "qc/{s}/motion",
+    ),
     "import-tilt-stack": ("stacks/{s}",),
     "align-tilt-series": ("alignments/{s}",),
     "qc-coarse-alignment": ("qc/{s}/coarse_alignment",),

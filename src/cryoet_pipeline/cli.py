@@ -58,6 +58,7 @@ from cryoet_pipeline.backends.motion import (
     MotionCor3MotionCorrectionBackend,
     PhaseCorrelationMotionCorrectionBackend,
     correct_and_register,
+    motion_qc_and_register,
 )
 from cryoet_pipeline.backends.picking import (
     PytomMatchPickBackend,
@@ -137,6 +138,7 @@ from cryoet_pipeline.models import (
     AlignmentFrame,
     Artifact,
     ArtifactKind,
+    MotionCorrectionQc,
     ProjectConfig,
     TiltSeriesManifest,
 )
@@ -540,9 +542,17 @@ def correct_motion(
         artifact_registry,
         replace_existing=overwrite,
     )
+    motion_qc = motion_qc_and_register(
+        artifacts,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
     artifact_registry.commit(registry)
 
     typer.echo(f"wrote {len(artifacts)} corrected projections")
+    _echo_motion_qc(motion_qc)
     typer.echo(f"updated {registry}")
     typer.echo(f"storage policy: {resolved_storage_policy.name.value}")
     typer.echo(f"registered size: {artifact_registry.total_size_bytes} bytes")
@@ -695,6 +705,13 @@ def prepare_tilt_series(
         artifact_registry,
         replace_existing=overwrite,
     )
+    motion_qc = motion_qc_and_register(
+        corrected_artifacts,
+        tilt_series_manifest,
+        context,
+        artifact_registry,
+        replace_existing=overwrite,
+    )
     stack_artifacts = build_stack_and_register(
         SimpleTiltStackBackend(),
         corrected_artifacts,
@@ -706,6 +723,7 @@ def prepare_tilt_series(
     artifact_registry.commit(registry)
 
     typer.echo(f"wrote {len(corrected_artifacts)} corrected projections")
+    _echo_motion_qc(motion_qc)
     typer.echo(f"wrote {len(stack_artifacts)} tilt-series preparation artifacts")
     typer.echo(f"updated {registry}")
     typer.echo(f"storage policy: {resolved_storage_policy.name.value}")
@@ -5405,6 +5423,17 @@ def _named_segmentation_artifact(
             param_hint="segmentation-id",
         )
     return artifact
+
+
+def _echo_motion_qc(motion_qc: Artifact | None) -> None:
+    """The motion QC's verdict and warnings, so that the lane's log carries them."""
+
+    if motion_qc is None:
+        return
+    report = MotionCorrectionQc.model_validate_json(motion_qc.path.read_text())
+    typer.echo(f"motion QC: {report.status.value} ({motion_qc.path})")
+    for warning in report.warnings:
+        typer.echo(f"  {warning}")
 
 
 def _tilt_stack_artifact(

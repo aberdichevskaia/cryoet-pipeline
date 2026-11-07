@@ -18,8 +18,10 @@ For each tilt movie, the adapter:
 2. runs MotionCor3 on one movie with global and patch correction;
 3. defaults to a `5 x 5` patch grid and one configured GPU;
 4. saves MotionCor3 alignment metadata and both process and tool logs;
-5. validates that the result is one finite 2D projection with the expected size;
-6. converts the result to the storage-policy format and registers a standard
+5. judges its patch alignment from MotionCor3's patch log (see "Patch
+   alignment QC");
+6. validates that the result is one finite 2D projection with the expected size;
+7. converts the result to the storage-policy format and registers a standard
    `CORRECTED_PROJECTION` artifact.
 
 The adapter uses Fourier binning `1.0`, does not save an aligned frame stack, and
@@ -131,11 +133,59 @@ bottom row first, and its alignframes can apply the files' TIFF Orientation tag
 (2 on EMPIAR-11830), so its sums of the same movies differ from MotionCor3's by
 a flip; the tilt axis and the hand belong to the orientation the sums have.
 
+## Patch alignment QC
+
+With more than one patch, MotionCor3 writes `<movie>-Patch-Patch.log` into
+`-LogDir`: for each patch, its shift in every frame against the whole-frame
+alignment, in the pixels of the frames it aligned (the log's `# Movie size`).
+After each movie the backend reads it. A patch counts as moved beyond the
+tolerance when its largest shift exceeds 1.5 nm, the fine alignment's failure
+threshold, since a tile of the sum put further off is a defect alignment cannot
+take out; a NaN or overflowing shift counts as beyond. A tilt's patch alignment
+failed when at least half its patches moved beyond. The artifact records this
+as `patch_alignment` (frames, patches, `tolerance_px`, `patches_beyond`,
+`median_patch_shift_px`, `failed`, the log), or as the reason the tilt was not
+judged: no log, a log older than the run, one that does not read, or a patch
+count other than the grid's. With `-Patch 1 1` there is nothing to judge and it
+is null.
+
+`prepare-tilt-series` (and `correct-motion`) then writes
+`qc/<TS>/motion/<TS>_motion_qc.json`, registered as QC type
+`motion_correction`: `fail` naming the tilts whose patch alignment failed,
+`warning` when a tilt was not judged, `pass` otherwise. The command prints the
+verdict and its warnings, so the lane's log has them. The verdict stops
+nothing: the stack is built either way. A run without patch alignment removes
+the report of an earlier one, so the report in place describes the latest
+motion correction.
+
+Measured on EMPIAR-11830 Position_1 (7 November 2026, 5 × 5 patches, 41 tilts
+from −75 to +45°): five tilts, −75/−72/−69 and +42/+45, had all 25 patches
+beyond 7.9 px, each by 125 px or more (medians 470–700 px). Of the other 36,
+none had more than one patch beyond, that one by at most 11.9 px, and their
+medians were at most 1.25 px. Those five
+are the tilts whose sums showed straight seams on the patch grid and broke
+coarse alignment. `scripts/mc3_patch_check.sbatch` (job 3901454) found the
+tiles of the −75 and +45 sums 150–480 px from where a `-Patch 1 1` sum has
+them, and those of −45, −15 and +15 within 1.4 px.
+
+Not known: why those five. They are the darkest tilts and also the only ones
+with 3 or 4 frames (the others have 5–9), since an EER movie's groups follow its
+dose, and MotionCor3 aligns patches on groups of 4 frames (`-Group 1 4`, its
+default, as its output prints). Too few frames and too little signal per patch
+both fit. Rerunning a 4-frame tilt with more groups, or a 5-frame one with 4,
+would tell them apart.
+
+Not checked: the log's name for MRC and TIFF movies. `<movie stem>-Patch-Patch.log`
+is what MotionCor3 wrote for EER. A tilt whose log is not found is reported as
+not judged, not as passed.
+
 ## Tests
 
 The default test suite never needs MotionCor3 or CUDA. It injects a fake process
 runner and covers command construction, MRC and Zarr canonicalization, artifact
 provenance, CUDA enforcement, missing executables, process failures, malformed
-outputs, and output preflight behavior.
+outputs, and output preflight behavior. `tests/test_motion_patch_qc.py` covers
+the patch log as MotionCor3 writes it (the start of a real one), the rule, the
+record of each tilt, and the series report.
 
 Official project: <https://github.com/czimaginginstitute/MotionCor3>

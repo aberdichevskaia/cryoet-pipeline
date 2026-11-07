@@ -97,6 +97,48 @@ list what the binary carries.
 
 **Source:** Munich cluster setup; the preflight in `scripts/lane.sbatch`.
 
+### M-2. Patch alignment cut the dark tilts into displaced tiles
+
+**Where it shows:** `scripts/show_project.py` marks `prepare-tilt-series` as
+`fail`, and `qc/<TS>/motion/<TS>_motion_qc.json` names the tilts ("patch
+alignment failed on ..."). Further on, coarse alignment jumps between
+neighbouring views at the ends of the series, the tilt axis drifts, and fine
+alignment fails. The views look dark, and their sums show straight seams on the
+patch grid (every 819 px of a 4096 px frame at 5 × 5), with content cut and
+repeated across them.
+
+**How to confirm:** the QC file. A failed tilt has most of its patches beyond
+the tolerance, by hundreds of pixels; the others have none or one or two. To see
+it in the sums themselves, `scripts/mc3_patch_check.sbatch` reruns chosen tilts
+with the recorded command and with `-Patch 1 1`, and measures how far each tile
+moved (one GPU job of a few minutes; a person submits it).
+
+**Causes, common to rare:**
+1. Too little in a patch to align: the darkest tilts (high tilt, thick
+   lamella) at the dose of one patch and one frame. On EMPIAR-11830 these tilts
+   also had the fewest frames (3–4: EER groups follow the dose), and MotionCor3
+   aligns patches on groups of 4 frames; which of the two matters is not known
+   (`docs/motioncor3_backend.md`, "Patch alignment QC").
+
+**What to try, cheap to expensive** — and what you expect to see if it works:
+1. `[motion] patch_x = 1` and `patch_y = 1`, and rerun from the motion stage
+   with `--overwrite`. Expect no motion QC (with whole frames there is nothing
+   to judge), sums without seams, and no jumps at the ends of coarse alignment.
+
+**What not to do:** raise `[align] min_std_ratio` to drop the dark views before
+reading the motion QC. On a frames lane the defect can sit in the sums, not in
+the darkness. The 0.84 in `ribo-mdc.toml` was a stack lane, with no motion
+correction of ours.
+
+**When to stop and ask someone:** when alignment still fails after the rerun
+with whole frames, or a tilt fails the motion QC with fewer patches.
+
+**Source:** EMPIAR-11830 Position_1, 7 November 2026. Of 41 tilts, five
+(−75/−72/−69, +42/+45) had all 25 patches beyond the tolerance, each by 125 px
+or more; of the others, none had more than one, by at most 11.9 px. Job 3901454 found the tiles of the −75
+and +45 sums 150–480 px from where a `-Patch 1 1` sum has them. Seen on one
+dataset.
+
 ## Alignment
 
 ### A-1. Coarse alignment QC fails, the rest is fine

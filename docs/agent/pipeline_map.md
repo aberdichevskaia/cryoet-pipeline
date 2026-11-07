@@ -195,6 +195,10 @@ Motion correction, then the tilt stack from the corrected sums.
 - Writes: `corrected/<TS>/` (one sum per tilt), `stacks/<TS>/` (the tilt
   stack). MotionCor3's working files are in `motion/motioncor3/<TS>/`, its logs in
   `logs/motioncor3/<TS>/`.
+- QC: `qc/<TS>/motion/<TS>_motion_qc.json`, when MotionCor3 aligned patches.
+  `fail` names the tilts where at least half the patches moved more than 1.5 nm
+  against the whole frame: their sums are cut into displaced tiles. Per tilt,
+  the corrected sum's `patch_alignment` in the registry. It stops nothing.
 - Preflight in `lane.sbatch`: `$MOTIONCOR3` is executable, its libraries load
   (`ldd`), and it has code the job's GPU can run (`cuobjdump`).
 - `storage_policy`: `working` keeps Zarr; `debug` (the command's default) writes

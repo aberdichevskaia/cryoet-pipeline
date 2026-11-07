@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
@@ -23,6 +25,9 @@ from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
     AxisOrder,
+    MotionCorrectionQc,
+    MotionPatchAlignment,
+    QcStatus,
     RetentionPolicy,
     StorageRole,
     TiltImage,
@@ -204,6 +209,7 @@ class MotionCor3MotionCorrectionBackend:
                 alignment_dir=alignment_dir,
                 fmint_path=fmint_path,
             )
+            started = time.time()
             result = self._command_runner(
                 command,
                 cwd=work_dir,
@@ -223,6 +229,13 @@ class MotionCor3MotionCorrectionBackend:
                 input_path=image.local_frame_file,
                 ftbin=settings.ftbin,
                 render_factor=settings.render_factor,
+            )
+            patch_alignment = _patch_alignment(
+                settings,
+                log_dir=log_dir,
+                movie=image.local_frame_file,
+                started=started,
+                sum_width_px=int(projection.shape[-1]),
             )
             _write_projection(
                 output_path,
@@ -282,6 +295,9 @@ class MotionCor3MotionCorrectionBackend:
                 "command_log": str(command_log_path),
                 "motioncor3_log": str(motioncor3_log_path),
                 "alignment_dir": str(alignment_dir),
+                # How far the patches moved against the whole frame, from
+                # MotionCor3's patch log; None with a 1 x 1 grid.
+                "patch_alignment": patch_alignment,
             },
             software_versions=software_versions,
             storage_role=_storage_role_parameter(context),
@@ -456,6 +472,265 @@ def correct_and_register(
     artifacts = backend.correct(manifest, context)
     registry.extend(artifacts, replace=replace_existing)
     return artifacts
+
+
+# How far MotionCor3 may move a patch against the whole frame before the patch
+# counts as misaligned: the fine alignment's failure threshold (its
+# residual_failure_nm, 1.5 nm), since a tile of the sum put further off than that
+# is a defect alignment cannot take out. A tilt fails when at least half its
+# patches moved further. On EMPIAR-11830 Position_1 (7 November 2026) the five
+# tilts whose sums came out cut into displaced tiles had every one of their 25
+# patches moved by 125 px or more; of the other 36, none had more than one beyond
+# the 7.9 px this is there, and that one by at most 11.9 px.
+PATCH_SHIFT_TOLERANCE_NM = 1.5
+PATCH_LOG_SUFFIX = "-Patch-Patch.log"
+# A patch log older than its run by more than this was left by an earlier run.
+_PATCH_LOG_MTIME_SLACK_S = 2.0
+
+
+@dataclass(frozen=True)
+class MotionCor3PatchLog:
+    """MotionCor3's `<movie>-Patch-Patch.log`.
+
+    Per patch, its centre and its shift in each frame against the whole-frame
+    alignment, in the pixels of the frames MotionCor3 aligned: `width` x
+    `height`, `frames` of them, as the log's "# Movie size" line gives them.
+    """
+
+    width: int
+    height: int
+    frames: int
+    centres: tuple[tuple[float, float], ...]
+    shifts: tuple[tuple[tuple[float, float], ...], ...]
+
+
+def read_motioncor3_patch_log(path: Path) -> MotionCor3PatchLog:
+    """Read a patch log; ValueError if it is not one, or not a whole one."""
+
+    size: tuple[int, int, int] | None = None
+    centres: list[tuple[float, float]] = []
+    shifts: list[list[tuple[float, float]]] = []
+    for number, line in enumerate(path.read_text().splitlines(), start=1):
+        text = line.strip()
+        try:
+            if text.startswith("# Movie size:"):
+                width, height, frames = (int(value) for value in text.split(":", 1)[1].split())
+                size = (width, height, frames)
+            elif text.startswith("#Patch"):
+                shifts.append([])
+            elif text and not text.startswith("#"):
+                if not shifts:
+                    raise ValueError("a shift before the first #Patch line")
+                fields = text.split()
+                if len(fields) < 5:
+                    raise ValueError(f"{len(fields)} fields, not frame, x, y, dx, dy")
+                x, y, dx, dy = (float(value) for value in fields[1:5])
+                if not shifts[-1]:
+                    centres.append((x, y))
+                shifts[-1].append((dx, dy))
+        except ValueError as error:
+            raise ValueError(f"{path}:{number}: {error}") from None
+    if size is None:
+        raise ValueError(f"{path}: no '# Movie size' line")
+    if not shifts:
+        raise ValueError(f"{path}: no patches")
+    short = [index for index, patch in enumerate(shifts, start=1) if len(patch) != size[2]]
+    if short:
+        raise ValueError(
+            f"{path}: patch {short[0]} has {len(shifts[short[0] - 1])} shifts for "
+            f"{size[2]} frames"
+        )
+    return MotionCor3PatchLog(
+        width=size[0],
+        height=size[1],
+        frames=size[2],
+        centres=tuple(centres),
+        shifts=tuple(tuple(patch) for patch in shifts),
+    )
+
+
+def judge_patch_shifts(log: MotionCor3PatchLog, *, tolerance_px: float) -> dict[str, object]:
+    """Count the patches whose shift in some frame exceeds the tolerance; the tilt
+    fails when at least half of them do."""
+
+    largest = []
+    for patch in log.shifts:
+        lengths = [math.hypot(dx, dy) for dx, dy in patch]
+        # A patch MotionCor3 lost can come with overflowing or NaN shifts: beyond.
+        largest.append(max(lengths) if all(math.isfinite(v) for v in lengths) else math.inf)
+    beyond = sum(1 for value in largest if value > tolerance_px)
+    median = float(np.median(largest))
+    return {
+        "frames": log.frames,
+        "patches": len(largest),
+        "tolerance_px": round(tolerance_px, 3),
+        "patches_beyond": beyond,
+        "median_patch_shift_px": round(median, 3) if math.isfinite(median) else None,
+        "failed": 2 * beyond >= len(largest),
+    }
+
+
+def _patch_alignment(
+    settings: _MotionCor3Settings,
+    *,
+    log_dir: Path,
+    movie: Path,
+    started: float,
+    sum_width_px: int,
+) -> dict[str, object] | None:
+    """One tilt's patch alignment, judged from MotionCor3's patch log; None for a
+    1 x 1 grid, which aligns whole frames only. A log that is missing, older
+    than the run or unreadable leaves the tilt unjudged, with the reason."""
+
+    patches = settings.patch_x * settings.patch_y
+    if patches == 1:
+        return None
+    log = log_dir / f"{movie.stem}{PATCH_LOG_SUFFIX}"
+    if not log.is_file():
+        return {"log": None, "error": f"MotionCor3 wrote no {log.name} in {log_dir}"}
+    if log.stat().st_mtime < started - _PATCH_LOG_MTIME_SLACK_S:
+        return {
+            "log": str(log),
+            "error": f"{log.name} is older than this run: MotionCor3 wrote no new one",
+        }
+    try:
+        patch_log = read_motioncor3_patch_log(log)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        return {"log": str(log), "error": f"{log.name} does not read: {error}"}
+    if len(patch_log.shifts) != patches:
+        return {
+            "log": str(log),
+            "error": (
+                f"{log.name} has {len(patch_log.shifts)} patches, the grid "
+                f"{settings.patch_x} x {settings.patch_y} = {patches}"
+            ),
+        }
+    # The shifts are in the pixels of the frames MotionCor3 aligned, whose size the
+    # log gives; the sum's pixel and width give their pixel size.
+    shift_pixel_angstrom = (
+        settings.output_pixel_spacing_angstrom * sum_width_px / patch_log.width
+    )
+    return {
+        "log": str(log),
+        **judge_patch_shifts(
+            patch_log,
+            tolerance_px=PATCH_SHIFT_TOLERANCE_NM * 10.0 / shift_pixel_angstrom,
+        ),
+    }
+
+
+def motion_qc_and_register(
+    corrected: Sequence[Artifact],
+    manifest: TiltSeriesManifest,
+    context: BackendContext,
+    registry: ArtifactRegistry,
+    *,
+    replace_existing: bool = False,
+) -> Artifact | None:
+    """Judge MotionCor3's patch alignment over the series and register the report.
+
+    The report goes to `qc/<TS>/motion/<TS>_motion_qc.json`: `fail` when a tilt's
+    patch alignment failed, `warning` when a tilt could not be judged, `pass`
+    otherwise. Without patch alignment (another backend, or a 1 x 1 grid) there
+    is nothing to judge, and a report left by an earlier run is removed, so the
+    one in place always describes the latest motion correction.
+    """
+
+    series = manifest.tilt_series_id
+    path = context.output_dir / "qc" / series / "motion" / f"{series}_motion_qc.json"
+    artifact_id = f"{series}:qc:motion:report"
+    if any(artifact.id == artifact_id for artifact in registry.artifacts):
+        registry.remove(artifact_id)
+    judged = [
+        artifact
+        for artifact in corrected
+        if isinstance(artifact.parameters.get("patch_alignment"), dict)
+    ]
+    if not judged:
+        path.unlink(missing_ok=True)
+        return None
+
+    tilts = sorted(
+        (
+            MotionPatchAlignment(
+                z_value=int(artifact.parameters["z_value"]),
+                tilt_angle_deg=float(artifact.parameters["tilt_angle_deg"]),
+                **artifact.parameters["patch_alignment"],
+            )
+            for artifact in judged
+        ),
+        key=lambda tilt: tilt.tilt_angle_deg,
+    )
+    failed = [tilt for tilt in tilts if tilt.failed]
+    unjudged = [tilt for tilt in tilts if tilt.error is not None]
+    warnings = []
+    if failed:
+        warnings.append(_failed_patch_alignment_warning(failed, len(tilts)))
+    if unjudged:
+        warnings.append(
+            f"patch alignment not judged on {len(unjudged)} of {len(tilts)} tilts "
+            f"({_angles(unjudged)} deg): {unjudged[0].error}"
+        )
+    status = QcStatus.FAIL if failed else QcStatus.WARNING if unjudged else QcStatus.PASS
+    report = MotionCorrectionQc(
+        tilt_series_id=series,
+        backend=str(judged[0].backend),
+        patch_grid_xy=[int(value) for value in judged[0].parameters["patch_grid_xy"]],
+        tolerance_nm=PATCH_SHIFT_TOLERANCE_NM,
+        tilts=tilts,
+        failed_z_values=sorted(tilt.z_value for tilt in failed),
+        status=status,
+        warnings=warnings,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.model_dump_json(indent=2) + "\n")
+    artifact = Artifact(
+        id=artifact_id,
+        kind=ArtifactKind.QC,
+        path=path,
+        parent_ids=[artifact.id for artifact in judged],
+        backend=judged[0].backend,
+        parameters={
+            "qc_type": "motion_correction",
+            "tilt_series_id": series,
+            "status": status.value,
+        },
+        storage_role=StorageRole.QC,
+        retention_policy=RetentionPolicy.KEEP,
+        can_recompute=True,
+        size_bytes=path.stat().st_size,
+    )
+    registry.extend([artifact], replace=replace_existing)
+    return artifact
+
+
+def _angles(tilts: Sequence[MotionPatchAlignment]) -> str:
+    return ", ".join(f"{tilt.tilt_angle_deg:.1f}" for tilt in tilts)
+
+
+def _failed_patch_alignment_warning(
+    failed: Sequence[MotionPatchAlignment], total: int
+) -> str:
+    frames = sorted({tilt.frames for tilt in failed if tilt.frames is not None})
+    frames_text = (
+        f"{frames[0]}" if len(frames) == 1 else f"{frames[0]}-{frames[-1]}"
+    )
+    medians = [
+        tilt.median_patch_shift_px for tilt in failed if tilt.median_patch_shift_px is not None
+    ]
+    median_text = (
+        f"median patch {min(medians):.0f}-{max(medians):.0f} px"
+        if medians
+        else "most patches lost"
+    )
+    tolerance_px = failed[0].tolerance_px or 0.0
+    return (
+        f"patch alignment failed on {len(failed)} of {total} tilts ({_angles(failed)} "
+        f"deg; {frames_text} frames each): at least half of each one's patches moved "
+        f"more than {PATCH_SHIFT_TOLERANCE_NM:g} nm ({tolerance_px:.1f} px) against the "
+        f"whole frame ({median_text}), so those sums are cut into displaced tiles. "
+        "[motion] patch_x = patch_y = 1 aligns whole frames only"
+    )
 
 
 def _motioncor3_settings(
