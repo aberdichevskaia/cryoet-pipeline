@@ -55,8 +55,18 @@
 # Required: MODEL; for an open model also OLLAMA_MODELS, and OLLAMA (the
 # executable) unless ollama is on PATH. Optional: CASES ("--all", or ids such as
 # "E11 E12"), RUNS (3), CONTEXT (131072, the server's window in tokens; the
-# client compacts within it) and TIMEOUT (seconds a run may take: 3600 for an
-# open model, run_cases.py's 1200 for Claude).
+# client compacts within it), TIMEOUT (seconds a turn of a run may take: 3600
+# for an open model, run_cases.py's 1200 for Claude) and LOAD_TIMEOUT (seconds
+# the model may take to load, 7200).
+#
+# llama-server prints nothing while it reads a model's weights, and Ollama gives
+# up on a load that prints nothing for OLLAMA_LOAD_TIMEOUT, 5 minutes by default
+# (Ollama 0.40.14 and llama.cpp b11963, read 7 November 2026). With mmap, the
+# default, llama.cpp reads every file whole (MAP_POPULATE) before it goes on.
+# GLM-5.3, 801 GB from /fast, was stopped so on 7 November 2026. The job sets
+# OLLAMA_LOAD_TIMEOUT to LOAD_TIMEOUT and prints how long the load took.
+# LLAMA_ARG_LOAD_MODE=none in --export reads the weights without mmap instead:
+# Ollama passes its environment on to llama-server.
 #
 # Before the batch, for an open model, the job checks and stops at the first
 # that fails:
@@ -85,12 +95,17 @@ cd "$REPO"
 read -ra cases <<< "${CASES:---all}"
 RUNS=${RUNS:-3}
 CONTEXT=${CONTEXT:-131072}
+LOAD_TIMEOUT=${LOAD_TIMEOUT:-7200}
+[[ "$LOAD_TIMEOUT" =~ ^[0-9]+$ ]] \
+    || { echo "LOAD_TIMEOUT is in seconds, not '$LOAD_TIMEOUT'" >&2; exit 1; }
 OUT=${OUT:-outputs/open-model-cases/$SLURM_JOB_ID}
 mkdir -p "$OUT"
 
 source scripts/activate_env.sh
 command -v claude > /dev/null || { echo "Claude Code (claude) is not on PATH" >&2; exit 1; }
-echo "$(hostname): $(nvidia-smi -L 2> /dev/null | wc -l) GPUs; model $MODEL"
+# The memory, since a model loaded with mmap is read into it first.
+echo "$(hostname): $(nvidia-smi -L 2> /dev/null | wc -l) GPUs," \
+     "$(free -g 2> /dev/null | awk '/^Mem:/ {print $2}') GB of memory; model $MODEL"
 
 # The first batch folder run_cases.py made since this UTC time: it names them by
 # the time they start, so names sort as times do.
@@ -122,6 +137,8 @@ if [[ "$MODEL" != claude-* ]]; then
     export OLLAMA_HOST=127.0.0.1:$((20000 + SLURM_JOB_ID % 20000))
     # One request at a time, each with the whole window, and the model kept loaded.
     export OLLAMA_CONTEXT_LENGTH=$CONTEXT OLLAMA_NUM_PARALLEL=1 OLLAMA_KEEP_ALIVE=-1
+    # The whole load, which prints nothing (see the header).
+    export OLLAMA_LOAD_TIMEOUT=$LOAD_TIMEOUT
     "$OLLAMA" serve > "$OUT/ollama.log" 2>&1 &
     server=$!
     trap 'kill "$server" 2> /dev/null || true' EXIT
@@ -142,13 +159,15 @@ if [[ "$MODEL" != claude-* ]]; then
 
     # 2. A tool call through the Anthropic API.
     status=0
-    python3 - "$OLLAMA_HOST" "$MODEL" > "$OUT/tool-check.json" <<'EOF' || status=$?
+    # The load, then up to 15 minutes for the answer.
+    python3 - "$OLLAMA_HOST" "$MODEL" "$((LOAD_TIMEOUT + 900))" > "$OUT/tool-check.json" \
+        <<'EOF' || status=$?
 import json
 import sys
 import urllib.error
 import urllib.request
 
-host, model = sys.argv[1:]
+host, model, timeout = sys.argv[1:]
 body = {
     "model": model, "max_tokens": 2048,
     "tools": [{"name": "read_file", "description": "Read a text file and return what it says.",
@@ -160,13 +179,17 @@ request = urllib.request.Request(
     f"http://{host}/v1/messages", data=json.dumps(body).encode(),
     headers={"content-type": "application/json", "anthropic-version": "2023-06-01",
              "x-api-key": "local"})
-# The first request loads the model: minutes for hundreds of GB from /fast.
+# The first request loads the model, so its answer may come only after the load.
+reason = None
 try:
-    reply = json.load(urllib.request.urlopen(request, timeout=3600))
+    reply = json.load(urllib.request.urlopen(request, timeout=int(timeout)))
 except urllib.error.HTTPError as error:
     # Ollama's reason, such as a model that did not load, is in the body
     # (7 November 2026: GLM-5.3 on maxg29 gave only "HTTP Error 500").
     reason = f"the server answered HTTP {error.code}: {error.read().decode(errors='replace')}"
+except (TimeoutError, urllib.error.URLError) as error:
+    reason = f"no answer from the server: {error!r} (the check waits {timeout} s)"
+if reason:
     print(reason)
     print(reason, file=sys.stderr)
     sys.exit(1)
@@ -178,6 +201,7 @@ EOF
     ((status == 0)) || { echo "$MODEL did not answer with a call of the tool it was offered;" \
                               "see $OUT/tool-check.json and $OUT/ollama.log" >&2; exit 1; }
     echo "check 2: $MODEL answered with a call of read_file"
+    grep -o 'llama-server started in [0-9.]* seconds' "$OUT/ollama.log" | tail -n 1 || true
 
     # 3. Wholly on the GPUs ("100% GPU", or "48%/52% CPU/GPU", in Ollama's ps).
     "$OLLAMA" ps > "$OUT/ps.txt" 2>&1 || true
