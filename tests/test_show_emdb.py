@@ -3,11 +3,14 @@
 import csv
 import io
 import json
+import math
 import sys
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
 
+import mrcfile
+import numpy as np
 import pytest
 
 from cryoet_pipeline.backends.protocols import BackendContext
@@ -265,3 +268,134 @@ def test_the_text_says_what_the_json_does(capsys):
     assert all(check in text for check in report["checks"])
     assert "map: 256 x 256 x 256 at 1.68 A/px = 430 A across; authors' contour 0.0787" in text
     assert "citation: A paper. Nat Commun 2026 (First A, Second B, Third C et al.)" in text
+
+
+# --- Measure a map --------------------------------------------------------------------
+
+
+def density(*balls: tuple[float, tuple[float, float, float]], box: int = 48) -> np.ndarray:
+    """Balls of 1 in 0s: (radius, centre from the box centre as z, y, x), in voxels."""
+
+    z, y, x = np.indices((box, box, box), dtype=np.float64) - (box - 1) / 2
+    data = np.zeros((box, box, box), np.float32)
+    for radius, (cz, cy, cx) in balls:
+        data[(z - cz) ** 2 + (y - cy) ** 2 + (x - cx) ** 2 <= radius ** 2] = 1.0
+    return data
+
+
+def map_file(path: Path, data: np.ndarray, voxel_size: float = 2.0) -> Path:
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(data)
+        mrc.voxel_size = voxel_size
+    return path
+
+
+class FakeFetch:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.asked: list[tuple[str, Path]] = []
+
+    def __call__(self, emdb_id: str, *, cache_dir: Path, progress=None) -> Path:
+        self.asked.append((emdb_id, cache_dir))
+        return self.path
+
+
+@pytest.fixture
+def fetched(tmp_path, monkeypatch):
+    fetch = FakeFetch(map_file(tmp_path / "emd_90001.map", density((10, (0, 0, 6)))))
+    monkeypatch.setattr(show_emdb, "fetch_emdb_map", fetch)
+    return fetch
+
+
+def test_an_entrys_map_is_measured_at_the_authors_contour(fetched, tmp_path, capsys):
+    from cryoet_pipeline.map_size import measure_density
+
+    apis = FakeApis()
+    apis.pages[ENTRY.format(number="90001")] = entry("90001")
+    cache = tmp_path / "project" / "emdb-cache"
+    argv = ["measure", "EMD-90001", "--cache", str(cache)]
+    assert show_emdb.main([*argv, "--json"], read=apis) == 0
+    report = json.loads(capsys.readouterr().out)
+    expected = measure_density(density((10, (0, 0, 6))), 2.0, 0.0787)
+
+    assert fetched.asked == [("EMD-90001", cache)]
+    assert (report["level"], report["level_from"]) == (0.0787, "authors")
+    assert report["second_level"] == pytest.approx(0.0787 * 1.5)
+    assert report["first"]["widest_angstrom"] == pytest.approx(expected.widest_angstrom)
+    # Six voxels off the centre: the mask's diameter, not the particle's width, is proposed.
+    assert report["diameter_angstrom"] == math.ceil(expected.mask_diameter_angstrom)
+    assert report["diameter_angstrom"] > expected.widest_angstrom + 2 * 6 * 2.0 - 1
+
+    assert show_emdb.main(argv, read=apis) == 0
+    text = capsys.readouterr().out
+    diameter = report["diameter_angstrom"]
+    assert "EMD-90001 above the authors' contour, 0.0787 (a 48 x 48 x 48 box at 2 A/px):" in text
+    assert f"widest across: {expected.widest_angstrom:.0f} A" in text
+    assert f"For [pick] particle_diameter_angstrom: {diameter} A, the mask's diameter" in text
+    assert (f"show_emdb.py entry EMD-90001 --pixel <tomogram A/px> --diameter {diameter}"
+            in text)
+
+
+def test_maps_go_to_the_users_cache_unless_told(fetched, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    apis = FakeApis()
+    apis.pages[ENTRY.format(number="90001")] = entry("90001")
+    assert show_emdb.main(["measure", "90001"], read=apis) == 0
+
+    assert fetched.asked == [("EMD-90001", tmp_path / "cache" / "cryoet-pipeline" / "emdb")]
+
+
+def test_a_map_file_needs_a_level_and_reads_no_entry(fetched, tmp_path, capsys):
+    path = map_file(tmp_path / "local.mrc", density((8, (0, 0, 0))))
+    apis = FakeApis()
+
+    assert show_emdb.main(["measure", str(path)], read=apis) == 2
+    assert "give its level with --level" in capsys.readouterr().err
+    assert show_emdb.main(["measure", str(path), "--level", "0.5"], read=apis) == 0
+    text = capsys.readouterr().out
+
+    assert apis.asked == [] and fetched.asked == []
+    assert f"{path} above the level, 0.5" in text
+    assert "For [pick] particle_diameter_angstrom:" in text
+    assert "show_emdb.py entry" not in text
+
+
+@pytest.mark.parametrize(("data", "why"), [
+    (np.maximum(density((8, (0, 0, 0))), np.pad(np.ones((4, 48, 48), np.float32),
+                                                  ((22, 22), (0, 0), (0, 0)))),
+     "the density reaches the map's edge"),
+    (np.kron(np.ones((6, 6, 6), np.float32), np.pad(np.ones((2, 2, 2), np.float32), 3)),
+     "more than 4 pieces are measured"),
+])
+def test_no_diameter_is_proposed_for_what_is_not_one_particle(tmp_path, capsys, data, why):
+    path = map_file(tmp_path / "many.mrc", data)
+    assert show_emdb.main(["measure", str(path), "--level", "0.5", "--json"],
+                          read=FakeApis()) == 0
+    assert json.loads(capsys.readouterr().out)["diameter_angstrom"] is None
+    assert show_emdb.main(["measure", str(path), "--level", "0.5"], read=FakeApis()) == 0
+    assert f"No diameter to propose: {why}." in capsys.readouterr().out
+
+
+def test_an_entry_without_a_map_or_a_contour_downloads_nothing(fetched, capsys):
+    apis = FakeApis()
+    apis.pages[ENTRY.format(number="90006")] = entry("90006", status="OBS")
+    no_contour = json.loads(entry("90007"))
+    no_contour["map"]["contour_list"]["contour"] = []
+    apis.pages[ENTRY.format(number="90007")] = json.dumps(no_contour)
+
+    assert show_emdb.main(["measure", "EMD-99999"], read=apis) == 1
+    assert "EMD-99999: EMDB has no such entry" in capsys.readouterr().out
+    assert show_emdb.main(["measure", "EMD-90006"], read=apis) == 1
+    assert "its status is OBS, not released: it has no map" in capsys.readouterr().out
+    assert show_emdb.main(["measure", "EMD-90007"], read=apis) == 1
+    assert "EMDB gives no contour for it: give one with --level" in capsys.readouterr().out
+    assert fetched.asked == []
+    assert show_emdb.main(["measure", "EMD-90007", "--level", "0.5"], read=apis) == 0
+    assert len(fetched.asked) == 1
+
+
+def test_a_source_that_is_neither_a_file_nor_an_entry_stops_with_status_2(fetched, capsys):
+    apis = FakeApis()
+    assert show_emdb.main(["measure", "no/such/map.mrc"], read=apis) == 2
+    assert "neither a map file nor an EMDB id" in capsys.readouterr().err
+    assert apis.asked == [] and fetched.asked == []

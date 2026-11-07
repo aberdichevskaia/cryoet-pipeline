@@ -61,7 +61,14 @@ the person and the date as its source.
 2. **How wide is it at its widest, in Å or nm?** This fills
    `[pick] particle_diameter_angstrom`. The template's mask and box, the
    angular step and `[extract] box_size_px` all follow from it. That is why it
-   must be the widest diameter, not a typical one.
+   must be the widest diameter, not a typical one. If the person does not know
+   it, measure the template map: `python3 scripts/show_emdb.py measure
+   EMD-<id>`, or a map file with `--level`. It proposes the diameter a mask
+   around the box centre needs, since prepare-template draws the mask there.
+   Give the person that number with the widest extent beside it, and let the
+   person confirm. A map's box ("N A across" in `show_emdb.py entry`) is not
+   the particle, and a map is measured with this tool, not with code of your
+   own.
 3. **Are there gold beads, and of what size?** With beads, keep alignment
    block A and set `[fiducials] fiducial_diameter_nm`. Without them (a FIB
    lamella, usually), keep block B, patch tracking, and ask 3a.
@@ -152,7 +159,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[template] particle_diameter_angstrom` | rule | unset: `run_series.py` passes `[pick] particle_diameter_angstrom` |
 | `[template] low_pass_angstrom` | rule | about 2 × the tomogram pixel, as `example.toml` says |
 | `[template] mask_radius_px, mask_sigma_px, box_size_px` | rule | unset: derived from the diameter, as the lab's rule says (radius half the diameter plus 3 px, a soft edge, a box twice the diameter). Set them only for a map with no single particle in it, such as a lattice |
-| `[pick] particle_diameter_angstrom` | person, card | question 2 |
+| `[pick] particle_diameter_angstrom` | person, card | question 2; `show_emdb.py measure` proposes it from the template map, for the person to confirm |
 | `[pick] gpu_ids` | site | the value of the closest lane at the same site |
 | `[pick] low_pass_angstrom` | rule | about 1.3 × the tomogram's Nyquist (2 × the tomogram pixel), by the lab's rule: a Nyquist of 19.6 Å gives 25 Å |
 | `[pick] number_of_particles, number_of_false_positives, cut_off` | rule | unset: twice the peaks above pytom's false-positive cut-off, by the lab's rule. A number only when the person asks for one |

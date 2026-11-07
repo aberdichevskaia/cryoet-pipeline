@@ -4,9 +4,13 @@
     python3 scripts/show_emdb.py search '<query>' [--method subtomogramAveraging] [--empiar <id>]
     python3 scripts/show_emdb.py entry EMD-<id> [--pixel <tomogram A/px>] [--diameter <A>]
                                  [--empiar <id>]
+    python3 scripts/show_emdb.py measure EMD-<id> | <map file> [--level <contour>] [--cache <dir>]
     ... --json
 
-Read-only: it reads the EMDB and EMPIAR APIs, and downloads no map.
+`search` and `entry` only read the EMDB and EMPIAR APIs. `measure` downloads
+the map, once, into a cache: `~/.cache/cryoet-pipeline/emdb` unless --cache
+names another folder. Given a lane's `<project>/emdb-cache`, prepare-template
+finds the map there and does not download it again.
 
 `search` runs an EMDB search (Solr syntax, such as `ryanodine AND receptor`)
 and counts what it finds by method. It lists the candidates with subtomogram
@@ -25,20 +29,33 @@ the map with what prepare-template will make of it:
 - the map is resampled to the tomogram pixel;
 - the template is low-passed to about twice the tomogram pixel.
 
+`measure` gives the size of the particle in a map, for a lane's
+`[pick] particle_diameter_angstrom` (src/cryoet_pipeline/map_size.py says how):
+its widest extent above the authors' contour, or above --level, and the
+diameter a mask around the box centre needs to hold it, which it proposes.
+prepare-template draws the mask, and turns the template, about the box centre.
+It reads the size again at 1.5 times the level, to show how much the size
+depends on it. Density that reaches the map's edge is more than one particle,
+and then no diameter is proposed. A map file has no authors' contour, so it
+needs --level.
+
 The entries are for the person to choose from. The weighing, in the order of
 docs/roadmap.md section 23, is the assistant's emdb-template skill.
 
-Exit status: 0 when the search found entries or the entry is released; 1 when
-nothing was found, the entry does not exist, or it is not released; 2 for
-arguments that contradict each other.
+Exit status: 0 when the search found entries, the entry is released, or the
+map was measured; 1 when nothing was found, the entry does not exist, it is
+not released, or its map could not be had or measured; 2 for arguments that
+contradict each other.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -52,7 +69,7 @@ from urllib.parse import quote
 
 from cryoet_pipeline.backends.protocols import BackendContext
 from cryoet_pipeline.backends.template import _box_size_from_diameter
-from cryoet_pipeline.emdb import normalize_emdb_id
+from cryoet_pipeline.emdb import fetch_emdb_map, normalize_emdb_id
 from cryoet_pipeline.empiar import DownloadGaveUp, call_with_retries, read_text_url
 from cryoet_pipeline.runtime import DevicePreference
 
@@ -288,6 +305,63 @@ def lane_checks(entry: dict[str, Any], pixel: float | None, diameter: float | No
     return found
 
 
+# --- Measure a map --------------------------------------------------------------------
+
+
+def default_cache() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "cryoet-pipeline" / "emdb"
+
+
+def measure(args: argparse.Namespace, read: Callable[[str], str]) -> dict[str, Any]:
+    # Here, not at the top: only measuring needs scipy and mrcfile.
+    from cryoet_pipeline import map_size
+
+    report: dict[str, Any] = {
+        "command": "measure", "source": args.source, "emdb_id": None, "map": None,
+        "level": args.level, "level_from": None if args.level is None else "given",
+        "first": None, "second_level": None, "second": None, "diameter_angstrom": None,
+        "problem": None, "exit": 1,
+    }
+    if Path(args.source).is_file():
+        path = Path(args.source)
+    else:
+        report["emdb_id"] = f"EMD-{normalize_emdb_id(args.source)}"
+        entry = read_entry(read, args.source)
+        if entry is None:
+            report["problem"] = "EMDB has no such entry"
+            return report
+        if entry["status"] not in (None, "REL"):
+            report["problem"] = f"its status is {entry['status']}, not released: it has no map"
+            return report
+        if args.level is None:
+            if entry["contour"] is None:
+                report["problem"] = "EMDB gives no contour for it: give one with --level"
+                return report
+            report["level"], report["level_from"] = entry["contour"], "authors"
+        path = fetch_emdb_map(report["emdb_id"], cache_dir=args.cache or default_cache(),
+                              progress=lambda message: print(message, file=sys.stderr))
+    report["map"] = str(path)
+    data, voxel = map_size.read_map(path)
+    first = map_size.measure_density(data, voxel, report["level"])
+    report["first"] = size_report(first)
+    if report["level"] > 0:
+        report["second_level"] = report["level"] * map_size.LEVEL_STEP
+        try:
+            report["second"] = size_report(
+                map_size.measure_density(data, voxel, report["second_level"]))
+        except ValueError:
+            report["second"] = None
+    if first.faces_reached == 0 and first.kept <= map_size.MOST_PIECES:
+        report["diameter_angstrom"] = math.ceil(first.mask_diameter_angstrom)
+    report["exit"] = 0
+    return report
+
+
+def size_report(size: Any) -> dict[str, Any]:
+    return {**dataclasses.asdict(size), "mask_diameter_angstrom": size.mask_diameter_angstrom}
+
+
 # --- Output ---------------------------------------------------------------------------
 
 
@@ -367,6 +441,65 @@ def render_entry(report: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+def render_measure(report: dict[str, Any]) -> str:
+    from cryoet_pipeline.map_size import KEEP_SHARE, LEVEL_STEP, MOST_PIECES
+
+    name = report["emdb_id"] or report["source"]
+    first = report["first"]
+    if first is None:
+        return f"{name}: {report['problem']}"
+    level = "the authors' contour" if report["level_from"] == "authors" else "the level"
+    box = " x ".join(map(str, first["box_px"]))
+    out = [f"{name} above {level}, {report['level']:g} (a {box} box at "
+           f"{first['voxel_size_angstrom']:g} A/px):"]
+    if first["kept"] == 1:
+        line = f"  one piece holds {first['kept_share']:.0%} of the volume above it"
+    elif first["kept"] <= MOST_PIECES:
+        line = (f"  {first['kept']} pieces of at least {KEEP_SHARE:.0%} of the largest hold "
+                f"{first['kept_share']:.0%} of the volume above it and are measured together: "
+                "look at the map to see whether they are one particle")
+    else:
+        line = (f"  {first['kept']} pieces of at least {KEEP_SHARE:.0%} of the largest hold "
+                f"{first['kept_share']:.0%} of the volume above it: too many to be one "
+                "particle, so the level is above its density or the map is noise")
+    left = first["pieces"] - first["kept"]
+    if left:
+        line += (f"; {left} smaller {'one is' if left == 1 else 'ones are'} left out, the "
+                 f"largest {first['largest_left_out']:.1%} of the largest piece")
+    out.append(line)
+    out.append(f"  widest across: {first['widest_angstrom']:.0f} A")
+    out.append("  around the box centre, where prepare-template draws the mask and turns the "
+               f"template, it reaches {first['from_centre_angstrom']:.0f} A: a mask holds it at "
+               f"{first['mask_diameter_angstrom']:.0f} A across")
+    if first["faces_reached"]:
+        out.append(f"  it reaches the map's edge on {first['faces_reached']} of 6 faces: a "
+                   "membrane, a neighbour or a lattice is in the map, so these are the map's "
+                   "sizes, not one particle's; look at it in ChimeraX")
+    else:
+        out.append(f"  it stays {first['inside_angstrom']:.0f} A or more inside the map's edges")
+    if report["second_level"] is not None:
+        second = report["second"]
+        if second is None:
+            out.append(f"  at {LEVEL_STEP:g} x the level, {report['second_level']:g}: nothing "
+                       "is above it")
+        else:
+            out.append(f"  at {LEVEL_STEP:g} x the level, {second['level']:g}: "
+                       f"{second['widest_angstrom']:.0f} A across, "
+                       f"{second['mask_diameter_angstrom']:.0f} A for the mask")
+    if report["diameter_angstrom"] is None:
+        why = ("the density reaches the map's edge" if first["faces_reached"]
+               else f"more than {MOST_PIECES} pieces are measured")
+        out.append(f"No diameter to propose: {why}. Measure one particle in ChimeraX, or give "
+                   "another --level")
+    else:
+        out.append(f"For [pick] particle_diameter_angstrom: {report['diameter_angstrom']} A, "
+                   "the mask's diameter")
+        if report["emdb_id"]:
+            out.append(f"Check it against the lane: show_emdb.py entry {report['emdb_id']} "
+                       f"--pixel <tomogram A/px> --diameter {report['diameter_angstrom']}")
+    return "\n".join(out)
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -382,6 +515,13 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     one.add_argument("--diameter", type=float, help="the particle's widest diameter, A")
     for command in (find, one):
         command.add_argument("--empiar", help="mark entries made from this EMPIAR entry's data")
+    size = commands.add_parser("measure", help="measure the particle in a map")
+    size.add_argument("source", help="EMD-1234, emd_1234, 1234, or a map file")
+    size.add_argument("--level", type=float,
+                      help="the contour level; for an entry, the authors' unless given")
+    size.add_argument("--cache", type=Path,
+                      help="where downloaded maps are kept (~/.cache/cryoet-pipeline/emdb)")
+    for command in (find, one, size):
         command.add_argument("--json", action="store_true", help="print the report as JSON")
     return parser.parse_args(argv)
 
@@ -412,6 +552,8 @@ def build(args: argparse.Namespace, read: Callable[[str], str]) -> dict[str, Any
 
 def main(argv: list[str] | None = None, read: Callable[[str], str] = read_text_url) -> int:
     args = parse_args(argv)
+    if args.command == "measure":
+        return main_measure(args, read)
     if args.command == "entry":
         try:
             normalize_emdb_id(args.emdb_id)
@@ -437,6 +579,30 @@ def main(argv: list[str] | None = None, read: Callable[[str], str] = read_text_u
         print(json.dumps(report, indent=2, default=str))
     else:
         print(render_search(report) if args.command == "search" else render_entry(report))
+    return int(report["exit"])
+
+
+def main_measure(args: argparse.Namespace, read: Callable[[str], str]) -> int:
+    if not Path(args.source).is_file():
+        try:
+            normalize_emdb_id(args.source)
+        except ValueError:
+            print(f"{args.source!r} is neither a map file nor an EMDB id", file=sys.stderr)
+            return 2
+    elif args.level is None:
+        print("a map file has no authors' contour: give its level with --level",
+              file=sys.stderr)
+        return 2
+    try:
+        report = measure(args, read)
+    except (OSError, DownloadGaveUp) as exc:
+        # URLError and HTTPError are OSErrors too.
+        print(f"the entry or its map could not be had: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2, default=str) if args.json else render_measure(report))
     return int(report["exit"])
 
 

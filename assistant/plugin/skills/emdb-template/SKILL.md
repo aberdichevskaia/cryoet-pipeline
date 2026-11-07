@@ -1,12 +1,14 @@
 ---
 name: emdb-template
-description: Propose one to three EMDB entries as the template for particle picking, each with its reasons, for the person to choose; check a chosen entry against the lane (box, pixel, low-pass, a membrane in the map, symmetry, independence). Use when the person does not know which map to pick with, or names an EMDB entry.
+description: Propose one to three EMDB entries as the template for particle picking, each with its reasons, for the person to choose; check a chosen entry against the lane (box, pixel, low-pass, a membrane in the map, symmetry, independence), and measure the particle in its map. Use when the person does not know which map to pick with, names an EMDB entry, or does not know how wide the particle is.
 ---
 
 # EMDB: propose a template
 
-The weighing follows `docs/roadmap.md`, section 23. The tool only reads: it
-downloads no map. `prepare-template` fetches the chosen map when the lane runs.
+The weighing follows `docs/roadmap.md`, section 23. `search` and `entry` only
+read; `measure` downloads the chosen map, once, into a cache.
+`prepare-template` fetches the map again when the lane runs, unless it finds it
+in the lane's `<project>/emdb-cache`.
 
 ## 1. What is to be picked
 
@@ -59,3 +61,29 @@ person's choice as its source.
 
 If no map fits, say so. A map simulated from a PDB model is the fallback, and
 this pipeline has no step for it yet.
+
+## 6. Measure the particle, when the person does not know its width
+
+```bash
+python3 scripts/show_emdb.py measure EMD-<id> [--cache <project>/emdb-cache]
+python3 scripts/show_emdb.py measure <map file> --level <contour>
+```
+
+It reads the density above the authors' contour, or above `--level`. It gives
+the widest extent, and the diameter a mask around the box centre needs to hold
+the density. prepare-template draws the mask and turns the template about the
+box centre, so the second number is the one proposed for
+`[pick] particle_diameter_angstrom`, and the person confirms it. Show the
+person both numbers. Then check the entry with that diameter (section 3).
+
+Say what the tool says besides the numbers:
+- pieces measured together, which may or may not be one particle;
+- density that reaches the map's edge, a membrane or a neighbour in the map;
+- the second reading at 1.5 times the level, which shows how much the size
+  depends on the level.
+
+When it proposes no diameter, the person measures one particle in ChimeraX.
+
+The map's box ("N A across" in `entry`) is not the particle. Measure a map
+with this tool only, never with code of your own: a number the person
+confirms has to come from a tool that has been tested.
