@@ -9,10 +9,11 @@
 # Required in the environment (sbatch --export):
 #   PROJECT  CONFIG  SERIES (space-separated)  FROM  UNTIL
 # and, for the stages that use them, MOTIONCOR3, MEMBRAIN_EXE, MEMBRAIN_CKPT,
-# PYTOMO_MP_DIR. OVERWRITE=1 adds --overwrite to every step, for re-running a
-# step that already wrote part of its output; submit_lanes.py sets it for its
-# --overwrite only. Optional: IMOD_DIR (the Munich install otherwise) and
-# ENV_MANAGER=conda|micromamba (scripts/activate_env.sh).
+# PYTOMO_MP_DIR, and whatever variable the lane's [executables] ctffind names
+# (CTFFIND5 in the lanes so far). OVERWRITE=1 adds --overwrite to every step,
+# for re-running a step that already wrote part of its output; submit_lanes.py
+# sets it for its --overwrite only. Optional: IMOD_DIR (the Munich install
+# otherwise) and ENV_MANAGER=conda|micromamba (scripts/activate_env.sh).
 #
 # Jobs of one project may run at the same time, one per series: each command
 # merges its own entries into the registry under a lock when it finishes
@@ -58,6 +59,30 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 STEPS=$(python3 scripts/run_series.py --project "$PROJECT" --config "$CONFIG" \
     --series X --from "$FROM" --until "$UNTIL" --list-steps-range)
 
+# The CTFFIND estimate-ctf will run, found the way its backend finds it
+# (cryoet_pipeline.backends.ctf._resolve_ctffind_executable): the lane's
+# [executables] ctffind, with its $VARs expanded as run_series.py expands them and
+# its ~ as the backend does, relative to the repo root; else ctffind5, then
+# ctffind, on PATH. Until 2026-11-08 the header line and the preflight looked at
+# PATH alone. At MDC the header then named PATH's CTFFIND 4 for jobs that ran the
+# lane's CTFFIND 5, and on a site without CTFFIND on PATH the preflight would have
+# stopped a lane that names one.
+CTFFIND_NAMED=$(python3 - "$CONFIG" <<'EOF'
+import os
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as handle:
+    value = (tomllib.load(handle).get("executables") or {}).get("ctffind")
+print("" if value is None else os.path.expanduser(os.path.expandvars(str(value))))
+EOF
+)
+if [[ -n "$CTFFIND_NAMED" ]]; then
+    CTFFIND_FOUND="$CTFFIND_NAMED (the lane's [executables] ctffind)"
+else
+    CTFFIND_FOUND=$(command -v ctffind5 || command -v ctffind || echo 'not on PATH')
+fi
+
 echo "job         $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname)"
 echo "started     $(date -Is)"
 echo "project     $PROJECT   config $CONFIG"
@@ -67,7 +92,7 @@ echo "overwrite   $([[ -n "${OVERWRITE:-}" ]] && echo yes || echo no)"
 echo "env         $CONDA_PREFIX ($ENV_MANAGER)"
 echo "cryoet      $(command -v cryoet)"
 echo "imod        $(command -v tiltxcorr || echo 'not on PATH')"
-echo "ctffind     $(command -v ctffind5 || command -v ctffind || echo 'not on PATH')"
+echo "ctffind     $CTFFIND_FOUND"
 nvidia-smi --query-gpu=name,compute_cap,memory.total --format=csv,noheader 2>/dev/null || true
 # Inside a MIG slice the line above reports the whole card: job 41075712 had a
 # 3g.20gb slice and printed 40960 MiB. -L lists the slice itself.
@@ -132,7 +157,21 @@ if needs prepare-template; then
                 "try to download it, which needs outbound access from this node"
 fi
 if needs estimate-ctf; then
-    command -v ctffind >/dev/null || command -v ctffind5 >/dev/null || fail "no ctffind on PATH"
+    # The backend stops on a named path that is not a file. The dry run refuses
+    # these too, but a job submitted by hand, or from another shell, has had none.
+    if [[ -z "$CTFFIND_NAMED" ]]; then
+        command -v ctffind5 >/dev/null || command -v ctffind >/dev/null \
+            || fail "no ctffind5 or ctffind on PATH, and the lane names no [executables] ctffind"
+    elif [[ "$CTFFIND_NAMED" == *'$'* ]]; then
+        fail "the lane's [executables] ctffind is '$CTFFIND_NAMED' here: a variable in it" \
+            "is not set in the environment the job was submitted with"
+    elif [[ -d "$CTFFIND_NAMED" ]]; then
+        fail "the lane's [executables] ctffind is the directory '$CTFFIND_NAMED'; name the" \
+            "CTFFIND program in it instead"
+    elif [[ ! -f "$CTFFIND_NAMED" || ! -x "$CTFFIND_NAMED" ]]; then
+        fail "the lane's [executables] ctffind is '$CTFFIND_NAMED' here, which is not an" \
+            "executable file"
+    fi
 fi
 # Every step commits to the registry under a lock and refuses to without one that
 # holds across nodes (no locks on this mount, or node-local ones by its options);
