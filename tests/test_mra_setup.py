@@ -192,6 +192,11 @@ def test_the_plan_is_made_from_the_export_as_dynamos_setup_made_it(tmp_path: Pat
     assert plan.setup["variables"]["seeds"] == ["subset", "blob", "noise"]
     assert plan.setup["variables"]["mask_radius_px"] == 5.0
     assert plan.setup["files"]["export"] == str(export.resolve())
+    # Seeds averaged on threads are the same seeds, and the same setup.
+    threaded = _plan(export, workers=3)
+    for channel in plan.references:
+        np.testing.assert_array_equal(threaded.references[channel], plan.references[channel])
+    assert threaded.setup == plan.setup
 
 
 def test_the_run_keeps_its_setup_and_carries_on_from_the_plan_made_again(tmp_path: Path) -> None:

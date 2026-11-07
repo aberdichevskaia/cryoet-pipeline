@@ -432,6 +432,7 @@ def make_plan(
     cone_steps: Sequence[float] = (3,),
     shift_limit: float = SHIFT_LIMIT,
     subset: int = SUBSET,
+    workers: int = 1,
     log: Callable[[str], None] = print,
 ) -> MraPlan:
     """The plan dynamo_mra_setup.m made a project for, from the particles `read` gives.
@@ -448,7 +449,8 @@ def make_plan(
     averages. The search is `search_rounds`', every particle kept within `shift_limit`
     px of its box centre in every round (`SHIFT_LIMIT`). The limit changes only what
     the iterations search, which each iteration's record holds whole; it is not one of
-    the setup's variables, whose results it does not touch.
+    the setup's variables, whose results it does not touch. `workers` threads average
+    the seeds (`average_class`), which do not depend on it, so it is no variable either.
     """
 
     seeds = list(seeds)
@@ -547,6 +549,7 @@ def make_plan(
                 (particles.load(int(tag)) for tag in particles.tags[members]),
                 angles[members], particles.shifts[members],
                 [particles.tilt_ranges[index] for index in members], mask, fmin=1,
+                workers=workers,
             ).average
             log(f"seed {channel}: {kind} of {len(members)} particles")
         references[channel] = np.asarray(seed, dtype=np.float32).astype(float)

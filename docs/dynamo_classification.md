@@ -40,6 +40,12 @@ particles' box). `SYMMETRY`, `AXIS_OFFSET` and `GPUS` are
 refused (the port models no symmetry and searches on every GPU of the job), and
 so is a `NAME` Dynamo has a project of in the export: that project's port run is
 made with `PROJECT=<export>/<name>` (the header of `scripts/mra_port_run.sbatch`).
+The seeds, the class averages and the report's average of all particles are made on
+the job's CPUs (`--workers`, the job's 8), each particle's resampling and wedge on a
+thread of its own and the sums in the members' order, so they do not depend on the
+number of threads, bit for bit. Until 2026-11-06 they were made on one CPU: at bin4
+(2,495 particles of 102 px) about 20 minutes of each 26 to 31 minute iteration, the
+GPUs idle meanwhile; on a Mac, eight threads average 2.1 to 2.3 times faster.
 
 Without an export, the same job reads the particle stacks of a pipeline project's
 registry where they are, `SOURCE=<project> LANE=<the stacks' label>

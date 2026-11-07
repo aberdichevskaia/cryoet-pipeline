@@ -40,6 +40,9 @@ project, named --name (default <project>_port):
 - --device numpy: the numpy kernel on --workers processes, the one the replays of
   Dynamo's CPU path checked.
 
+Whatever the device, the seeds and the class averages are made on --workers threads;
+they do not depend on it (`dynamo_search.average_class`).
+
 Then it compares the two runs iteration by iteration: how many particles each puts
 in the same class, and for those, how far apart their poses are (rotation in
 degrees, shift in px) and their CCs. Two exact runs agree everywhere; float32
@@ -223,7 +226,7 @@ def new_run(args: argparse.Namespace) -> int:
         global_rounds=args.global_rounds, global_step=args.global_step,
         global_full_box=args.global_full_box,
         cone_steps=[float(step) for step in args.cone_steps.split()],
-        shift_limit=args.shift_limit,
+        shift_limit=args.shift_limit, workers=args.workers,
     )
     try:
         if args.export is not None:
@@ -264,7 +267,9 @@ def main() -> int:
                         help="cuda, mps or cpu for the torch kernel; numpy for the numpy one")
     parser.add_argument("--dtype", default="float32", choices=("float32", "float64"))
     parser.add_argument("--chunk", type=int, default=256, help="torch: candidates per batch")
-    parser.add_argument("--workers", type=int, default=1, help="numpy: processes")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="threads averaging the seeds and classes; with --device numpy, "
+                        "also the processes searching")
     parser.add_argument("--gpus", type=int, default=0,
                         help="torch on cuda: how many GPUs to deal the particles among; "
                         "0 (default) for all the job sees")
