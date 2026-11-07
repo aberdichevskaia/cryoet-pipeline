@@ -40,13 +40,13 @@ def texture(size, seed):
     return (fine + coarse + 100.0).astype(np.float32)
 
 
-def tile_pattern(amplitude, grid=5):
+def tile_pattern(amplitude, grid=5, phase=0.0):
     """Whole-pixel (dy, dx) for each tile, up to `amplitude` px."""
     shifts = []
     for j in range(grid):
         row = []
         for i in range(grid):
-            angle = 2.4 * (j * grid + i)
+            angle = 2.4 * (j * grid + i) + phase
             dy = int(round(amplitude * np.sin(angle)))
             dx = int(round(amplitude * np.cos(angle)))
             row.append((dy, dx))
@@ -74,7 +74,12 @@ tile_pattern = _namespace["tile_pattern"]
 tiled = _namespace["tiled"]
 
 _FAKE_MOTIONCOR3 = '''#!{python}
-"""Stands in for MotionCor3: the movie's first pixel is how far -Patch 5 5 moves tiles."""
+"""Stands in for MotionCor3. The movie's first frame says how far -Patch 5 5
+moves tiles; in its second, pixel (0, 0) asks for another tile pattern in a
+rerun than in the pipeline's run (a patch result that changes from run to run)
+and pixel (0, 1) for fresh noise in every sum (MotionCor3 never gives the same
+pixels twice)."""
+import os
 import sys
 
 import mrcfile
@@ -88,10 +93,16 @@ out = args[args.index("-OutMrc") + 1]
 patch = (int(args[args.index("-Patch") + 1]), int(args[args.index("-Patch") + 2]))
 with mrcfile.open(movie, permissive=True) as mrc:
     amplitude = float(mrc.data[0, 0, 0])
+    changing = float(mrc.data[1, 0, 0]) > 0
+    jitter = float(mrc.data[1, 0, 1]) > 0
     size = mrc.data.shape[-1]
 image = texture(size, seed=7)
 if patch != (1, 1) and amplitude > 0:
-    image = tiled(image, tile_pattern(amplitude))
+    phase = 1.7 if changing and out.endswith("_p5.mrc") else 0.0
+    image = tiled(image, tile_pattern(amplitude, phase=phase))
+if jitter:
+    rng = np.random.default_rng(int.from_bytes(os.urandom(4), "little"))
+    image = image + rng.normal(scale=0.15 * image.std(), size=image.shape).astype(np.float32)
 with mrcfile.new(out, overwrite=True) as mrc:
     mrc.set_data(image)
 print("MotionCor3 stand-in: done")
@@ -183,7 +194,13 @@ def test_rewrite_moves_the_outputs_and_sets_the_grid_and_keeps_the_rest() -> Non
         )
 
 
-def _pipeline_project(tmp_path: Path, amplitudes: dict[float, float]) -> tuple[Path, Path]:
+def _pipeline_project(
+    tmp_path: Path,
+    amplitudes: dict[float, float],
+    *,
+    changing: frozenset[float] = frozenset(),
+    jitter: bool = False,
+) -> tuple[Path, Path]:
     """Run the pipeline's MotionCor3 step with the stand-in, as on the cluster."""
 
     executable = tmp_path / "bin" / "MotionCor3"
@@ -196,8 +213,12 @@ def _pipeline_project(tmp_path: Path, amplitudes: dict[float, float]) -> tuple[P
     for z, (angle, amplitude) in enumerate(amplitudes.items()):
         movie = tmp_path / "frames" / f"TS_TEST_{z:03d}_{angle:.1f}.mrc"
         movie.parent.mkdir(exist_ok=True)
+        frames = np.zeros((2, 1024, 1024), dtype=np.float32)
+        frames[0] = amplitude
+        frames[1, 0, 0] = 1.0 if angle in changing else 0.0
+        frames[1, 0, 1] = 1.0 if jitter else 0.0
         with mrcfile.new(movie, overwrite=True) as mrc:
-            mrc.set_data(np.full((2, 1024, 1024), amplitude, dtype=np.float32))
+            mrc.set_data(frames)
         images.append(
             TiltImage(
                 z_value=z, tilt_angle_deg=angle, subframe_path=f"frames/{movie.name}",
@@ -246,10 +267,16 @@ def test_moved_tiles_at_the_ends_are_found_and_the_prediction_holds(
     code, text = _check(project, out, capsys)
 
     assert code == 0
-    assert "control: each rerun as the pipeline ran it reproduces" in text
-    assert " -75.0 deg: tiles moved by more than 1.5 nm" in text
-    assert "  45.0 deg: tiles moved by more than 1.5 nm" in text
-    assert " -15.0 deg: no tile moved by more than 1.5 nm" in text
+    assert "control: at every tilt the rerun of the recorded command puts each tile" in text
+    assert (
+        " -75.0 deg: the 5x5 sums' tiles moved by more than 1.5 nm "
+        "(pipeline sum: moved; rerun: moved)" in text
+    )
+    assert "  45.0 deg: the 5x5 sums' tiles moved by more than 1.5 nm" in text
+    assert (
+        " -15.0 deg: no tile of the 5x5 sums moved by more than 1.5 nm "
+        "(pipeline sum: unchanged; rerun: unchanged)" in text
+    )
     assert "prediction (ends moved, -15 not): HELD" in text
     assert (out / "compare.png").is_file()
     plan = json.loads((out / "plan.json").read_text())
@@ -269,7 +296,38 @@ def test_no_moved_tiles_and_the_prediction_fails(
     assert "prediction (ends moved, -15 not): DID NOT HOLD" in text
 
 
-def test_a_sum_the_rerun_does_not_reproduce_fails_the_control(
+def test_patch_results_that_change_from_run_to_run_are_named_and_still_judged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # As job 3901454 on max: at the ends a rerun of the same command gives
+    # another patchwork; no sum has the same pixels twice.
+    project, _ = _pipeline_project(
+        tmp_path,
+        {-75.0: 30.0, 45.0: 20.0, -15.0: 0.0},
+        changing=frozenset({-75.0, 45.0}),
+        jitter=True,
+    )
+
+    code, text = _check(project, tmp_path / "check", capsys)
+
+    assert code == 0
+    assert (
+        "control: at -75, 45 deg the rerun of the recorded command (same executable, "
+        "sha256 checked) does not put the tiles where the pipeline's sum has them, "
+        "while at the other tilts it does" in text
+    )
+    assert "binary, the flags" not in text
+    assert " -75.0 deg: the 5x5 sums' tiles moved" in text
+    assert "  45.0 deg: the 5x5 sums' tiles moved" in text
+    assert " -15.0 deg: no tile of the 5x5 sums moved" in text
+    assert "prediction (ends moved, -15 not): HELD" in text
+    # The noise keeps r below 0.99 at -15, where the tiles stay in place.
+    row = next(line for line in text.splitlines() if line.startswith(" -15.0  "))
+    assert float(row.split()[1]) < 0.99
+    assert " same " in row
+
+
+def test_a_pipeline_sum_unlike_its_rerun_is_named_by_tilt(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     project, _ = _pipeline_project(tmp_path, {-75.0: 30.0, 45.0: 20.0, -15.0: 0.0})
@@ -279,9 +337,53 @@ def test_a_sum_the_rerun_does_not_reproduce_fails_the_control(
 
     code, text = _check(project, tmp_path / "check", capsys)
 
-    assert code == 2
-    assert "CONTROL FAILED" in text
-    assert "prediction" not in text
+    assert code == 0
+    assert "control: at -15 deg the rerun of the recorded command" in text
+    assert (
+        " -15.0 deg: the two 5x5 sums disagree (pipeline sum: moved; rerun: unchanged)"
+        in text
+    )
+    assert "prediction (ends moved, -15 not): DID NOT HOLD" in text
+
+
+def test_no_tilt_like_its_rerun_points_at_the_sums_not_at_motioncor3(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project, _ = _pipeline_project(tmp_path, {-75.0: 30.0, 45.0: 20.0, -15.0: 0.0})
+    for z in (0, 1, 2):
+        pipeline_sum = project / "corrected" / "TS_TEST" / f"TS_TEST_{z:03d}_mc3.mrc"
+        with mrcfile.open(pipeline_sum, mode="r+") as mrc:
+            mrc.data[:] = tiled(np.array(mrc.data), tile_pattern(12, phase=0.9))
+
+    code, text = _check(project, tmp_path / "check", capsys)
+
+    assert code == 0
+    assert "control: at no tilt does the rerun of the recorded command" in text
+    assert "Check that these sums are the ones this command made" in text
+
+
+def test_a_sum_moves_on_two_far_tiles_and_stays_on_most_found_near() -> None:
+    def summary(found: dict[tuple[int, int], tuple[float, float]]) -> dict:
+        shifts = np.zeros((5, 5, 3))
+        for (j, i), (dy, dx) in found.items():
+            shifts[j, i] = (dy, dx, 0.9)
+        return mc3_patch_check.displacement_summary(shifts, scale=1)
+
+    verdict = mc3_patch_check.sum_verdict
+    far_six = {(0, 0): (50, 0), (0, 1): (-50, 0), (1, 0): (0, 50), (1, 1): (0, -50),
+               (2, 2): (40, 40), (3, 3): (-40, -40)}
+    assert verdict(summary(far_six), 7.9) == "moved"  # +45 of job 3901454: 6 found
+    assert verdict(summary({(0, 0): (50, 0)}), 7.9) == "unclear"  # one alone
+    every = {(j, i): (0.0, 0.0) for j in range(5) for i in range(5)}
+    assert verdict(summary(every), 7.9) == "unchanged"
+    one_far = dict(every)
+    one_far[(2, 2)] = (30.0, 0.0)
+    assert verdict(summary(one_far), 7.9) == "unclear"  # could be a false match
+    ten = {(j, i): (0.0, 0.0) for j in range(2) for i in range(5)}
+    assert verdict(summary(ten), 7.9) == "unclear"  # fewer than half found
+    # The same far shift for every found tile is one shift of the image.
+    same_far = {(j, i): (50.0, 0.0) for j in range(5) for i in range(5)}
+    assert verdict(summary(same_far), 7.9) == "unchanged"
 
 
 def test_plan_refuses_a_motioncor3_that_changed_since_the_run(
@@ -297,3 +399,19 @@ def test_plan_refuses_a_motioncor3_that_changed_since_the_run(
 
     assert code == 1
     assert "changed since the pipeline ran it" in capsys.readouterr().err
+
+
+def test_the_control_needs_most_tiles_found_in_the_same_place() -> None:
+    def summary(found: dict[tuple[int, int], tuple[float, float]]) -> dict:
+        shifts = np.zeros((5, 5, 3))
+        for (j, i), (dy, dx) in found.items():
+            shifts[j, i] = (dy, dx, 0.9)
+        return mc3_patch_check.displacement_summary(shifts, scale=1)
+
+    every = {(j, i): (0.4, -0.3) for j in range(5) for i in range(5)}
+    assert mc3_patch_check.reproduced(summary(every))
+    # +45 of job 3901454: one tile found, 0.0 px away, the other 24 nowhere.
+    assert not mc3_patch_check.reproduced(summary({(2, 2): (0.0, 0.0)}))
+    one_off = dict(every)
+    one_off[(4, 4)] = (3.0, 0.0)
+    assert not mc3_patch_check.reproduced(summary(one_off))

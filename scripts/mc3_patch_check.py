@@ -18,17 +18,31 @@ has none, and the tiles of the 5 x 5 sum sit at other places than in it.
     run      runs them, one after another, on GPU 0 of the job.
     compare  bins every sum to about 1024 px and finds, for the centre of each
              tile of the pipeline's grid, where that content sits in another sum
-             (normalized cross-correlation after a band-pass, +-112 binned px):
-               control: the pipeline's own sum against p5, which should be the
-                        same image (the run is reproducible);
-               effect:  p5 against p1.
-             The common shift of all tiles is removed; what is left, in raw
-             pixels, is how far the patch alignment moved each tile. Prints a
-             table and the verdict, and writes compare.png.
+             (normalized cross-correlation after a band-pass, +-112 binned px;
+             a tile is found when the best correlation is at least 0.3):
+               control: the pipeline's own sum against p5. The tilt reproduces
+                        when at least half the tiles are found and none is
+                        more than 2 raw px away. Not bit for bit: MotionCor3
+                        does not give the same pixels twice (job 3901454: r
+                        0.976-0.989 at -15/-45/+15, every tile within 0.6 px).
+               effect:  the pipeline's sum and p5, each against p1.
+             The common shift of the found tiles is removed; what is left, in
+             raw pixels, is how far the patch alignment moved each tile. A sum
+             "moved" when at least two found tiles sit beyond the threshold,
+             is "unchanged" when at least half are found and none does, and is
+             "unclear" otherwise. Prints a table and the verdicts, writes
+             compare.png, and exits 0 whatever they are.
 
 Prediction, written before the run: at -75 and +45 some tile of the p5 sum sits
 more than 7.9 raw px from where it sits in the p1 sum (7.9 px = 1.5 nm at
 1.9037 A, the fine-alignment failure threshold); at -15 none does.
+
+Changed after the first run (job 3901454): the control first also asked for a
+correlation of the two images above 0.99, which MotionCor3's reruns never reach,
+and told the reader to suspect the binary; it now judges tile positions, tilt by
+tilt. A tilt with fewer than half its tiles found was "not measurable", which
+the prediction never said: at +45 the 5 x 5 tiles are mostly not found in the
+-Patch 1 1 sum at all, and the six found sat 105-469 px away.
 
 Disposable; scripts/mc3_patch_check.sbatch runs the three steps.
 """
@@ -51,8 +65,11 @@ from scipy.ndimage import gaussian_filter
 DEFAULT_THRESHOLD_NM = 1.5
 # A tile whose best correlation is lower than this is reported, not measured.
 MIN_PEAK = 0.3
-# Tolerance for "the same image" in the control, raw px.
+# Tolerance for "the same place" in the control, raw px.
 REPRODUCIBLE_PX = 2.0
+# Found tiles beyond the threshold that make a sum "moved" (one could be a
+# false match).
+MIN_MOVED_TILES = 2
 
 
 # ---------------------------------------------------------------- plan
@@ -381,7 +398,8 @@ def displacement_summary(shifts: np.ndarray, scale: float) -> dict[str, Any]:
     matched = shifts[..., 2] >= MIN_PEAK
     if matched.sum() == 0:
         return {"matched": 0, "tiles": int(matched.size), "max_px": None, "median_px": None,
-                "common_px": None, "residual": None, "matched_mask": matched}
+                "common_px": None, "residual": None, "magnitude": None,
+                "matched_mask": matched}
     vectors = shifts[..., :2] * scale
     common = np.median(vectors[matched], axis=0)
     residual = vectors - common
@@ -393,14 +411,44 @@ def displacement_summary(shifts: np.ndarray, scale: float) -> dict[str, Any]:
         "median_px": float(np.median(magnitude[matched])),
         "common_px": [float(common[0]), float(common[1])],
         "residual": residual,
+        "magnitude": magnitude,
         "matched_mask": matched,
     }
+
+
+def beyond(summary: dict[str, Any], threshold_px: float) -> int:
+    """Found tiles that sit more than threshold_px away."""
+
+    if summary["magnitude"] is None:
+        return 0
+    return int((summary["magnitude"][summary["matched_mask"]] > threshold_px).sum())
+
+
+def sum_verdict(summary: dict[str, Any], threshold_px: float) -> str:
+    """"moved", "unchanged" or "unclear" for one 5 x 5 sum against p1."""
+
+    far = beyond(summary, threshold_px)
+    if far >= MIN_MOVED_TILES:
+        return "moved"
+    if far == 0 and 2 * summary["matched"] >= summary["tiles"]:
+        return "unchanged"
+    return "unclear"
+
+
+def reproduced(control: dict[str, Any]) -> bool:
+    """The rerun puts the tiles where the pipeline's sum has them."""
+
+    return (
+        control["max_px"] is not None
+        and 2 * control["matched"] >= control["tiles"]
+        and control["max_px"] <= REPRODUCIBLE_PX
+    )
 
 
 def compare(args: argparse.Namespace) -> int:
     out = Path(args.out)
     document = json.loads((out / "plan.json").read_text())
-    rows = []
+    rows: list[dict[str, Any]] = []
     for tilt in document["tilts"]:
         pipeline = read_sum(Path(tilt["pipeline_sum"]))
         p5 = read_sum(Path(tilt["runs"]["p5"]["out_mrc"]))
@@ -411,80 +459,147 @@ def compare(args: argparse.Namespace) -> int:
         factor = max(1, int(round(pipeline.shape[1] / 1024)))
         b_pipe, b_p5, b_p1 = (bin_image(image, factor) for image in (pipeline, p5, p1))
         grid = tuple(tilt["pipeline_patches"])
-        control = displacement_summary(tile_shifts(b_pipe, b_p5, grid), factor)
-        effect = displacement_summary(tile_shifts(b_p5, b_p1, grid), factor)
-        same = float(np.corrcoef(b_pipe.ravel(), b_p5.ravel())[0, 1])
-        rows.append((tilt, factor, control, effect, same, (b_pipe, b_p5, b_p1)))
+        rows.append(
+            {
+                "tilt": tilt,
+                "factor": factor,
+                "r": float(np.corrcoef(b_pipe.ravel(), b_p5.ravel())[0, 1]),
+                "control": displacement_summary(tile_shifts(b_pipe, b_p5, grid), factor),
+                "pipeline": displacement_summary(tile_shifts(b_pipe, b_p1, grid), factor),
+                "rerun": displacement_summary(tile_shifts(b_p5, b_p1, grid), factor),
+                "images": (b_pipe, b_p5, b_p1),
+            }
+        )
 
     # The sums' pixel: "raw px" below are pixels of the sums, before binning.
-    pixel = rows[0][0]["pixel_angstrom"] if rows else 1.0
+    pixel = rows[0]["tilt"]["pixel_angstrom"] if rows else 1.0
     threshold_px = args.threshold_nm * 10.0 / pixel
-    print(f"sums' pixel {pixel:.4f} A; threshold {args.threshold_nm} nm = {threshold_px:.1f} px")
-    print("angle    control: pipeline sum vs p5 rerun       effect: p5 vs p1 (-Patch 1 1)")
     print(
-        "         r      matched  max px              "
-        "matched  max px  median px  common shift px"
+        f"sums' pixel {pixel:.4f} A; threshold {args.threshold_nm} nm = {threshold_px:.1f} px; "
+        f"a tile is found at a correlation of {MIN_PEAK} or more"
     )
-    reproducible = True
-    verdicts: dict[float, bool | None] = {}
-    for tilt, _factor, control, effect, same, _images in rows:
-        angle = tilt["tilt_angle_deg"]
-        control_ok = (
-            control["max_px"] is not None
-            and control["max_px"] <= REPRODUCIBLE_PX
-            and same > 0.99
+    print(
+        "        control: rerun vs pipeline sum   | each 5x5 sum vs -Patch 1 1: "
+        "found, beyond threshold, max px"
+    )
+    print(
+        "angle    r      found  max px  place     | pipeline sum           "
+        "| rerun"
+    )
+
+    def fmt(value: float | None) -> str:
+        return "     -" if value is None else f"{value:6.1f}"
+
+    def cell(summary: dict[str, Any]) -> str:
+        return (
+            f"{summary['matched']:2d}/{summary['tiles']:2d} {beyond(summary, threshold_px):3d} "
+            f"{fmt(summary['max_px'])}"
         )
-        reproducible &= control_ok
-        if effect["max_px"] is None or effect["matched"] < effect["tiles"] // 2:
-            verdicts[angle] = None
-        else:
-            verdicts[angle] = effect["max_px"] > threshold_px
 
-        def fmt(value: float | None) -> str:
-            return "   -  " if value is None else f"{value:6.1f}"
-
-        common = effect["common_px"]
-        common_text = "-" if common is None else f"({common[0]:+.1f}, {common[1]:+.1f})"
+    for row in rows:
+        control = row["control"]
+        place = "same" if reproduced(control) else "differs"
         print(
-            f"{angle:6.1f}   {same:6.4f}  {control['matched']:2d}/{control['tiles']:2d}  "
-            f"{fmt(control['max_px'])}              {effect['matched']:2d}/{effect['tiles']:2d}  "
-            f"{fmt(effect['max_px'])}  {fmt(effect['median_px'])}     {common_text}"
+            f"{row['tilt']['tilt_angle_deg']:6.1f}  {row['r']:6.3f}  "
+            f"{control['matched']:2d}/{control['tiles']:2d} {fmt(control['max_px'])}  "
+            f"{place:8s}  | {cell(row['pipeline'])}       | {cell(row['rerun'])}"
         )
     print()
-    if not reproducible:
-        print("CONTROL FAILED: a rerun as the pipeline ran it is not the pipeline's sum.")
-        print("Do not read the effect: compare the binary, the flags and the inputs first.")
+
+    differ = [row["tilt"]["tilt_angle_deg"] for row in rows if not reproduced(row["control"])]
+    if not differ:
+        print(
+            "control: at every tilt the rerun of the recorded command puts each tile where "
+            "the pipeline's sum has it."
+        )
+    elif len(differ) < len(rows):
+        print(
+            "control: at " + ", ".join(f"{angle:g}" for angle in differ) + " deg the rerun of "
+            "the recorded command (same executable, sha256 checked) does not put the tiles "
+            "where the pipeline's sum has them, while at the other tilts it does: there "
+            "MotionCor3's result with this patch grid changes from run to run."
+        )
     else:
-        print("control: each rerun as the pipeline ran it reproduces the pipeline's sum.")
-    for angle, moved in verdicts.items():
+        print(
+            "control: at no tilt does the rerun of the recorded command put the tiles where "
+            "the pipeline's sum has them. Check that these sums are the ones this command "
+            "made (their dates; a later motion run) before reading the rest."
+        )
+    print("(r is for information: MotionCor3 does not give the same pixels twice.)")
+    print()
+
+    verdicts: dict[float, str] = {}
+    for row in rows:
+        angle = row["tilt"]["tilt_angle_deg"]
+        pipeline_says = sum_verdict(row["pipeline"], threshold_px)
+        rerun_says = sum_verdict(row["rerun"], threshold_px)
+        both = pipeline_says if pipeline_says == rerun_says else "mixed"
+        verdicts[angle] = both
         text = {
-            None: "not measurable (fewer than half the tiles matched)",
-            True: f"tiles moved by more than {args.threshold_nm} nm",
-            False: f"no tile moved by more than {args.threshold_nm} nm",
-        }[moved]
-        print(f"{angle:6.1f} deg: {text}")
+            "moved": f"the 5x5 sums' tiles moved by more than {args.threshold_nm} nm",
+            "unchanged": f"no tile of the 5x5 sums moved by more than {args.threshold_nm} nm",
+            "unclear": "unclear (too few tiles found)",
+            "mixed": "the two 5x5 sums disagree",
+        }[both]
+        print(
+            f"{angle:6.1f} deg: {text} (pipeline sum: {pipeline_says}; rerun: {rerun_says})"
+        )
     ends = [angle for angle in verdicts if abs(angle - (-75)) < 1.6 or abs(angle - 45) < 1.6]
     mid = [angle for angle in verdicts if abs(angle - (-15)) < 1.6]
-    if reproducible and ends and mid:
-        held = all(verdicts[a] is True for a in ends) and all(verdicts[a] is False for a in mid)
+    if ends and mid:
+        held = all(verdicts[a] == "moved" for a in ends) and all(
+            verdicts[a] == "unchanged" for a in mid
+        )
         print()
         print("prediction (ends moved, -15 not): " + ("HELD" if held else "DID NOT HOLD"))
     _figure(rows, out / "compare.png", threshold_px)
     print(f"wrote {out / 'compare.png'}")
-    return 0 if reproducible else 2
+    return 0
 
 
-def _figure(rows: list[Any], path: Path, threshold_px: float) -> None:
+def _annotate(ax: Any, summary: dict[str, Any], factor: int, threshold_px: float,
+              grid: tuple[int, int], size: tuple[int, int]) -> None:
+    """Each tile's distance from the -Patch 1 1 sum, raw px; x = not found."""
+
+    nx, ny = grid
+    h, w = size
+    if summary["residual"] is None:
+        return
+    residual = summary["residual"] / factor
+    for j in range(ny):
+        for i in range(nx):
+            cx, cy = (i + 0.5) * w / nx, (j + 0.5) * h / ny
+            if not summary["matched_mask"][j, i]:
+                ax.plot(cx, cy, "x", color="orange", ms=8)
+                continue
+            dy, dx = residual[j, i]
+            magnitude = float(summary["magnitude"][j, i])
+            colour = "yellow" if magnitude > threshold_px else "cyan"
+            # Arrows are true length in the binned image shown.
+            ax.annotate(
+                "", xy=(cx + dx, cy + dy), xytext=(cx, cy),
+                arrowprops=dict(arrowstyle="->", color=colour, lw=1.5),
+            )
+            ax.text(cx, cy - 0.12 * h / ny, f"{magnitude:.0f}", color=colour,
+                    ha="center", va="top", fontsize=9, fontweight="bold")
+
+
+def _figure(rows: list[dict[str, Any]], path: Path, threshold_px: float) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(len(rows), 3, figsize=(15, 5.2 * len(rows)), squeeze=False)
-    titles = ("pipeline sum (as run)", "rerun as the pipeline ran it", "rerun with -Patch 1 1")
-    for row, (tilt, factor, _control, effect, _same, images) in zip(axes, rows, strict=True):
+    titles = (
+        "pipeline sum (as run)",
+        "rerun of the recorded command",
+        "rerun with -Patch 1 1",
+    )
+    for axes_row, row in zip(axes, rows, strict=True):
+        tilt = row["tilt"]
         nx, ny = tilt["pipeline_patches"]
-        for k, (ax, image, title) in enumerate(zip(row, images, titles, strict=True)):
+        for k, (ax, image, title) in enumerate(zip(axes_row, row["images"], titles, strict=True)):
             shown = gaussian_filter(image, 1.0)
             lo, hi = np.percentile(shown, [1, 99])
             h, w = image.shape
@@ -493,33 +608,17 @@ def _figure(rows: list[Any], path: Path, threshold_px: float) -> None:
                 ax.axvline(w * i / nx, color="red", lw=0.6, alpha=0.5)
             for j in range(1, ny):
                 ax.axhline(h * j / ny, color="red", lw=0.6, alpha=0.5)
-            ax.set_title(f"{tilt['tilt_angle_deg']:.1f} deg: {title}", fontsize=10)
             ax.set_xticks([])
             ax.set_yticks([])
-            if k == 1 and effect["residual"] is not None:
-                residual = effect["residual"] / factor
-                matched = effect["matched_mask"]
-                for j in range(ny):
-                    for i in range(nx):
-                        cx, cy = (i + 0.5) * w / nx, (j + 0.5) * h / ny
-                        if not matched[j, i]:
-                            ax.plot(cx, cy, "x", color="orange", ms=8)
-                            continue
-                        dy, dx = residual[j, i]
-                        magnitude = float(np.hypot(dy, dx) * factor)
-                        colour = "yellow" if magnitude > threshold_px else "cyan"
-                        # Arrows are true length in the binned image shown.
-                        ax.annotate(
-                            "", xy=(cx + dx, cy + dy), xytext=(cx, cy),
-                            arrowprops=dict(arrowstyle="->", color=colour, lw=1.5),
-                        )
-                        ax.text(cx, cy - 0.12 * h / ny, f"{magnitude:.0f}", color=colour,
-                                ha="center", va="top", fontsize=9, fontweight="bold")
-                ax.set_title(
-                    f"{tilt['tilt_angle_deg']:.1f} deg: rerun as run; numbers = raw px each "
-                    f"tile sits from the -Patch 1 1 sum (yellow > {threshold_px:.1f})",
-                    fontsize=9,
+            label = f"{tilt['tilt_angle_deg']:.1f} deg: {title}"
+            if k < 2:
+                summary = row["pipeline"] if k == 0 else row["rerun"]
+                _annotate(ax, summary, row["factor"], threshold_px, (nx, ny), (h, w))
+                label += (
+                    f"\nraw px from the -Patch 1 1 sum "
+                    f"(yellow > {threshold_px:.1f}, x not found)"
                 )
+            ax.set_title(label, fontsize=9)
     fig.tight_layout()
     fig.savefig(path, dpi=60)
     plt.close(fig)

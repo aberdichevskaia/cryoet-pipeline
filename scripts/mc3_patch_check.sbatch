@@ -23,7 +23,11 @@
 # SERIES. Optional: ANGLES (default "-75 45 -15 -45 15": the two ends, the
 # first tilt and two in between) and OUT (outputs/mc3-patch-check/<job id>).
 # Two MotionCor3 runs per tilt, about 0.13 GB of sums per tilt under OUT.
-# Nothing in PROJECT is written. The verdict and compare.png are in OUT.
+# Nothing in PROJECT is written. The verdict is in the log, compare.png in OUT.
+# The job ends 0 once the comparison is made, whatever the verdict; only a step
+# that fails ends it otherwise. To judge an earlier OUT again, without a GPU:
+#
+#     python3 scripts/mc3_patch_check.py compare --out <OUT>
 #
 # Disposable.
 
