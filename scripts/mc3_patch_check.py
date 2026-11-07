@@ -44,6 +44,31 @@ tilt. A tilt with fewer than half its tiles found was "not measurable", which
 the prediction never said: at +45 the 5 x 5 tiles are mostly not found in the
 -Patch 1 1 sum at all, and the six found sat 105-469 px away.
 
+Frames or darkness (`plan --fractions`, EER movies only). On Position_1 the five
+tilts whose patch alignment broke are the darkest and also the only ones with 3
+or 4 frames: the pipeline sums an EER movie's frames in as many groups as its
+dose allows, and MotionCor3 aligns patches on groups of 4 frames (`-Group 1 4`,
+its default). `--fractions 4 10` adds, for each chosen tilt, the recorded command
+again with the same patch grid but the frames summed in 4 and in 10 groups. Each
+5 x 5 sum (the rerun as recorded and these) is judged twice: by MotionCor3's
+patch log, with the motion QC's rule (at least half the patches beyond the
+threshold), and by its tiles against the -Patch 1 1 sum, as above. Then:
+  the frame count   every sum with no more frames than the patch group broke,
+                    and none with more, on tilts that broke as recorded and on
+                    tilts that did not;
+  the tilt          every sum broke as its tilt's recorded run did, whatever
+                    its frames (darkness, or anything else of the tilt);
+  not told apart    no run put a tilt's frames on the other side of the group
+                    size from its recorded run, so both rules fit;
+  neither alone     some run fits neither.
+
+Prediction, written before that run: the frame count. -75 and -72 with 10
+groups do not break, and -66 and -15 with 4 do. The step on Position_1 is sharp
+(every tilt with 5 frames had at most one patch beyond the threshold, every one
+with 4 had all 25 there), and the shifts at -75 overflow to 1e20, which looks
+like arithmetic on a single group rather than on a weak signal. Darkness would
+instead keep -75 and -72 broken with 10 groups and -66 and -15 whole with 4.
+
 Disposable; scripts/mc3_patch_check.sbatch runs the three steps.
 """
 
@@ -52,6 +77,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -128,6 +154,13 @@ def rewrite_command(
         index, end = _flag_values(new, flag)
         new[index + 1 : end] = values
     return new
+
+
+def _groups(eer_frames: int, fractions: int) -> int:
+    """The frames MotionCor3 makes of an EER movie asked for `fractions` groups:
+    N // G with G = N // fractions (docs/motioncor3_backend.md, "EER movies")."""
+
+    return eer_frames // (eer_frames // fractions)
 
 
 def _patch_grid(command: list[str]) -> tuple[int, int]:
@@ -218,18 +251,42 @@ def plan(args: argparse.Namespace) -> int:
         sum_path = Path(str(artifact.path))
         if not sum_path.is_absolute() and not sum_path.exists():
             sum_path = project / sum_path
+        eer_frames = params.get("eer_frames")
+        recorded_frames = params.get("eer_groups")
+        if recorded_frames is None and eer_frames and params.get("eer_fractions"):
+            recorded_frames = _groups(int(eer_frames), int(params["eer_fractions"]))
+        groups: list[tuple[str, tuple[int, int] | None, Path | None, int | None]] = [
+            ("p5", None, fmint, recorded_frames),
+            ("p1", (1, 1), fmint, recorded_frames),
+        ]
+        for fractions in args.fractions:
+            if fmint is None or not eer_frames:
+                print(
+                    "--fractions needs EER movies: the recorded command has no -FmIntFile",
+                    file=sys.stderr,
+                )
+                return 1
+            if not 2 <= fractions <= int(eer_frames):
+                print(f"--fractions {fractions}: not between 2 and {eer_frames}", file=sys.stderr)
+                return 1
+            group_file = out / f"{stem}_g{fractions}.fmint"
+            group_file.write_text(motioncor3_eer_fmint(int(eer_frames), fractions))
+            groups.append(
+                (f"g{fractions}", None, group_file, _groups(int(eer_frames), fractions))
+            )
         runs = {}
-        for label, patches in (("p5", None), ("p1", (1, 1))):
+        for label, patches, group_file, frames in groups:
             runs[label] = {
                 "out_mrc": str(out / f"{stem}_{label}.mrc"),
                 "stdout": str(out / "logs" / f"{stem}_{label}.out"),
+                "frames": frames,
                 "command": rewrite_command(
                     command,
                     patches=patches,
                     out_mrc=out / f"{stem}_{label}.mrc",
                     log_dir=out / "logs" / f"{stem}_{label}",
                     aln_dir=out / "aln" / f"{stem}_{label}",
-                    fmint=fmint,
+                    fmint=group_file,
                 ),
             }
         chosen.append(
@@ -242,6 +299,7 @@ def plan(args: argparse.Namespace) -> int:
                 "pixel_angstrom": float(params["pixel_spacing_angstrom"]),
                 "gain_reference": params.get("gain_reference"),
                 "executable_sha256": actual_sha,
+                "tilt_dose_e_per_a2": params.get("eer_tilt_dose_e_per_a2"),
                 "runs": runs,
             }
         )
@@ -554,7 +612,268 @@ def compare(args: argparse.Namespace) -> int:
         print("prediction (ends moved, -15 not): " + ("HELD" if held else "DID NOT HOLD"))
     _figure(rows, out / "compare.png", threshold_px)
     print(f"wrote {out / 'compare.png'}")
+    tested = [row for row in rows if any(label.startswith("g") for label in row["tilt"]["runs"])]
+    if tested:
+        print()
+        frames_or_darkness(tested, out, threshold_px, args.threshold_nm)
     return 0
+
+
+# ---------------------------------------------------------------- frames or darkness
+
+# MotionCor3's default: patches are aligned on groups of this many frames
+# (`-Group 1 4`). A run's own output gives the value when it prints it.
+DEFAULT_PATCH_GROUP = 4
+
+
+def patch_group(stdout: Path) -> int:
+    """The second value of the -Group MotionCor3 printed, else its default."""
+
+    if stdout.is_file():
+        match = re.search(
+            r"^-Group\s+\d+\s+(\d+)", stdout.read_text(errors="replace"), re.MULTILINE
+        )
+        if match:
+            return int(match.group(1))
+    return DEFAULT_PATCH_GROUP
+
+
+def patch_log_verdict(
+    spec: dict[str, Any], pixel: float, width: int, threshold_nm: float
+) -> dict[str, Any] | None:
+    """The motion QC's judgement of one run, from the patch log MotionCor3 wrote
+    for it; None when there is none that reads."""
+
+    from cryoet_pipeline.backends.motion import (
+        PATCH_LOG_SUFFIX,
+        judge_patch_shifts,
+        read_motioncor3_patch_log,
+    )
+
+    command = spec["command"]
+    movie = next(
+        (
+            Path(command[command.index(flag) + 1])
+            for flag in ("-InEer", "-InMrc", "-InTiff")
+            if flag in command
+        ),
+        None,
+    )
+    if movie is None:
+        return None
+    log = Path(command[command.index("-LogDir") + 1]) / f"{movie.stem}{PATCH_LOG_SUFFIX}"
+    try:
+        patch_log = read_motioncor3_patch_log(log)
+    except (OSError, ValueError):
+        return None
+    shift_pixel = pixel * width / patch_log.width
+    return judge_patch_shifts(patch_log, tolerance_px=threshold_nm * 10.0 / shift_pixel)
+
+
+def broken(log_says: str | None, tiles_say: str) -> bool | None:
+    """Whether a 5 x 5 sum broke: the patch log decides unless the tiles
+    contradict it; without a log, the tiles. None when it cannot be said."""
+
+    if log_says is None:
+        return {"moved": True, "unchanged": False}.get(tiles_say)
+    if log_says == "failed":
+        return None if tiles_say == "unchanged" else True
+    return None if tiles_say == "moved" else False
+
+
+def judge_frames_or_darkness(runs: list[dict[str, Any]]) -> tuple[str, str]:
+    """(verdict, explanation) over the 5 x 5 runs: each with `angle`, `label`,
+    `frames`, `group`, `broken` and `tilt_broken` (its tilt's recorded run)."""
+
+    known = [
+        run for run in runs
+        if run["broken"] is not None and run["tilt_broken"] is not None
+        and run["frames"] is not None
+    ]
+    if not known:
+        return "nothing to judge", "no 5x5 sum could be called broken or whole"
+    group = known[0]["group"]
+
+    def by_frames(run: dict[str, Any]) -> bool:
+        return run["broken"] == (run["frames"] <= run["group"])
+
+    def by_tilt(run: dict[str, Any]) -> bool:
+        return run["broken"] == run["tilt_broken"]
+
+    frames_fit = all(by_frames(run) for run in known)
+    tilt_fits = all(by_tilt(run) for run in known)
+    if frames_fit and not tilt_fits:
+        return "the frame count", (
+            f"every 5x5 sum with {group} frames or fewer broke and none with more did, "
+            "on tilts that broke as recorded and on tilts that did not"
+        )
+    if tilt_fits and not frames_fit:
+        return "the tilt", (
+            "every 5x5 sum broke as its tilt's recorded run did, whatever its frames "
+            "(darkness, or anything else of the tilt), not by the frame count"
+        )
+    if frames_fit and tilt_fits:
+        return "not told apart", (
+            f"no run put a tilt's frames on the other side of {group} from its recorded "
+            f"run; give --fractions that do (more than {group} groups for a tilt that "
+            f"broke, {group} or fewer for one that did not)"
+        )
+    neither = [run for run in known if not by_frames(run) and not by_tilt(run)]
+    return "neither alone", "these fit neither rule: " + "; ".join(
+        f"{run['angle']:.1f} deg {_run_name(run['label'])}, {run['frames']} frames, "
+        f"{'broke' if run['broken'] else 'whole'}"
+        for run in neither
+    )
+
+
+def _run_name(label: str) -> str:
+    return "as recorded" if label == "p5" else f"{label[1:]} groups"
+
+
+def frames_or_darkness(
+    rows: list[dict[str, Any]], out: Path, threshold_px: float, threshold_nm: float
+) -> str:
+    """Judge every 5 x 5 sum of the tested tilts, print the table and the
+    verdict on frames against darkness, write frames.png; the verdict."""
+
+    runs: list[dict[str, Any]] = []
+    for row in rows:
+        tilt = row["tilt"]
+        group = patch_group(Path(tilt["runs"]["p5"]["stdout"]))
+        b_p1 = row["images"][2]
+        for label, spec in tilt["runs"].items():
+            if label == "p1":
+                continue
+            raw = read_sum(Path(spec["out_mrc"]))
+            image = bin_image(raw, row["factor"])
+            tiles = displacement_summary(
+                tile_shifts(image, b_p1, tuple(tilt["pipeline_patches"])), row["factor"]
+            )
+            log = patch_log_verdict(spec, tilt["pixel_angstrom"], raw.shape[1], threshold_nm)
+            log_says = None if log is None else ("failed" if log["failed"] else "ok")
+            tiles_say = sum_verdict(tiles, threshold_px)
+            runs.append(
+                {
+                    "angle": tilt["tilt_angle_deg"],
+                    "label": label,
+                    "frames": spec.get("frames"),
+                    "dose": tilt.get("tilt_dose_e_per_a2"),
+                    "group": group,
+                    "log": log,
+                    "log_says": log_says,
+                    "tiles": tiles,
+                    "tiles_say": tiles_say,
+                    "broken": broken(log_says, tiles_say),
+                    "image": image,
+                    "factor": row["factor"],
+                    "grid": tuple(tilt["pipeline_patches"]),
+                }
+            )
+    for run in runs:
+        recorded = next(
+            other for other in runs if other["angle"] == run["angle"] and other["label"] == "p5"
+        )
+        run["tilt_broken"] = recorded["broken"]
+
+    print(
+        "frames or darkness: each 5x5 sum judged by its patch log (the motion QC's rule) and "
+        "by its tiles against -Patch 1 1"
+    )
+    print(
+        "angle   e/A2  run           frames  e/A2/frame | patch log: beyond, median px "
+        "| tiles vs 1x1: found, beyond, max px | broke"
+    )
+    for run in runs:
+        dose = run["dose"]
+        frames = run["frames"]
+        per_frame = (
+            f"{dose / frames:6.3f}" if dose is not None and frames else "     -"
+        )
+        if run["log"] is None:
+            log_cell = "no patch log        "
+        else:
+            median = run["log"]["median_patch_shift_px"]
+            log_cell = (
+                f"{run['log']['patches_beyond']:2d}/{run['log']['patches']:2d} "
+                f"{'   lost' if median is None else f'{median:7.1f}'} {run['log_says']:6s}"
+            )
+        tiles = run["tiles"]
+        max_px = "     -" if tiles["max_px"] is None else f"{tiles['max_px']:6.1f}"
+        says = {True: "yes", False: "no", None: "?"}[run["broken"]]
+        print(
+            f"{run['angle']:6.1f}  {'    -' if dose is None else f'{dose:5.2f}'}  "
+            f"{_run_name(run['label']):12s}  {'-' if frames is None else frames:>6}  "
+            f"{per_frame:>10} | {log_cell} | {tiles['matched']:2d}/{tiles['tiles']:2d} "
+            f"{beyond(tiles, threshold_px):3d} {max_px} {run['tiles_say']:9s} | {says}"
+        )
+    print()
+    groups = sorted({run["group"] for run in runs})
+    print(
+        "MotionCor3 aligned the patches on groups of "
+        + "/".join(str(value) for value in groups)
+        + " frames (-Group, as its output printed it, else its default 4)."
+    )
+    left_out = [run for run in runs if run["broken"] is None]
+    if left_out:
+        print(
+            "left out, neither broken nor whole by their patch log and tiles: "
+            + "; ".join(
+                f"{run['angle']:.1f} deg {_run_name(run['label'])} "
+                f"(log {run['log_says'] or 'none'}, tiles {run['tiles_say']})"
+                for run in left_out
+            )
+        )
+    verdict, why = judge_frames_or_darkness(runs)
+    print(f"verdict: {verdict}: {why}.")
+    outcome = {
+        "the frame count": "HELD",
+        "the tilt": "DID NOT HOLD",
+        "neither alone": "DID NOT HOLD",
+    }.get(verdict, "NOT TESTED")
+    print(f"prediction (the frame count): {outcome}")
+    _frames_figure(runs, out / "frames.png", threshold_px)
+    print(f"wrote {out / 'frames.png'}")
+    return verdict
+
+
+def _frames_figure(runs: list[dict[str, Any]], path: Path, threshold_px: float) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    angles = sorted({run["angle"] for run in runs})
+    columns = max(sum(1 for run in runs if run["angle"] == angle) for angle in angles)
+    fig, axes = plt.subplots(
+        len(angles), columns, figsize=(5 * columns, 5.2 * len(angles)), squeeze=False
+    )
+    for axes_row, angle in zip(axes, angles, strict=True):
+        tilt_runs = [run for run in runs if run["angle"] == angle]
+        for ax in axes_row[len(tilt_runs):]:
+            ax.axis("off")
+        for ax, run in zip(axes_row, tilt_runs, strict=False):
+            image = run["image"]
+            shown = gaussian_filter(image, 1.0)
+            lo, hi = np.percentile(shown, [1, 99])
+            h, w = image.shape
+            ax.imshow(shown, cmap="gray", vmin=lo, vmax=hi, origin="lower", extent=(0, w, 0, h))
+            nx, ny = run["grid"]
+            for i in range(1, nx):
+                ax.axvline(w * i / nx, color="red", lw=0.6, alpha=0.5)
+            for j in range(1, ny):
+                ax.axhline(h * j / ny, color="red", lw=0.6, alpha=0.5)
+            _annotate(ax, run["tiles"], run["factor"], threshold_px, (nx, ny), (h, w))
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_title(
+                f"{angle:.1f} deg, {_run_name(run['label'])}: {run['frames']} frames\n"
+                f"patch log {run['log_says'] or 'none'}, tiles {run['tiles_say']} "
+                f"(raw px from the -Patch 1 1 sum)",
+                fontsize=9,
+            )
+    fig.tight_layout()
+    fig.savefig(path, dpi=60)
+    plt.close(fig)
 
 
 def _annotate(ax: Any, summary: dict[str, Any], factor: int, threshold_px: float,
@@ -636,6 +955,11 @@ def main(argv: list[str] | None = None) -> int:
     p_plan.add_argument("--series", required=True, help="tilt-series id")
     p_plan.add_argument(
         "--angles", type=float, nargs="+", default=[-75.0, 45.0, -15.0, -45.0, 15.0]
+    )
+    p_plan.add_argument(
+        "--fractions", type=int, nargs="+", default=[],
+        help="EER movies only: also run each tilt's recorded command with its frames "
+        "summed in these group counts, same patch grid (frames or darkness)",
     )
     p_plan.add_argument("--out", required=True)
     p_run = sub.add_parser("run", help="run the planned MotionCor3 commands")

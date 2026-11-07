@@ -23,6 +23,18 @@
 # SERIES. Optional: ANGLES (default "-75 45 -15 -45 15": the two ends, the
 # first tilt and two in between) and OUT (outputs/mc3-patch-check/<job id>).
 # Two MotionCor3 runs per tilt, about 0.13 GB of sums per tilt under OUT.
+#
+# Frames or darkness (EER movies): FRACTIONS adds, per tilt, the recorded
+# command again with the same patch grid and the frames summed in each of these
+# group counts; compare then says whether the patches broke by the frame count
+# or by the tilt. For EMPIAR-11830 Position_1, two tilts that broke (3 and 4
+# frames) and two that did not (5 and 9):
+#
+#     sbatch -p gpu --gres=gpu:1 \
+#         --export=ALL,PROJECT=outputs/<lane>,SERIES=<tilt-series id>,ANGLES="-75 -72 -66 -15",FRACTIONS="4 10" \
+#         scripts/mc3_patch_check.sbatch
+#
+# Four runs per tilt then, about 0.26 GB per tilt.
 # Nothing in PROJECT is written. The verdict is in the log, compare.png in OUT.
 # The job ends 0 once the comparison is made, whatever the verdict; only a step
 # that fails ends it otherwise. To judge an earlier OUT again, without a GPU:
@@ -43,6 +55,7 @@ for name in PROJECT SERIES; do
 done
 [[ -f "$PROJECT/artifacts.json" ]] || { echo "no artifacts.json in PROJECT=$PROJECT" >&2; exit 1; }
 ANGLES=${ANGLES:--75 45 -15 -45 15}
+FRACTIONS=${FRACTIONS:-}
 OUT=${OUT:-outputs/mc3-patch-check/$SLURM_JOB_ID}
 
 source scripts/activate_env.sh
@@ -52,12 +65,16 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:${LD_LIBRARY_PATH:-}"
 echo "job        $SLURM_JOB_NAME ($SLURM_JOB_ID) on $(hostname), $(date -Is)"
 echo "project    $PROJECT   series $SERIES"
 echo "angles     $ANGLES   out $OUT"
+[[ -z "$FRACTIONS" ]] || echo "fractions  $FRACTIONS"
 nvidia-smi -L 2>/dev/null || true
 echo
 
+fractions=()
+# shellcheck disable=SC2206  # FRACTIONS is a list
+[[ -z "$FRACTIONS" ]] || fractions=(--fractions $FRACTIONS)
 # shellcheck disable=SC2086  # ANGLES is a list
 python3 scripts/mc3_patch_check.py plan --project "$PROJECT" --series "$SERIES" \
-    --angles $ANGLES --out "$OUT"
+    --angles $ANGLES ${fractions[@]+"${fractions[@]}"} --out "$OUT"
 motioncor3=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["tilts"][0]["runs"]["p5"]["command"][0])' "$OUT/plan.json")
 missing=$(ldd "$motioncor3" 2>/dev/null | awk '/not found/ {print $1}' | tr '\n' ' ')
 [[ -z "$missing" ]] || { echo "MotionCor3 cannot load: ${missing}" >&2; exit 1; }

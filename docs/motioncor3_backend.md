@@ -173,7 +173,8 @@ with 3 or 4 frames (the others have 5–9), since an EER movie's groups follow i
 dose, and MotionCor3 aligns patches on groups of 4 frames (`-Group 1 4`, its
 default, as its output prints). Too few frames and too little signal per patch
 both fit. Rerunning a 4-frame tilt with more groups, or a 5-frame one with 4,
-would tell them apart.
+would tell them apart: `scripts/mc3_patch_check.sbatch` with `FRACTIONS` does
+that and says which (its header has the command for Position_1).
 
 Not checked: the log's name for MRC and TIFF movies. `<movie stem>-Patch-Patch.log`
 is what MotionCor3 wrote for EER. A tilt whose log is not found is reported as
