@@ -19,11 +19,33 @@
 #     OLLAMA_MODELS=<folder> OLLAMA_HOST=127.0.0.1:11999 "$OLLAMA" serve &
 #     OLLAMA_HOST=127.0.0.1:11999 "$OLLAMA" pull <model>; kill %1
 #
+# A model the library has only as :cloud, such as GLM-5.3 on 5 November 2026,
+# comes from a GGUF on Hugging Face instead (unsloth/GLM-5.3-GGUF; Q8_0 is 17
+# files, 801 GB). Download its files into one folder, then, with the same server
+# running, `"$OLLAMA" create <name> -f <Modelfile>` with this Modelfile:
+#
+#     FROM <the folder of .gguf files>
+#     RENDERER glm-4.7
+#     PARSER glm-4.7
+#
+# Ollama has no renderer of its own for GLM-5, and GLM-5.3's chat template uses
+# GLM-4.7's markers; check 2 below tests the pair. The import copies the files
+# into OLLAMA_MODELS, so it needs their size twice until the folder is deleted.
+# The architecture, glm-dsa, is in the llama.cpp that Ollama 0.40.14 builds
+# (b11963, read 7 November 2026). At each load Ollama hard-links a model's files
+# under llama.cpp's own names into a folder in OLLAMA_MODELS/blobs.
+#
 # Then, at MDC, a model that needs a whole node (GLM-5.3 in 8 bits is ~750 GB of
 # weights; the GPU flags are the site's):
 #
 #     sbatch -p gpu --gres=gpu:h200:8 --exclusive --mem=0 \
 #         --export=ALL,MODEL=<model>,OLLAMA_MODELS=<folder> scripts/open_model_cases.sbatch
+#
+# a model that fits one card, such as gpt-oss:120b (65 GB) on an H100 (MDC
+# refuses a job on its H100 nodes that asks for more than 6 hours, 5 November 2026):
+#
+#     sbatch -p gpu --gres=gpu:h100:1 --time=06:00:00 --mem=128G \
+#         --export=ALL,MODEL=gpt-oss:120b scripts/open_model_cases.sbatch
 #
 # and Claude's arm, which needs no GPU but does need a node that reaches
 # Anthropic, and costs model use on the account like any batch:
@@ -123,6 +145,7 @@ if [[ "$MODEL" != claude-* ]]; then
     python3 - "$OLLAMA_HOST" "$MODEL" > "$OUT/tool-check.json" <<'EOF' || status=$?
 import json
 import sys
+import urllib.error
 import urllib.request
 
 host, model = sys.argv[1:]
@@ -138,14 +161,22 @@ request = urllib.request.Request(
     headers={"content-type": "application/json", "anthropic-version": "2023-06-01",
              "x-api-key": "local"})
 # The first request loads the model: minutes for hundreds of GB from /fast.
-reply = json.load(urllib.request.urlopen(request, timeout=3600))
+try:
+    reply = json.load(urllib.request.urlopen(request, timeout=3600))
+except urllib.error.HTTPError as error:
+    # Ollama's reason, such as a model that did not load, is in the body
+    # (7 November 2026: GLM-5.3 on maxg29 gave only "HTTP Error 500").
+    reason = f"the server answered HTTP {error.code}: {error.read().decode(errors='replace')}"
+    print(reason)
+    print(reason, file=sys.stderr)
+    sys.exit(1)
 print(json.dumps(reply, indent=2))
 calls = [block for block in reply.get("content", []) if block.get("type") == "tool_use"]
 sys.exit(0 if calls and calls[0].get("name") == "read_file"
          and calls[0].get("input", {}).get("path") == "notes.txt" else 1)
 EOF
     ((status == 0)) || { echo "$MODEL did not answer with a call of the tool it was offered;" \
-                              "see $OUT/tool-check.json" >&2; exit 1; }
+                              "see $OUT/tool-check.json and $OUT/ollama.log" >&2; exit 1; }
     echo "check 2: $MODEL answered with a call of read_file"
 
     # 3. Wholly on the GPUs ("100% GPU", or "48%/52% CPU/GPU", in Ollama's ps).
