@@ -164,7 +164,9 @@ def mra_iteration(
     resized (`resize_box`), the mask resized and thresholded (`resize_mask`), the
     band and shift limit scaled (`downsized`), the starting shifts scaled down and
     the found ones back (`expanded_shift`). The classes are averaged from the
-    particles at their own box, as the plugin averages them.
+    particles at their own box, as the plugin averages them. With `settings.antialias`
+    (not Dynamo's) each map is low-passed to the smaller box's Nyquist before it is
+    shrunk (`resize_box`).
 
     `workers` goes to the search kernel and to the averages, which run its
     per-particle work on that many threads and do not depend on it.
@@ -179,15 +181,17 @@ def mra_iteration(
     small = settings.dim if settings.dim not in (0, box) else 0
     if small:
         inner = downsized(settings, box)
-        searched = [resize_box(particle, small) for particle in particles]
-        binary = resize_mask(mask, small)
+        searched = [resize_box(particle, small, antialias=settings.antialias)
+                    for particle in particles]
+        binary = resize_mask(mask, small, antialias=settings.antialias)
     else:
         inner, searched = settings, particles
         binary = (np.asarray(mask) > 0.5).astype(float)
     computed = sorted(references)
     searches = {}
     for k in computed:
-        reference = resize_box(references[k], small) if small else references[k]
+        reference = (resize_box(references[k], small, antialias=settings.antialias)
+                     if small else references[k])
         prepared = prepare_reference(reference, binary, inner)
         angles, shifts = (np.asarray(v, dtype=float) for v in starts[k])
         if small:

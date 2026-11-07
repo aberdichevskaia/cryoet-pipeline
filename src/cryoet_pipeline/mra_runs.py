@@ -150,8 +150,12 @@ def _setup_identity(plan: MraPlan) -> tuple[dict[str, Any], list[RunInput]]:
 
 
 def _iteration_content(plan: MraPlan, number: int) -> dict[str, Any]:
-    return {"iteration": number, "search": asdict(plan.settings[number - 1]),
-            "mra": plan.mra[number - 1], "fmin": 1}
+    search = asdict(plan.settings[number - 1])
+    # Named only when on, as no search before 2026-11-07 had it: their records keep
+    # their fingerprints.
+    if not search["antialias"]:
+        del search["antialias"]
+    return {"iteration": number, "search": search, "mra": plan.mra[number - 1], "fmin": 1}
 
 
 def _identity(

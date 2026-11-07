@@ -226,7 +226,7 @@ def new_run(args: argparse.Namespace) -> int:
         global_rounds=args.global_rounds, global_step=args.global_step,
         global_full_box=args.global_full_box,
         cone_steps=[float(step) for step in args.cone_steps.split()],
-        shift_limit=args.shift_limit, workers=args.workers,
+        shift_limit=args.shift_limit, antialias=args.antialias, workers=args.workers,
     )
     try:
         if args.export is not None:
@@ -323,6 +323,9 @@ def main() -> int:
                        help="deg: a coarser grid for the global rounds, refined to their step")
     setup.add_argument("--global-full-box", action="store_true",
                        help="search the global rounds at the full box, not downsampled")
+    setup.add_argument("--antialias", action="store_true",
+                       help="not Dynamo's: low-pass every map to the global rounds' smaller box "
+                       "before shrinking it, so finer noise does not fold into their band")
     setup.add_argument("--cone-steps", default="3",
                        help='the cones\' width in steps: one number or one per round, "5 5 3 3 3"')
     setup.add_argument("--shift-limit", type=float, default=SHIFT_LIMIT,
@@ -362,6 +365,9 @@ def main() -> int:
             parser.error("a new run has no Dynamo project to compare with")
         return new_run(args)
 
+    if args.antialias:
+        parser.error("--antialias sets up a new run; a Dynamo project searches as Dynamo set "
+                     "it up")
     project = args.project.resolve()
     out = project.parent / (args.name or f"{project.name}_port")
     computed = computed_by_dynamo(project)

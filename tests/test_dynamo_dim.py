@@ -87,28 +87,74 @@ def test_the_kernels_refuse_maps_of_another_box_than_the_settings_dim():
                                    [TILTS], settings, dtype=torch.float64)
 
 
-def test_an_iteration_at_dim_searches_resized_maps_and_writes_full_box_shifts():
+@pytest.mark.parametrize("antialias", [False, True])
+def test_an_iteration_at_dim_searches_resized_maps_and_writes_full_box_shifts(antialias):
     seen = {}
 
     def search(particles, reference, mask, starts, tilt_ranges, settings, *, workers=1):
-        seen.update(shapes={p.shape for p in particles}, reference=reference.shape,
+        seen.update(particles=particles, reference=reference, shapes={p.shape for p in particles},
                     mask=set(np.unique(mask).tolist()), settings=settings,
                     starts=[shift for _, shift in starts])
         return [(angles, shift, 0.5) for angles, shift in starts]
 
     rng = np.random.default_rng(3)
     particles = [rng.normal(size=(BOX,) * 3) for _ in range(3)]
+    reference = rng.normal(size=(BOX,) * 3)
     angles, shifts = rng.uniform(0, 90, (3, 3)), rng.uniform(-2, 2, (3, 3))
-    settings = replace(SETTINGS, dim=SMALL)
-    step = mra_iteration(particles, {1: rng.normal(size=(BOX,) * 3)}, {1: (angles, shifts)},
+    settings = replace(SETTINGS, dim=SMALL, antialias=antialias)
+    step = mra_iteration(particles, {1: reference}, {1: (angles, shifts)},
                          [TILTS] * 3, _soft_sphere(BOX, 9.0), settings, search=search)
-    assert seen["shapes"] == {(SMALL,) * 3} and seen["reference"] == (SMALL,) * 3
+    assert seen["shapes"] == {(SMALL,) * 3} and seen["reference"].shape == (SMALL,) * 3
+    # Each map shrunk as the settings say, anti-aliased or as Dynamo shrinks it.
+    for searched, particle in zip(seen["particles"], particles, strict=True):
+        np.testing.assert_array_equal(searched,
+                                      core.resize_box(particle, SMALL, antialias=antialias))
     assert seen["mask"] == {0.0, 1.0}
     assert seen["settings"] == core.downsized(settings, BOX)
+    assert seen["settings"].antialias is False
     np.testing.assert_allclose(seen["starts"], shifts * SMALL / BOX, atol=1e-12)
     expected = [core.expanded_shift(a, s * SMALL / BOX, BOX, SMALL)
                 for a, s in zip(angles, shifts, strict=True)]
     np.testing.assert_allclose(step.searches[1].shifts, expected, atol=1e-12)
+
+
+def _band_variance(volume, radius):
+    """Per voxel, the variance of the part of `volume` within `radius` Fourier px."""
+
+    n = len(volume)
+    spectrum = np.fft.fftshift(np.fft.fftn(volume))
+    inside = np.sqrt(((np.indices(volume.shape) - n // 2) ** 2).sum(axis=0)) <= radius
+    return float((np.abs(spectrum[inside]) ** 2).sum() / n**6)
+
+
+def test_anti_aliasing_keeps_the_band_and_drops_what_the_small_box_cannot_hold():
+    # RyR1 at bin4: a 102 px box searched at 30 px for a band of 13 px (53.76 A at 6.72 A/px).
+    noise = np.random.default_rng(5).standard_normal((102,) * 3)
+    ideal = _band_variance(noise, 13)  # what a map low-passed before shrinking keeps there
+    as_dynamo = _band_variance(core.resize_box(noise, 30), 13)
+    anti_aliased = _band_variance(core.resize_box(noise, 30, antialias=True), 13)
+    assert as_dynamo > 15 * ideal  # 26.9 times, measured on 2026-11-07
+    assert 0.8 * ideal < anti_aliased < 1.2 * ideal
+    # A map with nothing beyond the band shrinks the same either way.
+    smooth = core.antialiased(noise, 26)
+    np.testing.assert_allclose(core.resize_box(smooth, 30, antialias=True),
+                               core.resize_box(smooth, 30), atol=1e-10)
+
+
+def test_anti_aliased_a_dim_that_divides_the_box_takes_every_kth_voxel():
+    noise = np.random.default_rng(6).standard_normal((48,) * 3)
+    with pytest.raises(ValueError, match="dim 24"):
+        core.resize_box(noise, 24)
+    np.testing.assert_allclose(core.resize_box(noise, 24, antialias=True),
+                               core.antialiased(noise, 24)[::2, ::2, ::2], atol=1e-10)
+    assert set(np.unique(core.resize_mask(_soft_sphere(48, 12.0), 24, antialias=True))) == {0, 1}
+
+
+def test_antialias_needs_a_smaller_dim_and_ends_with_the_shrinking():
+    with pytest.raises(ValueError, match="antialias"):
+        core.SearchSettings(antialias=True)
+    small = core.downsized(core.SearchSettings(dim=12, antialias=True), 16)
+    assert (small.dim, small.antialias) == (0, False)
 
 
 def test_the_devices_take_the_new_particles_when_the_box_changes():

@@ -203,6 +203,8 @@ class Round:
     dim: int
     """The box the round searches at."""
     is_global: bool
+    antialias: bool = False
+    """Not Dynamo's: maps low-passed to the Nyquist of `dim` before they are shrunk."""
 
     def settings(self, box: int, shift_limit: float = SHIFT_LIMIT) -> SearchSettings:
         return SearchSettings(
@@ -210,6 +212,7 @@ class Round:
             inplane_range=self.cone_range, inplane_sampling=self.sampling, refine=self.refine,
             refine_factor=2.0, high=2.0, low=float(self.low), shift_limit=float(shift_limit),
             area_search_modus=1, dim=0 if self.dim == box else self.dim,
+            antialias=self.antialias,
         )
 
     def describe(self, number: int, box: int, pixel_size: float) -> str:
@@ -219,6 +222,8 @@ class Round:
             search = (f"every orientation, 360 deg in {self.sampling:.1f} deg steps refined "
                       f"{self.refine} times by 2 to {self.sampling / 2 ** self.refine:.1f} deg, "
                       f"particles at {self.dim} px of {box}")
+            if self.antialias:
+                search += " (low-passed to its Nyquist first)"
         else:
             search = f"cone and in-plane {self.cone_range:.1f} deg in {self.step:.1f} deg steps"
         return (f"round {number}: {self.iterations} iteration(s), low-pass {self.low} px "
@@ -253,6 +258,7 @@ def search_rounds(
     global_step: float | None = None,
     global_full_box: bool = False,
     cone_steps: Sequence[float] = (3,),
+    antialias: bool = False,
 ) -> list[Round]:
     """Every round's search, as dynamo_mra_setup.m set it up (see its header).
 
@@ -261,7 +267,9 @@ def search_rounds(
     (A), in equal steps of resolution or of frequency (`lowpass_steps`), each round's
     angular step atan(resolution / diameter). The first `global_rounds` search every
     orientation, downsampled to dim 2 * (low-pass + 2) unless `global_full_box`, in
-    their own step or refined down to it from `global_step`.
+    their own step or refined down to it from `global_step`. With `antialias` (not
+    Dynamo's) a round that searches at a smaller dim low-passes every map to that dim's
+    Nyquist before shrinking it, and may then search at a dim that divides the box.
     """
 
     size = box * pixel_size
@@ -293,11 +301,13 @@ def search_rounds(
             raise ValueError(f"round {index + 1}'s low-pass, {lows[index]} Fourier px, is not "
                              f"between the high-pass (2 px) and the {box} px box's Nyquist "
                              f"({box / 2:g} px)")
-        if not dim_is_ported(dim, box):
+        shrunk = antialias and dim < box
+        if not dim_is_ported(dim, box) and not (shrunk and dim % 2 == 0 and dim >= 4):
             raise ValueError(f"round {index + 1} would search at dim {dim} of the {box} px box, "
-                             "which divides it: Dynamo bins then, and the port does not")
+                             "which divides it: Dynamo bins then, and the port does not "
+                             "(it does with antialias)")
         rounds.append(Round(iterations[index], lows[index], steps[index], round(cone_range, 6),
-                            round(sampling, 6), refine, dim, is_global))
+                            round(sampling, 6), refine, dim, is_global, shrunk))
     return rounds
 
 
@@ -431,6 +441,7 @@ def make_plan(
     global_full_box: bool = False,
     cone_steps: Sequence[float] = (3,),
     shift_limit: float = SHIFT_LIMIT,
+    antialias: bool = False,
     subset: int = SUBSET,
     workers: int = 1,
     log: Callable[[str], None] = print,
@@ -451,6 +462,8 @@ def make_plan(
     the iterations search, which each iteration's record holds whole; it is not one of
     the setup's variables, whose results it does not touch. `workers` threads average
     the seeds (`average_class`), which do not depend on it, so it is no variable either.
+    `antialias` (not Dynamo's, `search_rounds`) changes only the global rounds searched
+    at a smaller box, and is likewise held by their iterations' records alone.
     """
 
     seeds = list(seeds)
@@ -471,6 +484,9 @@ def make_plan(
         raise ValueError(f"global_step must be above 0 and at most 180 deg, got {global_step}")
     if global_full_box and not global_rounds:
         raise ValueError("global_full_box changes only global rounds; give global_rounds too")
+    if antialias and (not global_rounds or global_full_box):
+        raise ValueError("antialias changes only global rounds searched at a smaller box; give "
+                         "global_rounds, without global_full_box")
     cone_steps = list(cone_steps)
     if len(cone_steps) not in (1, ROUNDS[schedule]) or not all(step > 0 for step in cone_steps):
         raise ValueError(f"cone_steps must be one positive number of steps or one per round "
@@ -524,7 +540,7 @@ def make_plan(
         box, pixel_size, schedule=schedule, first_lowpass=first_lowpass,
         last_lowpass=last_lowpass, diameter=diameter, lowpass_steps=lowpass_steps,
         global_rounds=global_rounds, global_step=global_step, global_full_box=global_full_box,
-        cone_steps=cone_steps,
+        cone_steps=cone_steps, antialias=antialias,
     )
 
     order, orientations, noise = seed_draws(count, box, nref)

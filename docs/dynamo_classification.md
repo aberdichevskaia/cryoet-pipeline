@@ -47,6 +47,27 @@ number of threads, bit for bit. Until 2026-11-06 they were made on one CPU: at b
 (2,495 particles of 102 px) about 20 minutes of each 26 to 31 minute iteration, the
 GPUs idle meanwhile; on a Mac, eight threads average 2.1 to 2.3 times faster.
 
+`GLOBAL_ROUNDS` search every orientation at a smaller box, dim 2 × (low-pass + 2) px,
+30 px for a 53.76 Å round of RyR1. Dynamo shrinks each map to it by taking values at
+every N/dim-th voxel with cubic splines and low-passes nothing first
+(`dynamo_resize_template`), so whatever is finer than the smaller box can hold
+(its Nyquist, 46 Å at 30 px of RyR1's 685 Å box) folds into the coarse shells the
+round searches. On white noise that left in a 53.76 Å band 2.6 times the noise a
+low-passed map keeps there from bin8's 52 px box, and 26.9 times from bin4's 102 px
+box (2026-11-07). The bin8 runs with two global rounds kept RyR1 in their classes
+after both; a global round on bin4 consensus halves (`ryr1-gold-bin4`) put the
+particles in orientations that agreed with their MRA poses no better than random
+ones (median turn 125-127°, 132° for random rotations) and averaged them to noise.
+`ANTIALIAS=1` (`--antialias`), which Dynamo has no counterpart of, low-passes every
+map a global round shrinks (particles, references, mask) to the smaller box's
+Nyquist first (`dynamo_search.antialiased`: the band the round searches untouched,
+a raised cosine over its last 2 px), and lets it search at a dim that divides the
+box, which Dynamo would reach by binning and the port otherwise refuses (bin4's
+second round from 53.76 to 17.5 Å, at 45.7 Å: 34 px of 102). It goes with `GLOBAL_ROUNDS` and not with
+`GLOBAL_FULL_BOX`, and is recorded in the global rounds' searches only, so a run
+without it keeps its fingerprints and one with it is another plan from its first
+global iteration on. Runs with it are written only in the run-record layout.
+
 Without an export, the same job reads the particle stacks of a pipeline project's
 registry where they are, `SOURCE=<project> LANE=<the stacks' label>
 SERIES="<series in order>"` in place of `EXPORT`, and writes the run to

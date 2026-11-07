@@ -47,7 +47,11 @@
 # $EXPORT/${NAME}_classification_report.pdf, TEMPLATE drawn in it as in Dynamo's
 # reports. SHIFT_LIMIT (px of the particles' box, 3 unless given) is how far a
 # particle may move from its box centre in every round, Dynamo's area_search with
-# area_search_modus 1. A run begun before 2026-11-05 in Dynamo's layout,
+# area_search_modus 1. ANTIALIAS=1, which Dynamo has no counterpart of, low-passes
+# every map to the GLOBAL_ROUNDS' smaller box before shrinking it (Dynamo samples
+# it without), so noise finer than that box holds does not fold into their band;
+# needed from bin4 on, where a 102 px box shrunk to 30 px folded 27 times the noise
+# into a 53.76 A round (2.6 times from bin8's 52 px). A run begun before 2026-11-05 in Dynamo's layout,
 # $EXPORT/${NAME}_port with its settings/setup.json, is carried on in that layout
 # under that name.
 # GPUS, Dynamo's own GPU setting, is refused here: the port
@@ -226,6 +230,10 @@ if [[ -n "${SOURCE:-}${EXPORT:-}${SPLIT:-}" ]]; then
     case "${GLOBAL_FULL_BOX:-}" in
         "" | 0 | false) ;;
         *) from+=(--global-full-box) ;;
+    esac
+    case "${ANTIALIAS:-}" in
+        "" | 0 | false) ;;
+        *) from+=(--antialias) ;;
     esac
 fi
 echo "port run    $run"

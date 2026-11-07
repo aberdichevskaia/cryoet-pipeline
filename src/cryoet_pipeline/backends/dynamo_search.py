@@ -141,6 +141,10 @@ class SearchSettings:
     # Dynamo's dim: the box the search runs at, 0 for the particles' own. The kernel
     # runs at the size it is given; `downsized` and `resize_box` make a smaller one.
     dim: int = 0
+    # Not Dynamo's: every map low-passed to what the box of `dim` holds before it is
+    # shrunk to it (`resize_box`), so noise finer than that box's Nyquist is dropped
+    # rather than folded into the band the search reads. Only a smaller `dim` has it.
+    antialias: bool = False
 
     def __post_init__(self):
         numbers = np.array(list(vars(self).values()), dtype=float)
@@ -160,6 +164,8 @@ class SearchSettings:
             raise ValueError("require integer refine in [0, 4] and refine_factor > 1")
         if type(self.dim) is not int or self.dim < 0 or self.dim % 2:
             raise ValueError("dim must be 0 (the particles' box) or an even box")
+        if type(self.antialias) is not bool or (self.antialias and not self.dim):
+            raise ValueError("antialias is True or False, and True only with a smaller dim")
 
 
 @dataclass(frozen=True)
@@ -911,7 +917,41 @@ def _spline_rows(size: int, dim: int) -> np.ndarray:
     return rows
 
 
-def resize_box(volume, dim: int) -> np.ndarray:
+@lru_cache(maxsize=8)
+def _antialias_response(size: int, dim: int) -> np.ndarray:
+    """What `antialiased` multiplies a box's `rfftn` by: 1 up to dim/2 - 2 Fourier px
+    (cycles per box), a raised cosine down to 0 at dim/2, the Nyquist of a box of `dim`
+    voxels over the same extent, and 0 beyond."""
+
+    k = np.fft.fftfreq(size) * size
+    last = np.fft.rfftfreq(size) * size
+    radius = np.sqrt(k[:, None, None] ** 2 + k[None, :, None] ** 2 + last[None, None, :] ** 2)
+    start, stop = dim / 2 - 2, dim / 2
+    edge = 0.5 * (1 + np.cos(np.pi * (radius - start) / (stop - start)))
+    response = np.where(radius <= start, 1.0, np.where(radius >= stop, 0.0, edge))
+    response.flags.writeable = False
+    return response
+
+
+def antialiased(volume: np.ndarray, dim: int) -> np.ndarray:
+    """`volume` low-passed to what a box of `dim` voxels over the same extent holds, so
+    that sampling it there (`resize_box`) folds nothing finer into coarser shells.
+
+    A search at `dim` reads a band below dim/2 - 2 Fourier px: the global rounds' dim
+    is 2 * (low-pass + 2), so their whole band passes untouched. Not Dynamo's: on white
+    noise its sampling left in the band of a 53.76 A global round 2.6 times the noise
+    a low-passed map keeps there from a 52 px box, and 26.9 times from a 102 px box
+    (2026-11-07), the RyR1 particles at bin8 and bin4.
+    """
+
+    v = np.asarray(volume, dtype=np.float64)
+    if v.ndim != 3 or len(set(v.shape)) != 1:
+        raise ValueError(f"a cubic 3D map, not one of shape {v.shape}")
+    return np.fft.irfftn(np.fft.rfftn(v) * _antialias_response(len(v), dim), s=v.shape,
+                         axes=(0, 1, 2))
+
+
+def resize_box(volume, dim: int, *, antialias: bool = False) -> np.ndarray:
     """A map at Dynamo's smaller box `dim`, as `dynamo_resize_template` makes it.
 
     Every map a search at `dim` uses (each particle, each reference, the alignment
@@ -920,24 +960,30 @@ def resize_box(volume, dim: int) -> np.ndarray:
     with cubic splines, so the box's centre N/2 + 1 lands on the smaller box's
     dim/2 + 1, and nothing is low-passed first. A `dim` that divides N makes Dynamo
     bin instead (`dynamo_bin`), which is not ported, so it is refused.
+
+    With `antialias`, which Dynamo does not do, the map is low-passed first to what the
+    smaller box holds (`antialiased`), and a `dim` that divides N is allowed: the
+    samples are then every (N/dim)-th voxel of a map with nothing left to fold.
     """
 
     v = _cube(volume)
     n = len(v)
-    if dim % 2 or not 4 <= dim < n or n % dim == 0:
+    if dim % 2 or not 4 <= dim < n or (n % dim == 0 and not antialias):
         raise ValueError(f"dim {dim} for a {n}-voxel box: an even dim below it, not dividing it "
                          "(Dynamo bins then, which is not ported)")
+    if antialias:
+        v = antialiased(v, dim)
     rows = _spline_rows(n, dim)
     v = np.einsum("ai,ijk->ajk", rows, v)
     v = np.einsum("bj,ajk->abk", rows, v)
     return np.einsum("ck,abk->abc", rows, v)
 
 
-def resize_mask(mask, dim: int) -> np.ndarray:
+def resize_mask(mask, dim: int, *, antialias: bool = False) -> np.ndarray:
     """`dynamo_resize_mask`: the mask resized as a map, then thresholded at 0.5. A
-    soft mask's edge is gone at the smaller box."""
+    soft mask's edge is gone at the smaller box. `antialias` as `resize_box` takes it."""
 
-    return (resize_box(mask, dim) > 0.5).astype(float)
+    return (resize_box(mask, dim, antialias=antialias) > 0.5).astype(float)
 
 
 def downsized(settings: SearchSettings, box: int) -> SearchSettings:
@@ -946,12 +992,13 @@ def downsized(settings: SearchSettings, box: int) -> SearchSettings:
     The band, given in the particles' Fourier pixels, scales with the box
     (`dynamo_zaux_rescalings`), and the shift limit too, rounded up
     (`dynamo__align_motor`: `ceil(area_search * factor_shrink)`). The rest of the
-    search is the same at either size.
+    search is the same at either size; any anti-aliasing was done in the shrinking.
     """
 
     factor = settings.dim / box
     return replace(settings, high=factor * settings.high, low=factor * settings.low,
-                   shift_limit=float(math.ceil(settings.shift_limit * factor)), dim=0)
+                   shift_limit=float(math.ceil(settings.shift_limit * factor)), dim=0,
+                   antialias=False)
 
 
 def expanded_shift(angles, shift, box: int, dim: int) -> np.ndarray:

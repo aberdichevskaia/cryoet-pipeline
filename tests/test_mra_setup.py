@@ -247,6 +247,36 @@ def test_a_global_round_at_a_dim_that_divides_the_box_is_refused() -> None:
         search_rounds(48, 10.012, schedule="coarse_to_fine", first_lowpass=48, global_rounds=1)
 
 
+def test_anti_aliased_global_rounds_shrink_maps_themselves() -> None:
+    # RyR1 at bin4, 53.76 to 17.5 A: round 2's dim 34 divides the 102 px box.
+    variables = {"schedule": "coarse_to_fine", "first_lowpass": 53.76, "last_lowpass": 17.5,
+                 "diameter": 340, "global_rounds": 2}
+    with pytest.raises(ValueError, match="round 2 would search at dim 34 of the 102 px box"):
+        search_rounds(102, 6.72, **variables)
+    rounds = search_rounds(102, 6.72, **variables, antialias=True)
+    assert [(r.low, r.dim, r.antialias) for r in rounds] == [
+        (13, 30, True), (15, 34, True), (19, 102, False), (26, 102, False), (39, 102, False)]
+    assert [r.settings(102).antialias for r in rounds] == [True, True, False, False, False]
+    assert "low-passed to its Nyquist first" in rounds[0].describe(1, 102, 6.72)
+    # A global round at the full box shrinks nothing, so nothing is anti-aliased.
+    full = search_rounds(102, 6.72, **variables, global_full_box=True, antialias=True)
+    assert not any(r.antialias for r in full)
+
+
+def test_antialias_reaches_only_the_shrunk_rounds_and_not_the_setup(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    usual = _plan(export, global_rounds=1)
+    anti_aliased = _plan(export, global_rounds=1, antialias=True)
+    assert [s.antialias for s in anti_aliased.settings] == [s.dim > 0 for s in usual.settings]
+    assert any(s.antialias for s in anti_aliased.settings)
+    assert anti_aliased.setup == usual.setup
+    for channel, reference in usual.references.items():
+        np.testing.assert_array_equal(anti_aliased.references[channel], reference)
+    for wrong in ({}, {"global_rounds": 1, "global_full_box": True}):
+        with pytest.raises(ValueError, match="antialias changes only global rounds"):
+            _plan(export, antialias=True, **wrong)
+
+
 def test_a_table_with_another_wedge_type_is_refused(tmp_path: Path) -> None:
     export = _export(tmp_path)
     table = read_table(export / "initial.tbl")

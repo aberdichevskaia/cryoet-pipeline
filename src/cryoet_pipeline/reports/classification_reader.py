@@ -408,6 +408,8 @@ def _summary(search: Mapping[str, Any], record: RunRecord, box: int,
         return None
     band = f"low-pass {box * spacing / low:.0f} Å" if spacing and box else f"low-pass px {low:g}"
     summary = f"{band}, cone {search['cone_aperture']:g}° in {search['cone_sampling']:g}° steps"
+    if search.get("antialias"):
+        summary += ", anti-aliased"
     minutes = _minutes(record)
     return summary + (f" · {minutes:.0f} min" if minutes is not None else "")
 
@@ -447,6 +449,8 @@ def _search_line(search: Mapping[str, Any], box: int, spacing: float | None) -> 
             f"{search['shift_limit']:g} px, {_area_mode(search['area_search_modus'])}")
     if search.get("dim"):
         line += f" · searched at {search['dim']} px"
+        if search.get("antialias"):
+            line += ", low-passed to its Nyquist first"
     return line
 
 

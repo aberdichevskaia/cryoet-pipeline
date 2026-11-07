@@ -326,6 +326,9 @@ def run_mra_project(
     if not isinstance(plan.particles, Path):
         raise ValueError("a plan read from a registry is written only as a run of the "
                          "run-record layout (mra_runs.run_plan), not as a Dynamo project")
+    if any(settings.antialias for settings in plan.settings):
+        raise ValueError("an anti-aliased search is not Dynamo's, so it is written only as a run "
+                         "of the run-record layout (mra_runs.run_plan), not as a Dynamo project")
     out = out.resolve()
     try:
         done = 0

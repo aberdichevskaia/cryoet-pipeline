@@ -478,15 +478,15 @@ def test_a_consensus_half_is_refined_beside_its_split(tmp_path: Path) -> None:
     split.mkdir(parents=True)
     (tmp_path / "release").write_text("")
     job = _job(repo, "41", SPLIT=str(split), HALF="1", NAME="split_a-half1",
-               SCHEDULE="coarse_to_fine", SHIFT_LIMIT="2")
+               SCHEDULE="coarse_to_fine", SHIFT_LIMIT="2", GLOBAL_ROUNDS="1", ANTIALIAS="1")
     out, err = job.communicate(timeout=60)
     assert job.returncode == 0, err
     assert f"lock        {split.parent}/split_a-half1.lock, held by this job to its end" in out
     assert f"split       {split}, half 1" in out
     assert _calls(repo) == [
         f"port 41 env=active --split {split} --half 1 --schedule coarse_to_fine "
-        "--shift-limit 2 --name split_a-half1 --device cuda --dtype float32 --per-gpu 1 "
-        "--workers 1"]
+        "--global-rounds 1 --shift-limit 2 --antialias --name split_a-half1 --device cuda "
+        "--dtype float32 --per-gpu 1 --workers 1"]
 
     # The seed and the reference are the split's; SPLIT goes alone.
     seeded = _job(repo, "42", SPLIT=str(split), HALF="2", NAME="x", SEEDS="map")

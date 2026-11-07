@@ -13,7 +13,14 @@ from test_mra_setup import _export, _plan
 
 from cryoet_pipeline.backends import dynamo_search as core
 from cryoet_pipeline.dynamo_mra_project import plan_from_dynamo, run_mra_project
-from cryoet_pipeline.mra_runs import STEP_ITERATION, STEP_SETUP, Refused, read_state, run_plan
+from cryoet_pipeline.mra_runs import (
+    STEP_ITERATION,
+    STEP_SETUP,
+    Refused,
+    plan_record,
+    read_state,
+    run_plan,
+)
 from cryoet_pipeline.particle_tables import read_particle_table
 from cryoet_pipeline.reports.dynamo_project import read_em, read_table
 from cryoet_pipeline.runs import completed, read_record
@@ -52,8 +59,9 @@ def test_a_plan_is_written_as_nodes_each_with_its_record(tmp_path: Path) -> None
     assert {item.slot: item.fingerprint for item in first.inputs}["previous"] == setup.fingerprint
     assert {item.slot: item.fingerprint for item in second.inputs}["previous"] \
         == first.fingerprint
+    # Every setting of the search, the anti-aliasing only when on.
     assert first.content_params["search"] == {
-        name: value for name, value in vars(plan.settings[0]).items()}
+        name: value for name, value in vars(plan.settings[0]).items() if name != "antialias"}
     assert first.execution_params == {"device": "numpy"}
     sizes = {name: value for name, value in second.metrics.items() if name.startswith("class_")}
     assert sum(sizes.values()) == 12
@@ -149,6 +157,22 @@ def test_another_shift_limit_is_another_search_on_the_same_setup(tmp_path: Path)
     run_plan(_short(_plan(export), 1), run, **QUIET)
     with pytest.raises(Refused, match="ite_0001 holds a node of another plan"):
         run_plan(_short(_plan(export, shift_limit=2), 1), run, **QUIET)
+
+
+def test_an_anti_aliased_search_is_named_only_where_it_is_on(tmp_path: Path) -> None:
+    export = _export(tmp_path)
+    # A coarse global grid, refined down: a quick global round at dim 10 of the 16 px box.
+    usual = _short(_plan(export, global_rounds=1, global_step=60), 1)
+    anti_aliased = _short(_plan(export, global_rounds=1, global_step=60, antialias=True), 1)
+    # Off, the record names nothing new, so runs made before keep their fingerprints.
+    assert "antialias" not in plan_record(usual)["iterations"][0]["search"]
+    assert plan_record(anti_aliased)["iterations"][0]["search"]["antialias"] is True
+    run = tmp_path / "mra_g"
+    run_plan(usual, run, **QUIET)
+    with pytest.raises(Refused, match="ite_0001 holds a node of another plan"):
+        run_plan(anti_aliased, run, **QUIET)
+    with pytest.raises(ValueError, match="not Dynamo's"):
+        run_mra_project(anti_aliased, tmp_path / "old", **QUIET)
 
 
 def test_a_folder_of_another_layout_is_refused(tmp_path: Path) -> None:

@@ -74,6 +74,19 @@ def test_a_new_run_is_set_up_from_an_export_without_dynamo(tmp_path: Path) -> No
     other = _run(*("mra_t" if argument == "mra_n" else argument for argument in arguments))
     assert other.returncode == 1
     assert other.stderr.startswith(f"REFUSED: {export / 'mra_t'} holds files but no plan.json")
+    # Anti-aliased: the plan names it in the global round, and the log says so.
+    shrunk = _run("--export", str(export), "--name", "mra_a", "--seeds", "noise noise",
+                  "--mask-radius", "5", "--schedule", "coarse_to_fine", "--first-lowpass", "50",
+                  "--global-rounds", "1", "--global-step", "60", "--antialias",
+                  "--iterations", "1", "--device", "numpy")
+    assert shrunk.returncode == 0, shrunk.stderr
+    assert "particles at 10 px of 16 (low-passed to its Nyquist first)" in shrunk.stdout
+    searches = [item["search"] for item in
+                json.loads((export / "mra_a" / "plan.json").read_text())["iterations"]]
+    assert [search.get("antialias", False) for search in searches] == [True]
+    alone = _run("--export", str(export), "--name", "mra_b", "--seeds", "noise noise",
+                 "--antialias", "--device", "numpy")
+    assert alone.returncode == 1 and "antialias changes only global rounds" in alone.stderr
     # The setup's refusals end the script with REFUSED, not a traceback.
     refused = _run("--export", str(export), "--name", "x", "--seeds", "subset subset",
                    "--device", "numpy")
