@@ -34,7 +34,11 @@ client, which is what makes it the instrument for deciding about either (see
   for it, plus the files they point at.
 - **Held out:** the cases from history are also run with their own playbook entry
   removed, and with the other lines that tell their answer replaced
-  ([cases/held_out.toml](cases/held_out.toml)). With the entry present, a case
+  ([cases/held_out.toml](cases/held_out.toml)). Since 9 November 2026 the
+  playbook is one file per step (`playbook/`), and the constructed cases whose
+  answer an entry gives have their entries too: E11 E-3, E12 E-2, E13 D-5, E16
+  A-3, E17 E-4, E18 E-7. E05's are C-2 to C-5 and C-14, since each of those tells
+  its fix. With the entry present, a case
   tests whether the assistant applies what it has been told. Without it, the case
   tests whether the assistant reasons from the evidence. Only the held-out result
   says anything about the second.

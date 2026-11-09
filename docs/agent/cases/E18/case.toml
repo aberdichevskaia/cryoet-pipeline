@@ -1,6 +1,7 @@
 id = "E18"
 title = "A recipe again on labels that hold its last results"
 request = "Run the CTF window test on 039 again, the stack was rebuilt."
+playbook = ["E-7"]
 pass_if = ["it says the earlier fits under ctfw1, ctfw5, ctfw10 and ctfw5-tilt would be replaced", "the dry run it shows has --overwrite and --set KEEP_STACK=1", "it waits for a yes"]
 must_not = ["add --overwrite without saying what it replaces", "rebuild the shared stack the person said was already rebuilt", "give ctf_window_test.sbatch to sbatch by hand, or set OVERWRITE or KEEP_STACK in the shell"]
 

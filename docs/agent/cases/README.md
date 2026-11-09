@@ -100,8 +100,10 @@ The results go into `outputs/eval-runs/<UTC time>/`. Each run gets:
 `grading.md` holds every case's lines as boxes per run, for the person who
 grades. It flags a run that read a memory kept before it, or a `CLAUDE.md` from
 a folder above its own. `--held-out` also runs each case without its own
-playbook entries (eval_cases.md, "Held out"), and `--only-held-out` runs only
-that copy. A held-out copy also goes without the other lines that tell the
+playbook entries (eval_cases.md, "Held out"), taken out of every file of
+`docs/agent/playbook/`, and `--only-held-out` runs only that copy. An entry the
+case names but no file holds stops the run. A held-out copy also goes without the
+other lines that tell the
 case's answer: [held_out.toml](held_out.toml) names them, a worked example or a
 comment about the incident, with what replaces each, and its `markers` are the
 answer in a few patterns that a test looks for in every held-out copy. A run

@@ -41,8 +41,9 @@ when it is not Anthropic's); and grading.md, with the case's
 Pass-if and Must-not lines as boxes per run, and a flag on a run that read a
 memory kept before it or a CLAUDE.md from above its folder.
 
---held-out removes the case's own playbook entries from the sandbox's playbook,
-to test reasoning from the evidence rather than applying what it was told.
+--held-out removes the case's own playbook entries from the sandbox's playbook
+files (docs/agent/playbook/, one per step), to test reasoning from the evidence
+rather than applying what it was told.
 
 --base-url points the client at another server that speaks the Anthropic API,
 such as an open-weight model's behind Ollama; scripts/open_model_cases.sbatch
@@ -280,6 +281,9 @@ EVALUATION = ("docs/agent/eval_cases.md", "docs/agent/cases/", "scripts/run_case
               "docs/agent_architecture.md", "tests/")
 # The lines elsewhere that tell a case's answer, which its held-out runs go without.
 HELD_OUT = CASES / "held_out.toml"
+# The playbook, one file per step since 9 November 2026; docs/agent/playbook.md
+# lists them and holds no entry of its own.
+PLAYBOOK = Path("docs") / "agent" / "playbook"
 
 
 def tracked_files() -> list[str]:
@@ -310,8 +314,28 @@ def make_sandbox(sandbox: Path, case: Case, held_out: bool) -> None:
     if (case.folder / "tree").is_dir():
         shutil.copytree(case.folder / "tree", sandbox, dirs_exist_ok=True)
     if held_out:
-        playbook = sandbox / "docs" / "agent" / "playbook.md"
-        playbook.write_text(without_entries(playbook.read_text(), case.playbook))
+        hide_entries(sandbox, case)
+
+
+def hide_entries(sandbox: Path, case: Case) -> None:
+    """The case's own playbook entries, taken out of every playbook file of its
+    held-out copy. An entry the case names but no file holds stops the run, as a
+    line of held_out.toml that is gone does: the entry may have been renamed or
+    moved, and its answer would then stay in the copy unnoticed."""
+    files = sorted((sandbox / PLAYBOOK).glob("*.md"))
+    present = {entry for path in files for entry in playbook_entries(path.read_text())}
+    if missing := [entry for entry in case.playbook if entry not in present]:
+        raise SystemExit(
+            f"{case.id} held out: no playbook entry {', '.join(missing)} in {PLAYBOOK}/; "
+            "bring the case's playbook list up to date with the files"
+        )
+    for path in files:
+        path.write_text(without_entries(path.read_text(), case.playbook))
+
+
+def playbook_entries(text: str) -> list[str]:
+    """The IDs of the entries a playbook file holds, `### A-3. …` giving A-3."""
+    return re.findall(r"^### ([A-Z]-\d+)\.", text, flags=re.M)
 
 
 def prepare_run(run_dir: Path, case: Case, held_out: bool) -> dict[str, str]:
@@ -375,7 +399,7 @@ def own_repository(sandbox: Path) -> None:
 
 
 def without_entries(text: str, entries: list[str]) -> str:
-    """The playbook without these entries (`### A-3. …` to the next heading)."""
+    """A playbook file without these entries (`### A-3. …` to the next heading)."""
     kept: list[str] = []
     skipping = False
     for line in text.splitlines(keepends=True):

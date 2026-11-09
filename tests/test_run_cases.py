@@ -233,6 +233,7 @@ def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
     run_dir, env = _sandbox(tmp_path, "E11")
     sandbox = run_dir / "sandbox"
     assert (sandbox / "docs" / "agent" / "playbook.md").is_file()
+    assert (sandbox / "docs" / "agent" / "playbook" / "ctf.md").is_file()
     assert not (sandbox / "docs" / "agent" / "eval_cases.md").exists()
     assert not (sandbox / "docs" / "agent" / "cases").exists()
     assert not (sandbox / "scripts" / "run_cases.py").exists()
@@ -246,15 +247,17 @@ def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
     # long enough to be its own (a line such as "submit" is in many files). The
     # playbook may hold one inside the case's own entries, which teach what the
     # case grades and which a held-out run removes (E04's P-1 says what not to do).
-    playbook = (sandbox / "docs" / "agent" / "playbook.md").read_text()
+    playbook = [path.read_text()
+                for path in sorted((sandbox / "docs" / "agent" / "playbook").glob("*.md"))]
     lines = [(case, line) for case in BUILT.values() for line in case.pass_if + case.must_not
              if len(line) >= 30]
     assert len(lines) > 20
     for case, line in lines:
-        found = _run(run_dir, env, "grep", "-rlF", "--exclude-dir=.git", "--exclude=playbook.md",
+        found = _run(run_dir, env, "grep", "-rlF", "--exclude-dir=.git", "--exclude-dir=playbook",
                      line, ".")
         assert not found.strip(), (case.id, line, found)
-        assert line not in run_cases.without_entries(playbook, case.playbook), (case.id, line)
+        for text in playbook:
+            assert line not in run_cases.without_entries(text, case.playbook), (case.id, line)
 
 
 def _answer_markers(sandbox: Path, case: run_cases.Case) -> list[tuple[str, str]]:
@@ -293,8 +296,8 @@ def test_a_held_out_copy_holds_none_of_its_cases_answer(tmp_path, case_id):
 
 def test_only_held_out_runs_just_the_held_out_copies(tmp_path, monkeypatch):
     monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
-    # E17 has no playbook entry of its own, so it has no held-out copy.
-    assert run_cases.main(["E02", "E17", "--runs", "2", "--only-held-out", "--dry-run"]) == 0
+    # E14 has no playbook entry of its own, so it has no held-out copy.
+    assert run_cases.main(["E02", "E14", "--runs", "2", "--only-held-out", "--dry-run"]) == 0
     [out] = (tmp_path / "runs").glob("*")
     assert sorted(path.name for path in out.glob("E*")) == ["E02-held-out-1", "E02-held-out-2"]
 
@@ -308,8 +311,25 @@ def test_a_held_out_edit_whose_text_is_gone_stops_the_run(tmp_path):
 
 def test_a_held_out_run_has_no_playbook_entry_of_its_case(tmp_path):
     run_dir, _ = _sandbox(tmp_path, "E16", held_out=True)
-    playbook = (run_dir / "sandbox" / "docs" / "agent" / "playbook.md").read_text()
-    assert "### A-3." not in playbook and "### A-2." in playbook and "### C-1." in playbook
+    playbook = run_dir / "sandbox" / "docs" / "agent" / "playbook"
+    alignment = (playbook / "alignment.md").read_text()
+    assert "### A-3." not in alignment and "### A-2." in alignment
+    assert "### C-1." in (playbook / "ctf.md").read_text()
+
+
+def test_a_held_out_run_takes_its_case_out_of_every_playbook_file(tmp_path):
+    run_dir, _ = _sandbox(tmp_path, "E05", held_out=True)
+    entries = [entry for path in (run_dir / "sandbox" / "docs" / "agent" / "playbook").glob("*.md")
+               for entry in run_cases.playbook_entries(path.read_text())]
+    assert not set(BUILT["E05"].playbook) & set(entries)
+    assert {"C-1", "A-3", "E-1"} <= set(entries)
+
+
+def test_a_held_out_entry_no_playbook_file_holds_stops_the_run(tmp_path):
+    case = dataclasses.replace(BUILT["E01"], playbook=["A-2", "Z-9"])
+    message = "E01 held out: no playbook entry Z-9 in docs/agent/playbook/"
+    with pytest.raises(SystemExit, match=message):
+        _sandbox(tmp_path, case, held_out=True)
 
 
 def test_a_dry_run_builds_the_sandbox_and_runs_nothing(tmp_path, monkeypatch, capsys):

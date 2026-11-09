@@ -7,6 +7,12 @@ Below the template is an example from our own data.
 
 # [step]: [the symptom in a few words]
 
+**Kind:** crash, refused, warning, silent, false alarm, reading results or slow
+· **Evidence:** measured, seen, code, manual or general (what each means is at
+the top of `playbook/ctf.md`)
+
+**Error text:** the message, word for word, if there is one.
+
 **Where it shows:** which page, plot, number or message.
 
 **How to confirm:** what to look at or count to be sure it is this problem.
@@ -22,6 +28,8 @@ Below the template is an example from our own data.
 **What not to do:**
 
 **When to stop and ask someone:**
+
+**Applies to:** the versions, dates and sites this holds for.
 
 **Source:** the dataset, series, date and person this is based on.
 

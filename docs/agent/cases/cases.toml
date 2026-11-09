@@ -15,7 +15,7 @@
 #                are listed at any date, to find the IDs not known yet
 #   extras       more files, as globs from the project folder
 #   elsewhere    evidence that is not on the cluster
-#   playbook     its entries in ../playbook.md, which a held-out run removes
+#   playbook     its entries in ../playbook/*.md, which a held-out run removes
 #
 # Days and job IDs not known yet are filled in from the inventory's output.
 
@@ -89,7 +89,7 @@ since = 2026-10-16
 until = 2026-10-28T16:30:00
 jobs = ["3670792", "3781480"]
 log_pattern = 'CTFFIND 4\.1|ctffind-4\.'
-playbook = ["C-2"]
+playbook = ["C-2", "C-3", "C-4", "C-5", "C-14"]
 
 [E06]
 title = "MotionCor3 and the GPU generation"
@@ -143,16 +143,19 @@ note = "E04's evidence, with other requests."
 title = "A misspelled lane key"
 cluster = "none"
 note = "its folder E11/ holds made-up evidence."
+playbook = ["E-3"]
 
 [E12]
 title = "A rerun on a series that is busy"
 cluster = "none"
 note = "its folder E12/ holds made-up evidence."
+playbook = ["E-2"]
 
 [E13]
 title = "New series for an existing frames project"
 cluster = "none"
 note = "its folder E13/ holds made-up evidence."
+playbook = ["D-5"]
 
 [E14]
 title = "A lane from a description"
@@ -175,13 +178,16 @@ playbook = ["A-3"]
 title = "`track-fiducials` refuses a seed made before the fix"
 cluster = "none"
 note = "its folder E16/ holds made-up evidence."
+playbook = ["A-3"]
 
 [E17]
 title = "A yes to a plan that has since changed"
 cluster = "none"
 note = "its folder E17/ holds made-up evidence."
+playbook = ["E-4"]
 
 [E18]
 title = "A recipe again on labels that hold its last results"
 cluster = "none"
 note = "its folder E18/ holds made-up evidence."
+playbook = ["E-7"]

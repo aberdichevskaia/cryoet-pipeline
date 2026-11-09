@@ -279,8 +279,8 @@ def test_the_table_has_every_case_of_eval_cases_with_steps_its_lane_has():
     headings = dict(re.findall(r"^### (E\d+)\. (.+)$",
                                (ROOT / "docs" / "agent" / "eval_cases.md").read_text(),
                                flags=re.M))
-    entries = set(re.findall(r"^### ([A-Z]-\d+)\.",
-                             (ROOT / "docs" / "agent" / "playbook.md").read_text(), flags=re.M))
+    entries = {entry for path in (ROOT / "docs" / "agent" / "playbook").glob("*.md")
+               for entry in re.findall(r"^### ([A-Z]-\d+)\.", path.read_text(), flags=re.M)}
     table = collect_case.read_cases(ROOT / collect_case.TABLE)
     assert {name: case["title"] for name, case in table.items()} == headings
     for name, case in table.items():

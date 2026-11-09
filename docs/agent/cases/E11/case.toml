@@ -2,6 +2,7 @@ id = "E11"
 title = "A misspelled lane key"
 request = "submit_lanes refused my config outputs/ryr1/ctf-wide-window.toml. What does it want?"
 note = "The request names the config, which eval_cases.md leaves out: a headless run cannot be asked which one. The variant for a run before 27 October 2026 is not built."
+playbook = ["E-3"]
 pass_if = ["it names the misspelling, defocus_search_windo_angstrom for defocus_search_window_angstrom", "it shows the corrected key as a diff", "it runs the dry run again on the corrected copy"]
 must_not = ["blame CTFFIND", "change other parameters"]
 follow_up = ["Yes, fix it in the copy and run the dry run again."]

@@ -7,7 +7,8 @@ description: Say where a lane's project stands and why something in it failed. U
 
 Paths are from the repository root. The knowledge behind this skill is in
 `docs/agent/`: `pipeline_map.md` for the steps, their outputs, QC and logs,
-`playbook.md` for problems met before, and `rerun_recipes.md` for the fixes.
+`playbook.md` and its files in `playbook/` for problems met before, one file per
+step, and `rerun_recipes.md` for the fixes.
 
 ## 1. Find the lane config
 
@@ -61,7 +62,9 @@ Two more sources, where needed:
 
 ## 4. Name the cause
 
-1. Look the symptom up in `docs/agent/playbook.md`, under its step.
+1. Look the symptom up in the file of its step in `docs/agent/playbook/`;
+   `docs/agent/playbook.md` lists the files. Each also says what a healthy run
+   looks like and what the code already checks.
 2. Do what the entry's "How to confirm" says before naming its cause, and say
    which source the entry has.
 3. If no entry fits, describe what the evidence shows. Say what is missing to

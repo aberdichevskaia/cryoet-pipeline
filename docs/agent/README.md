@@ -11,7 +11,7 @@ instructions, permission rules and skills are in
 |---|---|
 | [pipeline_map.md](pipeline_map.md) | every lane step: keys, flags, outputs, QC, logs |
 | [rerun_recipes.md](rerun_recipes.md) | the safe ways to rerun part of a lane, and the recipe scripts that `scripts/submit_recipe.py` submits |
-| [playbook.md](playbook.md) | problems met so far: how to recognise, confirm and fix them |
+| [playbook.md](playbook.md) | problems met so far, one file per step in [playbook/](playbook/): how to recognise, confirm and fix them |
 | [data_folders.md](data_folders.md) | reading a new data folder with `scripts/show_folder.py`: the main naming schemes first, then field by field |
 | [lane_questions.md](lane_questions.md) | a new lane: where each key's value comes from (data, card, site, rule, person), and the few questions to ask |
 | [eval_cases.md](eval_cases.md) | past failures with expected answers, to measure the assistant |
@@ -26,4 +26,5 @@ Rules for these files:
 - **Every playbook entry and case names its source.** Something seen on one
   dataset says so.
 
-Status: drafts of 27 October 2026, not yet reviewed.
+Status: drafts of 27 October 2026, not yet reviewed. The playbook's files are
+drafts of 7–8 November 2026, under review by the biologists.

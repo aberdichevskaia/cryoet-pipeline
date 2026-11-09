@@ -22,7 +22,8 @@ time you use it. Never guess silently.
     and logs;
   - [rerun_recipes.md](../docs/agent/rerun_recipes.md): the safe ways to rerun,
     and its list of what never to do;
-  - [playbook.md](../docs/agent/playbook.md): problems met so far;
+  - [playbook.md](../docs/agent/playbook.md): problems met so far, one file per
+    step in `docs/agent/playbook/`;
   - [data_folders.md](../docs/agent/data_folders.md): reading a new data
     folder;
   - [lane_questions.md](../docs/agent/lane_questions.md): where each value of a
