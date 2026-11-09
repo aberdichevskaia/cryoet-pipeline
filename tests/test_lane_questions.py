@@ -72,5 +72,7 @@ def test_the_goals_end_at_steps_a_lane_has():
     goals = [GOAL_ROW.match(line)["step"] for line in section("What the goal sets").splitlines()
              if GOAL_ROW.match(line)]
     assert goals == ["reconstruct-tomogram", "segment-tomogram", "visualize-picks",
-                     "extract-particles"]
-    assert set(goals) <= set(listed)
+                     "extract-particles", run_series.MRA_STEP]
+    # The MRA follows the chain each series runs, as the stage of all of them at once.
+    assert set(goals) - {run_series.MRA_STEP} <= set(listed)
+    assert run_series.MRA_STEP not in listed

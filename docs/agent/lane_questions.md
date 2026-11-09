@@ -43,11 +43,16 @@ Each `[[run.stage]]` is one Slurm job, running the steps from its `from` to its
 | tomograms | `reconstruct-tomogram` |
 | membranes | `segment-tomogram`, with `[segment]` |
 | particles picked | `visualize-picks`: the picks and their preview |
-| particles to average | `extract-particles`, as in `example.toml` |
+| particles to average | `extract-particles` |
+| particles classified | `mra`: a stage of its own after the one that ends at `extract-particles`, as in `example.toml` |
 
 Whatever the goal, `[template]`, `[pick]` and `[extract]` must be filled in:
 `run_series.py` requires their keys in every lane, even one that stops at the
 tomogram.
+
+The `mra` stage classifies all the series' particles at once, on GPUs, by the
+lab's rules ([mra_in_lanes.md](../mra_in_lanes.md)). A lane written for picking
+gets it, unless the person says no MRA; question 10 decides only when it runs.
 
 ## The questions
 
@@ -99,9 +104,23 @@ the person and the date as its source.
    manifests for: adding them would erase the project. This fills
    `[run] project`.
 
-Not asked unless the person raises them: the number of particles (by the lab's
-rule, twice what pytom recommends), the symmetry (`[pick] z_axis_symmetry`,
-off), and the binning (by the lab's rule, a new dataset starts at bin8).
+10. **The MRA right after picking, or the picks looked at first?** Either way the
+    lane gets the `mra` stage, written from the site's GPU stage. Right after:
+    the whole lane is submitted, and the MRA waits for the extraction. Looked at
+    first: the lane is submitted with `--until-stage` set to the extraction's
+    stage, and the MRA later with `--from-stage mra`, after its own dry run and
+    yes. There is no default: ask. With no MRA at all, the stage is left out.
+    With one series first (question 8), the MRA has that series' particles
+    alone: its two subset seeds need 600 of them unless `[mra] subset_particles`
+    is smaller, so looking first is the safer answer there.
+11. **Roughly how many particles does one tomogram hold, if the person knows?**
+    This fills `[pick] expected_particles_per_tomogram`: twice that many of the
+    best peaks are kept. The default, unset, is twice what pytom recommends.
+    Either way the doubtful half is there for the MRA's noise class to take.
+
+Not asked unless the person raises them: the MRA's settings (`[mra]`, the lab's
+rules), the symmetry (`[pick] z_axis_symmetry`, off), and the binning (by the
+lab's rule, a new dataset starts at bin8).
 
 ## Every key
 
@@ -119,7 +138,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[run] project` | person | question 9 |
 | `[run] series` | data, person | the ids `show_folder.py` found; question 8 picks one or all |
 | `[run] stage` | rule, site | one `[[run.stage]]` table per job, as below |
-| `[run.stage] name, from, until` | rule | the stages of `example.toml`. With `input = "stack"`, a CPU stage from `import-tilt-stack` replaces `motion`. Without `[segment]`, the GPU stage starts at `prepare-template`. The last `until` is the goal's step. Stages follow one another without skipping a step |
+| `[run.stage] name, from, until` | rule | the stages of `example.toml`. With `input = "stack"`, a CPU stage from `import-tilt-stack` replaces `motion`. Without `[segment]`, the GPU stage starts at `prepare-template`. The last `until` is the goal's step. Stages follow one another without skipping a step. The `mra` stage has `from` and `until` both `mra`, and comes last |
 | `[run.stage] time, sbatch` | site | from the closest lane at the same site: partitions, QOS and GPUs differ between sites |
 | `[data] frames, mdocs, frames_pattern` | data | the fragment `show_folder.py` prints, for a frames lane |
 | `[data] mdoc, stack` | data | the fragment `show_folder.py` prints, for a stack lane |
@@ -166,6 +185,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[pick] gpu_ids` | site | the value of the closest lane at the same site |
 | `[pick] low_pass_angstrom` | rule | about 1.3 × the tomogram's Nyquist (2 × the tomogram pixel), by the lab's rule: a Nyquist of 19.6 Å gives 25 Å |
 | `[pick] number_of_particles, number_of_false_positives, cut_off` | rule | unset: twice the peaks above pytom's false-positive cut-off, by the lab's rule. A number only when the person asks for one |
+| `[pick] expected_particles_per_tomogram` | person | question 11; unset when the person does not know. Never together with `number_of_particles` |
 | `[pick] z_axis_symmetry` | person | unset unless the person asks, and only for a template whose symmetry axis is its z axis, as `example.toml` says |
 | `[pick] random_phase_correction, per_tilt_weighting, spectral_whitening, tophat_filter` | rule | the values of `example.toml` |
 | `[pick] ctf_weighting, extract_particle_diameter_angstrom` | rule | unset: the code's defaults |
@@ -173,6 +193,10 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[pick] use_segmentation_mask, segmentation_mask_dilation_px` | person | question 4 |
 | `[extract] box_size_px` | rule | required in every lane: an even number near 2 × diameter / tomogram pixel, by the lab's rule |
 | `[extract] pad_edges` | rule | unset: the code's default |
+| `[mra] name` | rule, person | unset: `<variant>-<one letter per seed>`, such as `bin8-ssn`, or `<from_run>-c<classes>-<letters>`. Set it for a second MRA of other settings |
+| `[mra] seeds, subset_particles, reference, schedule, first_lowpass_nyquist, last_lowpass_nyquist, first_lowpass_angstrom, last_lowpass_angstrom, lowpass_steps, diameter_angstrom, global_rounds, global_step_deg, global_full_box, cone_steps, antialias, shift_limit_px, mask_radius_px, mask_edge_px, mask_file` | rule | unset: the lab's rules, as [mra_in_lanes.md](../mra_in_lanes.md) lists them. Only what the person asks to change, with the reason |
+| `[mra] decoy_label` | person | unset; only for decoys the person has made, such as the `null-decoys` recipe's |
+| `[mra] from_run, from_classes, from_iteration, start_poses` | person | unset; only to run the classes of an earlier run again, in a copy of the lane submitted with `--from-stage mra` |
 | `[executables] motioncor3, pytom_create_template, pytom_create_mask, pytom_match_template, pytom_extract_candidates` | site | the environment variables of the closest lane at the same site |
 | `[executables] ctffind` | site | as the closest lane at the same site names it |
 | `[executables] aretomo` | site | only with `[fine_align] backend = "aretomo"`: as the closest lane at the same site names it, else AreTomo2 on PATH |

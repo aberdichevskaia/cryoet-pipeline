@@ -182,6 +182,7 @@ line marked `EDIT` depends on your data:
 | `[template]` | `emdb_id` or `source_map`, the low-pass, the mask radius |
 | `[pick]` | particle diameter in Å, how many candidates to keep per tomogram, GPU options. The membrane mask is off: turn it on only for particles on or next to membranes |
 | `[extract]` | box size in pixels, about 1.5× the particle |
+| `[mra]` | usually nothing: the `mra` stage classifies the particles by the lab's rules. Set only what should differ ([docs/mra_in_lanes.md](docs/mra_in_lanes.md)); delete the `mra` stage for no classification |
 
 For how the values in a real config were chosen, read the comments in
 `ribo-bin8.toml` and `gag-bin8.toml`. Their values were measured on *their*
@@ -230,6 +231,20 @@ python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --from-stage gpu 
 `--overwrite` holds for that submission only; with `--dry-run` it also lists the
 recorded runs it may replace. `OVERWRITE=1` set in the shell is refused. Every
 dry run and every submission is written to the project's `journal.jsonl`.
+
+A lane with the `mra` stage of `example.toml` classifies all its particles on
+GPUs once the extraction has finished, by the lab's rules unless `[mra]` says
+otherwise ([docs/mra_in_lanes.md](docs/mra_in_lanes.md)); the dry run shows every
+setting and where it came from. To look at the picks first, stop before it and
+submit it later:
+
+```bash
+python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --until-stage gpu
+python3 scripts/submit_lanes.py configs/lanes/<name>-bin8.toml --from-stage mra
+```
+
+A copy of the lane with another `[mra]` runs another MRA, also of some classes of
+an earlier run (`from_run`, `from_classes`), with `--from-stage mra`.
 Series that one of your queued or running jobs of the same project works on are
 refused, so wait until that job has ended. The batch scripts that run a lane's
 steps another way, such as the averaging in step 5 or the CTF window test, go

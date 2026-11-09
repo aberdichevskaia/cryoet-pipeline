@@ -211,16 +211,34 @@ LANE_KEYS: dict[str, frozenset[str]] = {
                            "box_size_px"}),
     "pick": frozenset({
         "particle_diameter_angstrom", "extract_particle_diameter_angstrom",
-        "z_axis_symmetry", "number_of_particles", "number_of_false_positives",
+        "z_axis_symmetry", "number_of_particles", "expected_particles_per_tomogram",
+        "number_of_false_positives",
         "cut_off", "tophat_filter", "low_pass_angstrom", "random_phase_correction",
         "ctf_weighting", "per_tilt_weighting", "spectral_whitening", "gpu_ids",
         "volume_split", "use_segmentation_mask", "segmentation_mask_dilation_px",
     }),
     "extract": frozenset({"box_size_px", "pad_edges"}),
+    # Read by scripts/submit_lanes.py and the MRA job through
+    # cryoet_pipeline.mra_lane.MraSettings, whose fields these are
+    # (tests/test_mra_lane.py holds the two together); this file imports no package.
+    "mra": frozenset({
+        "name", "seeds", "reference", "schedule",
+        "first_lowpass_nyquist", "last_lowpass_nyquist",
+        "first_lowpass_angstrom", "last_lowpass_angstrom", "lowpass_steps",
+        "diameter_angstrom", "global_rounds", "global_step_deg", "global_full_box",
+        "cone_steps", "antialias", "shift_limit_px",
+        "mask_radius_px", "mask_edge_px", "mask_file", "decoy_label", "subset_particles",
+        "from_run", "from_classes", "from_iteration", "start_poses",
+    }),
     "executables": frozenset({"motioncor3", "ctffind", "aretomo", "pytom_create_template",
                               "pytom_create_mask", "pytom_match_template",
                               "pytom_extract_candidates"}),
 }
+# The MRA: the last step of every lane, after extract-particles, on all the lane's
+# series together (docs/mra_in_lanes.md). It is no step of build_steps, which renders
+# one series; a [[run.stage]] that runs it runs nothing else, as a job of
+# scripts/mra_port_run.sbatch that scripts/submit_lanes.py submits.
+MRA_STEP = "mra"
 STAGE_KEYS = frozenset({"name", "from", "until", "time", "sbatch"})
 # Keys that were renamed, with what replaced them.
 RENAMED = {
@@ -432,6 +450,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
         cfg, "pick", ("particle_diameter_angstrom", "gpu_ids"),
         "every lane",
     )
+    if "number_of_particles" in pick and "expected_particles_per_tomogram" in pick:
+        raise SystemExit(
+            "[pick] sets both number_of_particles (the count to take) and "
+            "expected_particles_per_tomogram (twice it is taken); keep one"
+        )
     extract = _require(cfg, "extract", ("box_size_px",), "every lane")
     exe = _require(
         cfg, "executables",
@@ -719,6 +742,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-z-axis-symmetry", pick.get("z_axis_symmetry")),
              # Left out: twice what pytom recommends (pick-particles' default).
              *flag("pytom-number-of-particles", pick.get("number_of_particles")),
+             # Twice this is taken: the person's expectation per tomogram.
+             *flag("pytom-expected-particles", pick.get("expected_particles_per_tomogram")),
              *flag("pytom-number-of-false-positives", pick.get("number_of_false_positives")),
              # 0 keeps the best number_of_particles peaks with no score floor.
              *flag("pytom-cut-off", pick.get("cut_off")),

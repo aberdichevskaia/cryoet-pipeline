@@ -30,7 +30,8 @@ time you use it. Never guess silently.
     new lane comes from, and what to ask the person.
 - Four skills cover the common requests:
   - `project-status`, for how a project stands and why something failed;
-  - `lane-config`, for writing a config and submitting it;
+  - `lane-config`, for writing a config and submitting it, the MRA among its
+    stages (also an MRA of some classes of an earlier run, again);
   - `empiar-download`, for reading an EMPIAR entry and writing and checking its
     download layout;
   - `emdb-template`, for proposing EMDB entries to pick with.

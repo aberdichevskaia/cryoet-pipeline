@@ -291,6 +291,9 @@ def lane_stage(
         return None
     at = chain.index(step)
     for stage in lane.stages:
+        # The MRA's stage runs no step of the chain a recipe repeats.
+        if stage.is_mra:
+            continue
         if chain.index(stage.start) <= at <= chain.index(stage.end):
             return stage
     return None

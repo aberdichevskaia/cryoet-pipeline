@@ -381,6 +381,10 @@ Motion correction, then the tilt stack from the corrected sums.
   - `z_axis_symmetry` → `--pytom-z-axis-symmetry`;
   - `number_of_particles` → `--pytom-number-of-particles`. Left out, it is
     twice what pytom recommends;
+  - `expected_particles_per_tomogram` → `--pytom-expected-particles`: twice that
+    many of the best peaks, with no score floor unless `cut_off` or
+    `number_of_false_positives` sets one. Refused together with
+    `number_of_particles`;
   - `number_of_false_positives` → `--pytom-number-of-false-positives`;
   - `cut_off` → `--pytom-cut-off`. 0 keeps the best `number_of_particles` peaks
     with no score floor. Setting both `cut_off` and `number_of_false_positives`
@@ -424,6 +428,34 @@ Motion correction, then the tilt stack from the corrected sums.
 - Writes: `particles/<TS>/`; QC in `qc/<TS>/particle_extraction/`.
 - QC: more than half the particles dropped at the tomogram edge → warning; none
   survived → failure.
+
+### 17. `mra` — the stage that classifies all the series at once
+
+- A stage with `from` and `until` both `mra`, after the one that ends at
+  `extract-particles`. It is one job of
+  [`scripts/mra_port_run.sbatch`](../../scripts/mra_port_run.sbatch) on GPUs over
+  every series of the lane, not a step of `run_series.py`. Without such a stage a
+  lane runs no MRA. Design and defaults: [mra_in_lanes.md](../mra_in_lanes.md).
+- Keys, all in `[mra]`, each only to change a default (the dry run shows every
+  value and its source): `name`; `seeds`, `subset_particles`, `reference`;
+  `schedule`, `first_lowpass_nyquist`, `last_lowpass_nyquist` (or
+  `first_lowpass_angstrom`, `last_lowpass_angstrom`), `lowpass_steps`;
+  `diameter_angstrom` (else `[pick] particle_diameter_angstrom`);
+  `global_rounds`, `global_step_deg`, `global_full_box`, `cone_steps`,
+  `antialias`, `shift_limit_px`; `mask_radius_px`, `mask_edge_px`, `mask_file`;
+  `decoy_label`; and, to run classes of an earlier run again, `from_run`,
+  `from_classes`, `from_iteration`, `start_poses`.
+- Defaults: seeds subset, subset, noise; five rounds from 2 × to 1.1 × the
+  particles' Nyquist, the first two over every orientation and the last three in
+  cones three steps wide, each step atan(resolution / diameter); a sphere of the
+  particle's radius + 3 px with a 2 px soft edge; shifts up to 3 px.
+- Submitted with the lane: it waits for the extraction (afterok). To look at the
+  picks first, `submit_lanes.py <config> --until-stage <extraction stage>`, then
+  `--from-stage mra`. A copy of the lane with another `[mra]` and `name`, with
+  `--from-stage mra`, runs another MRA of the same particles, or of an earlier
+  run's classes.
+- Writes: `<project>/mra/<name>/` (plan.json, `setup/`, `ite_0001/`, ...) and
+  `<project>/mra/<name>_classification_report.pdf`.
 
 ### After the lane: averaging
 

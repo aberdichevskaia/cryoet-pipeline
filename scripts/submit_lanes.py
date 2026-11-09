@@ -17,6 +17,14 @@ failed series. The cut is not the order: stages must be consecutive slices of
 the fixed chain, and a gap or an overlap is refused here, before anything is
 submitted. The step order stays in code (see scripts/run_series.py).
 
+A stage whose `from` and `until` are both `mra` runs the MRA (docs/mra_in_lanes.md):
+one job of scripts/mra_port_run.sbatch over all the lane's series at once, on the
+particles the stage before it extracted, with the lane's [mra] over the defaults.
+--until-stage stops a submission before it, to look at the picks first, and
+--from-stage mra submits it later on its own. The dry run shows the MRA's run and
+every setting with its source. An MRA job reads its series rather than writing
+them: another MRA of other settings may run beside it, a lane's steps may not.
+
 Two lanes given together run side by side; every config is checked before any
 job is submitted. The environment goes to the jobs with --export=ALL, so set
 what the config's `$VAR` values name (PYTOMO_MP_DIR, MOTIONCOR3, MEMBRAIN_EXE,
@@ -91,6 +99,22 @@ import run_series  # noqa: E402
 import show_project  # noqa: E402
 
 LANE_SBATCH = ROOT / "scripts" / "lane.sbatch"
+# A stage that runs the step mra is one job of this script over all the lane's
+# series (docs/mra_in_lanes.md).
+MRA_SBATCH = ROOT / "scripts" / "mra_port_run.sbatch"
+# What scripts/mra_port_run.sbatch reads from the environment. A lane's MRA job gets
+# CONFIG, SOURCE, SERIES, NAME and CONFIG_SHA256 from here and none of the rest from
+# the shell: its settings are the lane's [mra], and a SEEDS or a PROJECT left in a
+# shell by a run typed by hand would change what it runs, or stop it.
+MRA_VARIABLES = (
+    "CONFIG", "CONFIG_SHA256", "SOURCE", "SERIES", "NAME", "LANE", "DECOY_LANE", "EXPORT",
+    "PROJECT", "SPLIT", "HALF", "SEEDS", "REFERENCE", "SCHEDULE", "FIRST_LOWPASS",
+    "LAST_LOWPASS", "DIAMETER", "LOWPASS_STEPS", "MASK_RADIUS", "MASK_EDGE", "MASK_FILE",
+    "GLOBAL_ROUNDS", "GLOBAL_STEP", "GLOBAL_FULL_BOX", "CONE_STEPS", "SHIFT_LIMIT",
+    "ANTIALIAS", "DATA_FOLDER", "GPUS", "SYMMETRY", "AXIS_OFFSET", "TEMPLATE", "DEVICE",
+    "DTYPE", "PER_GPU", "MRA_PORT_RUN_LOCK", "OVERWRITE",
+)
+_MRA_SET = ("CONFIG", "CONFIG_SHA256", "SOURCE", "SERIES", "NAME")
 _ENV_REFERENCE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 # Each project's record of what was shown and what was submitted: one JSON object
 # per line, appended to and never rewritten.
@@ -130,6 +154,11 @@ class Stage:
     sbatch: tuple[str, ...]
     env: frozenset[str]  # the $VARs the stage's commands name
 
+    @property
+    def is_mra(self) -> bool:
+        """Runs the MRA, a job of MRA_SBATCH, rather than steps of lane.sbatch."""
+        return self.start == run_series.MRA_STEP
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -137,6 +166,8 @@ class Plan:
     project: str
     series: tuple[str, ...]
     stages: tuple[Stage, ...]
+    # The lane's MRA (cryoet_pipeline.mra_lane.LaneMra), when a stage runs it.
+    mra: Any = None
 
 
 def _string_list(value: Any, where: str) -> tuple[str, ...]:
@@ -172,9 +203,11 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
         raise SystemExit(f"{config}: [run] has no [[run.stage]]")
 
     # The chain is the same for every series, and a frames lane may not know its
-    # series yet: any id renders it.
+    # series yet: any id renders it. The MRA follows it, over all the series at once.
     example = series[0] if series else "TS_X"
     chain = [name for name, _ in run_series.build_steps(cfg, Path(project), example)]
+    chain.append(run_series.MRA_STEP)
+    mra_at = len(chain) - 1
     stages: list[Stage] = []
     for raw in raw_stages:
         where = f"{config}: [[run.stage]] {raw.get('name', '?')!r}"
@@ -201,17 +234,26 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
                 )
         if raw["name"] in {stage.name for stage in stages}:
             raise SystemExit(f"{where}: two stages share the name")
+        if lo <= mra_at <= hi and lo != hi:
+            raise SystemExit(
+                f"{where}: runs {run_series.MRA_STEP} together with other steps; the MRA "
+                f"classifies all the series at once, in a stage of its own (from = until = "
+                f"{run_series.MRA_STEP!r}) after the one that ends at {chain[mra_at - 1]!r}"
+            )
 
-        # Every series renders the same $VARs; the paths differ, the variables do not.
-        sliced = run_series.slice_steps(
-            run_series.build_steps(cfg, Path(project), example), raw["from"], raw["until"]
-        )
-        env = frozenset(
-            match
-            for _, command in sliced
-            for part in command
-            for match in _ENV_REFERENCE.findall(part)
-        )
+        if lo == mra_at:
+            env: frozenset[str] = frozenset()
+        else:
+            # Every series renders the same $VARs; the paths differ, the variables do not.
+            sliced = run_series.slice_steps(
+                run_series.build_steps(cfg, Path(project), example), raw["from"], raw["until"]
+            )
+            env = frozenset(
+                match
+                for _, command in sliced
+                for part in command
+                for match in _ENV_REFERENCE.findall(part)
+            )
         stages.append(
             Stage(
                 name=raw["name"],
@@ -222,7 +264,28 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
                 env=env,
             )
         )
-    return Plan(config=config, project=project, series=series, stages=tuple(stages))
+
+    mra = None
+    if any(stage.is_mra for stage in stages):
+        try:
+            from cryoet_pipeline.mra_lane import LaneMraError, lane_mra
+        except ImportError as error:
+            raise SystemExit(
+                f"{config}: the MRA stage is checked with the cryoet-pipeline package, which "
+                f"this python cannot import ({error}); activate its environment first "
+                "(source scripts/activate_env.sh)"
+            ) from None
+        try:
+            mra = lane_mra(cfg)
+        except LaneMraError as error:
+            raise SystemExit(f"{config}: {error}") from None
+    elif "mra" in cfg:
+        raise SystemExit(
+            f"{config}: [mra] is set, but no [[run.stage]] runs {run_series.MRA_STEP}, so it "
+            f"would be ignored; add a stage with from = until = {run_series.MRA_STEP!r} after "
+            "the one that ends at extract-particles, or delete [mra]"
+        )
+    return Plan(config=config, project=project, series=series, stages=tuple(stages), mra=mra)
 
 
 def stack_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
@@ -286,6 +349,9 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
         for name in sorted(stage.env)
         if not os.environ.get(name)
     ]
+    found += mra_problems(lane, stages)
+    # The MRA is no step of the chain each series runs: its checks are mra_problems'.
+    stages = tuple(stage for stage in stages if not stage.is_mra)
     chain = run_series.build_steps(
         cfg, Path(lane.project), lane.series[0] if lane.series else "TS_X"
     )
@@ -343,6 +409,163 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
             "and init would erase the project to add them; use a new project for them"
         )
     return found
+
+
+def mra_alone(stages: tuple[Stage, ...]) -> bool:
+    """Whether a submission runs the MRA on particles extracted before it. Stages are
+    submitted as one unbroken slice, and the MRA's follows the extraction's."""
+    return bool(stages) and all(stage.is_mra for stage in stages)
+
+
+def mra_particles(lane: Plan) -> tuple[Any, str | None, str | None]:
+    """The particles the lane's MRA would read now, as the job will read them: the
+    lane's (cryoet_pipeline.particle_sources.registry_particles), or the classes of an
+    earlier run (mra_setup.class_selection). Returns them or None, why not, and a line
+    saying which they are."""
+    from cryoet_pipeline.particle_sources import registry_particles
+
+    mra = lane.mra
+    series = lane.series or project_series(lane.project)
+    if not series:
+        return None, f"{lane.project} has no series yet", None
+    quiet = lambda _: None  # noqa: E731
+    try:
+        if mra.from_run is None:
+            found = registry_particles(ROOT / lane.project, mra.label, series, mra.decoy_label,
+                                       log=quiet)
+            return found, None, None
+        from cryoet_pipeline.mra_setup import class_selection, selected_particles
+
+        chosen = class_selection(ROOT / lane.project / "mra" / mra.from_run, mra.from_classes,
+                                 iteration=mra.from_iteration, start_poses=mra.start_poses)
+        named = chosen.particles
+        if named["label"] != mra.label:
+            return None, (f"run {mra.from_run} read the particles of {named['label']!r}, not "
+                          f"the lane's {mra.label!r}"), None
+        if list(named["series"]) != list(series):
+            return None, (f"run {mra.from_run} read series {' '.join(named['series'])}, and "
+                          f"the lane has {' '.join(series)}"), None
+        found = selected_particles(chosen, log=quiet)
+    except (OSError, ValueError, KeyError) as error:
+        return None, str(error), None
+    held = ", ".join(f"class {channel} {count:,}" for channel, count in chosen.sizes.items()
+                     if count)
+    return found, None, (f"{chosen.name} of {mra.from_run}, iteration {chosen.iteration}: "
+                         f"{len(chosen.tags):,} particles (its classes: {held})")
+
+
+def mra_problems(lane: Plan, stages: tuple[Stage, ...]) -> list[str]:
+    """What would stop the lane's MRA job, when this submission has it."""
+
+    submitted = [stage for stage in stages if stage.is_mra]
+    if not submitted or lane.mra is None:
+        return []
+    stage, mra = submitted[0], lane.mra
+    run = mra.run(ROOT)
+    shown = _repo_relative(run)
+    found = []
+    if not any(arg.startswith(("--gres=gpu", "--gpus", "-G")) for arg in stage.sbatch):
+        found.append(
+            f"stage {stage.name!r} runs the MRA, which searches on GPUs; give that stage "
+            "--partition=... and --gres=gpu:..."
+        )
+    if not mra_alone(stages):
+        if mra.from_run is not None:
+            found.append(
+                f"[mra] from_run runs on the classes of {mra.from_run}, which name the "
+                "particles extracted before; this submission extracts them again, so submit "
+                "the MRA alone (--from-stage)"
+            )
+        if run.exists():
+            found.append(
+                f"the MRA run {shown} exists, and this submission extracts the particles "
+                "again, which that run cannot carry on with; give [mra] name another value"
+            )
+        return found
+
+    from cryoet_pipeline.mra_lane import existing_request
+    from cryoet_pipeline.runs import completed
+
+    particles, why, _ = mra_particles(lane)
+    if particles is None and mra.from_run is not None:
+        found.append(f"the MRA reads part of run {mra.from_run}, and cannot: {why}")
+    elif particles is None:
+        labels = repr(mra.label) + (f" and {mra.decoy_label!r}" if mra.decoy_label else "")
+        found.append(
+            f"the MRA reads the particles extracted under {labels}, and cannot: {why}; "
+            "extract them first, or submit the stages before it too"
+        )
+    if particles is not None:
+        found += [
+            f"the MRA's setup would refuse it: {problem}"
+            for problem in mra.setup_problems(particles.box, particles.pixel_size,
+                                              len(particles.particles))
+        ]
+    if not (run / "plan.json").is_file():
+        return found
+    try:
+        request = existing_request(run)
+        setup = completed(run / "setup")
+    except (OSError, ValueError) as error:
+        return [*found, f"the MRA run {shown} exists, and its record cannot be read: {error}"]
+    if request is None:
+        found.append(
+            f"the MRA run {shown} exists and was not asked for by a lane's [mra]; give "
+            "[mra] name another value"
+        )
+    elif particles is not None:
+        now = {**mra.resolved(particles.pixel_size), "label": mra.label,
+               "series": list(particles.series)}
+        before = {**(request.get("resolved") or {}), "label": request.get("label"),
+                  "series": request.get("series")}
+        differ = sorted(key for key in set(now) | set(before) if now.get(key) != before.get(key))
+        if differ:
+            found.append(
+                f"the MRA run {shown} exists with other settings ({', '.join(differ)}); give "
+                "[mra] name another value, or set [mra] as that run had it"
+            )
+        elif setup is not None and not (
+            {(one.slot, one.fingerprint) for one in particles.inputs()}
+            <= {(one.slot, one.fingerprint) for one in setup.inputs}
+        ):
+            found.append(
+                f"the MRA run {shown} was set up from particles that have been extracted "
+                "again since, so it cannot carry on; give [mra] name another value"
+            )
+    return found
+
+
+def mra_lines(lane: Plan, stages: tuple[Stage, ...]) -> list[str]:
+    """What the dry run says of the lane's MRA: its run, its particles and every setting
+    with its source."""
+
+    submitted = [stage for stage in stages if stage.is_mra]
+    if not submitted or lane.mra is None:
+        return []
+    mra, stage = lane.mra, submitted[0]
+    run = mra.run(ROOT)
+    lines = [f"mra {_repo_relative(run)}: stage {stage.name!r}, scripts/mra_port_run.sbatch"]
+    described = mra.describe()
+    if mra_alone(stages):
+        particles, _, which = mra_particles(lane)
+        if (run / "plan.json").is_file():
+            lines.append("  the run exists: with the same settings and particles, the job "
+                         "carries it on from its last finished iteration, or only reports it "
+                         "again")
+        if which is not None:
+            lines.append(f"  {which}")
+        if particles is not None:
+            described = mra.describe(particles.box, particles.pixel_size,
+                                     len(particles.particles))
+    else:
+        before = stages[stages.index(stage) - 1]
+        lines.append(f"  after stage {before.name!r}, on the particles it extracts")
+    lines += [f"  {line}" for line in described]
+    left = sorted(name for name in MRA_VARIABLES if name not in _MRA_SET and os.environ.get(name))
+    if left:
+        lines.append(f"  not passed to the MRA job, which takes its settings from [mra]: "
+                     f"{', '.join(left)}")
+    return lines
 
 
 def ctffind_problems(cfg: dict[str, Any], steps: set[str]) -> list[str]:
@@ -515,7 +738,8 @@ class SubmitError(Exception):
 
 
 def submit(
-    lane: Plan, stages: tuple[Stage, ...], dry_run: bool, overwrite: bool = False
+    lane: Plan, stages: tuple[Stage, ...], dry_run: bool, overwrite: bool = False,
+    config_sha256: str | None = None,
 ) -> list[str]:
     job_ids: list[str] = []
     prefix = Path(lane.project).name
@@ -528,27 +752,43 @@ def submit(
             if job_ids
             else []
         )
+        script = MRA_SBATCH if stage.is_mra else LANE_SBATCH
         command = [
             "sbatch", "--parsable", "--export=ALL",
             *stage.sbatch, *after,
             f"--time={stage.time}", f"--job-name={prefix}-{stage.name}",
-            str(LANE_SBATCH.relative_to(ROOT)),
+            str(script.relative_to(ROOT)),
         ]
         # Through the environment rather than --export=VAR=value, whose list is
         # comma-separated: SERIES holds spaces, and nothing has to survive a parser.
         if not lane.series and not dry_run:
             raise SubmitError("no series to submit", job_ids)
-        env = {
-            "PROJECT": lane.project,
-            "CONFIG": _repo_relative(lane.config),
-            # Unknown in a dry run of a new project without [run] series: init,
-            # which finds them, has not run.
-            "SERIES": " ".join(lane.series) or "<every series init finds>",
-            "FROM": stage.start,
-            "UNTIL": stage.end,
-        }
-        if overwrite:
-            env["OVERWRITE"] = "1"
+        # Unknown in a dry run of a new project without [run] series: init, which
+        # finds them, has not run.
+        series = " ".join(lane.series) or "<every series init finds>"
+        base = inherited
+        if stage.is_mra:
+            # The MRA's settings are the lane's [mra], read by the job from the config
+            # it was shown with; nothing else of the MRA's reaches it from the shell.
+            base = {key: value for key, value in inherited.items() if key not in MRA_VARIABLES}
+            env = {
+                "CONFIG": _repo_relative(lane.config),
+                "CONFIG_SHA256": config_sha256
+                or hashlib.sha256(lane.config.read_text().encode()).hexdigest(),
+                "SOURCE": lane.project,
+                "SERIES": series,
+                "NAME": lane.mra.name,
+            }
+        else:
+            env = {
+                "PROJECT": lane.project,
+                "CONFIG": _repo_relative(lane.config),
+                "SERIES": series,
+                "FROM": stage.start,
+                "UNTIL": stage.end,
+            }
+            if overwrite:
+                env["OVERWRITE"] = "1"
         if dry_run:
             shown = " ".join(f"{key}={value!r}" for key, value in env.items())
             print(f"{shown} {' '.join(command)}")
@@ -556,7 +796,7 @@ def submit(
             continue
         try:
             result = subprocess.run(
-                command, cwd=ROOT, env={**inherited, **env},
+                command, cwd=ROOT, env={**base, **env},
                 check=True, capture_output=True, text=True,
             )
         except subprocess.CalledProcessError as error:
@@ -592,14 +832,15 @@ def plan_record(
     series = lane.series
     if not series and init_command(cfg, lane) is None:
         series = project_series(lane.project)
-    return {
+    record = {
         "config": _repo_relative(lane.config),
         "config_sha256": hashlib.sha256(text.encode()).hexdigest(),
         "project": lane.project,
         "series": list(series),
         "stages": [
             {"name": stage.name, "from": stage.start, "until": stage.end,
-             "time": stage.time, "sbatch": list(stage.sbatch)}
+             "time": stage.time, "sbatch": list(stage.sbatch),
+             **({"kind": "mra"} if stage.is_mra else {})}
             for stage in stages
         ],
         "overwrite": overwrite,
@@ -610,6 +851,12 @@ def plan_record(
             for name in sorted({name for stage in stages for name in stage.env})
         },
     }
+    if lane.mra is not None and any(stage.is_mra for stage in stages):
+        # The MRA as the dry run shows it: its run, and every setting as asked for,
+        # which the job turns into numbers once it has read the particles.
+        record["mra"] = {"run": _repo_relative(lane.mra.run(ROOT)),
+                         "label": lane.mra.label, **lane.mra.resolved(None)}
+    return record
 
 
 def recorded_runs(
@@ -628,9 +875,11 @@ def recorded_runs(
         return {}
     steps = run_series.build_steps(cfg, Path(lane.project), series[0])
     labelled = {name for name, command in steps if "--variant" in command}
+    # The MRA replaces nothing: a run of its name carries on, or is refused.
     wanted = [
         name
         for stage in stages
+        if not stage.is_mra
         for name, _ in run_series.slice_steps(steps, stage.start, stage.end)
     ]
     runs = show_project.last_runs(
@@ -753,22 +1002,54 @@ def log_header(root: Path, job_id: str) -> dict[str, Any] | None:
     return None
 
 
+def journal_mra_runs(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """The MRA run of every MRA job the journal says was submitted, by job ID."""
+    planned = {
+        row.get("id"): row.get("plan") or {}
+        for row in rows
+        if row.get("event") == "submit"
+    }
+    found: dict[str, str] = {}
+    for row in rows:
+        if row.get("event") not in ("submitted", "submit-failed"):
+            continue
+        plan = planned.get(row.get("id"), {})
+        kinds = {
+            stage.get("name"): stage.get("kind")
+            for stage in plan.get("stages") or []
+            if isinstance(stage, dict)
+        }
+        for stage, job in (row.get("jobs") or {}).items():
+            if kinds.get(stage) == "mra":
+                found[str(job)] = str((plan.get("mra") or {}).get("run", ""))
+    return found
+
+
 def busy(
     cfg: dict[str, Any], lane: Plan, jobs: list[dict[str, str]], root: Path = ROOT,
-    submitting: str = "this lane",
+    submitting: str = "this lane", reading: str | None = None,
 ) -> list[str]:
     """Problems: jobs of this project, still queued or running, on series this
-    lane (or a recipe, scripts/submit_recipe.py) would run."""
+    lane (or a recipe, scripts/submit_recipe.py) would run.
+
+    `reading` is the MRA run of a submission that only runs the MRA, which reads
+    its series: an MRA job of another run reads them too, and is no problem for it.
+    """
 
     series = lane.series
     if not series and init_command(cfg, lane) is None:
         series = project_series(lane.project)
     project = (root / lane.project).resolve()
-    journaled = journal_series(read_journal(lane.project))
+    rows = read_journal(lane.project)
+    journaled = journal_series(rows)
+    readers = journal_mra_runs(rows)
     found = []
     for job in jobs:
         # squeue names an array job's tasks "<id>_<task>", and sbatch printed "<id>".
         theirs = journaled.get(job["id"], journaled.get(job["id"].split("_", 1)[0]))
+        their_run = readers.get(job["id"], readers.get(job["id"].split("_", 1)[0]))
+        if reading is not None and their_run is not None and their_run != reading:
+            continue
         if theirs is None:
             header = log_header(root, job["id"])
             if header is not None and "project" in header:
@@ -788,7 +1069,25 @@ def busy(
             continue
         # Without series of its own the lane takes every series.
         shared = [one for one in theirs if not series or one in series]
-        if shared:
+        if not shared:
+            continue
+        if their_run is not None and reading is not None:
+            found.append(
+                f"{what} is the MRA run {their_run}, which {submitting} would run too; its "
+                "lock lets one job at a time on a run, so submit after it has ended"
+            )
+        elif their_run is not None:
+            found.append(
+                f"{what} is the MRA run {their_run}, which reads the particles of "
+                f"{', '.join(shared)}; {submitting} would run steps on them, and a new "
+                "extraction would change them under it, so submit after it has ended"
+            )
+        elif reading is not None:
+            found.append(
+                f"{what} works on {', '.join(shared)}, whose particles {submitting} reads; "
+                "they may change under it, so submit after it has ended"
+            )
+        else:
             found.append(
                 f"{what} works on {', '.join(shared)}, which {submitting} would run too; "
                 "two jobs on one series write the same files, so submit after it has ended"
@@ -797,9 +1096,11 @@ def busy(
 
 
 def queue_problems(
-    targets: list[tuple[dict[str, Any], Plan]], submitting: str = "this lane"
+    targets: list[tuple[dict[str, Any], Plan]], submitting: str = "this lane",
+    reading: list[str | None] | None = None,
 ) -> list[list[str]]:
-    """Per lane, the jobs already queued or running on its series, as problems."""
+    """Per lane, the jobs already queued or running on its series, as problems.
+    `reading` holds, per lane, the MRA run of a submission that only runs the MRA."""
     try:
         jobs = queued_jobs()
     except subprocess.CalledProcessError as error:
@@ -810,7 +1111,11 @@ def queue_problems(
         ]
     if jobs is None:
         print("not checked whether the series are free: no squeue here", file=sys.stderr)
-    return [busy(cfg, lane, jobs or [], submitting=submitting) for cfg, lane in targets]
+    reading = reading or [None] * len(targets)
+    return [
+        busy(cfg, lane, jobs or [], submitting=submitting, reading=run)
+        for (cfg, lane), run in zip(targets, reading, strict=True)
+    ]
 
 
 # How a submission can differ from its dry run, in words, by plan key: a lane's
@@ -825,6 +1130,7 @@ _DIFFERS = {
     "files": "a file the recipe reads has changed",
     "sbatch": "the sbatch options differ",
     "overwrite": "only one of them has --overwrite",
+    "mra": "the MRA's settings differ",
 }
 
 
@@ -979,6 +1285,13 @@ def main(argv: list[str] | None = None) -> int:
         "job; with several configs, every one of them must have it",
     )
     parser.add_argument(
+        "--until-stage",
+        default=None,
+        help="submit no stage after this one, e.g. to look at the picks before the MRA "
+        "stage, which --from-stage submits later; with several configs, every one of "
+        "them must have it",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="print the sbatch commands and any problems; submit nothing",
     )
@@ -1013,10 +1326,17 @@ def main(argv: list[str] | None = None) -> int:
         text, cfg = run_series.read_config(config)
         lane = plan(cfg, config)
         names = [stage.name for stage in lane.stages]
-        if args.from_stage is not None and args.from_stage not in names:
-            raise SystemExit(f"{config}: no stage {args.from_stage!r}; stages: {', '.join(names)}")
+        for option, given in (("--from-stage", args.from_stage),
+                              ("--until-stage", args.until_stage)):
+            if given is not None and given not in names:
+                raise SystemExit(f"{config}: {option}: no stage {given!r}; stages: "
+                                 f"{', '.join(names)}")
         first = names.index(args.from_stage) if args.from_stage else 0
-        stages = lane.stages[first:]
+        last = names.index(args.until_stage) if args.until_stage else len(names) - 1
+        if first > last:
+            raise SystemExit(f"{config}: --from-stage {args.from_stage!r} comes after "
+                             f"--until-stage {args.until_stage!r}")
+        stages = lane.stages[first : last + 1]
         lanes.append(Submission(
             cfg, text, lane, stages, problems(cfg, lane, stages),
             plan_record(cfg, lane, stages, text, args.overwrite),
@@ -1027,9 +1347,14 @@ def main(argv: list[str] | None = None) -> int:
     if len(set(projects)) != len(projects):
         # Two jobs on the same series write the same files.
         raise SystemExit("two configs submit to the same project; submit them one after the other")
-    # For the same reason, no job already queued or running may be on the series.
+    # For the same reason, no job already queued or running may be on the series; an
+    # MRA alone only reads them, as an MRA job of another run does.
     targets = [(one.cfg, one.lane) for one in lanes]
-    for one, taken in zip(lanes, queue_problems(targets), strict=True):
+    reading = [
+        _repo_relative(one.lane.mra.run(ROOT)) if mra_alone(one.stages) else None
+        for one in lanes
+    ]
+    for one, taken in zip(lanes, queue_problems(targets, reading=reading), strict=True):
         one.problems += taken
 
     found = [f"{one.lane.config}: {problem}" for one in lanes for problem in one.problems]
@@ -1101,7 +1426,8 @@ def main(argv: list[str] | None = None) -> int:
                 # the project already has.
                 lane = replace(lane, series=project_series(lane.project))
                 print(f"  series: {' '.join(lane.series)}")
-            ids = submit(lane, stages, args.dry_run, args.overwrite)
+            ids = submit(lane, stages, args.dry_run, args.overwrite,
+                         config_sha256=one.record["config_sha256"])
         except subprocess.CalledProcessError as error:
             queued, why = [], f"init exited with {error.returncode}"
         except SubmitError as error:
@@ -1123,6 +1449,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 1
         print("  " + " -> ".join(f"{name} {job}" for name, job in jobs.items()))
+        for line in mra_lines(lane, stages):
+            print(f"  {line}")
         if args.overwrite:
             if one.replaces:
                 print("  --overwrite may replace what these recorded runs wrote:")

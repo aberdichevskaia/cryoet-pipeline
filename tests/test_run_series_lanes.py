@@ -389,11 +389,14 @@ def test_the_run_stages_cover_the_chain_in_order(lane):
     covered = [
         name
         for stage in plan.stages
+        if not stage.is_mra
         for name, _ in run_series.slice_steps(
             run_series.build_steps(config, Path(plan.project), "TS_X"), stage.start, stage.end
         )
     ]
     assert covered == chain
+    # The MRA, in a lane that has it, is a stage of its own after all of them.
+    assert not any(stage.is_mra for stage in plan.stages[:-1])
 
 
 def _two_stage_lane() -> dict:
@@ -549,3 +552,16 @@ def test_a_symmetric_template_cuts_the_search():
     # A lane that says nothing about symmetry renders nothing.
     assert "--pytom-z-axis-symmetry" not in dict(
         run_series.build_steps(_lane("gag-bin8"), Path("p"), "TS_01"))["pick-particles"]
+
+
+def test_an_expected_count_reaches_picking_and_never_beside_a_count():
+    config = _lane("ribo-mdc")
+    config["pick"].pop("number_of_particles", None)
+    config["pick"]["expected_particles_per_tomogram"] = 300
+    _assert_valid_commands(config, "expected")
+    pick = dict(run_series.build_steps(config, Path("p"), "TS_X"))["pick-particles"]
+    assert pick[pick.index("--pytom-expected-particles") + 1] == "300"
+    assert "--pytom-number-of-particles" not in pick
+    config["pick"]["number_of_particles"] = 600
+    with pytest.raises(SystemExit, match="keep one"):
+        run_series.build_steps(config, Path("p"), "TS_X")

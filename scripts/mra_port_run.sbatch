@@ -33,8 +33,13 @@
 # SPLIT=<project>/mra/<split> HALF=1 (or 2) and NAME, the split written by
 # scripts/consensus_halves.py split (docs/halves_from_runs.md), with the schedule's
 # variables; the particles, their starting poses, the seed and the reference come from
-# the split, and the run is beside it. The rest of this header says EXPORT where SOURCE
-# works the same. Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
+# the split, and the run is beside it. A lane's MRA (docs/mra_in_lanes.md) is submitted by
+# scripts/submit_lanes.py as the lane's stage that runs mra, with CONFIG (the lane file),
+# SOURCE (its project), SERIES, NAME and CONFIG_SHA256: every setting is the lane's [mra]
+# over the defaults, read by scripts/mra_port_run.py --config, which refuses a lane file
+# changed since the submission; none of the setup's variables is read, and the report
+# draws the template the lane's picks were matched with. The rest of this header says
+# EXPORT where SOURCE works the same. Dynamo takes no part. The job makes the run's plan from EXPORT and those variables
 # with the pipeline's setup (cryoet_pipeline.mra_setup; until 2026-11-02 Dynamo's,
 # scripts/dynamo_mra_setup.m, ran inside this job): the same particles in each subset
 # or blob seed, averaged as dynamo_average averages, the same mask and the same
@@ -136,6 +141,18 @@ if [[ -n "${SOURCE:-}" || -n "${EXPORT:-}" || -n "${SPLIT:-}" ]]; then
             echo "a half's seed is its split's start_reference.mrc; leave SEEDS and REFERENCE out" >&2
             exit 1
         fi
+    elif [[ -n "${CONFIG:-}" ]]; then
+        # A lane's MRA: every setting is the lane's [mra], read by mra_port_run.py.
+        [[ -n "${SOURCE:-}" ]] || { echo "a lane's MRA (CONFIG) needs SOURCE, the lane's project" >&2; exit 1; }
+        for variable in LANE DECOY_LANE SEEDS REFERENCE SCHEDULE FIRST_LOWPASS LAST_LOWPASS \
+                DIAMETER LOWPASS_STEPS MASK_RADIUS MASK_EDGE MASK_FILE GLOBAL_ROUNDS \
+                GLOBAL_STEP GLOBAL_FULL_BOX CONE_STEPS SHIFT_LIMIT ANTIALIAS DATA_FOLDER; do
+            if [[ -n "${!variable:-}" ]]; then
+                echo "REFUSED: $variable is set, but a lane's MRA takes its settings from" \
+                     "[mra] in $CONFIG; unset it" >&2
+                exit 1
+            fi
+        done
     else
         : "${SEEDS:?set SEEDS, e.g. SEEDS=\"subset subset noise\", to set the run up}"
     fi
@@ -205,6 +222,25 @@ echo "started     $(date -Is)"
 if [[ -n "${SPLIT:-}" ]]; then
     echo "split       $SPLIT, half $HALF"
     from=(--split "$SPLIT" --half "$HALF")
+elif [[ -n "${CONFIG:-}" ]]; then
+    echo "lane        $CONFIG, its [mra]; project $SOURCE, series $SERIES"
+    read -ra series <<< "$SERIES"
+    from=(--config "$CONFIG" --source "$SOURCE" --series "${series[@]}")
+    if [[ -n "${CONFIG_SHA256:-}" ]]; then from+=(--config-sha256 "$CONFIG_SHA256"); fi
+    # The report draws the template the lane's picks were matched with.
+    if [[ -z "${TEMPLATE:-}" ]]; then
+        TEMPLATE=$(python - "$SOURCE" "$CONFIG" "${series[@]}" <<'EOF' || true
+import sys
+import tomllib
+from pathlib import Path
+
+from cryoet_pipeline.mra_lane import lane_template
+
+label = tomllib.loads(Path(sys.argv[2]).read_text())["lane"]["variant"]
+print(lane_template(Path(sys.argv[1]), label, sys.argv[3:]) or "")
+EOF
+)
+    fi
 elif [[ -n "${SOURCE:-}" ]]; then
     echo "source      $SOURCE, label ${LANE:-none}, series $SERIES${DECOY_LANE:+, decoys $DECOY_LANE}"
     read -ra series <<< "$SERIES"

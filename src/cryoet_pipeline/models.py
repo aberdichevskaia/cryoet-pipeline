@@ -864,6 +864,9 @@ class PicksQc(BaseModel):
     recommended_particle_count: int | None = Field(default=None, ge=0)
     """What pytom recommended, the peaks above its own false-positive cut-off, when
     no count was given and twice this was asked for; None when one was given."""
+    expected_particle_count: int | None = Field(default=None, ge=1)
+    """How many particles the person expected in the tomogram, when twice this was
+    asked for; None otherwise."""
     excess_over_noise_at_cut_off: float | None = None
     """Observed picks minus what the noise alone predicts, at the cut-off.
 

@@ -178,8 +178,20 @@ class PytomMatchPickBackend:
                 (match_command, match_result)
             ]
             requested = _optional_positive_int_parameter(context, "pytom_number_of_particles")
+            expected = _optional_positive_int_parameter(context, "pytom_expected_particles")
             recommended: int | None = None
-            if requested is None:
+            cut_off: float | None
+            if expected is not None:
+                # The count the person expects in a tomogram: twice as many of the
+                # best peaks, for the same reason as twice the recommendation below,
+                # and like it without a floor unless one was asked for.
+                number_of_particles = 2 * expected
+                cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off")
+                if cut_off is None and _optional_positive_float_parameter(
+                    context, "pytom_number_of_false_positives"
+                ) is None:
+                    cut_off = 0.0
+            elif requested is None:
                 # No count given: take twice what pytom recommends, the peaks above
                 # its own false-positive cut-off, so that classification has the
                 # doubtful half to sort as well as the sure one.
@@ -217,9 +229,7 @@ class PytomMatchPickBackend:
                         "fixed number of the best peaks"
                     )
                 number_of_particles = 2 * recommended
-                cut_off: float | None = (
-                    _optional_non_negative_float_parameter(context, "pytom_cut_off") or 0.0
-                )
+                cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off") or 0.0
             else:
                 number_of_particles = requested
                 cut_off = _optional_non_negative_float_parameter(context, "pytom_cut_off")
@@ -283,6 +293,7 @@ class PytomMatchPickBackend:
                 excess_over_noise_at_cut_off=significance.excess_at_cut_off,
                 requested_particle_count=number_of_particles,
                 recommended_particle_count=recommended,
+                expected_particle_count=expected,
                 status=QcStatus.WARNING if warnings else QcStatus.PASS,
                 warnings=warnings,
             )
@@ -354,9 +365,11 @@ class PytomMatchPickBackend:
                 "segmentation_id": segmentation.id if segmentation is not None else None,
                 "picking_method": "template_matching",
                 # How many peaks extraction was asked for, and, when the count was
-                # left to the rule, what pytom recommended: twice that was asked.
+                # left to the rule, what pytom recommended or the person expected:
+                # twice that was asked.
                 "pytom_number_of_particles": number_of_particles,
                 "pytom_recommended_particles": recommended,
+                "pytom_expected_particles": expected,
                 "pytom_template_path": str(template),
                 "tomogram_mask_coverage": mask_coverage,
                 # Recorded because its absence is otherwise invisible: a match
@@ -1672,8 +1685,15 @@ def _extraction_particle_diameter(context: BackendContext) -> float | None:
 def _validate_extraction_options(context: BackendContext) -> None:
     """Fail before the GPU match on anything extraction will refuse afterwards."""
 
-    # Optional: without it, twice what pytom recommends.
-    _optional_positive_int_parameter(context, "pytom_number_of_particles")
+    # Optional: without either, twice what pytom recommends.
+    if (
+        _optional_positive_int_parameter(context, "pytom_number_of_particles") is not None
+        and _optional_positive_int_parameter(context, "pytom_expected_particles") is not None
+    ):
+        raise ValueError(
+            "at most one of 'pytom_number_of_particles' (the count to take) or "
+            "'pytom_expected_particles' (twice it is taken) may be set"
+        )
     _optional_non_negative_float_parameter(context, "pytom_cut_off")
     if (
         _optional_positive_float_parameter(context, "pytom_number_of_false_positives")

@@ -2845,6 +2845,16 @@ def pick_particles(
             "not a particle count.",
         ),
     ] = None,
+    pytom_expected_particles: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="How many particles a tomogram is expected to hold: extraction takes "
+            "twice as many of the best peaks, without a floor unless --pytom-cut-off or "
+            "--pytom-number-of-false-positives sets one. Exclusive with "
+            "--pytom-number-of-particles.",
+        ),
+    ] = None,
     pytom_extract_particle_diameter: Annotated[
         float | None,
         typer.Option(
@@ -3084,6 +3094,8 @@ def pick_particles(
         parameters["pytom_segmentation_dilation_px"] = segmentation_mask_dilation_px
     if pytom_number_of_particles is not None:
         parameters["pytom_number_of_particles"] = pytom_number_of_particles
+    if pytom_expected_particles is not None:
+        parameters["pytom_expected_particles"] = pytom_expected_particles
     parameters["pytom_per_tilt_weighting"] = pytom_per_tilt_weighting
     parameters["pytom_spectral_whitening"] = pytom_spectral_whitening
     if pytom_extract_particle_diameter is not None:

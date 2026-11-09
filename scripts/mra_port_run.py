@@ -95,9 +95,12 @@ from cryoet_pipeline.dynamo_mra_project import (
 from cryoet_pipeline.mra_runs import Refused, run_plan
 from cryoet_pipeline.mra_setup import (
     SHIFT_LIMIT,
+    class_selection,
+    plan_from_classes,
     plan_from_export,
     plan_from_registry,
     plan_from_split,
+    selected_particles,
 )
 from cryoet_pipeline.reports.classification import ClassificationRun, PoseTable
 from cryoet_pipeline.reports.classification_reader import read_classification
@@ -214,6 +217,78 @@ def compute(plan: MraPlan, run: Path, args: argparse.Namespace, spacing: float |
         raise SystemExit(f"REFUSED: {error}") from None
 
 
+# The setup's variables a run asked for by hand gives, which a lane's [mra] gives instead.
+_SETUP_OPTIONS = (
+    "seeds", "reference", "schedule", "first_lowpass", "last_lowpass", "diameter",
+    "lowpass_steps", "mask_radius", "mask_edge", "mask_file", "global_rounds", "global_step",
+    "global_full_box", "antialias", "cone_steps", "shift_limit", "data_folder",
+)
+
+
+def lane_plan(args: argparse.Namespace) -> tuple[MraPlan, Path]:
+    """The MRA a lane config's [mra] asks for over the defaults (docs/mra_in_lanes.md), on
+    --source's particles of the lane's label, and its run folder: the plan a run asked for
+    by hand with the same numbers gives, with how they were asked for beside them in
+    plan.json (setup.request)."""
+
+    import tomllib
+
+    from cryoet_pipeline.mra_lane import LaneMraError, config_sha256, lane_mra
+    from cryoet_pipeline.particle_sources import registry_particles
+
+    text = args.config.read_text()
+    digest = config_sha256(text)
+    if args.config_sha256 is not None and digest != args.config_sha256:
+        raise SystemExit(
+            f"REFUSED: {args.config} has changed since it was submitted (sha256 {digest[:12]}, "
+            f"submitted {args.config_sha256[:12]}): the MRA it asks for now is not the one its "
+            "dry run showed; dry-run the lane and submit it again"
+        )
+    try:
+        mra = lane_mra(tomllib.loads(text))
+    except (LaneMraError, tomllib.TOMLDecodeError) as error:
+        raise SystemExit(f"REFUSED: {args.config}: {error}") from None
+    if args.name != mra.name:
+        raise SystemExit(f"REFUSED: --name {args.name} is not the run {args.config} asks for, "
+                         f"{mra.name}")
+    source = args.source.resolve()
+    if source != Path(mra.project).resolve():
+        raise SystemExit(f"REFUSED: --source {args.source} is not the lane's project, "
+                         f"{mra.project}")
+    quiet = lambda _: None  # noqa: E731
+    selection = None
+    if mra.from_run is None:
+        particles = registry_particles(source, mra.label, args.series, mra.decoy_label,
+                                       log=quiet)
+    else:
+        # Part of an earlier run: the particles one of its iterations put in the classes
+        # named, as that run read them.
+        chosen = class_selection(source / "mra" / mra.from_run, mra.from_classes,
+                                 iteration=mra.from_iteration, start_poses=mra.start_poses)
+        named = chosen.particles
+        if named["label"] != mra.label or list(named["series"]) != list(args.series):
+            raise SystemExit(f"REFUSED: run {mra.from_run} read {named['label']!r} of series "
+                             f"{' '.join(named['series'])}, not the lane's {mra.label!r} of "
+                             f"{' '.join(args.series)}")
+        particles = selected_particles(chosen, log=quiet)
+        selection = {"run": mra.from_run, "iteration": chosen.iteration,
+                     "classes": list(chosen.classes), "start_poses": chosen.start_poses,
+                     "particles": len(chosen.tags)}
+    print(f"the MRA of {args.config} (sha256 {digest[:12]}):")
+    for line in mra.describe(particles.box, particles.pixel_size, len(particles.particles)):
+        print(f"  {line}")
+    options = mra.options(particles.pixel_size)
+    if mra.from_run is None:
+        plan = plan_from_registry(source, mra.label, args.series, mra.seeds,
+                                  decoy_label=mra.decoy_label, workers=args.workers, **options)
+    else:
+        plan = plan_from_classes(chosen.run, chosen.classes, mra.seeds,
+                                 iteration=chosen.iteration, start_poses=chosen.start_poses,
+                                 workers=args.workers, **options)
+    request = mra.request(args.config, text, particles.pixel_size, args.series, selection)
+    return replace(plan, setup={**plan.setup, "request": request}), source / "mra" / args.name
+
+
 def new_run(args: argparse.Namespace) -> int:
     """A run set up without Dynamo, from an export folder or from a project's registry:
     nothing to compare it with."""
@@ -229,7 +304,10 @@ def new_run(args: argparse.Namespace) -> int:
         shift_limit=args.shift_limit, antialias=args.antialias, workers=args.workers,
     )
     try:
-        if args.export is not None:
+        if args.config is not None:
+            plan, run = lane_plan(args)
+            where, spacing = args.source.resolve(), None
+        elif args.export is not None:
             where = args.export.resolve()
             plan = plan_from_export(where, args.seeds.split(), data_folder=args.data_folder,
                                     reference_file=args.reference, **options)
@@ -290,6 +368,13 @@ def main() -> int:
                           help="the tilt-series, in the order to number them")
     registry.add_argument("--decoy-lane", default=None,
                           help="the label of decoy stacks of the same series, after the particles")
+    registry.add_argument("--config", type=Path, default=None,
+                          help="a lane config: the MRA its [mra] asks for over the defaults "
+                          "(docs/mra_in_lanes.md), on --source's particles of the lane's label; "
+                          "the setup's variables below are then left out")
+    registry.add_argument("--config-sha256", default=None,
+                          help="with --config: refuse it if its text has changed since the "
+                          "submission that gave this sha256")
     halves = parser.add_argument_group(
         "a consensus half: one half of a split of two runs of the registry, refined from "
         "the split's start; the schedule's variables below")
@@ -354,6 +439,21 @@ def main() -> int:
         if args.compare_only:
             parser.error("a new run has no Dynamo project to compare with")
         return new_run(args)
+    if args.config is not None:
+        if args.source is None or not args.series or args.name is None:
+            parser.error("--config needs --source, --series and --name")
+        if args.lane is not None or args.decoy_lane is not None:
+            parser.error("--config takes the label from [lane] variant and the decoys from "
+                         "[mra] decoy_label; leave out --lane and --decoy-lane")
+        given = [name for name in _SETUP_OPTIONS if getattr(args, name) != parser.get_default(name)]
+        if given:
+            parser.error("--config takes the setup from the lane's [mra]; leave out "
+                         + ", ".join(f"--{name.replace('_', '-')}" for name in given))
+        if args.compare_only:
+            parser.error("a new run has no Dynamo project to compare with")
+        return new_run(args)
+    if args.config_sha256 is not None:
+        parser.error("--config-sha256 goes with --config")
     if args.export is not None or args.source is not None:
         if args.name is None or args.seeds is None:
             parser.error("a new run needs --name and --seeds")

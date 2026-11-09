@@ -51,6 +51,10 @@ REASON = ["--reason", "Anna asked: rerun TS_A and TS_B"]
 
 @pytest.fixture
 def lane(tmp_path, monkeypatch):
+    return make_lane(tmp_path, monkeypatch)
+
+
+def make_lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """ribo-bin8 moved onto two empty stacks and a project in tmp_path, submitted
     by a person, with sbatch and squeue replaced by SBATCH and SQUEUE."""
 

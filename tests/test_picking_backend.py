@@ -1487,8 +1487,11 @@ def test_defocus_for_pytom_follows_the_views_the_tomogram_kept(tmp_path: Path) -
         )
 
 
-def _pick_twice_recommended(root: Path, recommended: int) -> tuple[Artifact, list[list[str]]]:
-    """A run with no count given, on a pytom whose cut-off keeps `recommended` peaks."""
+def _pick_twice_recommended(
+    root: Path, recommended: int, extra: dict | None = None
+) -> tuple[Artifact, list[list[str]]]:
+    """A run with no count given (or `extra` parameters), on a pytom whose cut-off
+    keeps `recommended` peaks."""
 
     root.mkdir()
     tomogram = _tomogram_artifact(root)
@@ -1540,6 +1543,7 @@ def _pick_twice_recommended(root: Path, recommended: int) -> tuple[Artifact, lis
                 "pytom_template_mask": template_mask,
                 "pytom_gpu_ids": "0",
                 "pytom_particle_diameter": 100.0,
+                **(extra or {}),
             },
         ),
         registry,
@@ -1575,3 +1579,36 @@ def test_with_no_count_given_picking_takes_twice_what_pytom_recommends(tmp_path:
 def test_twice_nothing_is_refused_rather_than_an_empty_pick_list(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="--pytom-number-of-particles"):
         _pick_twice_recommended(tmp_path / "run", recommended=0)
+
+
+def test_with_an_expected_count_picking_takes_twice_it(tmp_path: Path) -> None:
+    """Anna, 2026-11-09: the person's expected count per tomogram, doubled, without a
+    floor unless one is asked for (docs/mra_in_lanes.md)."""
+
+    picks, commands = _pick_twice_recommended(
+        tmp_path / "run", recommended=3, extra={"pytom_expected_particles": 4})
+
+    _, extract = commands  # no recommendation pass
+    assert extract[extract.index("-n") + 1] == "8"
+    assert extract[extract.index("-c") + 1] == "0.000000"
+    assert picks.parameters["pytom_expected_particles"] == 4
+    assert picks.parameters["pytom_number_of_particles"] == 8
+    assert picks.parameters["pytom_recommended_particles"] is None
+    report = json.loads(Path(picks.parameters["qc_path"]).read_text())
+    assert report["expected_particle_count"] == 4
+    assert report["requested_particle_count"] == 8
+
+    # A floor asked for is kept: pytom's own false-positive cut-off here.
+    _, commands = _pick_twice_recommended(
+        tmp_path / "floor", recommended=3,
+        extra={"pytom_expected_particles": 4, "pytom_number_of_false_positives": 2.0})
+    _, extract = commands
+    assert "-c" not in extract
+    assert extract[extract.index("--number-of-false-positives") + 1] == "2.000000"
+
+
+def test_an_expected_count_and_a_count_are_refused_together(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="pytom_expected_particles"):
+        _pick_twice_recommended(
+            tmp_path / "run", recommended=3,
+            extra={"pytom_expected_particles": 4, "pytom_number_of_particles": 10})

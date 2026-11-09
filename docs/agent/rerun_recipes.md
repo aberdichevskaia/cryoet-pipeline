@@ -213,6 +213,26 @@ dataset, while keeping the existing lane for comparison.
   the two lists. It was written to repeat a search unchanged (`scripts/repick.py`
   says why), so read its header before using it for a changed parameter.
 
+## F. An MRA, again or of a class
+
+The MRA is a lane's `mra` stage ([mra_in_lanes.md](../mra_in_lanes.md)). Its runs
+live in `<project>/mra/<name>`. A run is never overwritten: one of the same name
+and the same settings is carried on from its last finished iteration, and one of
+the same name with other settings is refused by the dry run.
+
+- **The MRA of a lane submitted without it** (`--until-stage`, to look at the
+  picks first): `submit_lanes.py <config> --from-stage mra`.
+- **Another MRA of the same particles:** a config copy with another `[mra] name`
+  and the changed keys, `--from-stage mra`. MRA jobs only read their series, so
+  it may run beside another MRA of the lane; a lane's own steps on those series
+  may not.
+- **Only the particles of some classes of an earlier run:** a config copy with
+  `[mra] from_run` and `from_classes`, and the changed keys, `--from-stage mra`.
+  The classes are those of that run's last iteration unless `from_iteration`
+  names another, which must have finished; the particles start at the poses that
+  iteration gave them, or at their picks with `start_poses = "picked"`. The dry run
+  refuses classes whose particles were extracted again since.
+
 ## Never
 
 - Run two jobs on the same series at once.

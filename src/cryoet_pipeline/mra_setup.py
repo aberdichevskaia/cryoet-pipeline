@@ -51,7 +51,7 @@ from cryoet_pipeline.dynamo_mra_project import (
     _search_fields,
     dim_is_ported,
 )
-from cryoet_pipeline.mra_runs import HALVES, PLAN, START, STEP_SPLIT
+from cryoet_pipeline.mra_runs import HALVES, PARTICLES, PLAN, START, STEP_SPLIT, node_folder
 from cryoet_pipeline.particle_sources import (
     RegistryParticles,
     SelectionInput,
@@ -419,6 +419,153 @@ def plan_from_split(
     )
 
 
+START_POSES = ("run", "picked")
+
+
+@dataclass(frozen=True)
+class ClassSelection:
+    """The particles an iteration of an earlier run put in some of its classes, each at
+    the pose that iteration gave it in its class ('run') or to be taken at its pick
+    ('picked'); read from the run's files alone, no particle's voxels."""
+
+    run: Path
+    iteration: int
+    classes: tuple[int, ...]
+    start_poses: str
+    tags: np.ndarray
+    angles: np.ndarray
+    shifts: np.ndarray
+    particles: dict[str, Any]
+    """The run's plan's particles: project, label, series, decoy_label."""
+    stacks: frozenset[tuple[str, str]]
+    """The (slot, fingerprint) of every particle stack the run's setup read."""
+    input: SelectionInput
+    sizes: dict[int, int]
+    """Every class of that iteration and its particles, the chosen ones and the others."""
+
+    @property
+    def name(self) -> str:
+        return " + ".join(f"class {channel}" for channel in self.classes)
+
+
+def class_selection(run: Path, classes: Sequence[int], *, iteration: int | None = None,
+                    start_poses: str = "run") -> ClassSelection:
+    """`classes` of iteration `iteration` of `run`, a run of the run-record layout on a
+    project's registry; its last planned iteration unless given, which must have
+    finished either way (docs/mra_in_lanes.md, "Again on a class")."""
+
+    run = Path(run).resolve()
+    if start_poses not in START_POSES:
+        raise ValueError(f"start_poses must be 'run' or 'picked', got {start_poses!r}")
+    classes = tuple(int(channel) for channel in classes)
+    if not classes or len(set(classes)) != len(classes):
+        raise ValueError(f"name each class once, at least one; got {list(classes)}")
+    if not (run / PLAN).is_file():
+        raise ValueError(f"{run}: no such run (no {PLAN})")
+    plan = json.loads((run / PLAN).read_text())
+    particles = plan.get("particles")
+    if not isinstance(particles, dict):
+        raise ValueError(f"{run}: its particles are an export folder, not a project's "
+                         "registry; a run on its classes needs a run from the registry")
+    planned = len(plan.get("iterations") or [])
+    number = planned if iteration is None else int(iteration)
+    if not 1 <= number <= planned:
+        raise ValueError(f"{run}: iteration {number} is not one of its {planned}")
+    record = completed(node_folder(run, number))
+    if record is None:
+        done = 0
+        while done < planned and completed(node_folder(run, done + 1)) is not None:
+            done += 1
+        raise ValueError(f"{run}: iteration {number} has not finished ({done} of its {planned} "
+                         "have); wait for it, or name a finished one")
+    setup = completed(node_folder(run, 0))
+    if setup is None:
+        raise ValueError(f"{run}: its setup has no record")
+    columns, _ = read_particle_table(node_folder(run, number) / PARTICLES)
+    assigned = columns["assigned"].astype(bool)
+    channels = columns["channel"].astype(int)
+    sizes = {int(channel): int(np.sum(assigned & (channels == channel)))
+             for channel in sorted(set(channels.tolist()))}
+    absent = [channel for channel in classes if not sizes.get(channel)]
+    if absent:
+        held = ", ".join(f"class {channel} ({count:,})" for channel, count in sizes.items()
+                         if count)
+        raise ValueError(f"{run}: iteration {number} has no particle in class "
+                         f"{', '.join(map(str, absent))}; its classes: {held or 'none'}")
+    rows = np.flatnonzero(assigned & np.isin(channels, classes))
+    order = rows[np.argsort(columns["particle_id"][rows], kind="stable")]
+    angles = np.column_stack([columns[name] for name in ("tdrot_deg", "tilt_deg",
+                                                         "narot_deg")])[order]
+    shifts = np.column_stack([columns[name] for name in ("shift_x_px", "shift_y_px",
+                                                         "shift_z_px")])[order]
+    name = " + ".join(f"class {channel}" for channel in classes)
+    return ClassSelection(
+        run=run, iteration=number, classes=classes, start_poses=start_poses,
+        tags=columns["particle_id"][order].astype(int), angles=angles, shifts=shifts,
+        particles=particles,
+        stacks=frozenset((item.slot, item.fingerprint) for item in setup.inputs
+                         if item.slot.startswith("particle_stack ")),
+        input=SelectionInput(name=name, run=node_folder(run, number),
+                             fingerprint=record.fingerprint),
+        sizes=sizes,
+    )
+
+
+def selected_particles(chosen: ClassSelection, log: Callable[[str], None] = print
+                       ) -> RegistryParticles:
+    """The registry's particles of `chosen`, at the poses it starts them from; refused
+    when the stacks are no longer the ones its run read."""
+
+    named = chosen.particles
+    source = registry_particles(Path(named["project"]), named["label"], named["series"],
+                                named["decoy_label"], log=log)
+    if not {(item.slot, item.fingerprint) for item in source.inputs()
+            if item.slot.startswith("particle_stack ")} <= chosen.stacks:
+        raise ValueError(f"{chosen.run}: its particles have been extracted again since it read "
+                         "them, so its classes no longer name these particles")
+    angles, shifts = chosen.angles, chosen.shifts
+    if chosen.start_poses == "picked":
+        rows = {int(tag): row for row, tag in enumerate(source.tags)}
+        index = [rows[int(tag)] for tag in chosen.tags if int(tag) in rows]
+        if len(index) != len(chosen.tags):
+            raise ValueError(f"{chosen.run}: some of its tags are not the registry's particles")
+        angles, shifts = source.table[index][:, ANGLES], source.table[index][:, SHIFTS]
+    return source.selected(chosen.tags, angles, shifts, chosen.input)
+
+
+def plan_from_classes(
+    run: Path,
+    classes: Sequence[int],
+    seeds: Sequence[str],
+    *,
+    iteration: int | None = None,
+    start_poses: str = "run",
+    log: Callable[[str], None] = print,
+    **options: Any,
+) -> MraPlan:
+    """A run on part of an earlier run's particles: those its iteration `iteration` (its
+    last unless given) put in `classes`, read from the registry as that run read them,
+    each at the pose that iteration gave it ('run') or at its pick ('picked'), with
+    `seeds` and the other options as `make_plan` takes them, any of them other than the
+    earlier run's. The earlier run, its iteration, the classes and where the poses come
+    from are the plan's variables; the selection is its input, by that iteration's
+    record (docs/mra_in_lanes.md, "Again on a class")."""
+
+    chosen = class_selection(run, classes, iteration=iteration, start_poses=start_poses)
+    named = chosen.particles
+    project = Path(named["project"]).resolve()
+    return make_plan(
+        lambda: selected_particles(chosen, log=log), seeds, source=project,
+        made_by="cryoet_pipeline.mra_setup.plan_from_classes",
+        origin={"particles": {"label": named["label"], "series": named["series"],
+                              "decoy_label": named["decoy_label"],
+                              "from_run": chosen.run.name, "from_iteration": chosen.iteration,
+                              "from_classes": list(chosen.classes),
+                              "start_poses": chosen.start_poses}},
+        files={"project": str(project)}, log=log, **options,
+    )
+
+
 def make_plan(
     read: Callable[[], Particles],
     seeds: Sequence[str],
@@ -627,7 +774,8 @@ def make_plan(
     )
 
 
-__all__ = ["SHIFT_LIMIT", "ExportParticles", "Particles", "Round", "make_plan",
+__all__ = ["SHIFT_LIMIT", "START_POSES", "SUBSET", "ClassSelection", "ExportParticles",
+           "Particles", "Round", "class_selection", "make_plan", "plan_from_classes",
            "plan_from_export",
            "plan_from_registry", "plan_from_split", "read_export", "search_rounds",
-           "seed_draws", "soft_sphere"]
+           "seed_draws", "selected_particles", "soft_sphere"]

@@ -1,6 +1,6 @@
 ---
 name: lane-config
-description: Write or change a lane config (a TOML file in the format of configs/lanes/example.toml), check it, and submit it after a dry run and an explicit yes. Use when the person describes data to process, wants a new lane, a changed parameter, a rerun with other settings, or one of the recipes.
+description: Write or change a lane config (a TOML file in the format of configs/lanes/example.toml), check it, and submit it after a dry run and an explicit yes. Use when the person describes data to process, wants a new lane, a changed parameter, a rerun with other settings, an MRA classification (also of one class of an earlier MRA again), or one of the recipes.
 ---
 
 # Lane config: write, check, submit
@@ -97,6 +97,13 @@ the repository root.
   Change one only with a reason, and write the reason.
 - **The template.** Ask the person for the EMDB entry or the map. If they know
   none, the `emdb-template` skill proposes one to three for them to choose.
+- **The MRA.** Once the lane is filled in up to picking, ask question 10 of
+  `docs/agent/lane_questions.md`: the MRA right after picking, or the picks
+  looked at first? Either way write the `mra` stage of `example.toml`, with the
+  partition, GPUs and time of the site's GPU stage. Write `[mra]` only for what
+  the person changes, each with its source: the defaults are the lab's rules,
+  and the dry run shows them. The answer decides the submission (section 5).
+  With no MRA at all, leave the stage out.
 - **Values you cannot fill in.** Ask. Do not leave a placeholder from
   `example.toml` in a config you submit.
 
@@ -118,6 +125,22 @@ A lane:
 python3 scripts/submit_lanes.py <config> [--from-stage <stage>] [--overwrite] --dry-run
 ```
 
+A lane with an `mra` stage:
+
+| The person said | Submit |
+|---|---|
+| the MRA right after picking | the whole lane: the MRA job waits for the extraction |
+| look at the picks first | `--until-stage <the stage that ends at extract-particles>`; later, when the person asks for the MRA, `--from-stage mra` |
+| another MRA of the same particles | a config copy with another `[mra] name` and the changed keys, `--from-stage mra` |
+| "class x looks good: run only its particles again", with other settings or not | a config copy with `[mra] from_run` (the earlier run's name), `from_classes` (its class numbers, from its report), a new `name` if the default does not suit, and the changed keys; `--from-stage mra` |
+
+For a class run again, name the earlier run and its iteration as the report
+shows them. `from_iteration` is its last unless the person names another, and the
+particles start at the poses that iteration gave them unless `start_poses =
+"picked"`. The dry run says how many particles the classes hold. A class smaller
+than two subsets of 300 needs `subset_particles`, or other seeds: say so when
+the dry run refuses it.
+
 A recipe, which is one of the experiments written in advance:
 
 ```bash
@@ -129,6 +152,8 @@ Then:
 
 1. Show the person what the dry run printed:
    - the jobs and their stages;
+   - for an MRA, its run folder, its particles, and the settings that are not
+     the lab's rules;
    - every "would refuse" line, and what it means;
    - with `--overwrite`, the outputs it may replace.
 2. If it refused anything, fix the cause and run the dry run again. If it

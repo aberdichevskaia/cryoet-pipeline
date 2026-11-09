@@ -58,6 +58,20 @@ time = "16:00:00"
 sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
           "--cpus-per-task=8", "--mem=64G"]
 
+# The MRA: a classification of all the particles the stage before extracted, on
+# GPUs, by the rules in [mra] below (docs/mra_in_lanes.md). It waits for that stage.
+# To look at the picks first, submit with --until-stage gpu, and this stage later
+# with --from-stage mra. Delete it for no MRA. EDIT the GPUs and time your site
+# allows: every GPU of the job searches, and four A40s took 2 h 48 min for 2,384
+# RyR1 particles at bin8 (52 px box).
+[[run.stage]]
+name = "mra"
+from = "mra"
+until = "mra"
+time = "24:00:00"
+sbatch = ["--partition=gpu_p", "--qos=gpu_normal", "--gres=gpu:a100_3g.20gb:1",
+          "--cpus-per-task=8", "--mem=64G"]
+
 [data]
 # EDIT. Paths are relative to the repository root.
 # input = "frames": the movie folder, MRC (.mrc) or TIFF (.tif/.tiff), and
@@ -243,8 +257,11 @@ particle_diameter_angstrom = 250.0    # EDIT: your particle at its widest; sets 
 # recommends, i.e. twice the peaks above its own false-positive cut-off, so the
 # doubtful ones are there for classification as well as the sure ones. The
 # cut-off expects 1 false positive in the whole search unless
-# number_of_false_positives says otherwise. Set a number to keep exactly that
-# many of the best instead.
+# number_of_false_positives says otherwise. If you know roughly how many particles
+# a tomogram holds, give that: twice as many of the best are kept, for the same
+# reason. Or set a number to keep exactly that many of the best instead (not
+# both).
+# expected_particles_per_tomogram = 300
 # number_of_particles = 2000
 # number_of_false_positives = 1.0
 low_pass_angstrom = 30.0              # EDIT: a little above the tomogram's Nyquist
@@ -270,6 +287,26 @@ gpu_ids = "0"
 
 [extract]
 box_size_px = 48          # EDIT: about 2 x the particle diameter in tomogram pixels; even
+
+# The MRA of the "mra" stage. Left out, it follows the lab's rules: seeds subset,
+# subset, noise; five rounds from 2 x to 1.1 x the particles' Nyquist, the first
+# two over every orientation, the last three in cones 3 angular steps wide, each
+# step atan(resolution / [pick] particle_diameter_angstrom); a sphere of the
+# particle's radius + 3 px with a 2 px soft edge; the run <project>/mra/bin8-ssn.
+# Set only what should differ; the dry run shows every value and where it came
+# from. All the keys are in docs/mra_in_lanes.md.
+# [mra]
+# name = "bin8-ssn"
+# seeds = ["subset", "subset", "noise"]
+# first_lowpass_nyquist = 2.0
+# last_lowpass_nyquist = 1.1
+# global_rounds = 2
+# cone_steps = 3
+#
+# To run part of an earlier run again, with other settings if wanted: a copy of
+# this file with the run and its classes here, submitted with --from-stage mra.
+# from_run = "bin8-ssn"
+# from_classes = [2]
 
 [executables]
 # Leave as is; set these environment variables before submitting.

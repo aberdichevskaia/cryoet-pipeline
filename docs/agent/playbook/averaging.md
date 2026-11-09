@@ -23,7 +23,9 @@ are in [halves_from_runs.md](../../halves_from_runs.md).
   score threshold and refines the particles in two independent halves.
 - **Classification** (MRA) runs our port of Dynamo's MRA (`dynamo-search`, the
   default backend) on GPUs, or Dynamo itself on MDC's CPUs. Its runs live in
-  `<project>/mra/<NAME>`, and every run writes a PDF report.
+  `<project>/mra/<NAME>`, and every run writes a PDF report. A lane runs it as
+  its `mra` stage, step 17 of [pipeline_map.md](../pipeline_map.md), right after
+  extraction or later ([mra_in_lanes.md](../../mra_in_lanes.md)).
 
 ## How a healthy run looks
 
