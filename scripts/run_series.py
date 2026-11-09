@@ -152,6 +152,13 @@ FIDUCIAL_PAIRS = {
     "imod-patch-seed": "imod-patch-track",
 }
 ALIGNMENTS = {"imod-autofidseed": "beads", "imod-patch-seed": "patches"}
+# [fine_align] backend. AreTomo2 aligns from the tilt stack itself, so its lanes
+# have no [fiducials] and skip the two fiducial steps.
+FINE_BACKENDS = ("imod-tiltalign", "aretomo")
+ARETOMO_FINE_KEYS = frozenset({"aretomo_align_z_nm", "aretomo_tilt_cor",
+                               "aretomo_dark_tol", "aretomo_gpu"})
+TILTALIGN_FINE_KEYS = frozenset({"robust_fitting", "auto_prune_outliers",
+                                 "max_pruned_fraction", "surfaces_to_analyze"})
 
 # The combinations of input, alignment and membranes that have run on real data,
 # as docs/agent/pipeline_map.md ("Which combinations have run on real data") and
@@ -179,7 +186,8 @@ LANE_KEYS: dict[str, frozenset[str]] = {
                          "pixel_size_angstrom", "gain_reference", "gain_rotation",
                          "gain_flip", "ftbin", "eer_sampling", "eer_fractions"}),
     "binning": frozenset({"ctf_fit", "tomogram"}),
-    "align": frozenset({"binning", "min_std_ratio", "tilt_axis_angle"}),
+    "align": frozenset({"binning", "min_std_ratio", "tilt_axis_angle",
+                        "exclude_tilt_angles"}),
     "qc_coarse": frozenset({"preview_binning", "residual_warning_px"}),
     "fiducials": frozenset({
         "seed_backend", "track_backend",
@@ -190,8 +198,7 @@ LANE_KEYS: dict[str, frozenset[str]] = {
         "patch_filter_sigma2",
         "min_tracked_fiducials", "coverage_warning", "coverage_failure",
     }),
-    "fine_align": frozenset({"robust_fitting", "auto_prune_outliers",
-                             "max_pruned_fraction", "surfaces_to_analyze"}),
+    "fine_align": frozenset({"backend"}) | TILTALIGN_FINE_KEYS | ARETOMO_FINE_KEYS,
     "reconstruct": frozenset({"thickness"}),
     "ctf": frozenset({"voltage_kv", "spherical_aberration_mm", "amplitude_contrast",
                       "min_defocus_angstrom", "max_defocus_angstrom",
@@ -210,7 +217,7 @@ LANE_KEYS: dict[str, frozenset[str]] = {
         "volume_split", "use_segmentation_mask", "segmentation_mask_dilation_px",
     }),
     "extract": frozenset({"box_size_px", "pad_edges"}),
-    "executables": frozenset({"motioncor3", "ctffind", "pytom_create_template",
+    "executables": frozenset({"motioncor3", "ctffind", "aretomo", "pytom_create_template",
                               "pytom_create_mask", "pytom_match_template",
                               "pytom_extract_candidates"}),
 }
@@ -341,6 +348,8 @@ def lane_combination(
     """
     seed = cfg.get("fiducials", {}).get("seed_backend")
     alignment = ALIGNMENTS.get(seed, str(seed))
+    if cfg.get("fine_align", {}).get("backend") == "aretomo":
+        alignment = "AreTomo"
     source = lane_input(cfg)
     if source == "frames" and "eer" in movies:
         source = "EER frames"
@@ -392,8 +401,31 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     binning = _require(cfg, "binning", ("ctf_fit", "tomogram"), "every lane")
     align = _require(cfg, "align", ("binning", "min_std_ratio"), "every lane")
     qc = _require(cfg, "qc_coarse", ("preview_binning", "residual_warning_px"), "every lane")
-    fid = _require(cfg, "fiducials", ("seed_backend", "track_backend"), "every lane")
     fine = cfg.get("fine_align", {})
+    fine_backend = fine.get("backend", "imod-tiltalign")
+    if fine_backend not in FINE_BACKENDS:
+        raise SystemExit(
+            f"[fine_align] backend must be one of {', '.join(FINE_BACKENDS)}, "
+            f"not {fine_backend!r}"
+        )
+    aretomo = fine_backend == "aretomo"
+    # Keys of the other backend would reach no step, so they are refused rather
+    # than skipped, as every unread key is.
+    stray = sorted(set(fine) & (TILTALIGN_FINE_KEYS if aretomo else ARETOMO_FINE_KEYS))
+    if stray:
+        raise SystemExit(
+            f"[fine_align] {', '.join(stray)} {'do' if len(stray) > 1 else 'does'} not "
+            f"apply to backend {fine_backend!r}"
+        )
+    if aretomo:
+        if "fiducials" in cfg:
+            raise SystemExit(
+                "[fiducials] is not read by a lane whose [fine_align] backend is "
+                "'aretomo': AreTomo2 aligns from the tilt stack, with no fiducial steps"
+            )
+        fid: dict[str, Any] = {}
+    else:
+        fid = _require(cfg, "fiducials", ("seed_backend", "track_backend"), "every lane")
     ctf = _require(cfg, "ctf", ("voltage_kv", "spherical_aberration_mm"), "every lane")
     tmpl = _require(cfg, "template", ("low_pass_angstrom",), "every lane")
     pick = _require(
@@ -410,13 +442,21 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     recon = cfg.get("reconstruct", {})
     seg = cfg.get("segment")
 
-    if FIDUCIAL_PAIRS.get(fid["seed_backend"]) != fid["track_backend"]:
+    if not aretomo and FIDUCIAL_PAIRS.get(fid["seed_backend"]) != fid["track_backend"]:
         pairs = "; ".join(f"{seed} with {track}" for seed, track in FIDUCIAL_PAIRS.items())
         raise SystemExit(
             f"[fiducials] seed_backend {fid['seed_backend']!r} and track_backend "
             f"{fid['track_backend']!r} do not belong together; use {pairs}"
         )
-    if fid["seed_backend"] == "imod-patch-seed" and "thickness" not in recon:
+    if aretomo and "thickness" not in recon:
+        # tiltalign's thickness comes from the fiducials' spread in depth;
+        # AreTomo2 reports none, so reconstruction would refuse after hours of
+        # the chain. The authors of EMPIAR-11830 gave tilt THICKNESS themselves.
+        raise SystemExit(
+            "[reconstruct] thickness must be set with [fine_align] backend 'aretomo': "
+            "AreTomo2 does not measure the sample depth"
+        )
+    if fid.get("seed_backend") == "imod-patch-seed" and "thickness" not in recon:
         # The derived thickness measures specimen depth only when the fiducials
         # sample it. Coplanar patches do not: on EMPIAR-11538 TS_0002 it gave a
         # 24 nm box for a lamella, and reconstruction still reported `pass`.
@@ -496,14 +536,23 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             ),
         ]
 
-    alignment: list[tuple[str, Command]] = [
+    excluded_angles = align.get("exclude_tilt_angles")
+    if excluded_angles is not None and (
+        not isinstance(excluded_angles, list)
+        or not all(isinstance(a, (int, float)) and not isinstance(a, bool)
+                   for a in excluded_angles)
+    ):
+        raise SystemExit("[align] exclude_tilt_angles must be a list of angles, as [-75, 6]")
+    coarse: list[tuple[str, Command]] = [
         # Everything up to fine alignment is shared and unlabelled.
         (
             "align-tilt-series",
             ["align-tilt-series", *common,
              *flag("binning", align["binning"]),
              *flag("min-std-ratio", align["min_std_ratio"]),
-             *flag("tilt-axis-angle", align.get("tilt_axis_angle"))],
+             *flag("tilt-axis-angle", align.get("tilt_axis_angle")),
+             *flag("exclude-tilt-angles",
+                   ",".join(f"{a:g}" for a in excluded_angles) if excluded_angles else None)],
         ),
         (
             "qc-coarse-alignment",
@@ -511,6 +560,23 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("preview-binning", qc["preview_binning"]),
              *flag("residual-warning-px", qc["residual_warning_px"])],
         ),
+    ]
+    tilt_cor = fine.get("aretomo_tilt_cor")
+    fine_aretomo: list[tuple[str, Command]] = [
+        (
+            "fine-align-tilt-series",
+            ["fine-align-tilt-series", *common,
+             *flag("backend", "aretomo"),
+             *flag("aretomo-executable", exe.get("aretomo")),
+             *flag("aretomo-align-z-nm", fine.get("aretomo_align_z_nm")),
+             *([] if tilt_cor is None else [
+                 "--aretomo-tilt-cor" if tilt_cor else "--no-aretomo-tilt-cor"
+             ]),
+             *flag("aretomo-dark-tol", fine.get("aretomo_dark_tol")),
+             *flag("aretomo-gpu", fine.get("aretomo_gpu"))],
+        ),
+    ]
+    fiducial_and_fine: list[tuple[str, Command]] = fine_aretomo if aretomo else [
         (
             "generate-fiducial-seed",
             ["generate-fiducial-seed", *common,
@@ -553,6 +619,10 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              # separate choices and a lane comparing backends needs to say so.
              *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze"))],
         ),
+    ]
+    alignment: list[tuple[str, Command]] = [
+        *coarse,
+        *fiducial_and_fine,
         # The CTF fit stack carries NO variant label, so that correct-ctf in any
         # lane can fall back to the model built from it.
         (

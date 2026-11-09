@@ -562,6 +562,43 @@ class FineAlignmentQc(BaseModel):
         return self
 
 
+class AretomoAlignmentQc(BaseModel):
+    """What AreTomo2's own output says about a fine alignment it solved.
+
+    AreTomo2 has no fiducials and so no residual in tiltalign's sense. What it
+    prints is projection matching: each view against a reprojection of the
+    others, as the shift that view still needs. Its last pass is reported here
+    as the per-view correction; AreTomo2 itself stops when the largest is under
+    2 px of the stack it read (CProcessThread::mProjAlign), which is `converged`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    tilt_series_id: str
+    backend: str
+    alignment_id: str
+    aretomo_version: str | None = None
+    image_count: int = Field(ge=1)
+    excluded_before_z_values: list[int] = Field(default_factory=list)
+    dark_z_values: list[int] = Field(default_factory=list)
+    input_pixel_spacing_angstrom: float = Field(gt=0.0)
+    align_z_px: int = Field(ge=1)
+    initial_tilt_axis_angle_deg: float
+    tilt_axis_angle_deg: float
+    tilt_axis_spread_deg: float = Field(ge=0.0)
+    tilt_offset_applied: bool
+    applied_tilt_angle_offset_deg: float | None = None
+    projection_matching_passes: int = Field(ge=0)
+    last_pass_correction_mean_nm: float | None = Field(default=None, ge=0.0)
+    last_pass_correction_max_nm: float | None = Field(default=None, ge=0.0)
+    last_pass_correction_max_px: float | None = Field(default=None, ge=0.0)
+    converged: bool
+    rotation_scores: list[float] = Field(default_factory=list)
+    status: QcStatus
+    warnings: list[str] = Field(default_factory=list)
+
+
 class TomogramQc(BaseModel):
     """Machine-readable statistics and preview paths for a reconstructed tomogram."""
 

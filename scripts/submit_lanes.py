@@ -293,6 +293,18 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
         name for stage in stages
         for name, _ in run_series.slice_steps(chain, stage.start, stage.end)
     })
+    if cfg.get("fine_align", {}).get("backend") == "aretomo":
+        # AreTomo2 runs only on a GPU; a CPU node fails it after the queue wait.
+        for stage in stages:
+            steps = {name for name, _ in run_series.slice_steps(chain, stage.start, stage.end)}
+            asks_gpu = any(
+                arg.startswith(("--gres=gpu", "--gpus", "-G")) for arg in stage.sbatch
+            )
+            if "fine-align-tilt-series" in steps and not asks_gpu:
+                found.append(
+                    f"stage {stage.name!r} runs fine-align-tilt-series with AreTomo2, "
+                    "which needs a GPU; give that stage --partition=gpu and --gres=gpu:..."
+                )
     if run_series.lane_input(cfg) != "frames":
         # A stack lane writes its own manifests in import-tilt-stack; only its
         # inputs can be checked here, which saves a queue wait on a typo.

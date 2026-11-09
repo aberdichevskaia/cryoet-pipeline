@@ -23,6 +23,10 @@ usage = [["--help"]]
 [motioncor3]
 usage = [["--help"]]
 
+[aretomo]
+# AreTomo2 prints every tag with --help (CAreTomoMain.cpp).
+usage = [["--help"]]
+
 [pytom-match-pick]
 scripts = [
     "pytom_create_template.py",

@@ -57,6 +57,7 @@ from typing import Any
 
 from cryoet_pipeline.tool_versions import (
     Version,
+    aretomo_version_of,
     bash_version,
     ctffind_version,
     imod_version,
@@ -78,13 +79,15 @@ SITE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 # The tools this script knows how to find and ask. configs/library.toml may name
 # only these.
-KNOWN = ("imod", "ctffind", "motioncor3", "pytom-match-pick", "membrain-seg", "slurm", "bash")
+KNOWN = ("imod", "ctffind", "motioncor3", "aretomo", "pytom-match-pick", "membrain-seg",
+         "slurm", "bash")
 
 # The lane config keys that name a tool's executable. The first key of a tool is
 # the one its path is taken from.
 LANE_EXECUTABLES: dict[tuple[str, str], str] = {
     ("executables", "ctffind"): "ctffind",
     ("executables", "motioncor3"): "motioncor3",
+    ("executables", "aretomo"): "aretomo",
     ("executables", "pytom_match_template"): "pytom-match-pick",
     ("executables", "pytom_create_template"): "pytom-match-pick",
     ("executables", "pytom_create_mask"): "pytom-match-pick",
@@ -97,6 +100,7 @@ LANE_EXECUTABLES: dict[tuple[str, str], str] = {
 LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
     "ctffind": ("CTFFIND5", ("ctffind5", "ctffind")),
     "motioncor3": ("MOTIONCOR3", ("MotionCor3",)),
+    "aretomo": ("ARETOMO", ("AreTomo2", "AreTomo")),
     "pytom-match-pick": ("PYTOMO_MP_DIR", ("pytom_match_template.py",)),
     "membrain-seg": ("MEMBRAIN_EXE", ("membrain",)),
 }
@@ -284,6 +288,10 @@ def ask_version(tool: Tool) -> Version | None:
             return ctffind_version(tool.path)
         case "motioncor3":
             return stated_version(tool.path, "MotionCor3")
+        case "aretomo":
+            # The program's name is part of the answer: AreTomo2 and AreTomo3
+            # do not share a command line.
+            return Version(aretomo_version_of(tool.path), f"{tool.path.name} --version")
         case "pytom-match-pick" | "membrain-seg":
             python = script_python(tool.path)
             if python is None:

@@ -135,6 +135,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[align] binning` | rule | the same as `[binning] tomogram` |
 | `[align] min_std_ratio` | rule | the value of `example.toml` |
 | `[align] tilt_axis_angle` | data, person | unset when the mdocs give the axis; question 7 when `show_folder.py` says nothing does |
+| `[align] exclude_tilt_angles` | person | unset; only views the person has looked at and rejected, by nominal angle, each naming one view within 0.5 deg. Never set to make a QC pass |
 | `[qc_coarse] preview_binning, residual_warning_px` | rule | the values of `example.toml` |
 | `[fiducials] seed_backend, track_backend` | person | block A or block B of `example.toml`, by question 3 |
 | `[fiducials] fiducial_diameter_nm` | card, person | the bead size, question 3; block A only |
@@ -147,6 +148,8 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[fine_align] robust_fitting, auto_prune_outliers` | rule | the values of the block kept |
 | `[fine_align] surfaces_to_analyze` | rule | 2 with beads, which sit on both faces; 1 with patches, which are coplanar. The config does not enforce it, so keep the block's value |
 | `[fine_align] max_pruned_fraction` | rule | unset with beads; 0.08 with patches, as block B explains |
+| `[fine_align] backend` | rule, person | unset: tiltalign after the `[fiducials]` steps. `aretomo` only when the person asks for AreTomo2; that lane has no `[fiducials]`, needs `[reconstruct] thickness` and a GPU stage, and has not run on real data yet (docs/aretomo_backend.md) |
+| `[fine_align] aretomo_align_z_nm, aretomo_tilt_cor, aretomo_dark_tol, aretomo_gpu` | rule | unset: AreTomo2's own defaults, with the tilt offset applied (docs/aretomo_backend.md) |
 | `[reconstruct] thickness` | person, rule | with beads, unset: the beads measure it. With patches, required: question 3a |
 | `[ctf] voltage_kv` | data, card | the mdocs' `Voltage`, else the instrument card |
 | `[ctf] spherical_aberration_mm` | card, person | question 6 |
@@ -172,6 +175,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[extract] pad_edges` | rule | unset: the code's default |
 | `[executables] motioncor3, pytom_create_template, pytom_create_mask, pytom_match_template, pytom_extract_candidates` | site | the environment variables of the closest lane at the same site |
 | `[executables] ctffind` | site | as the closest lane at the same site names it |
+| `[executables] aretomo` | site | only with `[fine_align] backend = "aretomo"`: as the closest lane at the same site names it, else AreTomo2 on PATH |
 
 `tests/test_lane_questions.py` checks that this table names every key the
 pipeline reads (`LANE_KEYS` and `STAGE_KEYS` in `scripts/run_series.py`), and

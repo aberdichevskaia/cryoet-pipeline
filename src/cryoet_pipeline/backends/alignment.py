@@ -92,6 +92,7 @@ class ImodTiltXcorrAlignmentBackend:
             maximum=0.5,
         )
         tilt_axis_angle_deg = _tilt_axis_angle(manifest, context)
+        exclude_tilt_angles = _exclude_tilt_angles(context)
         tiltxcorr_executable = resolve_imod_executable("tiltxcorr", context)
         xftoxg_executable = resolve_imod_executable("xftoxg", context)
         overwrite = _bool_parameter(context, "overwrite", default=False)
@@ -137,6 +138,10 @@ class ImodTiltXcorrAlignmentBackend:
                 )
                 if projection_std < median_std * min_std_ratio
             ]
+            excluded_alignment_indices = sorted(
+                set(excluded_alignment_indices)
+                | _views_at_angles(manifest, alignment_order, exclude_tilt_angles)
+            )
             if len(excluded_alignment_indices) == manifest.num_tilts:
                 raise ValueError("input QC excluded every tilt image")
             command = [
@@ -299,6 +304,7 @@ class ImodTiltXcorrAlignmentBackend:
                 "alignment_order": "tilt_angle_ascending",
                 "transform_semantics": "global",
                 "min_std_ratio": min_std_ratio,
+                "exclude_tilt_angles": exclude_tilt_angles,
                 "excluded_z_values": alignment.excluded_z_values,
                 "filter_sigma1": filter_sigma1,
                 "filter_radius2": filter_radius2,
@@ -529,6 +535,49 @@ def _write_binned_array(
 
 def write_tilt_angles_file(path: Path, tilt_angles_deg: Sequence[float]) -> None:
     path.write_text("".join(f"{angle:.6f}\n" for angle in tilt_angles_deg))
+
+
+def _exclude_tilt_angles(context: BackendContext) -> list[float]:
+    value = context.parameters.get("exclude_tilt_angles") or []
+    if not isinstance(value, (list, tuple)):
+        raise TypeError("context parameter 'exclude_tilt_angles' must be a list")
+    angles = []
+    for angle in value:
+        if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+            raise TypeError("context parameter 'exclude_tilt_angles' must hold numbers")
+        if not np.isfinite(angle):
+            raise ValueError("context parameter 'exclude_tilt_angles' must be finite")
+        angles.append(float(angle))
+    return angles
+
+
+def _views_at_angles(
+    manifest: TiltSeriesManifest,
+    alignment_order: Sequence[int],
+    angles: Sequence[float],
+) -> set[int]:
+    """Positions in `alignment_order` of the views at these nominal tilt angles.
+
+    Angles are matched within half a degree, so -12 names the view the mdoc
+    records as -12.01. An angle that names no view, or two, is refused rather
+    than skipped: the list is there to take views out, and a typo would
+    otherwise leave a bad view in without a word.
+    """
+
+    found: set[int] = set()
+    for angle in angles:
+        matches = [
+            position
+            for position, index in enumerate(alignment_order)
+            if abs(manifest.images[index].tilt_angle_deg - angle) <= 0.5
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"exclude_tilt_angles: {angle:g} deg names {len(matches)} views of "
+                f"{manifest.tilt_series_id}, not one"
+            )
+        found.add(matches[0])
+    return found
 
 
 def _tilt_axis_angle(manifest: TiltSeriesManifest, context: BackendContext) -> float:

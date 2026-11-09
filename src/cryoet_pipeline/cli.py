@@ -49,6 +49,10 @@ from cryoet_pipeline.backends.final_stack import (
     ImodFinalAlignedStackBackend,
     build_final_stack_and_register,
 )
+from cryoet_pipeline.backends.aretomo_alignment import (
+    AretomoAlignmentBackend,
+    aretomo_align_and_register,
+)
 from cryoet_pipeline.backends.fine_alignment import (
     ImodTiltalignBackend,
     fine_align_and_register,
@@ -761,6 +765,13 @@ def align_tilt_series(
         float | None,
         typer.Option(help="IMOD tilt-axis angle in degrees; defaults to mdoc RotationAngle - 90."),
     ] = None,
+    exclude_tilt_angles: Annotated[
+        str | None,
+        typer.Option(
+            help="Comma-separated nominal tilt angles of views to leave out of every "
+            "later step, as `-75,-72,6`; each must name one view within 0.5 deg."
+        ),
+    ] = None,
     imod_dir: Annotated[
         Path | None,
         typer.Option(help="IMOD installation directory when it is not configured."),
@@ -785,6 +796,16 @@ def align_tilt_series(
         "binning": binning,
         "min_std_ratio": min_std_ratio,
     }
+    if exclude_tilt_angles is not None and exclude_tilt_angles.strip():
+        try:
+            parameters["exclude_tilt_angles"] = [
+                float(part) for part in exclude_tilt_angles.split(",") if part.strip()
+            ]
+        except ValueError as exc:
+            raise typer.BadParameter(
+                f"not a comma-separated list of angles: {exclude_tilt_angles!r}",
+                param_hint="exclude_tilt_angles",
+            ) from exc
     if tilt_axis_angle is not None:
         parameters["tilt_axis_angle_deg"] = tilt_axis_angle
     if imod_dir is not None:
@@ -1206,8 +1227,42 @@ def fine_align_tilt_series(
     out: Annotated[Path, typer.Option(help="Output directory for alignment artifacts.")],
     backend: Annotated[
         str,
-        typer.Option(help="Fine-alignment backend to use."),
+        typer.Option(
+            help="Fine-alignment backend: imod-tiltalign fits the tracked fiducials "
+            "(beads or patches); aretomo runs AreTomo2 on the tilt stack itself and "
+            "needs no fiducial steps, only align-tilt-series before it."
+        ),
     ] = "imod-tiltalign",
+    aretomo_executable: Annotated[
+        Path | None,
+        typer.Option(help="AreTomo2 executable (aretomo backend); else AreTomo2 on PATH."),
+    ] = None,
+    aretomo_align_z_nm: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="AreTomo2 -AlignZ, the specimen thickness its projection matching "
+            "reconstructs, in nm. Default: AreTomo2's own 600 px of the tilt stack.",
+        ),
+    ] = None,
+    aretomo_tilt_cor: Annotated[
+        bool | None,
+        typer.Option(
+            help="Measure AreTomo2's tilt offset and apply it to the tilt angles "
+            "(-TiltCor 1, the default here, as the authors of EMPIAR-11830 did), or "
+            "only use it during alignment (-TiltCor 0).",
+        ),
+    ] = None,
+    aretomo_dark_tol: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0, max=1.0, help="AreTomo2 -DarkTol for dropping dark views (0.7)."
+        ),
+    ] = None,
+    aretomo_gpu: Annotated[
+        int | None,
+        typer.Option(min=0, help="GPU id for AreTomo2 (0)."),
+    ] = None,
     residual_warning_nm: Annotated[
         float,
         typer.Option(min=0.0, help="Mean residual warning threshold in nanometers."),
@@ -1295,6 +1350,50 @@ def fine_align_tilt_series(
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
     artifact_registry = ArtifactRegistry.load(registry)
+    aretomo_options = {
+        "aretomo_executable": aretomo_executable,
+        "aretomo_align_z_nm": aretomo_align_z_nm,
+        "aretomo_tilt_cor": aretomo_tilt_cor,
+        "aretomo_dark_tol": aretomo_dark_tol,
+        "aretomo_gpu": aretomo_gpu,
+    }
+    if backend.lower() == "aretomo":
+        aretomo_parameters: dict[str, object] = {
+            "overwrite": overwrite,
+            "variant": variant,
+            "residual_warning_nm": residual_warning_nm,
+            "residual_failure_nm": residual_failure_nm,
+            **{key: value for key, value in aretomo_options.items() if value is not None},
+        }
+        aretomo_context = BackendContext(
+            output_dir=out,
+            device=resolve_device(device),
+            parameters=aretomo_parameters,
+        )
+        alignment, report = aretomo_align_and_register(
+            AretomoAlignmentBackend(),
+            _tilt_stack_artifact(artifact_registry, tilt_series_manifest),
+            _alignment_artifact(artifact_registry, tilt_series_manifest),
+            tilt_series_manifest,
+            aretomo_context,
+            artifact_registry,
+            replace_existing=overwrite,
+        )
+        artifact_registry.commit(registry)
+        typer.echo(f"wrote fine alignment: {alignment.path}")
+        typer.echo(f"wrote final IMOD transforms: {alignment.parameters['imod_xf_path']}")
+        typer.echo(f"wrote AreTomo alignment file: {alignment.parameters['aretomo_aln_path']}")
+        typer.echo(f"wrote fine-alignment QC: {report.path}")
+        typer.echo(f"QC status: {report.parameters['status']}")
+        typer.echo(f"updated {registry}")
+        return
+    given = [key for key, value in aretomo_options.items() if value is not None]
+    if given:
+        raise typer.BadParameter(
+            f"{', '.join('--' + key.replace('_', '-') for key in given)} only apply to "
+            "--backend aretomo",
+            param_hint="backend",
+        )
     tracking_stack = _fiducial_tracking_stack_artifact(
         artifact_registry,
         tilt_series_manifest,

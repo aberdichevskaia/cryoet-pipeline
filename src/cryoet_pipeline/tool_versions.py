@@ -311,6 +311,32 @@ def motioncor3_version_of(executable: str | os.PathLike[str]) -> str | None:
     return stated_version(executable, "MotionCor3").value
 
 
+_ARETOMO_NAMES = ("AreTomo3", "AreTomo2", "AreTomo")
+
+
+@functools.cache
+def aretomo_version_of(executable: str | os.PathLike[str]) -> str | None:
+    """Which AreTomo this is and its version, as `AreTomo2 1.1.3`; None when it
+    states neither, or cannot run here.
+
+    The name is kept with the number because the three programs do not share a
+    command line: AreTomo2 answers `--version` with "AreTomo2 version 1.1.3"
+    (CAreTomoMain.cpp), and AreTomo3 reads movies and mdocs by prefix instead of
+    one stack. `\\b` keeps "AreTomo" from matching inside "AreTomo2".
+    """
+
+    result = probe([executable, "--version"])
+    for name in _ARETOMO_NAMES:
+        found = re.search(
+            rf"\b{name}\b[ \t:,(=-]*(?:version)?[ \t:=.-]*v?(?P<version>\d+\.\d+(?:\.\d+)*)",
+            result.output,
+            re.IGNORECASE,
+        )
+        if found:
+            return f"{name} {found['version']}"
+    return None
+
+
 def _head(result: Probe, lines: int = 20) -> str:
     """The start of what a probe printed, for a record of how a version was read."""
 
