@@ -195,7 +195,7 @@ def test_the_halves_split_the_consensus_with_the_first_runs_poses(tmp_path: Path
                 == (tmp_path / f"consensus-half{half}" / "initial.tbl").read_text())
 
 
-def test_split_refuses_a_used_folder_another_export_and_a_start_past_nyquist(
+def test_split_refuses_a_used_folder_another_export_a_start_past_nyquist_and_picked_poses(
         tmp_path: Path) -> None:
     export, _, _, result = _split(tmp_path)
     assert result.returncode == 0, result.stderr
@@ -212,6 +212,10 @@ def test_split_refuses_a_used_folder_another_export_and_a_start_past_nyquist(
                 "--start-lowpass", 20, "--out", tmp_path / "y")
     assert fine.returncode != 0 and "not coarser than Nyquist" in fine.stderr
     assert not (tmp_path / "y-half1").exists()
+    picked = _run("split", f"{export / 'mra_p'}:1", "--agree", f"{export / 'mra_a'}:1",
+                  "--start-lowpass", 60, "--start-poses", "picked", "--out", tmp_path / "z")
+    assert picked.returncode != 0 and "is built for runs of a registry" in picked.stderr
+    assert not (tmp_path / "z-half1").exists()
 
 
 def _half_project(folder: Path, name: str, turn: float, average: np.ndarray,
@@ -260,6 +264,7 @@ def test_maps_writes_the_halves_and_their_fsc(tmp_path: Path) -> None:
                        (maps[1] + maps[2]) / 2)
     assert np.array_equal(mrcfile.read(tmp_path / "maps" / "consensus_mask.mrc"), mask)
     assert "turned median 5.0 deg" in result.stdout and "shifted median 0.50 px" in result.stdout
+    assert "the halves started from the poses the first run refined" in result.stdout
     assert "FSC unmasked : 0.5 never crossed, 0.143 never crossed" in result.stdout
     assert "FSC masked   : 0.5 " in result.stdout
     assert "fsc_phase_randomization.py" in result.stdout

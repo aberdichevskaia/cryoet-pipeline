@@ -3,6 +3,7 @@ run of its own, the halves refined from it, `maps` knowing them by it."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,21 +12,32 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
+import torch
 
 pytest.importorskip("pyarrow")
 pytest.importorskip("matplotlib")
 
 from test_mra_from_registry import QUIET, ROOT, SERIES, SETUP, _project, _short  # noqa: E402
 
+from cryoet_pipeline.filters import low_pass_filter_volume  # noqa: E402
 from cryoet_pipeline.mra_runs import Refused, run_plan  # noqa: E402
-from cryoet_pipeline.mra_setup import plan_from_registry, plan_from_split  # noqa: E402
+from cryoet_pipeline.mra_setup import (  # noqa: E402
+    ANGLES,
+    SHIFTS,
+    TAG,
+    plan_from_registry,
+    plan_from_split,
+)
+from cryoet_pipeline.particle_sources import registry_particles  # noqa: E402
 from cryoet_pipeline.particle_tables import read_particle_table  # noqa: E402
 from cryoet_pipeline.reports.classification_reader import read_classification  # noqa: E402
+from cryoet_pipeline.reports.dynamo_project import average_at_poses  # noqa: E402
 from cryoet_pipeline.runs import completed  # noqa: E402
 
 SCRIPT = ROOT / "scripts" / "consensus_halves.py"
 SCHEDULE = {"mask_radius": 3, "mask_edge": 2, "schedule": "coarse_to_fine",
             "first_lowpass": 30.0, "last_lowpass": 22.0}
+POSE = ("shift_x_px", "shift_y_px", "shift_z_px", "tdrot_deg", "tilt_deg", "narot_deg")
 
 
 def _halves_script(*arguments: object) -> subprocess.CompletedProcess[str]:
@@ -124,12 +136,70 @@ def test_maps_knows_the_halves_by_their_split(made: Split, tmp_path: Path) -> No
     result = _halves_script("maps", made.halves[1], made.halves[0], "--out", out)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "iteration 1 of both halves" in result.stdout
+    assert "the halves started from the poses the first run refined" in result.stdout
     for half, folder in enumerate(made.halves, 1):
         written = mrcfile.read(tmp_path / f"consensus_half{half}.mrc")
         np.testing.assert_array_equal(written, mrcfile.read(folder / "ite_0001" / "average_1.mrc"))
     assert "--randomize-beyond-angstrom 40" in result.stdout
     same = _halves_script("maps", made.halves[0], made.halves[0], "--out", tmp_path / "same")
     assert same.returncode != 0 and "not the two halves of one split" in same.stderr
+
+
+def test_a_split_from_the_picks_starts_the_halves_where_picking_put_them(
+        made: Split, tmp_path: Path) -> None:
+    picked = made.project / "mra" / "split_picked"
+    result = _halves_script("split", f"{made.run}:{made.channel}", "--agree",
+                            f"{made.run}:{made.channel}", "--start-lowpass", 40,
+                            "--start-poses", "picked", "--workers", 2, "--out", picked)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "starting poses: the poses mra_a started the particles from" in result.stdout
+    record, refined_split = completed(picked), completed(made.split)
+    assert record is not None and refined_split is not None
+    # Named only when asked for, so a split made before keeps its fingerprint.
+    assert "start_poses" not in refined_split.content_params
+    assert record.content_params == {**refined_split.content_params, "start_poses": "picked"}
+    assert record.fingerprint != refined_split.fingerprint
+    columns, _ = read_particle_table(picked / "halves.parquet")
+    refined, _ = read_particle_table(made.split / "halves.parquet")
+    # The same particles in the same halves: only where they start differs.
+    tags = columns["particle_id"].astype(int)
+    assert tags.tolist() == refined["particle_id"].tolist()
+    assert columns["half"].tolist() == refined["half"].tolist()
+
+    # Each starts at its pick's pose, read here from the registry, not from the run.
+    particles = registry_particles(made.project, "bin8", SERIES, **QUIET)
+    rows = {int(tag): row for row, tag in enumerate(particles.tags)}
+    index = [rows[int(tag)] for tag in tags]
+    picks = np.column_stack([particles.shifts[index], particles.angles[index]])
+    np.testing.assert_array_equal(np.column_stack([columns[name] for name in POSE]), picks)
+    assert not np.array_equal(np.column_stack([refined[name] for name in POSE]), picks)
+
+    # One start: their average at those poses under the run's mask, low-passed.
+    average = average_at_poses((particles.volume(int(tag)) for tag in tags),
+                               particles.angles[index], particles.shifts[index],
+                               [particles.tilt_ranges[row] for row in index],
+                               mrcfile.read(made.run / "setup" / "mask.mrc"))
+    expected = low_pass_filter_volume(torch.from_numpy(average), cutoff_angstrom=40,
+                                      pixel_spacing_angstrom=particles.pixel_size).numpy()
+    np.testing.assert_array_equal(mrcfile.read(picked / "start_reference.mrc"), expected)
+
+    # Each half is set up with its particles there, and once refined, `maps` says where
+    # they started and takes no half of each split for a pair.
+    folders = []
+    for half in (1, 2):
+        plan = plan_from_split(picked, half, **SCHEDULE, **QUIET)
+        chosen = columns["half"] == half
+        assert plan.table[:, TAG].astype(int).tolist() == tags[chosen].tolist()
+        np.testing.assert_array_equal(
+            np.column_stack([plan.table[:, SHIFTS], plan.table[:, ANGLES]]), picks[chosen])
+        folders.append(made.project / "mra" / f"split_picked-half{half}")
+        run_plan(_short(plan, 1), folders[-1], **QUIET)
+    maps = _halves_script("maps", *folders, "--out", tmp_path / "picked")
+    assert maps.returncode == 0, maps.stdout + maps.stderr
+    assert "the halves started from their picks' poses" in maps.stdout
+    assert json.loads((tmp_path / "picked_fsc.json").read_text())["start_poses"] == "picked"
+    mixed = _halves_script("maps", folders[0], made.halves[1], "--out", tmp_path / "mixed")
+    assert mixed.returncode != 0 and "not the two halves of one split" in mixed.stderr
 
 
 def test_a_split_of_runs_that_read_other_particles_is_refused(made: Split) -> None:
@@ -151,6 +221,11 @@ def test_a_split_of_runs_that_read_other_particles_is_refused(made: Split) -> No
     again = _halves_script("split", f"{made.halves[0]}:1", "--agree", f"{made.halves[1]}:1",
                            "--start-lowpass", 40, "--out", made.project / "mra" / "split_d")
     assert again.returncode != 0 and "is not split again" in again.stderr
+    idle = _halves_script("split", f"{made.run}:{made.channel}", "--agree",
+                          f"{made.run}:{made.channel}", "--start-lowpass", 40, "--start-poses",
+                          "picked", "--workers", 0, "--out", made.project / "mra" / "split_f")
+    assert idle.returncode != 0 and "--workers 0: give at least 1" in idle.stderr
+    assert not (made.project / "mra" / "split_f").exists()
     # A half run carried on under another split is refused, as any other plan is.
     with pytest.raises(Refused):
         run_plan(_short(plan_from_split(made.split, 2, **SCHEDULE, **QUIET), 1), made.halves[0],

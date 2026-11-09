@@ -28,6 +28,18 @@ split with no export (docs/halves_from_runs.md):
     python scripts/consensus_halves.py maps outputs/ryr1/mra/refine_h1 \
         outputs/ryr1/mra/refine_h2 --out outputs/ryr1/mra/ryr1-consensus
 
+With --start-poses picked (runs of a registry only), each kept particle starts from the
+pose its run started it from, its pick's (pytom's for RyR1), and the common start is the
+kept particles' average at those poses, low-passed to --start-lowpass, instead of the
+first run's refined poses and its class average: no orientation the MRA refined against
+all the particles together reaches either half (the gold-standard split, 2026-11-09).
+That average is computed here, with --workers threads (on a Mac, 2026-11-09: 0.14 s a
+particle in a 102 px box on one thread, 0.06 s on four, so 2.4 and 1.1 min for 1,052):
+
+    python scripts/consensus_halves.py split outputs/ryr1/mra/mra_bin4_ssn:2 \
+        --agree outputs/ryr1/mra/mra_bin4_ssb:2 --start-lowpass 53.76 \
+        --start-poses picked --out outputs/ryr1/mra/ryr1-picked-bin4
+
 The split is then a run of its own in <project>/mra (its run.json, halves.parquet with
 each kept particle's half and starting pose, start_reference.mrc), its halves two
 selections of its record; each half run reads the stacks the two runs read, its half's
@@ -82,6 +94,13 @@ FSC can therefore show that the halves disagree, not how far they agree; the
 resolution test is the same split at bin4. How far the halves moved their particles
 says how much of the shared start they kept.
 
+With --start-poses picked the halves share no pose the MRA refined. They still share
+the choice of particles (the two runs' classes, which saw all of them), the start below
+its low-pass, and the picks' poses, which template matching found against the template
+low-passed for matching (17.5 A for RyR1 at bin4). A pick that fitted noise to the
+template carries the template's features into both halves, so the FSC can be raised by
+the template at resolutions coarser than that low-pass, and not at finer ones.
+
 Disposable, like the rest of scripts/.
 """
 
@@ -90,6 +109,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 from collections import defaultdict
 from collections.abc import Mapping
@@ -108,7 +128,7 @@ from cryoet_pipeline.models import ArtifactKind
 from cryoet_pipeline.mra_runs import HALVES, PLAN, START, STEP_SPLIT, node_folder
 from cryoet_pipeline.particle_tables import DYNAMO_POSES, write_particle_table
 from cryoet_pipeline.reports.classification import ClassificationRun, Pose, PoseTable
-from cryoet_pipeline.reports.classification_reader import read_classification
+from cryoet_pipeline.reports.classification_reader import read_classification, starting_average
 from cryoet_pipeline.runs import RunInput, Selection, completed, writing
 
 SPLIT_VERSION = 1
@@ -206,8 +226,22 @@ def _start(run: ClassificationRun, project: Path, channel: int, number: int, low
                    f"low-passed to {lowpass:g} A")
 
 
+def _picked_start(project: Path, tags: list[int], lowpass: float, spacing: float,
+                  workers: int) -> tuple[np.ndarray, str]:
+    """The halves' common start from the picks: the kept particles averaged at the poses
+    the run started them from, low-passed, and what it is in words."""
+
+    found = starting_average(project, tags, workers=workers)
+    start = low_pass_filter_volume(torch.from_numpy(found), cutoff_angstrom=lowpass,
+                                   pixel_spacing_angstrom=spacing).numpy()
+    return start, (f"the {len(tags):,} kept particles averaged at the poses {project.name} "
+                   f"started them from (their picks'), low-passed to {lowpass:g} A")
+
+
 def split(args: argparse.Namespace) -> int:
     (project, channel), (agree, agree_channel) = args.poses, args.agree
+    if args.workers < 1:
+        raise SystemExit(f"--workers {args.workers}: give at least 1")
     for path in (project, agree):
         if not path.is_dir():
             raise SystemExit(f"{path}: no such run")
@@ -224,6 +258,10 @@ def split(args: argparse.Namespace) -> int:
         raise SystemExit(f"{export}: no export_complete.json, so no finished export to split; "
                          f"{project.name} is not a run of a registry either (its plan.json would "
                          "name the stacks it read)")
+    if args.start_poses == "picked":
+        raise SystemExit("--start-poses picked is built for runs of a registry "
+                         f"(docs/halves_from_runs.md); {project.name} and {agree.name} are runs "
+                         f"on the export {export}")
     out = args.out.resolve()
     folders = {half: out.with_name(f"{out.name}-half{half}") for half in (1, 2)}
     for folder in folders.values():
@@ -329,9 +367,12 @@ def split_runs(args: argparse.Namespace) -> int:
     if not 2 * spacing < args.start_lowpass:
         raise SystemExit(f"--start-lowpass {args.start_lowpass} A is not coarser than Nyquist "
                          f"({2 * spacing:.2f} A)")
-    refined = _poses(run, (number, channel))
+    picked = args.start_poses == "picked"
+    starts = _poses(run, None if picked else (number, channel))
+    pose_note = (f"the poses {project.name} started the particles from (their picks')"
+                 if picked else f"{project.name}'s refined poses in class {channel}, "
+                 f"iteration {number}")
     halves = _deal(chosen, run.series, args.seed)
-    start, start_note = _start(run, project, channel, number, args.start_lowpass, spacing)
 
     nodes = [(project, number), (agree, agree_number)]
     records = [completed(node_folder(path, at)) for path, at in nodes]
@@ -341,16 +382,24 @@ def split_runs(args: argparse.Namespace) -> int:
             raise SystemExit(f"{node_folder(path, at)}: no record that succeeded")
         inputs.append(RunInput(slot=slot, path=str(node_folder(path, at)),
                                fingerprint=record.fingerprint))
-    content = {
+    if picked:
+        start, start_note = _picked_start(project, chosen, args.start_lowpass, spacing,
+                                          args.workers)
+    else:
+        start, start_note = _start(run, project, channel, number, args.start_lowpass, spacing)
+    content: dict[str, Any] = {
         "poses": {"run": project.name, "channel": channel, "iteration": number},
         "agree": {"run": agree.name, "channel": agree_channel, "iteration": agree_number},
         "seed": args.seed, "start_lowpass_angstrom": float(args.start_lowpass),
         # Where the project is, the runs' plans say: paths stay out of fingerprints.
         "particles": {key: value for key, value in particles.items() if key != "project"},
     }
+    if picked:
+        # Named only when asked for, so the splits made before keep their fingerprints.
+        content["start_poses"] = "picked"
     tags = sorted(chosen)
     half_of = {tag: half for half, members_ in halves.items() for tag in members_}
-    poses = np.array([refined[tag] for tag in tags], dtype=float).reshape(len(tags), 6)
+    poses = np.array([starts[tag] for tag in tags], dtype=float).reshape(len(tags), 6)
     with writing(out, step=STEP_SPLIT, step_version=SPLIT_VERSION, backend="cryoet-pipeline",
                  backend_version=SPLIT_VERSION, content_params=content,
                  inputs=inputs) as attempt:
@@ -360,7 +409,8 @@ def split_runs(args: argparse.Namespace) -> int:
             "tdrot_deg": poses[:, 3], "tilt_deg": poses[:, 4], "narot_deg": poses[:, 5],
             "shift_x_px": poses[:, 0], "shift_y_px": poses[:, 1], "shift_z_px": poses[:, 2],
         }, {"set": "each kept particle's consensus half and starting pose", **DYNAMO_POSES,
-            "pixel_size_angstrom": spacing, "box_px": run.box_px, "start_reference": start_note})
+            "pixel_size_angstrom": spacing, "box_px": run.box_px, "poses": pose_note,
+            "start_reference": start_note})
         _write_mrc(attempt.add(ArtifactKind.CLASS_REFERENCE, START), start, spacing)
         for half in (1, 2):
             attempt.selections.append(Selection(
@@ -373,6 +423,7 @@ def split_runs(args: argparse.Namespace) -> int:
             counts[run.series[tag]] += 1
         print(f"half {half}: {len(halves[half]):,} particles; by series: "
               + ", ".join(f"{name} {count}" for name, count in sorted(counts.items())))
+    print(f"starting poses: {pose_note}")
     print(f"{START}: {start_note}")
     print(f"split written to {out}; refine each half with scripts/mra_port_run.sbatch, "
           f"SPLIT={out} HALF=1 NAME={out.name}-half1 (and HALF=2) and the schedule's variables")
@@ -399,7 +450,8 @@ def _split_half(run: Path) -> dict[str, Any] | None:
         raise SystemExit(f"{run}: the split at {named} is not the one it was set up from")
     return {"half": int(setup.selection.split()[-1]), "from": record.fingerprint,
             "seed": record.content_params["seed"], "split": str(named),
-            "start_lowpass_angstrom": record.content_params["start_lowpass_angstrom"]}
+            "start_lowpass_angstrom": record.content_params["start_lowpass_angstrom"],
+            "start_poses": record.content_params.get("start_poses", "refined")}
 
 
 def _half(project: Path) -> tuple[ClassificationRun, int, np.ndarray, dict[str, Any]]:
@@ -464,8 +516,11 @@ def maps(args: argparse.Namespace) -> int:
     _write_mrc(paths["half2"], halves[2], spacing)
     _write_mrc(paths["mean"], (halves[1] + halves[2]) / 2, spacing)
     _write_mrc(paths["mask"], masks[0], spacing)
+    start_poses = record.get("start_poses", "refined")
     print(f"iteration {number} of both halves, {spacing:g} A/px: "
           + ", ".join(str(path) for path in paths.values()))
+    print("the halves started from " + ("their picks' poses" if start_poses == "picked"
+                                        else "the poses the first run refined"))
 
     for project, (half_run, _, _, own) in zip(projects, found, strict=True):
         turns, shifts = _moves(half_run, number)
@@ -502,7 +557,8 @@ def maps(args: argparse.Namespace) -> int:
     fsc_path = out.with_name(f"{out.name}_fsc.json")
     fsc_path.write_text(json.dumps({
         "halves": [str(project) for project in projects], "iteration": number,
-        "pixel_spacing_angstrom": spacing, **curves}, indent=1) + "\n")
+        "start_poses": start_poses, "pixel_spacing_angstrom": spacing, **curves},
+        indent=1) + "\n")
     print(f"curves: {fsc_path}")
 
     nyquist = 2 * spacing
@@ -532,6 +588,17 @@ def main() -> int:
                         help="the halves go to <out>-half1 and <out>-half2; for runs of the "
                         "registry, the split itself, <project>/mra/<name>")
     making.add_argument("--seed", type=int, default=20261026, help="for the random split")
+    making.add_argument("--start-poses", choices=("refined", "picked"), default="refined",
+                        help="refined (the default): each particle starts from its pose in the "
+                        "first run's class at that iteration, and the start is that class's "
+                        "average; picked: from the pose the first run started it from, its "
+                        "pick's, and the start is the kept particles' average at those poses, "
+                        "so no pose the MRA refined reaches the halves. picked is for runs of "
+                        "a registry")
+    making.add_argument("--workers", type=int,
+                        default=int(os.environ.get("SLURM_CPUS_PER_TASK") or 1),
+                        help="threads for the average at the picked poses; the map does not "
+                        "depend on them (default: $SLURM_CPUS_PER_TASK, else 1)")
     making.set_defaults(run=split)
     reading = commands.add_parser("maps", help="the halves' maps, their FSC and mask")
     reading.add_argument("halves", type=Path, nargs=2, help="the two half projects")

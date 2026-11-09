@@ -89,7 +89,37 @@ split in `artifacts.json`.
 4. `maps` knows the two halves by the split they name, not by a manifest.
 5. Splitting into sub-exports stays for runs in an export folder.
 
+## Starting the halves from the picks (2026-11-09)
+
+`split ... --start-poses picked` gives each kept particle the pose its run started it
+from, for a run of a registry its pick's (template matching's), instead of the run's
+refined pose, and makes the common start from the kept particles' average at those
+poses (the run's own starting table, stacks and mask:
+`classification_reader.starting_average`), low-passed to `--start-lowpass`, instead of
+the class average. The particles and their halves are the ones the default split
+deals. The halves are then refined from before any orientation was refined against
+all the particles together. Halves from the refined poses are not gold-standard:
+those poses fit a reference made of both halves. Asked for on 2026-11-09 for RyR1 at
+bin4, where two 360° rounds at the start of the classification did worse than the
+picks' own angles: the halves step locally from the picks.
+
+The halves still share the particles, which two runs' classes chose seeing all of
+them, the start below its low-pass, and the picks' poses, which template matching
+fitted against the template low-passed for matching (17.5 Å for RyR1 at bin4). A pick
+that fitted noise to the template carries the template's features into both halves,
+so it can raise the FSC at resolutions coarser than that low-pass, and not at finer
+ones.
+
+`start_poses: "picked"` enters the split's content parameters only when given, so
+splits made before keep their fingerprints, and a split from the picks is another
+split than the one from refined poses: `maps` refuses a half of each. `split` computes
+the average itself with `--workers` threads (the map is the same for any number).
+Runs on an export are refused.
+
 ## Status
+
+2026-11-09: `split --start-poses picked` (above); tests in
+tests/test_halves_from_runs.py and tests/test_consensus_halves.py. Not run on max yet.
 
 2026-11-05: `consensus_halves.py split` writes the split of two runs of a registry as
 a run of step `consensus-split` (`SPLIT_VERSION` 1) in `<project>/mra/<OUT>` and

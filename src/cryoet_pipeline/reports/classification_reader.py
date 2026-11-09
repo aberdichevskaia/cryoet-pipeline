@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -412,6 +412,35 @@ def _summary(search: Mapping[str, Any], record: RunRecord, box: int,
         summary += ", anti-aliased"
     minutes = _minutes(record)
     return summary + (f" · {minutes:.0f} min" if minutes is not None else "")
+
+
+def starting_average(run: Path, tags: Iterable[int] | None = None, *,
+                     workers: int = 1) -> np.ndarray:
+    """Particles of a run of the run-record layout averaged at the poses its setup started
+    them from, under its mask, as the report's average of all particles at their starting
+    poses: all of them, or only `tags` (scripts/consensus_halves.py, halves from the picks).
+    `workers` threads; the map does not depend on them."""
+
+    run = Path(run).resolve()
+    setup_folder = node_folder(run, 0)
+    if completed(setup_folder) is None:
+        raise ValueError(f"{run}: its setup has not finished, so it has no starting poses")
+    plan = json.loads((run / PLAN).read_text())
+    starting, metadata = read_particle_table(setup_folder / PARTICLES)
+    starting = _by_tag(starting)
+    if tags is not None:
+        wanted = {int(tag) for tag in tags}
+        keep = np.isin(starting["particle_id"].astype(int), sorted(wanted))
+        missing = sorted(wanted - set(starting["particle_id"][keep].astype(int).tolist()))
+        if missing:
+            raise ValueError(f"{run}: {len(missing)} tags are not among its particles, e.g. "
+                             f"{missing[0]}")
+        starting = {name: values[keep] for name, values in starting.items()}
+    problems: list[str] = []
+    load, _ = _particle_loader(plan["particles"], run.parent, starting, metadata, problems)
+    if load is None:
+        raise FileNotFoundError(f"{run}: " + "; ".join(problems))
+    return _starting_average(load, starting, setup_folder / "mask.mrc", workers=workers)
 
 
 def _starting_average(load: Callable[[int], np.ndarray], starting: Mapping[str, np.ndarray],
