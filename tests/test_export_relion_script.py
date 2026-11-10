@@ -112,3 +112,64 @@ def test_the_commands_load_relion_check_it_and_use_the_gpus(tmp_path) -> None:
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
     assert result.returncode == 2 and "relion_tomo_subtomo not found" in result.stderr
     assert not (tmp_path / "Extract").exists()
+
+
+def _stubs(folder, *, refine_starts=True):
+    """Stand-ins for RELION and mpirun that log their arguments."""
+
+    folder.mkdir()
+    log = folder / "calls.log"
+    for name in ("relion_tomo_subtomo", "relion_refine_mpi", "mpirun"):
+        stub = folder / name
+        stub.write_text(f'#!/bin/sh\necho "{name} $*" >> "{log}"\n')
+        stub.chmod(0o755)
+    refine = folder / "relion_refine"
+    refine.write_text(
+        "#!/bin/sh\necho 'RELION version: 5.0.1-commit-test'\n"
+        if refine_starts
+        else "#!/bin/sh\necho 'relion_refine: error while loading shared libraries: "
+        "libucp.so.0' >&2\nexit 127\n"
+    )
+    refine.chmod(0o755)
+    return log
+
+
+def _commands(tmp_path):
+    from types import SimpleNamespace
+
+    plan = SimpleNamespace(
+        chosen=SimpleNamespace(box=48, pixel_angstrom=5.4, channel=1),
+        series=[SimpleNamespace(relion_bin=4)],
+    )
+    script = tmp_path / "export" / "relion_commands.sh"
+    script.parent.mkdir()
+    script.write_text(_script().commands_text(plan, diameter=130.0, ini_high=40.0))
+    return script
+
+
+def test_a_relion_that_does_not_start_stops_the_commands_first(tmp_path) -> None:
+    import subprocess
+
+    script = _commands(tmp_path)
+    log = _stubs(tmp_path / "bin", refine_starts=False)
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 2
+    assert "does not start" in result.stderr and "libucp.so.0" in result.stderr
+    assert not log.exists() and not (script.parent / "Extract").exists()
+
+
+def test_the_commands_run_extract_then_refine(tmp_path) -> None:
+    import subprocess
+
+    script = _commands(tmp_path)
+    log = _stubs(tmp_path / "bin")
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "HOME": str(tmp_path), "USE_GPU": "0"}
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "RELION version: 5.0.1" in result.stdout
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("relion_tomo_subtomo --i optimisation_set.star")
+    assert calls[1].startswith("mpirun -n 3 relion_refine_mpi --ios Extract/job001/")
+    assert "--gpu" not in calls[1]
+    assert (script.parent / "Extract" / "job001").is_dir()

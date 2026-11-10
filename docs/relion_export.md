@@ -239,8 +239,11 @@ alignment solved without one; not decided.
   `/fast/AG_Kudryashev/software/relion-5.0.1`), `relion/v4/gpu/sm86-cu11.7` and
   someone's `relion/xchu/v4`, `/v5`; nothing on PATH. `relion_commands.sh` loads the
   module `RELION5_MODULE` names, stops if RELION is not found, and gives Refine3D
-  the job's GPUs. Its version, MPI and CUDA are not yet checked (`module show`,
-  `relion_refine --version`).
+  the job's GPUs. `module show`: RELION 5.0.1 (`build-gpu_sm86_cu11.7`), with
+  `openmpi/v5.0.10` loaded as a requirement. On the login node max023 its
+  `relion_refine --version` fails: `libucp.so.0` (UCX, Open MPI 5's network
+  library) is not found. Not yet tried on a GPU node; relion_commands.sh now runs
+  `relion_refine --version` first and stops, naming what is missing, if it fails.
 
 ## RELION 5 on a Mac, for checks
 

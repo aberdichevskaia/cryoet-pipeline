@@ -331,12 +331,18 @@ if [ -n "${{RELION5_MODULE:-}}" ]; then
     fi
     module load "$RELION5_MODULE"
 fi
-for program in relion_tomo_subtomo relion_refine_mpi mpirun; do
+for program in relion_tomo_subtomo relion_refine relion_refine_mpi mpirun; do
     if ! command -v "$program" >/dev/null 2>&1; then
         echo "$program not found: load RELION 5 (set RELION5_MODULE) or put it on PATH" >&2
         exit 2
     fi
 done
+# A RELION whose libraries this node lacks fails here, not after an hour of Extract.
+if ! version=$(relion_refine --version 2>&1); then
+    echo "relion_refine does not start on $(hostname): $version" >&2
+    exit 2
+fi
+echo "$version" | head -1
 GPU_ARGS=()
 if [ "${{USE_GPU:-1}}" != 0 ] && command -v nvidia-smi >/dev/null 2>&1 \\
         && nvidia-smi -L >/dev/null 2>&1; then
