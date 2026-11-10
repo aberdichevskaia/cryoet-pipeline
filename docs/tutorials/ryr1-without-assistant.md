@@ -29,8 +29,9 @@ There is a second tutorial for the same data with the assistant:
 ## What you need
 
 - An account on max, and a folder on `/fast` with room for the data and the
-  outputs. The frames are tens of GB (step 2 measures them); the outputs at
-  bin8 add about 30 GB of motion-corrected sums and stacks plus the tomograms.
+  outputs. Measure the frames with `du -sh` before copying them (step 2); the
+  outputs at bin8 add about 30 GB of motion-corrected sums and stacks plus the
+  tomograms.
 - A terminal on a login node. Every command below runs there. The heavy work
   runs in Slurm jobs, which the pipeline's scripts submit for you.
 - About an hour of your time for the setup, then waiting for the queue.
@@ -90,7 +91,8 @@ finds. This writes nothing:
 ```bash
 cd /fast/AG_Kudryashev/$USER/cryoet-pipeline
 micromamba activate cryoet-pipeline
-python3 scripts/build_library.py --site mdc --dry-run --config docs/tutorials/ryr1/ryr1-tutorial.toml
+python3 scripts/build_library.py --site mdc --dry-run \
+    --config docs/tutorials/ryr1/ryr1-tutorial.toml
 ```
 
 Every tool should show a version, pytom-match-pick 0.14.0 among them, and the
@@ -117,7 +119,10 @@ du -sh /fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5
 
 ```bash
 mkdir -p data/ryr1/frames
-rsync -a --info=progress2 --include='tomogram_*.tif' --include='gain.mrc' --exclude='*' /fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5/ data/ryr1/frames/
+rsync -a --info=progress2 \
+    --include='tomogram_*.tif' --include='gain.mrc' --exclude='*' \
+    /fast/AG_Kudryashev/anna.berdichevskaia/frames.renamed.top1to5/ \
+    data/ryr1/frames/
 ```
 
 You should now have 145 frames (5 series × 29 tilts) and `gain.mrc`:
@@ -138,7 +143,8 @@ a regular expression. `show_folder.py` reads the folder the way the pipeline
 will, and writes nothing:
 
 ```bash
-python3 scripts/show_folder.py data/ryr1/frames --pattern 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
+python3 scripts/show_folder.py data/ryr1/frames --pattern \
+    'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
 ```
 
 Check its table against what was collected: five series, 039, 096, 097, 125 and
@@ -153,7 +159,8 @@ data, `outputs/ryr1-tutorial`. Create it now, with every series the folder
 holds:
 
 ```bash
-cryoet init --frames data/ryr1/frames --frames-pattern 'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif' --out outputs/ryr1-tutorial
+cryoet init --frames data/ryr1/frames --out outputs/ryr1-tutorial --frames-pattern \
+    'tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif'
 ```
 
 It prints each series with its tilt count, angle range, frames per tilt and
@@ -190,7 +197,8 @@ saying where it came from. The parts to understand before you submit:
   the steps:
 
   ```bash
-  python3 scripts/run_series.py --project outputs/ryr1-tutorial --config docs/tutorials/ryr1/ryr1-tutorial.toml --series 039 --list-steps
+  python3 scripts/run_series.py --project outputs/ryr1-tutorial \
+      --config docs/tutorials/ryr1/ryr1-tutorial.toml --series 039 --list-steps
   ```
 
 - **`[motion]`** names the gain reference. These frames are not
@@ -215,7 +223,8 @@ on the login node: the stages, the input folders, the tool variables, whether
 one of your jobs is already working on these series.
 
 ```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml --until-stage gpu --dry-run
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml \
+    --until-stage gpu --dry-run
 ```
 
 `--until-stage gpu` stops the submission before the MRA, so that you can look
@@ -231,7 +240,8 @@ at the picks first. The dry run should show:
 Then the same command without `--dry-run`:
 
 ```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml --until-stage gpu
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml \
+    --until-stage gpu
 ```
 
 It prints the four job IDs. Every dry run and every submission is written to
@@ -282,7 +292,8 @@ failed, with a dry run first. Steps of that stage that had finished run again,
 which is why `--overwrite` is needed:
 
 ```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml --from-stage cpu --until-stage gpu --overwrite --dry-run
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml \
+    --from-stage cpu --until-stage gpu --overwrite --dry-run
 ```
 
 `--overwrite` holds for that submission only, and its dry run lists the
@@ -296,7 +307,8 @@ Once the `gpu` jobs have finished, write the project's report. It reads the
 project, runs nothing, and writes one PDF with a page per step and series:
 
 ```bash
-cryoet report --project outputs/ryr1-tutorial --variant bin8 --config docs/tutorials/ryr1/ryr1-tutorial.toml
+cryoet report --project outputs/ryr1-tutorial --variant bin8 \
+    --config docs/tutorials/ryr1/ryr1-tutorial.toml
 ```
 
 It goes to `outputs/ryr1-tutorial/reports/report-bin8.pdf`. If you skipped 161,
@@ -334,13 +346,15 @@ that resemble nothing.
 five comes from `ryr1-tutorial-all.toml`:
 
 ```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-all.toml --from-stage mra --dry-run
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-all.toml \
+    --from-stage mra --dry-run
 ```
 
 **Without 161**, from the main lane:
 
 ```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml --from-stage mra --dry-run
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml \
+    --from-stage mra --dry-run
 ```
 
 The dry run prints the run's folder, `outputs/ryr1-tutorial/mra/bin8-ssn-all`

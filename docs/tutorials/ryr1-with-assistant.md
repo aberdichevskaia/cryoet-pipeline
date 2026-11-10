@@ -31,17 +31,25 @@ minutes, with the reason you gave, and the project's journal records it.
 
 ## What you need
 
-- Everything in [What you need](ryr1-without-assistant.md#what-you-need) of the
-  other tutorial: an account on max, a folder on `/fast` with room, a terminal
-  on a login node.
-- A Claude subscription that includes Claude Code (Pro, Max, Team or
-  Enterprise), under terms that exclude training on your data. A Team or
-  Enterprise seat does by default. On a personal Pro or Max plan, turn off the
-  setting that lets Anthropic use your chats to improve its models
-  (claude.ai → Settings → Privacy) before the first session.
-- What leaves the cluster in a session: the text the assistant reads (log
-  excerpts, file paths, lane files, QC records) and any picture it opens. The
-  frames and the tomograms do not.
+- **An account on max.**
+- **A folder on `/fast` with room for the data and the outputs.** The clone
+  lives there, and the outputs are written inside it. The frames are copied
+  into it too: measure them with `du -sh` before copying (step 1 says how). At
+  bin8 the outputs add about 30 GB of motion-corrected sums and stacks, plus
+  the tomograms.
+- **A terminal on a login node.** You, and the assistant, run everything there.
+  The heavy work runs in Slurm jobs, which the pipeline's scripts submit.
+- **A Claude subscription that includes Claude Code**: Pro, Max, Team or
+  Enterprise.
+- **Terms that exclude training on your data.** A Team or Enterprise seat has
+  them by default. On a personal Pro or Max plan, turn off the setting that
+  lets Anthropic use your chats to improve its models (claude.ai → Settings →
+  Privacy) before the first session.
+- **To know what leaves the cluster.** In a session, the text the assistant
+  reads goes to Anthropic: log excerpts, file paths, lane files, QC records,
+  and any picture it opens. The frames and the tomograms do not.
+- **About an hour for the setup**, then waiting for the queue. While the jobs
+  run, the session can be closed.
 
 ## 1. Set up the pipeline and the data (once)
 

@@ -794,7 +794,9 @@ python -m pip install -e ".[viz]"
 
 - [docs/tutorials/](docs/tutorials/ryr1-without-assistant.md) — RyR1 on max from
   a fresh clone to MRA classes, without and
-  [with the assistant](docs/tutorials/ryr1-with-assistant.md)
+  [with the assistant](docs/tutorials/ryr1-with-assistant.md);
+  `python3 scripts/export_tutorial_pdf.py` prints them as PDFs to
+  `outputs/tutorials/`, with Chrome
 - [docs/backends.md](docs/backends.md) — every stage's backends and how to choose
 - [docs/roadmap.md](docs/roadmap.md) — planned work and settled design decisions
 - [docs/database_design.md](docs/database_design.md) — project state, provenance
