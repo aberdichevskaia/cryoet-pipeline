@@ -234,3 +234,18 @@ def test_the_submission_hint_names_the_export_folder(tmp_path) -> None:
     hint = _script().submit_hint(folder)
     assert f"--chdir={folder.resolve()}" in hint
     assert "--ntasks=3" in hint and '--wrap "./relion_commands.sh"' in hint
+
+
+def test_the_diameter_comes_from_the_plan_or_half_the_box(tmp_path) -> None:
+    import json
+
+    script = _script()
+    dynamo = tmp_path / "mra_pad_ssn_g2atan"
+    dynamo.mkdir()
+    assert script.particle_diameter(dynamo, 52, 13.44) == 52 * 13.44 / 2
+    run = tmp_path / "run2"
+    run.mkdir()
+    (run / "plan.json").write_text(
+        json.dumps({"setup": {"variables": {"diameter_angstrom": 340.0}}})
+    )
+    assert script.particle_diameter(run, 52, 13.44) == 340.0

@@ -589,3 +589,69 @@ def test_optimisation_set_names_the_particles_and_tomograms() -> None:
     assert "data_" in text.splitlines()
     with pytest.raises(ValueError):
         optimisation_set_text("a b.star", "tomograms.star")
+
+
+def _export_manifest(path, tags, *, decoys=(), project="/fast/p/outputs/ryr1"):
+    import json
+
+    particles = [
+        {
+            "tag": tag,
+            "run": "TS_A" if tag <= 6 else "TS_B",
+            "source_stack_id": f"{'TS_A' if tag <= 6 else 'TS_B'}:particle_stack:cubic-crop:bin8",
+            "native_record": {"x_px": 10.0 + tag, "y_px": 20.0 + tag, "z_px": 30.0 + tag},
+            "decoy": tag in decoys,
+        }
+        for tag in tags
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "source_project": project,
+                "box_size_px": 16,
+                "pixel_spacing_angstrom": 13.44,
+                "wedge": {"ranges": {"TS_A": [-50.0, 60.0], "TS_B": [-40.0, 55.0]}},
+                "particles": particles,
+            }
+        )
+    )
+
+
+def test_origins_come_from_an_export_manifest(tmp_path) -> None:
+    from cryoet_pipeline.relion_export import origins_from_manifest
+
+    _export_manifest(tmp_path / "export_manifest.json", [1, 7])
+    project, box, pixel, origins = origins_from_manifest(tmp_path / "export_manifest.json")
+    assert (str(project), box, pixel) == ("/fast/p/outputs/ryr1", 16, 13.44)
+    assert origins[7] == ("TS_B", "TS_B:particle_stack:cubic-crop:bin8", (17.0, 27.0, 37.0))
+
+
+def test_a_class_of_a_dynamo_project_in_an_export_is_read_through_its_manifest(tmp_path) -> None:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_classification_report import BOX, SECOND, TAGS, make_project, sphere
+
+    from cryoet_pipeline.relion_export import read_run_class
+
+    project = make_project(tmp_path)
+    _export_manifest(project.parent / "export_manifest.json", TAGS, decoys=(2,))
+    chosen = read_run_class(project, 1)
+    expected = sorted(tag for tag, channel in SECOND.items() if channel == 1 and tag != 2)
+    assert [member.tag for member in chosen.members] == expected
+    assert chosen.iteration == 2 and chosen.decoys_left_out == 1
+    assert (chosen.box, chosen.pixel_angstrom) == (BOX, 13.44)
+    first = chosen.members[0]
+    assert (first.series, first.pick_xyz) == ("TS_A", (11.0, 21.0, 31.0))
+    np.testing.assert_allclose(chosen.average, -sphere(4))
+    np.testing.assert_allclose(chosen.mask, sphere(6))
+    assert "export manifest" in chosen.source
+
+
+def test_a_run_nothing_traces_is_refused(tmp_path) -> None:
+    from cryoet_pipeline.relion_export import read_run_class
+
+    (tmp_path / "lonely").mkdir()
+    with pytest.raises(ValueError, match="nothing says where"):
+        read_run_class(tmp_path / "lonely", 1)

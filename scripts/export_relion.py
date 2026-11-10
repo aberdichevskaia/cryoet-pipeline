@@ -230,7 +230,10 @@ def describe(plan: ExportPlan) -> list[str]:
         f"({plan.linked_groups:,} groups of neighbours within a box kept together, "
         f"seed {plan.seed})"
     )
-    lines.append(f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the MRA's")
+    lines.append(
+        f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the MRA's; "
+        f"particles traced through {chosen.source}"
+    )
     for series in plan.series:
         lines.append(
             f"  {series.name}: {series.particles:,} particles, {series.views} views, "
@@ -550,8 +553,8 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
         )
         attempt.add(ArtifactKind.DATASET_EXPORT, "optimisation_set.star")
 
-        average = mrcfile.read(chosen.average).astype(np.float32)
-        mask = mrcfile.read(chosen.mask).astype(np.float32)
+        average = chosen.average
+        mask = chosen.mask
         _write_mrc(
             folder / "reference" / f"class_{chosen.channel}.mrc",
             standard_frame_reference(average),
@@ -563,10 +566,7 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
         attempt.add(ArtifactKind.CLASS_AVERAGE, f"reference/class_{chosen.channel}.mrc")
         attempt.add(ArtifactKind.ALIGNMENT_MASK, "reference/mask.mrc")
 
-        plan_json = json.loads((chosen.run / "plan.json").read_text())
-        diameter = float(
-            _find(plan_json, "diameter_angstrom") or chosen.box * chosen.pixel_angstrom / 2
-        )
+        diameter = particle_diameter(chosen.run, chosen.box, chosen.pixel_angstrom)
         ini_high = float(args.ini_high)
         commands = folder / "relion_commands.sh"
         commands.write_text(commands_text(plan, diameter, ini_high))
@@ -617,6 +617,16 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
             }
         )
     return written
+
+
+def particle_diameter(run: Path, box: int, pixel: float) -> float:
+    """The particle's diameter in A for Refine3D: the MRA setup's, from the run's
+    plan.json; a Dynamo project, or a port run in Dynamo's layout, has none, and then
+    half the box, as the box is twice the particle (docs/agent/lane_questions.md)."""
+
+    plan = run / "plan.json"
+    found = _find(json.loads(plan.read_text()), "diameter_angstrom") if plan.is_file() else None
+    return float(found) if found else box * pixel / 2
 
 
 def _find(value: object, key: str) -> object:

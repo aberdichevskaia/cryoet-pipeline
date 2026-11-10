@@ -21,11 +21,17 @@ python scripts/export_relion.py --run <project>/mra/<NAME> --class 1 --dry-run
 python scripts/export_relion.py --run <project>/mra/<NAME> --class 1
 ```
 
-It reads a run of the registry (`<project>/mra/<NAME>`, the run-record layout): the
-class's members after the last finished iteration (`--iteration` for another),
-decoys left out, with `--agree RUN:CLASS` only those also in another run's class
-(as the consensus split takes them), their poses of that iteration, and their picks
-from the setup's table. Each particle's tomogram is its particle stack's parent in
+It reads a run of the registry (`<project>/mra/<NAME>`, the run-record layout), or
+since 10 November a run in an export folder of scripts/export_dynamo.py (a Dynamo
+project, or a run of the port beside it, either layout): the class's members after
+the last finished iteration (`--iteration` for another), decoys left out, with
+`--agree RUN:CLASS` only those also in another run's class (as the consensus split
+takes them), and their poses of that iteration, all through the classification
+report's reader; their picks from the setup's table, or for an export folder from
+its `export_manifest.json` (each tag's series, source stack and pick, and the
+registry project). The export's particles are the extraction's own boxes, copied,
+so the box corner is the same. The class average and the alignment mask come
+through the same reader (MRC or Dynamo's EM). Each particle's tomogram is its particle stack's parent in
 the registry. A particle whose centre (box corner + N/2 + the MRA shift) came within
 `--min-distance` (a quarter of the box) of a better-scoring one of its series is a
 duplicate and left out. Halves: particles of a series within a box of each other are
@@ -231,8 +237,8 @@ alignment solved without one; not decided.
 - **Beads** are not looked for: a class with gold beads in it exports them. MRA
   usually puts them in a class of their own; the fiducial model would say where
   they are on bead-aligned series.
-- **Runs in Dynamo's layout** (export folders) are refused: the step reads runs of
-  the registry, whose setup table names each particle's stack.
+- **Runs in export folders** are read through their manifest (unit-tested on a
+  synthetic Dynamo project); no export of one has been checked by RELION yet.
 - **CTF from a CTF model** is unit-tested only: the local TS_01 project has no
   CTF model, so no RELION run has read a fitted defocus from this export yet.
 - **A real class.** The step has run on a class of picks with random orientations

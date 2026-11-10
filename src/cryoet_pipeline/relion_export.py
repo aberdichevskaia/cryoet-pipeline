@@ -903,7 +903,15 @@ class ClassMember:
 
 @dataclass(frozen=True)
 class RunClass:
-    """One class of an MRA run of the registry, as the export reads it."""
+    """One class of an MRA run, as the export reads it.
+
+    The run is one of the registry (`<project>/mra/<NAME>`, its setup's table naming
+    each particle's stack and pick) or one in an export folder of
+    scripts/export_dynamo.py: a Dynamo project or a run of the port, whose particles
+    the export's manifest traces to their stacks and picks. `average` and `mask` are
+    the class average of that iteration and the run's alignment mask, in the
+    pipeline's frame.
+    """
 
     run: Path
     project: Path
@@ -915,9 +923,14 @@ class RunClass:
     decoys_left_out: int
     not_agreed: int
     agreed_with: str | None
-    average: Path
-    mask: Path
+    average: np.ndarray
+    mask: np.ndarray
+    source: str
     record_fingerprints: dict[str, str]
+
+
+Origins = dict[int, tuple[str, str, tuple[float, float, float]]]
+"""Each tag's tilt series, particle stack and pick (x, y, z, zero-based voxels)."""
 
 
 def _registry_run(run: Path) -> bool:
@@ -925,6 +938,50 @@ def _registry_run(run: Path) -> bool:
     if not plan.is_file():
         return False
     return isinstance(json.loads(plan.read_text()).get("particles"), dict)
+
+
+def origins_from_setup(run: Path) -> tuple[Path, int, float, Origins]:
+    """The project, box, pixel and particles' origins a registry run's setup table holds."""
+
+    from cryoet_pipeline.mra_runs import PARTICLES, node_folder
+    from cryoet_pipeline.particle_tables import read_particle_table
+
+    setup, about = read_particle_table(node_folder(run, 0) / PARTICLES)
+    origins: Origins = {}
+    for row, tag in enumerate(setup["particle_id"]):
+        x, y, z = (float(setup[f"position_{axis}_px"][row]) for axis in "xyz")
+        origins[int(tag)] = (
+            str(setup["tilt_series_id"][row]),
+            str(setup["stack_id"][row]),
+            (x, y, z),
+        )
+    project = Path(str(about["project"]))
+    return project, int(about["box_px"]), float(about["pixel_size_angstrom"]), origins
+
+
+def origins_from_manifest(manifest: Path) -> tuple[Path, int, float, Origins]:
+    """The same from an export manifest of scripts/export_dynamo.py: each particle's
+    series ("run"), source stack and its pick (native_record), the registry project
+    it came from, its box and pixel."""
+
+    data = json.loads(Path(manifest).read_text())
+    origins: Origins = {}
+    for entry in data["particles"]:
+        record = entry.get("native_record") or {}
+        try:
+            x, y, z = (float(record[name]) for name in ("x_px", "y_px", "z_px"))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"{manifest}: tag {entry.get('tag')} has no pick position") from error
+        stack = entry.get("source_stack_id")
+        if not stack:
+            raise ValueError(f"{manifest}: tag {entry.get('tag')} names no source stack")
+        origins[int(entry["tag"])] = (str(entry["run"]), str(stack), (x, y, z))
+    return (
+        Path(str(data["source_project"])),
+        int(data["box_size_px"]),
+        float(data["pixel_spacing_angstrom"]),
+        origins,
+    )
 
 
 def _class_members(run: Path, channel: int, iteration: int | None) -> tuple[Any, int, set[int]]:
@@ -945,6 +1002,15 @@ def _class_members(run: Path, channel: int, iteration: int | None) -> tuple[Any,
     return classification, number, {int(tag) for tag in classes[channel].members}
 
 
+def _array_digest(*arrays: np.ndarray) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    for array in arrays:
+        digest.update(np.ascontiguousarray(array, dtype=np.float64).tobytes())
+    return digest.hexdigest()
+
+
 def read_run_class(
     run: Path,
     channel: int,
@@ -953,17 +1019,26 @@ def read_run_class(
     agree: tuple[Path, int] | None = None,
 ) -> RunClass:
     """The members of `channel` after `iteration` (the last finished by default) of an
-    MRA run of the registry, decoys left out, with their poses of that iteration and
-    their picks; with `agree`, only those also in that run's class after its last
-    finished iteration, as scripts/consensus_halves.py takes them."""
+    MRA run, decoys left out, with their poses of that iteration and their picks;
+    with `agree`, only those also in that run's class after its last finished
+    iteration, as scripts/consensus_halves.py takes them."""
 
-    from cryoet_pipeline.mra_runs import PARTICLES, node_folder
-    from cryoet_pipeline.particle_tables import read_particle_table
-    from cryoet_pipeline.runs import completed
+    from cryoet_pipeline.runs import completed, files_fingerprint
 
     run = Path(run)
-    if not _registry_run(run):
-        raise ValueError(f"{run} is not an MRA run of the registry (plan.json with its particles)")
+    manifest = run.parent / "export_manifest.json"
+    if _registry_run(run):
+        project, box, pixel, origins = origins_from_setup(run)
+        source = "the registry run's setup table"
+    elif manifest.is_file():
+        project, box, pixel, origins = origins_from_manifest(manifest)
+        source = f"the export manifest {manifest}"
+    else:
+        raise ValueError(
+            f"{run} is neither a run of the registry (plan.json with its particles) nor in "
+            "an export folder (export_manifest.json beside it): nothing says where its "
+            "particles were picked"
+        )
     classification, number, members = _class_members(run, channel, iteration)
     decoys = members & {int(tag) for tag in classification.decoys}
     members -= decoys
@@ -977,51 +1052,75 @@ def read_run_class(
         agreed_with = f"{Path(other).name}:{other_channel}"
     if not members:
         raise ValueError(f"{run}: class {channel} of iteration {number} has no particle to export")
+    missing = sorted(members - set(origins))
+    if missing:
+        raise ValueError(
+            f"{source} does not trace {len(missing)} of the class's particles, "
+            f"e.g. tag {missing[0]}"
+        )
 
     assert classification.poses is not None
     poses = classification.poses((number, channel))
     row_of = {int(tag): row for row, tag in enumerate(poses.tags)}
-    setup, about = read_particle_table(node_folder(run, 0) / PARTICLES)
-    setup_row = {int(tag): row for row, tag in enumerate(setup["particle_id"])}
     chosen = []
     for tag in sorted(members):
-        row, srow = row_of[tag], setup_row[tag]
+        row = row_of[tag]
+        series, stack, pick = origins[tag]
         chosen.append(
             ClassMember(
                 tag=tag,
-                series=str(setup["tilt_series_id"][srow]),
-                stack_id=str(setup["stack_id"][srow]),
-                pick_xyz=tuple(float(setup[f"position_{axis}_px"][srow]) for axis in "xyz"),  # type: ignore[arg-type]
+                series=series,
+                stack_id=stack,
+                pick_xyz=pick,
                 angles_deg=tuple(float(value) for value in poses.angles[row]),  # type: ignore[arg-type]
                 shifts_px=tuple(float(value) for value in poses.shifts[row]),  # type: ignore[arg-type]
                 cc=float(poses.cc[row]),
             )
         )
-    fingerprints = {}
-    for name, folder in (
-        ("mra_setup", node_folder(run, 0)),
-        ("mra_iteration", node_folder(run, number)),
-    ):
-        record = completed(folder)
-        if record is None:
-            raise ValueError(f"{folder} has no finished run record")
-        fingerprints[name] = record.fingerprint
-    average = node_folder(run, number) / f"average_{channel}.mrc"
-    if not average.is_file():
-        raise ValueError(f"{average} is missing")
+    result = classification.iterations[[r.number for r in classification.iterations].index(number)]
+    if result.classes[channel].average is None:
+        raise ValueError(f"{run}: iteration {number} wrote no average of class {channel}")
+    if classification.mask is None:
+        raise ValueError(f"{run}: no alignment mask found")
+    average = np.asarray(result.classes[channel].average.load(), dtype=np.float32)
+    mask = np.asarray(classification.mask.load(), dtype=np.float32)
+    if average.shape != (box,) * 3 or mask.shape != (box,) * 3:
+        raise ValueError(
+            f"{run}: the average {average.shape} or mask {mask.shape} is not the "
+            f"particles' box {box}"
+        )
+
+    fingerprints: dict[str, str] = {}
+    if _registry_run(run):
+        from cryoet_pipeline.mra_runs import node_folder
+
+        for name, folder in (
+            ("mra_setup", node_folder(run, 0)),
+            ("mra_iteration", node_folder(run, number)),
+        ):
+            record = completed(folder)
+            if record is None:
+                raise ValueError(f"{folder} has no finished run record")
+            fingerprints[name] = record.fingerprint
+    else:
+        fingerprints["export_manifest"] = files_fingerprint([manifest])
+    fingerprints["class"] = _array_digest(
+        np.asarray(sorted(members), dtype=float), poses.angles, poses.shifts, average, mask
+    )
     return RunClass(
         run=run,
-        project=Path(str(about["project"])),
+        project=project,
         iteration=number,
         channel=channel,
-        box=int(about["box_px"]),
-        pixel_angstrom=float(about["pixel_size_angstrom"]),
+        box=box,
+        pixel_angstrom=pixel,
         members=tuple(chosen),
         decoys_left_out=len(decoys),
         not_agreed=not_agreed,
         agreed_with=agreed_with,
         average=average,
-        mask=node_folder(run, 0) / "mask.mrc",
+        mask=mask,
+        source=source,
         record_fingerprints=fingerprints,
     )
 

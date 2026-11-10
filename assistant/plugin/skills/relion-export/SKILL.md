@@ -17,8 +17,11 @@ was checked: `docs/relion_export.md`.
 - A class is a channel of the run: `ite_<n>/average_<c>.mrc` are its classes after
   iteration n. The choice of class is the person's. Asked which looks best, say what
   the run shows (class sizes, decoys per class) and leave the choice to them.
-- Only a run of the registry can be exported: one made from a lane (its MRA stage,
-  or `--source`). The script refuses another and says why; pass that on.
+- Two kinds of run can be exported: a run of the registry (`<project>/mra/<NAME>`,
+  from a lane's MRA stage or `--source`), and a run in an export folder of
+  `scripts/export_dynamo.py` (a Dynamo project or a run of the port beside it, such
+  as `<project>/dynamo/<export>/<NAME>`), whose `export_manifest.json` says where its
+  particles came from. The script refuses a run that neither traces, and says why.
 - Unless the person names an iteration, the last finished one is exported. Say
   which.
 
