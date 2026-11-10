@@ -317,9 +317,13 @@ def commands_text(plan: ExportPlan, diameter: float, ini_high: float) -> str:
 # scripts/export_relion.py and not run by it: review before submitting (README.md says
 # why each value is what it is).
 #
-# RELION comes from PATH, or from the module RELION5_MODULE names, loaded here: at MDC
-# relion/v5/gpu/sm86-cu11.7, an A40 build. Refine3D uses the GPUs the job sees, unless
-# USE_GPU=0. THREADS and MPI set the threads per rank and the ranks.
+# RELION comes from PATH, from the modules RELION5_MODULE names (one or more, loaded
+# here), and from RELION5_HOME, an installation whose bin/ and lib/ go first. At MDC
+# (10 November 2026): RELION5_MODULE=openmpi/v5.0.5-xchu and
+# RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7, as the
+# module relion/v5/gpu/sm86-cu11.7 brings an Open MPI that lacks its UCX libraries.
+# Refine3D uses the GPUs the job sees, unless USE_GPU=0. THREADS and MPI set the
+# threads per rank and the ranks.
 set -euo pipefail
 cd "$(dirname "$0")"
 THREADS=${{THREADS:-8}}
@@ -329,11 +333,18 @@ if [ -n "${{RELION5_MODULE:-}}" ]; then
     if ! type module >/dev/null 2>&1 && [ -n "${{MODULESHOME:-}}" ]; then
         source "$MODULESHOME/init/bash"
     fi
-    module load "$RELION5_MODULE"
+    # One or more module names, split on spaces.
+    # shellcheck disable=SC2086
+    module load $RELION5_MODULE
+fi
+if [ -n "${{RELION5_HOME:-}}" ]; then
+    export PATH="$RELION5_HOME/bin:$PATH"
+    export LD_LIBRARY_PATH="$RELION5_HOME/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
 fi
 for program in relion_tomo_subtomo relion_refine relion_refine_mpi mpirun; do
     if ! command -v "$program" >/dev/null 2>&1; then
-        echo "$program not found: load RELION 5 (set RELION5_MODULE) or put it on PATH" >&2
+        echo "$program not found: set RELION5_MODULE and/or RELION5_HOME, or put RELION 5" \\
+            "on PATH" >&2
         exit 2
     fi
 done
@@ -407,9 +418,9 @@ def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: floa
         "",
         "Run it in a job with MPI: as many tasks as `MPI` ranks (3 by default), `THREADS`",
         "CPUs each (8), and GPUs for Refine3D, which it uses unless `USE_GPU=0`. RELION comes",
-        "from PATH, or from the module `RELION5_MODULE` names, which the script loads (at",
-        "MDC `relion/v5/gpu/sm86-cu11.7`, built for A40s). Without RELION it stops before",
-        "running anything.",
+        "from PATH, from the modules `RELION5_MODULE` names, and from `RELION5_HOME` (its",
+        "bin/ and lib/); the script's header says what works at MDC. It first checks that",
+        "RELION starts, and stops before running anything if it does not.",
         "",
         "## Checks",
         "",

@@ -103,7 +103,7 @@ def test_the_commands_load_relion_check_it_and_use_the_gpus(tmp_path) -> None:
     script = tmp_path / "relion_commands.sh"
     script.write_text(text)
     assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
-    assert 'module load "$RELION5_MODULE"' in text
+    assert "module load $RELION5_MODULE" in text and 'PATH="$RELION5_HOME/bin:$PATH"' in text
     assert "--b 96 --crop 48 --bin 4" in text and "reference/class_1.mrc" in text
     assert '${GPU_ARGS[@]+"${GPU_ARGS[@]}"}' in text
     assert "--particle_diameter 130 " in text and "--ini_high 40 " in text
@@ -117,7 +117,7 @@ def test_the_commands_load_relion_check_it_and_use_the_gpus(tmp_path) -> None:
 def _stubs(folder, *, refine_starts=True):
     """Stand-ins for RELION and mpirun that log their arguments."""
 
-    folder.mkdir()
+    folder.mkdir(parents=True)
     log = folder / "calls.log"
     for name in ("relion_tomo_subtomo", "relion_refine_mpi", "mpirun"):
         stub = folder / name
@@ -173,3 +173,26 @@ def test_the_commands_run_extract_then_refine(tmp_path) -> None:
     assert calls[1].startswith("mpirun -n 3 relion_refine_mpi --ios Extract/job001/")
     assert "--gpu" not in calls[1]
     assert (script.parent / "Extract" / "job001").is_dir()
+
+
+def test_relion_can_come_from_an_installation_folder(tmp_path) -> None:
+    import subprocess
+
+    script = _commands(tmp_path)
+    home = tmp_path / "relion-5.0.1"
+    log = _stubs(home / "bin")
+    (home / "lib").mkdir()
+    subtomo = home / "bin" / "relion_tomo_subtomo"
+    subtomo.write_text(f'#!/bin/sh\necho "LD=$LD_LIBRARY_PATH" >> "{log}"\n')
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "USE_GPU": "0",
+        "RELION5_HOME": str(home),
+        "LD_LIBRARY_PATH": "/opt/mpi/lib",
+    }
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text().splitlines()
+    assert calls[0] == f"LD={home / 'lib'}:/opt/mpi/lib"
+    assert calls[1].startswith("mpirun -n 3 relion_refine_mpi")

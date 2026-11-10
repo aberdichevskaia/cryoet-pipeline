@@ -76,8 +76,8 @@ Never run RELION, `relion_commands.sh` or `mpirun` yourself; the guard blocks th
 On a login node they would take the node, and Refine3D needs MPI. Give the person
 the commands of `relion_commands.sh`, to run in a job on the cluster with their own
 resources: as many tasks as `MPI` ranks (3), `THREADS` CPUs each (8), and GPUs. The
-script loads RELION from the module `RELION5_MODULE` names, or finds it on PATH;
-`module avail relion` lists the cluster's builds.
+script takes RELION from the modules `RELION5_MODULE` names, from the installation
+`RELION5_HOME` names, or from PATH; its header says what works on this cluster.
 
 ## 5. What it does not do
 

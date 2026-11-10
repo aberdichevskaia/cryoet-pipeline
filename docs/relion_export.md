@@ -242,8 +242,17 @@ alignment solved without one; not decided.
   the job's GPUs. `module show`: RELION 5.0.1 (`build-gpu_sm86_cu11.7`), with
   `openmpi/v5.0.10` loaded as a requirement. On the login node max023 its
   `relion_refine --version` fails: `libucp.so.0` (UCX, Open MPI 5's network
-  library) is not found. Not yet tried on a GPU node; relion_commands.sh now runs
-  `relion_refine --version` first and stops, naming what is missing, if it fails.
+  library) is not found, and in an A40 job too (`ldd`: libucp, libucs, libucm,
+  libuct, libxpmem not found; none of them under the group's software, /usr/lib64
+  or /opt). With the group's other Open MPI, `openmpi/v5.0.5-xchu` (the same
+  libmpi.so.40), the same RELION starts: `5.0.1-commit-cad71b`, `CUDA-ACC=single`,
+  nothing missing. relion_commands.sh therefore takes `RELION5_MODULE` as one or more
+  modules and `RELION5_HOME` as an installation whose bin/ and lib/ go first, and at
+  MDC: `RELION5_MODULE=openmpi/v5.0.5-xchu`,
+  `RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7`.
+  It runs `relion_refine --version` first and stops, naming what is missing, if it
+  fails. `mpirun` of 5.0.5 starting `relion_refine_mpi` is not yet tried.
+  (`relion/xchu/v5` loads but puts no relion_refine on PATH.)
 
 ## RELION 5 on a Mac, for checks
 
