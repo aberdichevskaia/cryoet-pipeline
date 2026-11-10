@@ -46,16 +46,8 @@ import numpy as np
 import zarr
 from scipy import ndimage
 
-from cryoet_pipeline.artifacts import ArtifactRegistry
-from cryoet_pipeline.backends.alignment import write_binned_mrc_stack
-from cryoet_pipeline.models import Artifact, ArtifactKind, TiltAlignment, TiltSeriesManifest
-from cryoet_pipeline.relion_export import (
-    ImodReconstruction,
-    RelionOptics,
-    RelionView,
-    relion_tilt,
-    write_tomogram_set,
-)
+from cryoet_pipeline.models import Artifact
+from cryoet_pipeline.relion_export import export_series, series_sources, write_tomogram_set
 
 BOX = 128
 QUARTERS = ("centre", "y- x-", "y- x+", "y+ x-", "y+ x+")
@@ -64,139 +56,47 @@ QUARTER_LIMIT = 0.5
 MARGIN = 3.0
 
 
-def _ancestors(registry: ArtifactRegistry, artifact: Artifact) -> list[Artifact]:
-    seen: dict[str, Artifact] = {}
-    queue = list(artifact.parent_ids)
-    while queue:
-        parent_id = queue.pop(0)
-        if parent_id in seen:
-            continue
-        try:
-            parent = registry.get(parent_id)
-        except KeyError:
-            continue
-        seen[parent_id] = parent
-        queue.extend(parent.parent_ids)
-    return list(seen.values())
+def build(
+    project: Path, series: str, tomogram_id: str | None, out: Path, stack_binning: int | None = None
+) -> dict:
+    """The series as the RELION export writes it, at its tomogram's binning."""
 
-
-def _one(found: list[Artifact], what: str) -> Artifact:
-    if len(found) != 1:
-        names = ", ".join(item.id for item in found) or "none"
-        sys.exit(f"expected one {what} among the tomogram's ancestors, found {names}")
-    return found[0]
-
-
-def _fine(artifact: Artifact) -> bool:
-    if artifact.kind is not ArtifactKind.ALIGNMENT:
-        return False
     try:
-        return TiltAlignment.model_validate_json(artifact.path.read_text()).stage == "fine"
-    except (OSError, ValueError):
-        return False
-
-
-def series_inputs(project: Path, series: str, tomogram_id: str | None):
-    registry = ArtifactRegistry.load(project / "artifacts.json")
-    tomogram = registry.get(tomogram_id or f"{series}:tomogram:fine")
-    ancestors = _ancestors(registry, tomogram)
-    alignment = _one([a for a in ancestors if _fine(a)], "fine alignment")
-    raw = _one([a for a in ancestors if a.kind is ArtifactKind.TILT_STACK], "raw tilt stack")
-    final = [
-        a
-        for a in ancestors
-        if a.kind is ArtifactKind.ALIGNED_TILT_STACK
-        and a.parameters.get("purpose") == "final_alignment"
-    ]
-    final_stack = _one(final, "final aligned stack")
-    manifest = TiltSeriesManifest.model_validate_json(
-        (project / "manifests" / f"{series}.json").read_text()
-    )
-    return tomogram, alignment, raw, final_stack, manifest
-
-
-def build(project: Path, series: str, tomogram_id: str | None, out: Path) -> dict:
-    tomogram, alignment_artifact, raw, final_stack, manifest = series_inputs(
-        project, series, tomogram_id
-    )
-    solved = TiltAlignment.model_validate_json(alignment_artifact.path.read_text())
-    binning = int(tomogram.binning or final_stack.binning)
-    raw_px = float(final_stack.parameters["raw_pixel_spacing_angstrom"])
-    pixel = raw_px * binning
-    included = [
-        int(z)
-        for z in tomogram.parameters.get("included_z_values")
-        or [t.z_value for t in solved.transforms]
-    ]
-    transforms = [t for t in solved.transforms if t.z_value in set(included)]
-    index_by_z = {image.z_value: i for i, image in enumerate(manifest.images)}
-    tilt_series = out / "tilt_series"
-    tilt_series.mkdir(parents=True, exist_ok=True)
-    stack = tilt_series / f"{series}.mrcs"
-    write_binned_mrc_stack(
-        raw.path,
-        stack,
-        binning=binning,
-        pixel_spacing_angstrom=pixel,
-        section_indices=[index_by_z[t.z_value] for t in transforms],
-    )
-    with mrcfile.open(stack, permissive=True, header_only=True) as header:
-        image_xy = (int(header.header.nx), int(header.header.ny))
-    nz, ny, nx = (int(s) for s in tomogram.shape)
-    reconstruction = ImodReconstruction(
-        size_xyz=(nx, ny, nz),
-        x_axis_tilt_deg=float(tomogram.parameters.get("x_axis_tilt_deg", 0.0)),
-        z_shift_px=float(tomogram.parameters.get("z_shift_px", 0.0)),
-    )
-    image_by_z = {image.z_value: image for image in manifest.images}
-    views = []
-    dropped = []
-    for section, t in enumerate(transforms, start=1):
-        binned = t.model_copy(
-            update={"shift_x_px": t.shift_x_px / binning, "shift_y_px": t.shift_y_px / binning}
-        )
-        tilt = relion_tilt(
-            binned, image_size_xy=image_xy, reconstruction=reconstruction, pixel_size_angstrom=pixel
-        )
-        dropped.append(tilt.dropped_px)
-        image = image_by_z[t.z_value]
-        nominal = 10000.0 * (image.defocus_um or 3.0)
-        # Geometry only: no CTF correction or dose weighting is asked of RELION here.
-        views.append(
-            RelionView(
-                image=f"{section}@{stack.relative_to(out)}",
-                nominal_tilt_deg=image.tilt_angle_deg,
-                pre_exposure=0.0,
-                defocus_u_angstrom=nominal,
-                defocus_v_angstrom=nominal,
-                defocus_angle_deg=0.0,
-                tilt=tilt,
-            )
-        )
-    optics = RelionOptics(
-        voltage_kv=300.0,
-        spherical_aberration_mm=2.7,
-        amplitude_contrast=0.1,
-        original_pixel_size_angstrom=raw_px,
-    )
+        sources = series_sources(project, series, tomogram_id)
+        exported = export_series(sources, out, stack_binning=stack_binning)
+    except (KeyError, ValueError) as error:
+        sys.exit(f"cannot export {series}: {error}")
     write_tomogram_set(
-        out, {series: (views, reconstruction.size_xyz, pixel)}, optics=optics, hand=-1
+        out,
+        {
+            series: (
+                exported.views,
+                exported.placement.size_xyz(),
+                exported.placement.stack_pixel_angstrom,
+            )
+        },
+        optics=exported.optics,
+        hand=-1,
     )
+    pixel = exported.placement.stack_pixel_angstrom
     return {
-        "tomogram": tomogram,
-        "size_xyz": reconstruction.size_xyz,
-        "binning": binning,
+        "tomogram": sources.tomogram,
+        "size_xyz": exported.placement.size_xyz(),
+        "binning": int(sources.tomogram.binning or 1),
+        "relion_bin": exported.placement.binning,
         "pixel_angstrom": pixel,
-        "views": len(views),
-        "image_xy": image_xy,
-        "x_axis_tilt_deg": reconstruction.x_axis_tilt_deg,
-        "z_shift_px": reconstruction.z_shift_px,
-        "dropped_px_max": max(dropped),
-        "dropped_angstrom_max": max(dropped) * pixel,
+        "views": len(exported.views),
+        "x_axis_tilt_deg": exported.reconstruction.x_axis_tilt_deg,
+        "z_shift_px": exported.reconstruction.z_shift_px,
+        "dropped_px_max": exported.dropped_px_max,
+        "dropped_angstrom_max": exported.dropped_px_max * pixel,
+        "notes": list(exported.notes),
     }
 
 
-def reconstruct(relion: str, out: Path, series: str, size_xyz, threads: int) -> np.ndarray:
+def reconstruct(
+    relion: str, out: Path, series: str, size_xyz, threads: int, binning: int = 1
+) -> np.ndarray:
     target = out / "rec" / "tomograms" / f"rec_{series}.mrc"
     command = [
         relion,
@@ -213,7 +113,7 @@ def reconstruct(relion: str, out: Path, series: str, size_xyz, threads: int) -> 
         "--d",
         str(size_xyz[2]),
         "--bin",
-        "1",
+        str(binning),
         "--j",
         str(threads),
     ]
@@ -329,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))
     )
+    # No --stack-binning here: with a stack finer than the tomogram RELION has to
+    # bin its reconstruction, and its binned tomogram is not on IMOD's grid (on
+    # TS_01 with a bin4 stack and --bin 2: 0.2-0.7 voxel, with a scale along the
+    # odd-sized images' x), while its particles at that binning are exact
+    # (relion_particle_check.py --stack-binning). So this check runs at the
+    # tomogram's binning, and binning is checked on particles.
     args = parser.parse_args(argv)
     if not args.relion:
         parser.error("no relion_tomo_reconstruct_tomogram: give --relion")
@@ -338,7 +244,9 @@ def main(argv: list[str] | None = None) -> int:
 
     built = build(args.project, args.series, args.tomogram_id, args.out)
     tomogram: Artifact = built.pop("tomogram")
-    relion = reconstruct(args.relion, args.out, args.series, built["size_xyz"], args.threads)
+    relion = reconstruct(
+        args.relion, args.out, args.series, built["size_xyz"], args.threads, built["relion_bin"]
+    )
     pipeline = np.asarray(zarr.open(str(tomogram.path), mode="r"), dtype=np.float32)
     result = compare(pipeline, relion)
     passed, reasons = verdict(result)
@@ -361,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         f"dropped by RELION's model (magnification/stretch/skew): up to "
         f"{built['dropped_px_max']:.2f} px = {built['dropped_angstrom_max']:.1f} A at the corners"
     )
+    for note in built["notes"]:
+        print(f"note: {note}")
     for name, value in sorted(result["reversals"].items(), key=lambda item: -item[1]):
         print(f"  reversal {name}: NCC {value:+.3f}")
     for name, shift in result["shifts_zyx_voxel"].items():

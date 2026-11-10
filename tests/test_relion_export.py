@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from cryoet_pipeline.models import AlignmentTransform
+from cryoet_pipeline.backends.dynamo_search import dynamo_angles_from_matrix, dynamo_to_native
+from cryoet_pipeline.imod_defocus import CtffindRow, write_imod_defocus_file
+from cryoet_pipeline.models import AlignmentTransform, Artifact, ArtifactKind
 from cryoet_pipeline.relion_export import (
     ImodReconstruction,
     RelionOptics,
+    RelionParticle,
     RelionTilt,
     RelionView,
+    SeriesSources,
+    TomogramPlacement,
+    _defocus_by_z,
+    acquisition_ranks,
     defocus_angle_in_raw_frame,
     pre_exposures,
+    relion_pose,
     relion_tilt,
+    standard_frame_reference,
     star_text,
+    write_particles,
     write_tomogram_set,
 )
 
@@ -318,3 +329,191 @@ def test_write_tomogram_set_refuses_a_hand_that_is_not_a_sign(tmp_path) -> None:
         write_tomogram_set(
             tmp_path, {"TS_01": ([_view(1)], (10, 10, 10), 1.0)}, optics=optics, hand=0
         )
+
+
+# Particles -------------------------------------------------------------------
+
+
+def _relion_euler(rot_deg, tilt_deg, psi_deg):
+    """Euler::anglesToMatrix3 (src/jaz/math/Euler_angles_relion.h, RELION 5.0), as written there."""
+
+    sp, cp = math.sin(math.radians(rot_deg)), math.cos(math.radians(rot_deg))
+    st, ct = math.sin(math.radians(tilt_deg)), math.cos(math.radians(tilt_deg))
+    sc, cc = math.sin(math.radians(psi_deg)), math.cos(math.radians(psi_deg))
+    return np.array(
+        [
+            [cc * ct * cp - sc * sp, cc * ct * sp + sc * cp, -cc * st],
+            [-sc * ct * cp - cc * sp, -sc * ct * sp + cc * cp, sc * st],
+            [st * cp, st * sp, ct],
+        ]
+    )
+
+
+def _random_rotation(rng):
+    q, r = np.linalg.qr(rng.normal(size=(3, 3)))
+    q = q @ np.diag(np.sign(np.diag(r)))
+    return q if np.linalg.det(q) > 0 else -q
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_relion_places_every_reference_point_where_the_pipeline_pose_does(seed: int) -> None:
+    # The pipeline's side through its own code path: the native pose from
+    # dynamo_to_native, x_in = cN + A (x_out - cN) + s, in the box extraction cut
+    # at `start`; then IMOD's standard orientation (z reversed). RELION's side as
+    # ParticleSet places a reference point: centred / pixel + size / 2 + E (r - N/2),
+    # with the reference mirrored as standard_frame_reference mirrors it.
+    rng = np.random.default_rng(seed)
+    box = 2 * int(rng.integers(8, 33))
+    shape = (int(rng.integers(80, 140)), int(rng.integers(150, 260)), int(rng.integers(150, 260)))
+    pixel = float(rng.uniform(2, 15))
+    placement = TomogramPlacement(shape, 1, pixel)
+    start = rng.integers(0, 40, size=3).astype(float)
+    angles = dynamo_angles_from_matrix(_random_rotation(rng).T)
+    shift = rng.uniform(-3, 3, size=3)
+    centred, (rot, tilt, psi) = relion_pose(
+        box_start_xyz=start,
+        box=box,
+        dynamo_angles_deg=angles,
+        dynamo_shift_px=shift,
+        placement=placement,
+    )
+    a_native, s_native = dynamo_to_native(angles, shift, box)
+    native_centre = (box - 1) / 2
+    position = centred / pixel + np.array(placement.size_xyz()) / 2.0
+    e = _relion_euler(rot, tilt, psi)
+    for r in rng.uniform(0, box - 1, size=(10, 3)):
+        canonical = start + native_centre + a_native @ (r - native_centre) + s_native
+        standard = np.array([canonical[0], canonical[1], (shape[0] - 1) - canonical[2]])
+        mirrored = np.array([r[0], r[1], 2 * (box // 2) - r[2]])
+        np.testing.assert_allclose(position + e @ (mirrored - box // 2), standard, atol=1e-9)
+
+
+def test_an_odd_box_is_refused() -> None:
+    placement = TomogramPlacement((50, 60, 70), 1, 5.0)
+    with pytest.raises(ValueError, match="even"):
+        relion_pose(
+            box_start_xyz=(1, 2, 3),
+            box=47,
+            dynamo_angles_deg=(0, 0, 0),
+            dynamo_shift_px=(0, 0, 0),
+            placement=placement,
+        )
+
+
+def test_standard_frame_reference_mirrors_z_about_the_relion_centre() -> None:
+    even = np.zeros((8, 5, 5))
+    even[6, 2, 3] = 1.0
+    even[4, 1, 1] = 2.0  # int(8/2): stays
+    mirrored = standard_frame_reference(even)
+    assert mirrored[2, 2, 3] == 1.0 and mirrored[4, 1, 1] == 2.0 and mirrored.sum() == 3.0
+    odd = np.zeros((7, 3, 3))
+    odd[5, 0, 0] = 1.0
+    assert standard_frame_reference(odd)[1, 0, 0] == 1.0
+
+
+def test_centred_angstrom_puts_a_binned_voxel_at_the_middle_of_its_pixels() -> None:
+    # A voxel u of a tomogram binned 4 times over the stack covers stack pixels
+    # 4u .. 4u + 3 (block binning, the final stack's), so its centre is 4u + 1.5;
+    # z is reversed first, into IMOD's standard orientation.
+    placement = TomogramPlacement((30, 40, 50), 4, 2.5)
+    size = np.array(placement.size_xyz(), dtype=float)
+    assert placement.size_xyz() == (200, 160, 120)
+    for x, y, z in [(0, 0, 0), (49, 39, 29), (10, 20, 5)]:
+        decentred = placement.centred_angstrom((x, y, z)) / 2.5 + size / 2.0
+        np.testing.assert_allclose(decentred, [4 * x + 1.5, 4 * y + 1.5, 4 * (29 - z) + 1.5])
+    assert placement.reconstruction(x_axis_tilt_deg=1.0, z_shift_px=3.0).z_shift_px == 12.0
+
+
+def test_write_particles_names_each_particle_and_its_half(tmp_path) -> None:
+    particles = [
+        RelionParticle("TS_01", 1, (1.0, 2.0, 3.0), (10.0, 20.0, 30.0), class_number=2, half_set=1),
+        RelionParticle("TS_01", 2, (4.0, 5.0, 6.0), (0.0, 90.0, 0.0), class_number=2, half_set=2),
+    ]
+    lines = write_particles(tmp_path / "particles.star", particles).read_text().splitlines()
+    assert "data_particles" in lines and "_rlnRandomSubset #10" in lines
+    assert "TS_01 TS_01/2 4.000000 5.000000 6.000000 0.000000 90.000000 0.000000 2 2" in lines
+    with pytest.raises(ValueError, match="every particle or for none"):
+        write_particles(
+            tmp_path / "x.star", [particles[0], RelionParticle("TS_01", 3, (0, 0, 0), (0, 0, 0))]
+        )
+    with pytest.raises(ValueError, match="share a name"):
+        write_particles(tmp_path / "x.star", [particles[0], particles[0]])
+    no_halves = write_particles(
+        tmp_path / "y.star", [RelionParticle("TS_01", 1, (0, 0, 0), (0, 0, 0))]
+    )
+    assert "_rlnRandomSubset" not in no_halves.read_text()
+
+
+def _manifest(stamps):
+    return SimpleNamespace(
+        images=[
+            SimpleNamespace(z_value=z, metadata={"DateTime": s} if s else {}) for z, s in stamps
+        ]
+    )
+
+
+def test_acquisition_order_comes_from_the_mdoc_clock() -> None:
+    ranks, source = acquisition_ranks(
+        _manifest(
+            [
+                (0, "30-Nov-15  15:21:38"),
+                (1, "30-Nov-15  15:22:37"),
+                (2, "30-Nov-15  15:23:20"),
+                (3, "30-Nov-15  15:21:59"),
+            ]
+        )
+    )
+    assert source == "mdoc DateTime" and ranks == {0: 0, 3: 1, 1: 2, 2: 3}
+    ranks, source = acquisition_ranks(_manifest([(0, "30-Nov-15  15:21:38"), (5, None), (2, None)]))
+    assert source.startswith("z value") and ranks == {0: 0, 2: 1, 5: 2}
+
+
+def _ctf_sources(tmp_path, *, backend="ctffind5", fitted_on="final"):
+    rows = [
+        CtffindRow(
+            view=v,
+            defocus1_angstrom=30000.0 + v,
+            defocus2_angstrom=29000.0 + v,
+            astigmatism_azimuth_deg=10.0 * v,
+            phase_shift_rad=0.0,
+            cross_correlation=None,
+            fit_resolution_angstrom=None,
+        )
+        for v in (1, 2, 3)
+    ]
+    path = tmp_path / "fit.defocus"
+    write_imod_defocus_file(path, rows, [-3.0, 0.0, 3.0])
+    model = Artifact(
+        id="ctf",
+        kind=ArtifactKind.CTF_MODEL,
+        path=path,
+        parameters={"backend": backend, "z_values": [11, 10, 12], "input_stack_id": fitted_on},
+    )
+    final = Artifact(id="final", kind=ArtifactKind.ALIGNED_TILT_STACK, path=tmp_path / "final.st")
+    return SeriesSources(
+        name="TS",
+        tomogram=None,
+        alignment=None,
+        raw_stack=None,  # type: ignore[arg-type]
+        final_stack=final,
+        ctf_model=model,
+        manifest=None,
+    )  # type: ignore[arg-type]
+
+
+def test_defocus_is_read_by_z_value_from_the_ctf_model(tmp_path) -> None:
+    notes: list[str] = []
+    defocus = _defocus_by_z(_ctf_sources(tmp_path), notes)
+    assert defocus == {
+        11: (30001.0, 29001.0, 10.0),
+        10: (30002.0, 29002.0, 20.0),
+        12: (30003.0, 29003.0, 30.0),
+    }
+    assert notes == []
+    notes = []
+    _defocus_by_z(_ctf_sources(tmp_path, fitted_on="elsewhere"), notes)
+    assert any("fitted on elsewhere" in note for note in notes)
+    notes = []
+    plotter = _defocus_by_z(_ctf_sources(tmp_path, backend="ctfplotter"), notes)
+    assert plotter[11] == (30001.0 - 500.0, 30001.0 - 500.0, 0.0)
+    assert any("without astigmatism" in note for note in notes)

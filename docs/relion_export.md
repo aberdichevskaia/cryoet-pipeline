@@ -72,6 +72,69 @@ The continuous parts (centres, the transform's inverse, its shift, the z shift)
 were derived and then predicted the 0.00 voxel; only the two discrete signs were
 chosen by the data, and the wrong choices fail by a factor of six or more.
 
+`series_sources` finds what a registry tomogram was made from (fine alignment,
+raw stack, final stack, CTF model, manifest) and `export_series` writes the raw
+tilt images the tomogram used, binned as the final stack bins them, with each
+view's row: CTF from the CTF model (CTFFIND's U, V and azimuth, paired by z
+value), pre-exposure in acquisition order (the mdoc's DateTime, else z order),
+the mdoc's dose or a given one. Every fallback is listed in its `notes`. The
+geometry check runs through this code.
+
+## Built: particles
+
+A particle the pipeline aligned is a box cut from the canonical tomogram at
+`start` (extraction: round(pick) - N//2) with Dynamo's angles and shift about
+N/2, as MRA records them: reference point r lies at `start + N/2 + A (r - N/2) + d`,
+A = M^T of the Dynamo matrix. RELION 5 puts it at `pos + E (r - int(N/2))`
+(ParticleSet::getMatrix4x4), E the classic RELION Euler matrix (the same rows as
+`rotations.relion_euler_to_matrix`), pos = centred / pixel + size / 2. Into
+IMOD's standard orientation:
+
+- position: z reversed, `(Nz - 1) - z`; a voxel of a tomogram b times coarser
+  than the stack RELION reads sits at `b u + (b - 1)/2`; centred on size / 2
+  (`TomogramPlacement.centred_angstrom`);
+- pose: `E = F A F`, F = diag(1, 1, -1) (`standard_frame_matrix`), as
+  rlnAngleRot/Tilt/Psi;
+- reference: mirrored in z about int(N/2), index k to N - k for an even box
+  (`standard_frame_reference`; np.flip alone would move the centre one voxel).
+
+Boxes must be even, as MRA's are (dynamo_search refuses odd ones); an odd box
+puts half a voxel between Dynamo's centre and RELION's that nothing has checked,
+so `relion_pose` refuses it. `write_particles` writes `data_particles` as RELION
+reads it straight after picking (RELION makes the optics table from
+tomograms.star), with rlnRandomSubset for all or none.
+
+### Measured (10 November 2026)
+
+`scripts/relion_particle_check.py` places 8 particles on structured parts of
+TS_01 (no beads), gives each a random orientation and a shift of up to 2 voxels,
+and compares RELION's `relion_tomo_reconstruct_particle` at the exported pose with
+the pipeline's own `average_class` (what makes the MRA class averages) of the
+same box at the same pose, mirrored as above:
+
+| stack RELION reads | per particle: NCC, next reversal | all 8 | offsets |
+|---|---|---|---|
+| bin8 (as the tomogram) | 0.51-0.77, at most 0.14 | 0.68 (next 0.10) | at most 0.17 voxel |
+| bin4 (RELION at --bin 2) | 0.51-0.73, at most 0.14 | 0.66 (next 0.09) | at most 0.14 voxel |
+
+The first run, before the comparison was fixed, failed everywhere (NCC 0.02);
+the cause was RELION's map, not the export (below).
+
+### RELION facts found on the way
+
+- `reconstruct_particle` writes `data_merged.mrc` (the backprojected data) and
+  `merged.mrc` (the data divided by its Fourier weights). A few particles' weights
+  are a few planes, so `merged` is mostly noise: on a gold bead `data_merged`
+  held the bead at the centre and `merged` only streaks. It also inverts the
+  contrast (`flip_value` is true in 5.0). The check compares `-data_merged`.
+- `--no_ctf` fills the weights with 1; nothing else changes.
+- `reconstruct_tomogram` with `--x0/--y0` put a region at twice its origin
+  (found by correlating it against the whole tomogram, NCC 0.88). Not used.
+- `reconstruct_tomogram --bin 2` from a bin4 stack of odd-sized images is not on
+  IMOD's grid: 0.2-0.7 voxel, with a scale along the images' odd axis. Its
+  particles at the same binning are exact (bin4 row above), so the geometry
+  check runs at the tomogram's binning and binning is checked on particles.
+
 ### What RELION's model drops
 
 A rotation and a shift per image: tiltalign's per-view magnification (MagOption 1
@@ -94,11 +157,13 @@ alignment solved without one; not decided.
 - **Dose.** rlnMicrographPreExposure counts every acquired view in acquisition
   order, the left-out ones too. Some mdocs give no dose (10164: ExposureDose 0),
   so the lane has to give one.
-- **Particles** (next): positions through the z mirror into centred Angstroms;
-  poses `F A F` with F = diag(1, 1, -1); the reference mirrored about the box
-  centre N/2 (np.flip moves the centre one voxel for even boxes); decoys out,
-  duplicates after the MRA shifts, beads, halves from the consensus split. Check:
-  RELION's `relion_tomo_reconstruct_particle` against the class average.
+- **The step itself** (next): `export-relion` reading an MRA run's class (the
+  run's selection `class <c>`, poses of the chosen iteration, positions from the
+  setup table), decoys out, duplicates after the MRA shifts, beads, halves from
+  the consensus split, the class average mirrored and rescaled to the extraction
+  pixel, a mask by the processing rules, README, sbatch and run.json.
+- **CTF from a CTF model** is unit-tested only: the local TS_01 project has no
+  CTF model, so no RELION run has read a fitted defocus from this export yet.
 - **RELION at MDC.** Unknown whether RELION 5 is installed on max. The check
   runs anywhere RELION 5 does, on a series copied at its tomogram's binning.
 
