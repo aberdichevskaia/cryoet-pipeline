@@ -13,6 +13,7 @@ from matplotlib.colors import Normalize, to_rgba
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
+from matplotlib.transforms import blended_transform_factory
 
 from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import CtfTable, SeriesReport
@@ -66,6 +67,10 @@ def ctf_page(report: SeriesReport) -> Figure:
         note += " The mdoc records no PriorRecordDose, so the tilts are not coloured by dose."
     if ctf.diagnostic_path is not None:
         note += " Bottom: CTFFIND's own diagnostic images for three of the tilts."
+    if ctf.fit_resolution_angstrom is not None and ctf.no_rings.any():
+        note += (" A triangle at the top is a tilt without rings: it has no fit limit, so it "
+                 "sets no scale.")
+    note += _angle_note(ctf)
     style.caption(figure, note)
     return figure
 
@@ -181,6 +186,21 @@ def _defocus_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
     _flag_legend(axes, ctf)
 
 
+def _angle_note(ctf: CtfTable) -> str:
+    """Where the alignment moved the tilt angles, by how much, in the mdoc's terms."""
+
+    if ctf.collected_angle_deg is None:
+        return ""
+    offset = float(np.median(ctf.tilt_angle_deg - ctf.collected_angle_deg))
+    text = f" Tilt angles are as aligned, {offset:+.0f}° from the mdoc's"
+    unfitted = np.flatnonzero(ctf.no_rings)
+    if unfitted.size:
+        view = int(unfitted[0])
+        text += (f": the tilt without rings at {ctf.tilt_angle_deg[view]:+.0f}° was "
+                 f"collected at {ctf.collected_angle_deg[view]:+.0f}°")
+    return text + "."
+
+
 def _fit_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
     axes.set_xlabel("Tilt angle (°)")
     axes.set_title("How far the CTF fit reached", loc="left")
@@ -196,14 +216,36 @@ def _fit_plot(axes: Axes, ctf: CtfTable, colours: np.ndarray) -> None:
         axes.set_yticks([])
         return
     fit = ctf.fit_resolution_angstrom
-    finite = np.isfinite(fit)
+    no_rings = ctf.no_rings
+    fitted = np.isfinite(fit) & ~no_rings
     axes.scatter(
-        ctf.tilt_angle_deg[finite], fit[finite], c=colours[finite], s=24, zorder=3, linewidths=0
+        ctf.tilt_angle_deg[fitted], fit[fitted], c=colours[fitted], s=24, zorder=3,
+        linewidths=0,
     )
     if ctf.nyquist_angstrom is not None:
         axes.axhline(ctf.nyquist_angstrom, color=style.INK_MUTED, linewidth=0.8, zorder=1)
         _reference_label(axes, "Nyquist of the fitted stack", ctf.nyquist_angstrom)
-        axes.set_ylim(bottom=min(ctf.nyquist_angstrom, float(np.nanmin(fit))) * 0.9)
+    # The scale is the fitted tilts' alone. A tilt without rings has no fit limit,
+    # only where CTFFIND gave up: 974.7 A on Position_1 of EMPIAR-11830
+    # (2026-11-10), which stretched the axis to 1000 A and pressed every real fit,
+    # 6 to 18 A, onto the Nyquist line.
+    reached = [float(value) for value in fit[fitted]]
+    if ctf.nyquist_angstrom is not None:
+        reached.append(ctf.nyquist_angstrom)
+    if reached:
+        axes.set_ylim(min(reached) * 0.9, max(reached) * 1.2)
+    if no_rings.any():
+        # At the top edge, pointing up: beyond any fit limit drawn.
+        axes.scatter(
+            ctf.tilt_angle_deg[no_rings], np.full(int(no_rings.sum()), 0.95),
+            transform=blended_transform_factory(axes.transData, axes.transAxes),
+            c=colours[no_rings], marker="^", s=34, zorder=3, linewidths=0, clip_on=False,
+        )
+        axes.legend(
+            handles=[Line2D([], [], marker="^", linestyle="", markersize=6,
+                            color=style.INK_SECONDARY, label="no Thon rings: no fit limit")],
+            loc="best", fontsize=style.FONT_TINY,
+        )
     axes.set_ylabel("Fit limit (Å, lower is better)")
     axes.grid(True, axis="y")
 
@@ -222,6 +264,8 @@ def _thumbnail_views(ctf: CtfTable) -> list[int]:
 
 def _thumbnail_title(ctf: CtfTable, view: int) -> str:
     title = f"{ctf.tilt_angle_deg[view]:+.0f}°"
+    if ctf.no_rings[view]:
+        return title + " · no Thon rings"
     if ctf.fit_resolution_angstrom is not None and np.isfinite(ctf.fit_resolution_angstrom[view]):
         title += f" · fit to {ctf.fit_resolution_angstrom[view]:.1f} Å"
     return title
@@ -245,10 +289,13 @@ def _numbers(report: SeriesReport, ctf: CtfTable) -> str:
     ]
     if ctf.fit_resolution_angstrom is not None:
         fit = ctf.fit_resolution_angstrom
-        best = int(np.nanargmin(fit))
+        reached_fits = np.where(ctf.no_rings, np.nan, fit)
         near_zero = ctf.nearest_view(0.0)
-        lines.append(f"Best fit {fit[best]:.1f} Å, at {ctf.tilt_angle_deg[best]:+.0f}°")
-        lines.append(f"At {ctf.tilt_angle_deg[near_zero]:+.0f}°: {fit[near_zero]:.1f} Å")
+        if np.isfinite(reached_fits).any():
+            best = int(np.nanargmin(reached_fits))
+            lines.append(f"Best fit {fit[best]:.1f} Å, at {ctf.tilt_angle_deg[best]:+.0f}°")
+        reached = "no Thon rings" if ctf.no_rings[near_zero] else f"{fit[near_zero]:.1f} Å"
+        lines.append(f"At {ctf.tilt_angle_deg[near_zero]:+.0f}°: {reached}")
     if ctf.dose is not None:
         lines.append(f"Dose {float(np.min(ctf.dose)):.0f} to {float(np.max(ctf.dose)):.0f} e⁻/Å²")
     lines.extend(timing.panel_lines(report.timing.page("ctf"), 36))

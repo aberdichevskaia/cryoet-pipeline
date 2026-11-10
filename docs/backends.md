@@ -80,7 +80,9 @@ fitting, not about what follows.
   ryr1 data it fell ~0.03 µm per degree near 0, so ±1000 Å fitted 9 of 29 views
   and ±10000 Å 26 (`scripts/ctf_window_test.sbatch`, 2026-10-16). A view whose
   defocus lies outside it is not fitted, and CTFFIND says so only through the
-  fit limit, which stops at the low end of the range (29.7 Å of 30). Such
+  fit limit, which stops at the low end of the range (29.7 Å of 30 on ryr1;
+  CTFFIND5 gave 974.7 Å on the +57° tilt of EMPIAR-11830's Position_1,
+  2026-11-10, and the report draws such a tilt off its fit-limit scale). Such
   views are *unfitted*: their defocus in the model is interpolated from the
   fitted views (linear between neighbours, along the outermost views' line past
   the last), and with at most `--ctf-max-excluded-views` of them (5) `correct-ctf`

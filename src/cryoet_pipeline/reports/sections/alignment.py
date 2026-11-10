@@ -426,10 +426,18 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
             f"Found dark by AreTomo2{as_collected}: "
             + ", ".join(f"{angle:+.0f}°" for angle in dark_angles), 40
         ))
-    no_rings = _left_out_for_ctf(alignment)
+    no_rings = _left_out_for_ctf_views(alignment)
     if no_rings:
-        lines.append("Left out, no Thon rings: "
-                     + ", ".join(f"{angle:+.0f}°" for angle in no_rings))
+        # Solved angles, as the CTF page draws them, with the mdoc's beside them where
+        # the alignment moved them: the lines above are as collected.
+        named = []
+        for view in no_rings:
+            text = f"{alignment.tilt_angle_deg[view]:+.0f}°"
+            collected = angle_by_z.get(int(alignment.z_value[view]))
+            if collected is not None and f"{collected:+.0f}°" != text:
+                text += f" ({collected:+.0f}° as collected)"
+            named.append(text)
+        lines.append("Left out, no Thon rings: " + ", ".join(named))
     lines.append("")
     steps = report.timing.page("alignment")
     for qc_type in ALIGNMENT_STEPS:
@@ -520,7 +528,13 @@ def _shown_views(alignment: AlignmentInfo) -> list[int]:
 
 
 def _left_out_for_ctf(alignment: AlignmentInfo) -> list[float]:
-    """Solved angles of the aligned views the reconstructed stack does not hold.
+    """Solved angles of the aligned views the reconstructed stack does not hold."""
+
+    return [float(alignment.tilt_angle_deg[view]) for view in _left_out_for_ctf_views(alignment)]
+
+
+def _left_out_for_ctf_views(alignment: AlignmentInfo) -> list[int]:
+    """The aligned views the reconstructed stack does not hold.
 
     correct-ctf leaves out the views CTFFIND found no Thon rings on; fine
     alignment's own exclusions are not aligned views, so they are not counted here.
@@ -529,7 +543,7 @@ def _left_out_for_ctf(alignment: AlignmentInfo) -> list[float]:
     if alignment.aligned_z_values is None:
         return []
     return [
-        float(alignment.tilt_angle_deg[view])
+        view
         for view in range(alignment.z_value.size)
         if int(alignment.z_value[view]) not in alignment.aligned_z_values
     ]

@@ -508,10 +508,23 @@ class CtfTable:
     left_out: np.ndarray | None = None
     """Per view, True where such a view was also left out of the corrected stack, and so
     of the tomogram."""
+    collected_angle_deg: np.ndarray | None = None
+    """Per view, its angle as collected (the mdoc's), where the alignment moved the angles
+    `tilt_angle_deg` holds; None where it did not. AreTomo2 moved Position_1 of
+    EMPIAR-11830 by +12 deg, so the tilt CTFFIND found no rings on, +57 deg here, is +45
+    in the mdoc."""
 
     @property
     def mean_defocus_um(self) -> np.ndarray:
         return np.asarray((self.defocus1_um + self.defocus2_um) / 2.0)
+
+    @property
+    def no_rings(self) -> np.ndarray:
+        """Per view, True where CTFFIND found no Thon rings, whether kept or left out."""
+
+        if self.interpolated is None:
+            return np.zeros(len(self.z_value), dtype=bool)
+        return np.asarray(self.interpolated, dtype=bool)
 
     def nearest_view(self, angle_deg: float) -> int:
         return int(np.argmin(np.abs(self.tilt_angle_deg - angle_deg)))
@@ -567,6 +580,15 @@ def load_ctf(
         fit = None
 
     z_values = np.asarray([transform.z_value for transform in transforms], dtype=np.int64)
+    angles = np.asarray([transform.tilt_angle_deg for transform in transforms])
+    collected_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
+    collected = (
+        np.asarray([collected_by_z[int(z)] for z in z_values])
+        if all(int(z) in collected_by_z for z in z_values)
+        else None
+    )
+    if collected is not None and np.allclose(collected, angles, atol=0.05):
+        collected = None
     # Views CTFFIND found no Thon rings on: the model holds an interpolated defocus
     # for them, and that is the one corrected with, so it is the one to show.
     interpolated = np.isin(z_values, _int_list(ctf_model.parameters.get("interpolated_z_values")))
@@ -587,7 +609,7 @@ def load_ctf(
     return CtfTable(
         backend=str(ctf_model.parameters.get("backend", ctf_model.backend or "unknown")),
         z_value=z_values,
-        tilt_angle_deg=np.asarray([transform.tilt_angle_deg for transform in transforms]),
+        tilt_angle_deg=angles,
         defocus1_um=defocus1,
         defocus2_um=defocus2,
         fit_resolution_angstrom=fit,
@@ -608,6 +630,7 @@ def load_ctf(
         fit_binning=fitted_stack.binning if fitted_stack is not None else None,
         interpolated=interpolated if interpolated.any() else None,
         left_out=left_out if left_out.any() else None,
+        collected_angle_deg=collected,
     )
 
 
@@ -1227,16 +1250,27 @@ class SummaryRow:
     """`residual_nm` is AreTomo2's last projection-matching shift, not a residual."""
 
 
-def summary_row(report: SeriesReport) -> SummaryRow:
-    manifest = report.artifacts.manifest
-    angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
+def aligned_angle_by_z(report: SeriesReport) -> dict[int, float]:
+    """Each view's angle as the tomogram was built with it, by z value.
+
+    The alignment's solved angle where it has one, the mdoc's otherwise: AreTomo2
+    moved Position_1's by +12 deg (11830, 2026-11-10), and the alignment and CTF
+    pages show the solved angles.
+    """
+
+    angle_by_z = {image.z_value: image.tilt_angle_deg
+                  for image in report.artifacts.manifest.images}
     if report.alignment is not None:
-        # The angles the tomogram was built with, as the alignment and CTF pages
-        # show them: AreTomo2 moved Position_1's by +12 deg (11830, 2026-11-10).
         angle_by_z.update(
             zip(report.alignment.z_value.tolist(), report.alignment.tilt_angle_deg.tolist(),
                 strict=True)
         )
+    return angle_by_z
+
+
+def summary_row(report: SeriesReport) -> SummaryRow:
+    manifest = report.artifacts.manifest
+    angle_by_z = aligned_angle_by_z(report)
     used: list[int] | None = None
     if report.tomogram is not None and report.tomogram.included_z_values is not None:
         used = [z for z in report.tomogram.included_z_values if z in angle_by_z]
@@ -1250,8 +1284,12 @@ def summary_row(report: SeriesReport) -> SummaryRow:
         mean_defocus = _finite(report.qc["ctf_estimation"].document.get("mean_defocus_um"))
     fit_near_zero = None
     if ctf is not None and ctf.fit_resolution_angstrom is not None:
-        value = float(ctf.fit_resolution_angstrom[ctf.nearest_view(0.0)])
-        fit_near_zero = value if math.isfinite(value) else None
+        near_zero = ctf.nearest_view(0.0)
+        value = float(ctf.fit_resolution_angstrom[near_zero])
+        # A tilt without Thon rings has no fit limit, only where CTFFIND gave up.
+        fit_near_zero = (
+            value if math.isfinite(value) and not ctf.no_rings[near_zero] else None
+        )
 
     membranes = None
     if "tomogram_segmentation" in report.qc:

@@ -1350,6 +1350,125 @@ def test_ctf_page_colours_tilts_without_thon_rings(tmp_path: Path) -> None:
     assert "stopped at the low end" not in numbers
 
 
+def _gave_up_on_z4(registry: ArtifactRegistry) -> Artifact:
+    """TS_A's CTF model with z 4, the first row, fitted to 974.7 A and left out.
+
+    CTFFIND5 gave up at 974.7 A on Position_1 of EMPIAR-11830's +57 deg tilt
+    (2026-11-10); the other fits are the fixture's.
+    """
+
+    ctf_model = registry.get("TS_A:ctf_model:ctffind5")
+    Path(ctf_model.parameters["summary_path"]).write_text(
+        "# view defocus1 defocus2 azimuth phase cc fit\n"
+        + "".join(
+            f"{view} {30000 + 400 * view:.1f} {29000 + 400 * view:.1f} 30.0 0.0 0.12 {fit}\n"
+            for view, fit in enumerate((974.7, 10.0, 8.0, 11.0, 15.0), 1)
+        )
+    )
+    ctf_model.path.write_text(
+        "1 0 0.0 0.0 0.0 3\n"
+        + "".join(
+            f"{view} {view} 0.0 0.0 {nm:.1f} {nm:.1f} 0.0\n"
+            for view, nm in enumerate((3300.0, 3080.0, 3120.0, 3160.0, 3200.0), 1)
+        )
+    )
+    return ctf_model.model_copy(
+        update={
+            "parameters": {
+                **ctf_model.parameters,
+                "interpolated_z_values": [4],
+                "excluded_z_values": [4],
+            }
+        }
+    )
+
+
+def test_a_tilt_without_rings_sets_no_scale_on_the_fit_panel(tmp_path: Path) -> None:
+    """On Position_1 of EMPIAR-11830 (2026-11-10) the panel's axis ran to 1000 A.
+
+    CTFFIND5's 974.7 A on the one tilt without rings set it, and every real fit,
+    6 to 18 A, lay on the Nyquist line, so the page could not be read.
+    """
+
+    project = _project(tmp_path)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    flagged = _gave_up_on_z4(registry)
+    table = load_ctf(registry, flagged, _manifest("TS_A"), lineage_qc(registry, [flagged]))
+    report = SeriesReport(artifacts=SeriesArtifacts(manifest=_manifest("TS_A")), ctf=table)
+    # Rows follow the alignment, z 4..0: the tilt without rings is +40 deg.
+    assert table.no_rings.tolist() == [True, False, False, False, False]
+    assert table.tilt_angle_deg[0] == 40.0
+    # Beads moved no angle, so there are no angles as collected to name.
+    assert table.collected_angle_deg is None
+
+    page = ctf.ctf_page(report)
+
+    fit_axes = next(axes for axes in page.axes
+                    if axes.get_title(loc="left") == "How far the CTF fit reached")
+    bottom, top = fit_axes.get_ylim()
+    assert 15.0 < top < 30.0
+    assert bottom < 5.4  # Nyquist of the fitted stack
+    fitted, pinned = fit_axes.collections[:2]
+    assert sorted(fitted.get_offsets()[:, 1].tolist()) == [8.0, 10.0, 11.0, 15.0]
+    # At the top edge, in axes fraction, where the fitted tilts are in Angstrom.
+    assert pinned.get_offsets().tolist() == [[40.0, 0.95]]
+    assert pinned.get_transform() is not fit_axes.transData
+    legend = fit_axes.get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == ["no Thon rings: no fit limit"]
+    text = _page_text(page)
+    assert "+40° · no Thon rings" in text
+    assert "974.7" not in text
+    assert "Tilt angles are as aligned" not in text
+
+    # The tilt nearest 0 deg without rings has no fit to give, here or in the table.
+    near_zero = table.nearest_view(0.0)
+    no_rings_at_zero = replace(table, interpolated=np.arange(5) == near_zero)
+    with_it = replace(report, ctf=no_rings_at_zero)
+    assert "At +0°: no Thon rings" in ctf._numbers(with_it, no_rings_at_zero).splitlines()
+    assert summary_row(with_it).ctf_fit_near_zero_angstrom is None
+    assert summary_row(report).ctf_fit_near_zero_angstrom == pytest.approx(8.0)
+
+
+def test_pages_name_the_mdoc_s_angles_where_the_alignment_moved_them(tmp_path: Path) -> None:
+    """Position_1 of EMPIAR-11830 (2026-11-10): AreTomo2 moved its angles by +12 deg.
+
+    The tomogram page gave -63 to +42 deg, the summary table -51 to +54, and the
+    CTF page's tilt without rings, +57 deg, is not in the mdoc, which has it at +45.
+    """
+
+    report = _aretomo_report(tmp_path / "aretomo")
+    assert report.ctf is not None and report.alignment is not None
+    report.ctf = replace(report.ctf, interpolated=report.ctf.z_value == 4,
+                         left_out=report.ctf.z_value == 4)
+    report.alignment = replace(report.alignment, aligned_z_values=(0, 1, 2, 3))
+
+    assert ("5 of 5 tilts, -37° to +43° (mdoc: -40° to +40°)"
+            in tomogram_pages._tomogram_subtitle(report))
+    assert summary_row(report).tilt_range_deg == (-37.0, 43.0)
+    assert report.ctf.collected_angle_deg is not None
+    assert ctf._angle_note(report.ctf) == (
+        " Tilt angles are as aligned, +3° from the mdoc's: the tilt without rings at +43° "
+        "was collected at +40°."
+    )
+    assert ctf._angle_note(report.ctf) in _page_text(ctf.ctf_page(report))
+    page = alignment_pages.alignment_page(report)
+    assert ("Left out, no Thon rings: +43° (+40° as collected)"
+            in " ".join(_page_text(page).split()))
+
+    # Where the alignment moved no angle, there is one angle to give.
+    beads = _project(tmp_path / "beads")
+    registry = ArtifactRegistry.load(beads / "artifacts.json")
+    plain = load_series(registry, cli._report_artifacts(registry, _manifest("TS_A"),
+                                                        variant="bin8"))
+    assert plain.alignment is not None
+    plain.alignment = replace(plain.alignment, aligned_z_values=(0, 1, 2, 3))
+    assert "5 of 5 tilts, -40° to +40° ·" in tomogram_pages._tomogram_subtitle(plain)
+    text = " ".join(_page_text(alignment_pages.alignment_page(plain)).split())
+    assert "Left out, no Thon rings: +40° " in text + " "
+    assert "+40° (+40° as collected)" not in text
+
+
 # --- run times ---------------------------------------------------------------------------
 
 _T0 = datetime(2026, 10, 20, 8, 0, tzinfo=UTC).timestamp()

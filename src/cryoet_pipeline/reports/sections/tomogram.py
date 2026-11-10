@@ -13,7 +13,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import PercentFormatter
 
 from cryoet_pipeline.reports import style, timing
-from cryoet_pipeline.reports.collect import SeriesReport, TomogramInfo
+from cryoet_pipeline.reports.collect import SeriesReport, TomogramInfo, aligned_angle_by_z
 from cryoet_pipeline.reports.imaging import (
     SMOOTHING_SIGMA_PX,
     Depth,
@@ -160,13 +160,23 @@ def _tomogram_subtitle(report: SeriesReport) -> str:
     ]
     manifest = report.artifacts.manifest
     if info.included_z_values is not None:
-        angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
-        angles = [
-            angle_by_z[z_value] for z_value in info.included_z_values if z_value in angle_by_z
-        ]
+        # The angles it was built with, as the summary table gives them; the mdoc's
+        # beside them where the alignment moved them (Position_1 of 11830 said
+        # -63 to +42 here and -51 to +54 in the table, 2026-11-10).
+        built = aligned_angle_by_z(report)
+        collected = {image.z_value: image.tilt_angle_deg for image in manifest.images}
+        angles = [built[z] for z in info.included_z_values if z in built]
+        as_collected = [collected[z] for z in info.included_z_values if z in collected]
         text = f"{len(info.included_z_values)} of {len(manifest.images)} tilts"
         if angles:
-            text += f", {min(angles):+.0f}° to {max(angles):+.0f}°"
+            solved = f"{min(angles):+.0f}° to {max(angles):+.0f}°"
+            text += f", {solved}"
+            if as_collected:
+                mdoc = f"{min(as_collected):+.0f}° to {max(as_collected):+.0f}°"
+                # Short: at Position_1's length the subtitle already ends 28 px from the
+                # page's edge with "as collected" in place of "mdoc:".
+                if mdoc != solved:
+                    text += f" (mdoc: {mdoc})"
         parts.append(text)
     if info.ctf_corrected is not None:
         parts.append("CTF corrected" if info.ctf_corrected else "not CTF corrected")
