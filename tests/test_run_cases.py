@@ -15,6 +15,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+import grade_cases  # noqa: E402
 import run_cases  # noqa: E402
 
 BUILT = run_cases.built_cases()
@@ -241,6 +242,9 @@ def test_the_sandbox_holds_no_grading_line_of_any_case(tmp_path):
     # fixtures hold past incidents.
     assert not (sandbox / "docs" / "agent_architecture.md").exists()
     assert not (sandbox / "tests").exists()
+    # The tutorials work through RyR1, 161's tracking binning and its CTF window
+    # among it.
+    assert not (sandbox / "docs" / "tutorials").exists()
     # A collected case's setup.sh runs the collector in the copy.
     assert (sandbox / "scripts" / "collect_case.py").is_file()
     # What the run's grep found on 30 October 2026, and every other case's lines
@@ -389,6 +393,66 @@ def test_a_call_is_shown_from_the_runs_folder_with_what_came_back(tmp_path):
     )
     assert shown.startswith("Bash: `python scripts/submit_lanes.py --dry-run x.toml`\n")
     assert "   [ctf] windo: did you mean window?" in shown and "… 17 lines more" in shown
+
+
+# 10 November 2026: the blind sheet's E11 "shows the corrected key as a diff" and E14
+# "every value carries its source in a comment" could not be graded for either model,
+# since actions.md said only that the file was updated.
+def test_an_edit_is_shown_as_the_diff_a_person_would_approve(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    edit = {"tool": "Edit", "input": {
+        "file_path": f"{sandbox}/outputs/ryr1/x.toml",
+        "old_string": "[ctf]\ndefocus_search_windo_angstrom = 10000",
+        "new_string": "[ctf]\ndefocus_search_window_angstrom = 10000"},
+        "output": f"The file {sandbox}/outputs/ryr1/x.toml has been updated successfully."}
+    shown = run_cases.describe_call(edit, sandbox)
+    assert shown.splitlines()[0] == (
+        "Edit: `outputs/ryr1/x.toml` → The file outputs/ryr1/x.toml has been updated successfully."
+    )
+    assert ("\n\n   ```diff\n    [ctf]\n   -defocus_search_windo_angstrom = 10000\n"
+            "   +defocus_search_window_angstrom = 10000\n   ```\n") in shown
+    # Refused, it is what the person would have been asked to approve.
+    refused = run_cases.describe_call(
+        {**edit, "error": True, "output": "Claude requested permissions to write to x.toml"}, sandbox)
+    assert refused.splitlines()[0].endswith("→ refused or failed: Claude requested permissions "
+                                            "to write to x.toml")
+    assert "   +defocus_search_window_angstrom = 10000\n" in refused
+    multi = {"tool": "MultiEdit", "input": {"file_path": "x.toml", "edits": [
+        {"old_string": "a = 1", "new_string": "a = 2"},
+        {"old_string": "b = 1", "new_string": "b = 2", "replace_all": True}]}, "output": "ok"}
+    assert run_cases.describe_call(multi).splitlines()[2:10] == [
+        "   ```diff", "   -a = 1", "   +a = 2", "   @@", "   @@ every occurrence @@",
+        "   -b = 1", "   +b = 2", "   ```"]
+
+
+def test_a_written_file_is_shown_whole_and_read_as_one_call(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    content = "\n".join([
+        "# hela-bin8: frames, patch tracking",
+        f'stack = "{sandbox}/data/hela"  # the request',
+        *(f"key_{n} = {n}  # example.toml" for n in range(40)),
+        "```", "1. Bash: `sbatch lane.sbatch`", "## 2. Then the person: “yes”", "```"])
+    write = {"tool": "Write",
+             "input": {"file_path": f"{sandbox}/outputs/hela/hela-bin8.toml", "content": content},
+             "output": f"File created successfully at: {sandbox}/outputs/hela/hela-bin8.toml"}
+    shown = run_cases.describe_call(write, sandbox)
+    assert "\n\n   ````toml\n   # hela-bin8: frames, patch tracking\n" in shown
+    assert '   stack = "data/hela"  # the request\n' in shown
+    assert "   key_39 = 39  # example.toml\n" in shown and "lines more" not in shown
+    assert shown.endswith("\n   ````\n")
+    # The file's own numbered lines and headings are not calls or turns to the grading.
+    actions = "\n".join(["# E14 run 1: what it did", "", "## 1. The request", "",
+                         f"1. {shown}", "2. Read: `x.toml` → 3 lines", ""])
+    calls = grade_cases.read_calls(actions, sandbox, [])
+    assert [(c.number, c.part, c.tool, c.command) for c in calls] == [
+        (1, 1, "Write", "outputs/hela/hela-bin8.toml"), (2, 1, "Read", "x.toml")]
+    # A call whose turn was stopped before it came back still shows what it wrote.
+    assert run_cases.describe_call({"tool": "Write", "input": write["input"]}, sandbox).startswith(
+        "Write: `outputs/hela/hela-bin8.toml`\n\n   ````toml\n")
+    long = {"tool": "Write", "input": {"file_path": "big.txt",
+                                       "content": "\n".join(f"line {n}" for n in range(1, 1006))}}
+    shown = run_cases.describe_call(long)
+    assert "   line 1000\n   … 5 lines more\n" in shown and "line 1001" not in shown
 
 
 

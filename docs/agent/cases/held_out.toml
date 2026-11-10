@@ -14,8 +14,9 @@
 # because of these cases, and a run that reasons its way to them may use them.
 #
 # Every run, held out or not, also goes without docs/agent_architecture.md, whose
-# starting case set states the expected answers, and without tests/, whose
-# fixtures hold past incidents (EVALUATION in run_cases.py).
+# starting case set states the expected answers, without tests/, whose fixtures
+# hold past incidents, and without docs/tutorials/, whose RyR1 walk-through tells
+# E01's and E03's answers (EVALUATION in run_cases.py).
 
 [E01]
 markers = ['161[^\n]{0,80}(segfault|tracking_binning)', 'segfault[^\n]{0,80}\b161\b',

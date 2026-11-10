@@ -46,6 +46,11 @@ This section is for running a dataset end to end, from tilt-series to a
 subtomogram average, without writing code. You write one config file and run
 two submissions. In between, you look at the picks and choose score thresholds.
 
+On MDC's cluster max, two tutorials run a real dataset (RyR1, five tilt-series
+of TIFF frames) from a fresh clone to MRA classes:
+[without the assistant](docs/tutorials/ryr1-without-assistant.md) and
+[with the assistant](docs/tutorials/ryr1-with-assistant.md).
+
 ```text
 download data ─▶ lane config ─▶ submission 1 (Slurm) ─▶ review picks, set thresholds ─▶ submission 2 (Slurm)
                                  tilt-series → particles                                  average + resolution
@@ -107,12 +112,14 @@ What is not supported yet:
 **At MDC (max)** each person has their own clone and their own environments.
 Only the tools in the group folder are shared.
 
-1. Your clone, and its `cryoet-pipeline` environment, with micromamba:
+1. Your clone, and its `cryoet-pipeline` environment, with micromamba. `gpu`
+   brings PyTorch, which the MRA stage runs on; `viz` brings matplotlib, which
+   the reports need:
 
    ```bash
    micromamba create -n cryoet-pipeline -c conda-forge python=3.13
    micromamba activate cryoet-pipeline
-   python -m pip install -e ".[io]"
+   python -m pip install -e ".[io,viz,gpu]"
    ```
 
 2. Your pytom-match-pick environment, at 0.14.0. That is the version the group's
@@ -785,6 +792,9 @@ python -m pip install -e ".[viz]"
 
 ## Documentation
 
+- [docs/tutorials/](docs/tutorials/ryr1-without-assistant.md) — RyR1 on max from
+  a fresh clone to MRA classes, without and
+  [with the assistant](docs/tutorials/ryr1-with-assistant.md)
 - [docs/backends.md](docs/backends.md) — every stage's backends and how to choose
 - [docs/roadmap.md](docs/roadmap.md) — planned work and settled design decisions
 - [docs/database_design.md](docs/database_design.md) — project state, provenance

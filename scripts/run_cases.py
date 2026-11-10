@@ -61,6 +61,7 @@ Disposable, like the rest of scripts/.
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -278,7 +279,7 @@ _UNTRACKED = frozenset({".git", ".claude", "outputs", "__pycache__", ".pytest_ca
 # past incidents. scripts/collect_case.py stays: a collected case's setup.sh runs
 # it in the copy, and it names no case.
 EVALUATION = ("docs/agent/eval_cases.md", "docs/agent/cases/", "scripts/run_cases.py",
-              "docs/agent_architecture.md", "tests/")
+              "docs/agent_architecture.md", "tests/", "docs/tutorials/")
 # The lines elsewhere that tell a case's answer, which its held-out runs go without.
 HELD_OUT = CASES / "held_out.toml"
 # The playbook, one file per step since 9 November 2026; docs/agent/playbook.md
@@ -524,11 +525,51 @@ def read_transcript(path: Path) -> dict[str, Any]:
 
 
 _SHOWN_LINES = 15
+# A file a run writes is shown whole up to here; a lane config has about 350 lines.
+_WRITTEN_LINES = 1000
+
+
+def _diff(old: str, new: str) -> list[str]:
+    """An edit's text, line by line: kept lines start with a space, removed ones
+    with -, added ones with +."""
+    a, b = old.splitlines(), new.splitlines()
+    lines = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            lines += [f" {line}" for line in a[i1:i2]]
+        else:
+            lines += [f"-{line}" for line in a[i1:i2]] + [f"+{line}" for line in b[j1:j2]]
+    return lines
+
+
+def _change(call: dict[str, Any]) -> tuple[str, list[str]]:
+    """What an Edit, MultiEdit or Write put in its file, or asked to: (the fence's
+    language, the lines). A person sees this when asked to approve, and reads it in
+    the session afterwards, but the tool's reply only says the file was updated."""
+    given = call["input"]
+    if call["tool"] == "Write" and "content" in given:
+        lines = str(given["content"]).splitlines()
+        if len(lines) > _WRITTEN_LINES:
+            lines = lines[:_WRITTEN_LINES] + [f"… {len(lines) - _WRITTEN_LINES} lines more"]
+        return Path(str(given.get("file_path") or "")).suffix.lstrip("."), lines
+    edits = {"Edit": [given], "MultiEdit": given.get("edits")}.get(call["tool"])
+    if not isinstance(edits, list):
+        return "", []
+    lines = []
+    for number, edit in enumerate(edit for edit in edits if isinstance(edit, dict)):
+        if number:
+            lines.append("@@")
+        if edit.get("replace_all"):
+            lines.append("@@ every occurrence @@")
+        lines += _diff(str(edit.get("old_string") or ""), str(edit.get("new_string") or ""))
+    return "diff", lines
 
 
 def describe_call(call: dict[str, Any], sandbox: Path | None = None) -> str:
     """A call and what came back: a Read's line count, one line inline, or the first
-    lines as a block. Paths are given from the run's folder."""
+    lines as a block; then what an Edit or Write changed, whole, refused or not. Paths
+    are given from the run's folder. Every line after the first is indented, so that
+    grade_cases.py reads one call however the file's text looks."""
     def short(text: str) -> str:
         return text.replace(f"{sandbox}/", "").replace(str(sandbox), ".") if sandbox else text
 
@@ -537,18 +578,27 @@ def describe_call(call: dict[str, Any], sandbox: Path | None = None) -> str:
                      or given.get("skill") or json.dumps(given)[:200]))
     head = f"{call['tool']}: `{what}`"
     lines = [short(line)[:200] for line in (call.get("output") or "").strip().splitlines()]
+    language, change = _change(call)
+    written = []
+    if change:
+        # A fence longer than any run of backticks in the text, which may hold fences.
+        fence = "`" * max([3, *(len(run) + 1 for run in re.findall(r"`+", "\n".join(change)))])
+        written = [f"   {fence}{language}", *(f"   {short(line)}" for line in change),
+                   f"   {fence}", ""]
     if not lines:
-        return head
+        return "\n".join([head, "", *written]) if written else head
     if call.get("error"):
         lines[0] = f"refused or failed: {lines[0]}"
     elif call["tool"] == "Read":
         return f"{head} → {len(lines)} lines"
     if len(lines) == 1:
-        return f"{head} → {lines[0]}"
+        return "\n".join([f"{head} → {lines[0]}", "", *written]) if written \
+            else f"{head} → {lines[0]}"
     shown = lines[:_SHOWN_LINES]
     if len(lines) > _SHOWN_LINES:
         shown.append(f"… {len(lines) - _SHOWN_LINES} lines more")
-    return "\n".join([head, "", "   ```", *(f"   {line}" for line in shown), "   ```", ""])
+    return "\n".join([head, "", "   ```", *(f"   {line}" for line in shown), "   ```", "",
+                      *written])
 
 
 def code_version() -> dict[str, Any]:
