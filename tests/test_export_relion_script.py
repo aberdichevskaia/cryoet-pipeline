@@ -196,3 +196,34 @@ def test_relion_can_come_from_an_installation_folder(tmp_path) -> None:
     calls = log.read_text().splitlines()
     assert calls[0] == f"LD={home / 'lib'}:/opt/mpi/lib"
     assert calls[1].startswith("mpirun -n 3 relion_refine_mpi")
+
+
+def test_too_few_slurm_tasks_stop_the_commands_first(tmp_path) -> None:
+    import subprocess
+
+    script = _commands(tmp_path)
+    log = _stubs(tmp_path / "bin")
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "HOME": str(tmp_path), "SLURM_NTASKS": "1"}
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 2 and "--ntasks=3" in result.stderr
+    assert not log.exists()
+
+
+def test_mpirun_keeps_its_session_files_where_it_is_told(tmp_path) -> None:
+    import subprocess
+
+    script = _commands(tmp_path)
+    log = _stubs(tmp_path / "bin")
+    mpirun = tmp_path / "bin" / "mpirun"
+    mpirun.write_text(f'#!/bin/sh\necho "PRTE=$PRTE_MCA_prte_tmpdir_base" >> "{log}"\n')
+    local = tmp_path / "local"
+    env = {
+        "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "USE_GPU": "0",
+        "SLURM_NTASKS": "3",
+        "RELION5_MPI_TMPDIR": str(local),
+    }
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert log.read_text().splitlines()[-1] == f"PRTE={local}"

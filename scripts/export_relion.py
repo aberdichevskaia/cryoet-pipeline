@@ -323,7 +323,9 @@ def commands_text(plan: ExportPlan, diameter: float, ini_high: float) -> str:
 # RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7, as the
 # module relion/v5/gpu/sm86-cu11.7 brings an Open MPI that lacks its UCX libraries.
 # Refine3D uses the GPUs the job sees, unless USE_GPU=0. THREADS and MPI set the
-# threads per rank and the ranks.
+# threads per rank and the ranks; a Slurm job needs --ntasks of at least MPI, as mpirun
+# takes its slots from Slurm. mpirun keeps its session files and shared memory in
+# RELION5_MPI_TMPDIR, by default /dev/shm, not in a TMPDIR on a shared file system.
 set -euo pipefail
 cd "$(dirname "$0")"
 THREADS=${{THREADS:-8}}
@@ -354,6 +356,16 @@ if ! version=$(relion_refine --version 2>&1); then
     exit 2
 fi
 echo "$version" | head -1
+if [ -n "${{SLURM_NTASKS:-}}" ] && [ "$SLURM_NTASKS" -lt "$MPI" ]; then
+    echo "this job has $SLURM_NTASKS task(s) and mpirun needs $MPI: submit it with" \\
+        "--ntasks=$MPI, or set MPI" >&2
+    exit 2
+fi
+if [ -n "${{RELION5_MPI_TMPDIR:-}}" ]; then
+    export PRTE_MCA_prte_tmpdir_base="$RELION5_MPI_TMPDIR"
+elif [ -z "${{PRTE_MCA_prte_tmpdir_base:-}}" ] && [ -d /dev/shm ] && [ -w /dev/shm ]; then
+    export PRTE_MCA_prte_tmpdir_base=/dev/shm
+fi
 GPU_ARGS=()
 if [ "${{USE_GPU:-1}}" != 0 ] && command -v nvidia-smi >/dev/null 2>&1 \\
         && nvidia-smi -L >/dev/null 2>&1; then

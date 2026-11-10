@@ -251,7 +251,12 @@ alignment solved without one; not decided.
   MDC: `RELION5_MODULE=openmpi/v5.0.5-xchu`,
   `RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7`.
   It runs `relion_refine --version` first and stops, naming what is missing, if it
-  fails. `mpirun` of 5.0.5 starting `relion_refine_mpi` is not yet tried.
+  fails. `mpirun` of 5.0.5 starting `relion_refine_mpi` is not yet tried: run outside
+  a two-task allocation it refused (`not enough slots`, it takes its slots from
+  Slurm), and PRTE warned that its session directory, with the ranks' shared memory,
+  sat on GPFS (TMPDIR on /fast). relion_commands.sh now stops when the job has fewer
+  Slurm tasks than MPI ranks, and puts that directory in /dev/shm unless
+  `RELION5_MPI_TMPDIR` names another.
   (`relion/xchu/v5` loads but puts no relion_refine on PATH.)
 
 ## RELION 5 on a Mac, for checks
