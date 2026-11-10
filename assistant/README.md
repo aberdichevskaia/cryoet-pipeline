@@ -36,8 +36,9 @@ are yours.
 | [plugin/skills/emdb-template](plugin/skills/emdb-template/SKILL.md) | one to three EMDB entries proposed as the picking template with `show_emdb.py`, each checked against the lane, for the person to choose |
 | [plugin/skills/empiar-download](plugin/skills/empiar-download/SKILL.md) | an EMPIAR entry read with `show_empiar.py`, its download layout written and checked against each series' mdoc, and the download command handed to the person |
 | [plugin/skills/lane-config](plugin/skills/lane-config/SKILL.md) | writing a lane config with the source of every value: the data read with `show_folder.py`, then checking it, dry run, yes, and submit |
+| [plugin/skills/relion-export](plugin/skills/relion-export/SKILL.md) | a class of an MRA run exported for RELION 5 with `export_relion.py`: dry run, shown with its notes, yes, export with `--reason`; RELION itself is the person's to run |
 | [settings.json](settings.json) | the client's permission rules, and the guard on shell commands |
-| [guard.py](guard.py) | that guard: it blocks `sbatch`, `srun` and `salloc`, batch scripts run directly, and writes to a journal, wherever they sit in a command line |
+| [guard.py](guard.py) | that guard: it blocks `sbatch`, `srun` and `salloc`, batch scripts run directly, writes to a journal, and RELION's programs and `mpirun`, wherever they sit in a command line |
 
 The skills are thin. They point at the knowledge base in
 [docs/agent/](../docs/agent/README.md), which is plain markdown that a person

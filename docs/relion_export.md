@@ -85,6 +85,21 @@ median 11 deg, which says nothing either way: these picks hold no particle for p
 to converge on. The gold-standard command is for max (or any machine with a working
 MPI), with a real class.
 
+### The assistant (10 November 2026)
+
+The terminal assistant exports on request with the skill `relion-export`
+(assistant/plugin/skills/relion-export): the run and class the person names, the
+dry run shown with each series' notes, an explicit yes, then the export with
+`--reason`. As for submissions, the gate is in the script: every dry run and export
+goes into the project's journal.jsonl (scripts/submit_lanes.py's journal), and an
+export from an agentic client must be the same person's last dry run of the same run
+and class, unchanged, at most 30 minutes old, or it is refused. The dry run prints
+what each series' rows fall back on (no dose, no CTF model, order from z values), so
+a missing dose is given with `--dose-per-tilt` before anything is written. The
+client allows the dry run alone; the export asks the person. The guard blocks RELION
+itself (relion_* programs, an export's relion_commands.sh, mpirun, mpiexec): those
+run in a job on the cluster, by the person. Not yet tried in a live session.
+
 ## Built: the tilt geometry
 
 `cryoet_pipeline.relion_export` writes RELION's five numbers per tilt image

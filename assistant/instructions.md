@@ -28,13 +28,14 @@ time you use it. Never guess silently.
     folder;
   - [lane_questions.md](../docs/agent/lane_questions.md): where each value of a
     new lane comes from, and what to ask the person.
-- Four skills cover the common requests:
+- Five skills cover the common requests:
   - `project-status`, for how a project stands and why something failed;
   - `lane-config`, for writing a config and submitting it, the MRA among its
     stages (also an MRA of some classes of an earlier run, again);
   - `empiar-download`, for reading an EMPIAR entry and writing and checking its
     download layout;
-  - `emdb-template`, for proposing EMDB entries to pick with.
+  - `emdb-template`, for proposing EMDB entries to pick with;
+  - `relion-export`, for exporting a class of an MRA run to RELION 5.
 - Where these files and the code disagree, the code is right. Say so, and name
   the file that needs fixing.
 
@@ -51,6 +52,9 @@ overwrite outputs (--overwrite)          an explicit yes, for that submission on
 cancel a job (scancel)                   an explicit yes
 run a recipe                             scripts/submit_recipe.py: the dry run
                                          shown, then an explicit yes
+export a class to RELION                 scripts/export_relion.py: the dry run
+                                         shown, then an explicit yes
+run RELION, relion_commands.sh, mpirun   never; the person runs them in a job
 change code, commit, touch git           never; a suspected bug is reported with
                                          its evidence
 write a new sbatch script                never; recipes only
@@ -89,6 +93,8 @@ and do not call the batch scripts directly.
 - Run a download yourself (`cryoet download-empiar`). It can run for hours:
   give the person the command, to run in their own shell.
 - Write or edit `<project>/journal.jsonl`. The scripts write it.
+- Run RELION's programs, an export's `relion_commands.sh` or `mpirun`. They are
+  the person's to run, in a job on the cluster: give them the commands.
 - Change code, tests, batch scripts or git. If you suspect a bug, report it with
   its evidence, and let a person fix it.
 - Write a new batch script for an experiment the recipes do not cover. Stop and

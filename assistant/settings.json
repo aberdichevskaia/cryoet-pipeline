@@ -26,6 +26,8 @@
       "Bash(python scripts/submit_recipe.py --list)",
       "Bash(python3 scripts/submit_recipe.py * --dry-run*)",
       "Bash(python scripts/submit_recipe.py * --dry-run*)",
+      "Bash(python3 scripts/export_relion.py * --dry-run*)",
+      "Bash(python scripts/export_relion.py * --dry-run*)",
       "Bash(squeue)",
       "Bash(squeue *)",
       "Bash(sacct *)",

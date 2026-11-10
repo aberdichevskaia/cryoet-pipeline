@@ -752,32 +752,7 @@ def export_series(
         z_shift_px=float(tomogram.parameters.get("z_shift_px", 0.0)),
     )
 
-    notes: list[str] = []
-    ranks, order_source = acquisition_ranks(sources.manifest)
-    if not order_source.startswith("mdoc"):
-        notes.append(f"acquisition order from the {order_source}")
-    doses = {z: image.exposure_dose for z, image in images.items()}
-    if all(dose is not None and dose > 0 for dose in doses.values()):
-        dose_values = {z: float(dose or 0.0) for z, dose in doses.items()}
-    elif dose_per_tilt is not None:
-        dose_values = {z: float(dose_per_tilt) for z in doses}
-        notes.append(f"dose {dose_per_tilt} e/A^2 per tilt as given, the mdoc states none")
-    else:
-        dose_values = {z: 0.0 for z in doses}
-        notes.append("no dose: every pre-exposure is 0, so RELION weights no tilt by dose")
-    pre = pre_exposures(dose_values, ranks)
-
-    defocus = _defocus_by_z(sources, notes)
-    if sources.ctf_model is not None:
-        optics = RelionOptics(
-            voltage_kv=float(sources.ctf_model.parameters["voltage_kv"]),
-            spherical_aberration_mm=float(sources.ctf_model.parameters["spherical_aberration_mm"]),
-            amplitude_contrast=float(sources.ctf_model.parameters["amplitude_contrast"]),
-            original_pixel_size_angstrom=raw_px,
-        )
-    else:
-        optics = RelionOptics(300.0, 2.7, 0.1, raw_px)
-        notes.append("optics assumed (300 kV, Cs 2.7 mm, amplitude contrast 0.1): no CTF model")
+    pre, defocus, optics, notes = _rows_inputs(sources, dose_per_tilt, raw_px)
 
     views = []
     dropped = []
@@ -824,6 +799,47 @@ def export_series(
         dropped_px_max=max(dropped),
         notes=tuple(notes),
     )
+
+
+def _rows_inputs(
+    sources: SeriesSources, dose_per_tilt: float | None, raw_px: float
+) -> tuple[dict[int, float], dict[int, tuple[float, float, float]], RelionOptics, list[str]]:
+    """Each view's pre-exposure and defocus, the optics, and what they fall back on."""
+
+    notes: list[str] = []
+    ranks, order_source = acquisition_ranks(sources.manifest)
+    if not order_source.startswith("mdoc"):
+        notes.append(f"acquisition order from the {order_source}")
+    doses = {image.z_value: image.exposure_dose for image in sources.manifest.images}
+    if all(dose is not None and dose > 0 for dose in doses.values()):
+        dose_values = {z: float(dose or 0.0) for z, dose in doses.items()}
+    elif dose_per_tilt is not None:
+        dose_values = {z: float(dose_per_tilt) for z in doses}
+        notes.append(f"dose {dose_per_tilt} e/A^2 per tilt as given, the mdoc states none")
+    else:
+        dose_values = {z: 0.0 for z in doses}
+        notes.append("no dose: every pre-exposure is 0, so RELION weights no tilt by dose")
+    pre = pre_exposures(dose_values, ranks)
+    defocus = _defocus_by_z(sources, notes)
+    if sources.ctf_model is not None:
+        optics = RelionOptics(
+            voltage_kv=float(sources.ctf_model.parameters["voltage_kv"]),
+            spherical_aberration_mm=float(sources.ctf_model.parameters["spherical_aberration_mm"]),
+            amplitude_contrast=float(sources.ctf_model.parameters["amplitude_contrast"]),
+            original_pixel_size_angstrom=raw_px,
+        )
+    else:
+        optics = RelionOptics(300.0, 2.7, 0.1, raw_px)
+        notes.append("optics assumed (300 kV, Cs 2.7 mm, amplitude contrast 0.1): no CTF model")
+    return pre, defocus, optics, notes
+
+
+def series_notes(sources: SeriesSources, *, dose_per_tilt: float | None = None) -> list[str]:
+    """What `export_series` would fall back on for this series, written nowhere: for a
+    dry run, so that a missing dose can be given before the stack is written."""
+
+    raw_px = float(sources.final_stack.parameters["raw_pixel_spacing_angstrom"])
+    return _rows_inputs(sources, dose_per_tilt, raw_px)[3]
 
 
 def _defocus_by_z(

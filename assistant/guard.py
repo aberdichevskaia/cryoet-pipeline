@@ -13,7 +13,11 @@ line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c`:
 * starting a Slurm job (sbatch, srun, salloc), which would skip the checks and
   the journal of scripts/submit_lanes.py and scripts/submit_recipe.py;
 * running a batch script (*.sbatch) directly;
-* writing a project's journal.jsonl, which only those two scripts write;
+* writing a project's journal.jsonl, which only those two scripts and
+  scripts/export_relion.py write;
+* running RELION itself: a relion_* program, an export's relion_commands.sh, or
+  mpirun/mpiexec, which would compute on the login node. The person runs RELION,
+  in a job on the cluster;
 * running scripts/build_library.py, which writes the reference library;
 * changing the reference library (docs/library.md). A command line that names
   the library, or runs inside it, may run only commands that read. An edit of a
@@ -44,6 +48,9 @@ WRAPPERS = {
     "builtin", "stdbuf", "setsid", "watch", "eval",
 }
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+# RELION's programs and how they are started: never by the assistant.
+RELION_PREFIX = "relion_"
+MPI_LAUNCHERS = {"mpirun", "mpiexec"}
 # Tokens after which a new command starts.
 SEPARATORS = {";", "&&", "||", "|", "&", "(", "{", "!", "then", "do", "else", "elif"}
 REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
@@ -123,6 +130,8 @@ def problem(command, depth=0):
                 return slurm_message(name)
             if name.endswith(".sbatch"):
                 return batch_message(word)
+            if name.startswith(RELION_PREFIX) or name in MPI_LAUNCHERS:
+                return relion_message(name)
             if name in WRAPPERS:
                 previous = name
                 i += 1
@@ -148,6 +157,8 @@ def problem(command, depth=0):
                 operands = [one for one in rest if not one.startswith("-")]
                 if operands and os.path.basename(operands[0]).endswith(".sbatch"):
                     return batch_message(operands[0])
+                if operands and os.path.basename(operands[0]).startswith(RELION_PREFIX):
+                    return relion_message(os.path.basename(operands[0]))
             end = next(
                 (j for j in range(i + 1, len(words)) if words[j] in SEPARATORS), len(words)
             )
@@ -181,8 +192,16 @@ def batch_message(path):
 
 def journal_message():
     return (
-        "a project's journal.jsonl is written by scripts/submit_lanes.py and "
-        "scripts/submit_recipe.py only. Read it, but never change it."
+        "a project's journal.jsonl is written by scripts/submit_lanes.py, "
+        "scripts/submit_recipe.py and scripts/export_relion.py only. Read it, but never "
+        "change it."
+    )
+
+
+def relion_message(name):
+    return (
+        f"`{name}` would run RELION here, on the login node. RELION is the person's to run, "
+        "in a job on the cluster: give them the commands of the export's relion_commands.sh."
     )
 
 

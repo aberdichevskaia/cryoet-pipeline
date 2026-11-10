@@ -26,6 +26,11 @@ run-record layout (run.json written last, the folder renamed into place):
 
 Nothing is submitted, and relion_commands.sh has not been run by the export.
 
+Every dry run and export goes into the project's journal.jsonl, through
+scripts/submit_lanes.py's journal, and an export from an agentic client (the
+assistant) needs --reason and must be the same person's last dry run of the same
+run and class, unchanged, at most 30 minutes old, as a submission must.
+
 --relion-check <relion_tomo_reconstruct_particle> then has RELION reconstruct the
 exported class from the tilt images at the exported poses (no CTF, at the MRA's
 pixel) and compares it with the exported reference: the same check as
@@ -44,9 +49,12 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from collections import Counter
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import mrcfile
 import numpy as np
@@ -65,6 +73,7 @@ from cryoet_pipeline.relion_export import (
     read_run_class,
     relion_pose,
     remove_duplicates,
+    series_notes,
     series_sources,
     standard_frame_reference,
     write_particles,
@@ -72,7 +81,12 @@ from cryoet_pipeline.relion_export import (
 )
 from cryoet_pipeline.runs import RunInput, files_fingerprint, writing
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import submit_lanes  # noqa: E402  (the journal and the dry-run gate of submissions)
+
 STEP, STEP_VERSION, BACKEND, BACKEND_VERSION = "export-relion", 1, "relion5", 1
+JOURNAL_ACTION = "export-relion"
+"""What the project's journal calls this script's dry runs and exports."""
 """Declared: raised by hand when a change moves what the export writes."""
 MIN_STACK_PIXEL = 1.0
 """Angstrom: the default stack binning is the least that brings the tilt images to
@@ -88,6 +102,7 @@ class SeriesPlan:
     views: int
     stack_gb: float
     particles: int
+    notes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -170,6 +185,7 @@ def make_plan(args: argparse.Namespace) -> ExportPlan:
                 views=views,
                 stack_gb=views * (nx // binning) * (ny // binning) * 4 / 1e9,
                 particles=counts[name],
+                notes=tuple(series_notes(sources, dose_per_tilt=args.dose_per_tilt)),
             )
         )
     if len({plan.relion_bin for plan in plans}) != 1:
@@ -222,8 +238,69 @@ def describe(plan: ExportPlan) -> list[str]:
             f"({series.stack_gb:.1f} GB as float32), RELION at --bin {series.relion_bin} "
             f"for the MRA's pixel"
         )
+        lines.extend(f"    note: {note}" for note in series.notes)
     lines.append(f"  to {plan.out}")
     return lines
+
+
+def plan_record(plan: ExportPlan, args: argparse.Namespace) -> dict[str, Any]:
+    """What the dry run showed, as the journal keeps it: an export from the assistant
+    must be this record unchanged (scripts/submit_lanes.py's `unshown`). The run, the
+    class and the iteration name the thread, as a config and its series do for a lane."""
+
+    chosen = plan.chosen
+    return {
+        "recipe": JOURNAL_ACTION,
+        "config": str(chosen.run.resolve()),
+        "series": f"class {chosen.channel} after iteration {chosen.iteration}",
+        "project": str(plan.project),
+        "agree": chosen.agreed_with,
+        "particles": len(plan.kept),
+        "decoys_left_out": chosen.decoys_left_out,
+        "not_agreed_left_out": chosen.not_agreed,
+        "duplicates_left_out": len(plan.duplicates),
+        "halves": {
+            str(half): count for half, count in sorted(Counter(plan.halves.values()).items())
+        },
+        "seed": plan.seed,
+        "min_distance": plan.min_distance,
+        "stacks": {
+            series.name: {
+                "binning": series.stack_binning,
+                "views": series.views,
+                "relion_bin": series.relion_bin,
+                "notes": list(series.notes),
+            }
+            for series in plan.series
+        },
+        "out": str(plan.out),
+        "hand": args.hand,
+        "dose_per_tilt": args.dose_per_tilt,
+        "ini_high": args.ini_high,
+        "relion_check": bool(args.relion_check),
+        "env": {},
+    }
+
+
+def refusal(
+    record: dict[str, Any],
+    who: dict[str, Any],
+    reason: str | None,
+    rows: list[dict[str, Any]],
+    now: datetime,
+) -> str | None:
+    """Why an export may not be written now, or None. Only an agentic client is held
+    to the dry run it showed, as for a submission: --reason, and the person's own last
+    dry run of this run and class, unchanged and at most 30 minutes old."""
+
+    if not who["assistant"]:
+        return None
+    if not (reason or "").strip():
+        return "an export from the assistant needs --reason: what was asked, and by whom"
+    why = submit_lanes.unshown(rows, record, who["user"], now)
+    if why:
+        return f"{why}; dry-run it, show the dry run, and export after a yes"
+    return None
 
 
 def _write_mrc(path: Path, volume: np.ndarray, pixel: float) -> None:
@@ -573,6 +650,10 @@ def main(argv: list[str] | None = None) -> int:
         help="A: Refine3D's starting low-pass of the reference",
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--reason",
+        help="what was asked and by whom, for the project's journal; required from the assistant",
+    )
     parser.add_argument("--relion-check", help="relion_tomo_reconstruct_particle (RELION 5)")
     parser.add_argument(
         "--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))
@@ -585,12 +666,51 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     for line in describe(plan):
         print(line)
-    if args.dry_run:
-        print("dry run: nothing written")
-        return 0
     if plan.out.exists():
         print(f"{plan.out} is there already; an export is never written over", file=sys.stderr)
         return 2
+    record = plan_record(plan, args)
+    who = submit_lanes._who()
+    project = str(plan.project)
+    if not args.dry_run:
+        why = refusal(
+            record, who, args.reason, submit_lanes.read_journal(project), datetime.now(UTC)
+        )
+        if why:
+            print(f"refused: {why}", file=sys.stderr)
+            return 2
+    # Journaled before anything is written, as a submission is before its sbatch: one
+    # dry run stands for one export.
+    entry: dict[str, Any] = {
+        **who,
+        "at": submit_lanes._now(),
+        "recipe": JOURNAL_ACTION,
+        "config": record["config"],
+        "argv": [sys.argv[0], *(sys.argv[1:] if argv is None else argv)],
+        "plan": record,
+        "plan_sha256": submit_lanes._digest(record),
+        "reason": args.reason,
+    }
+    if args.dry_run:
+        entry |= {"event": "dry-run", "problems": []}
+    else:
+        entry |= {
+            "event": "submit",
+            "id": uuid.uuid4().hex[:12],
+            "code": submit_lanes.code_version(),
+        }
+    try:
+        journal = submit_lanes.write_journal(project, entry)
+    except OSError as error:
+        if not args.dry_run:
+            print(f"refused: cannot write the project's journal: {error}", file=sys.stderr)
+            return 2
+        print(f"not journaled: {error}", file=sys.stderr)
+    else:
+        print(f"recorded in {journal}")
+    if args.dry_run:
+        print("dry run: nothing written")
+        return 0
     written = write(plan, args)
     for series in written["series"]:
         for note in series["notes"]:

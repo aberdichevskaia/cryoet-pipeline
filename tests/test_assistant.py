@@ -63,18 +63,27 @@ def library(tmp_path):
     (root / "current").symlink_to("site-2026-11-05")
     link = tmp_path / "elsewhere"
     link.symlink_to(snapshot)
-    return {"root": root.resolve(), "snapshot": snapshot.resolve(), "link": link,
-            "tmp": tmp_path.resolve()}
+    return {
+        "root": root.resolve(),
+        "snapshot": snapshot.resolve(),
+        "link": link,
+        "tmp": tmp_path.resolve(),
+    }
 
 
 def library_env(library: dict) -> dict[str, str]:
-    return {"CRYOET_LIBRARY_ROOT": str(library["root"]),
-            "CRYOET_LIBRARY_SNAPSHOT": str(library["snapshot"])}
+    return {
+        "CRYOET_LIBRARY_ROOT": str(library["root"]),
+        "CRYOET_LIBRARY_SNAPSHOT": str(library["snapshot"]),
+    }
 
 
 def _launch(*args: str, cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["bash", str(LAUNCHER), *args], cwd=cwd, capture_output=True, text=True,
+        ["bash", str(LAUNCHER), *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
         env=dict(os.environ),
     )
 
@@ -168,8 +177,11 @@ def test_accept_edits_passes_only_for_a_headless_run(claude):
     _, passed = _noted(claude)
     assert passed[passed.index("--permission-mode") + 1] == "acceptEdits"
     claude.unlink()
-    for args in (["--permission-mode", "acceptEdits"], ["--permission-mode=acceptEdits"],
-                 ["-p", "hello", "--permission-mode", "bypassPermissions"]):
+    for args in (
+        ["--permission-mode", "acceptEdits"],
+        ["--permission-mode=acceptEdits"],
+        ["-p", "hello", "--permission-mode", "bypassPermissions"],
+    ):
         result = _launch(*args, cwd=ROOT)
         assert result.returncode == 2 and "scripts/assistant:" in result.stderr
         assert not claude.exists()
@@ -201,6 +213,7 @@ def test_print_command_adds_no_empty_argument(claude):
 
 # --- the reference library --------------------------------------------------------
 
+
 def test_a_session_reads_the_snapshot_current_names(claude, library, monkeypatch):
     monkeypatch.setenv("CRYOET_LIBRARY", str(library["tmp"] / "cryoet-library"))
     result = _launch("-p", "what does newstack -bin do?", cwd=ROOT)
@@ -211,15 +224,18 @@ def test_a_session_reads_the_snapshot_current_names(claude, library, monkeypatch
     assert fields["CRYOET_LIBRARY_SNAPSHOT"] == str(library["snapshot"])
     assert args[args.index("--add-dir") + 1] == str(library["snapshot"])
     prompt = args[args.index("--append-system-prompt") + 1]
-    assert prompt == "\n\n".join([
-        (ASSISTANT / "instructions.md").read_text().rstrip("\n"),
-        (ASSISTANT / "library.md").read_text().rstrip("\n"),
-        f"This session's library is {library['snapshot']} (snapshot site-2026-11-05).",
-    ])
+    assert prompt == "\n\n".join(
+        [
+            (ASSISTANT / "instructions.md").read_text().rstrip("\n"),
+            (ASSISTANT / "library.md").read_text().rstrip("\n"),
+            f"This session's library is {library['snapshot']} (snapshot site-2026-11-05).",
+        ]
+    )
 
 
 def test_none_and_a_folder_without_a_snapshot_start_without_the_library(
-        claude, library, monkeypatch):
+    claude, library, monkeypatch
+):
     plain = (ASSISTANT / "instructions.md").read_text().rstrip("\n")
     for value, said in (("none", ""), (str(library["tmp"]), "no library snapshot at")):
         monkeypatch.setenv("CRYOET_LIBRARY", value)
@@ -240,18 +256,25 @@ def site_launcher(tmp_path, library):
     text = LAUNCHER.read_text()
     sites = re.search(r"^LIBRARY_SITES=\(.*\)$", text, re.MULTILINE).group(0)
     (repo / "scripts" / "assistant").write_text(
-        text.replace(sites, f"LIBRARY_SITES=({library['root']})"))
+        text.replace(sites, f"LIBRARY_SITES=({library['root']})")
+    )
     (repo / "assistant").symlink_to(ASSISTANT)
     return repo / "scripts" / "assistant"
 
 
 def test_a_person_gets_the_sites_library_and_a_headless_run_only_a_named_one(
-        claude, library, site_launcher, monkeypatch):
+    claude, library, site_launcher, monkeypatch
+):
     monkeypatch.delenv("CRYOET_LIBRARY")
 
     def launch(*args: str) -> list[str]:
-        result = subprocess.run(["bash", str(site_launcher), *args], cwd=ROOT,
-                                capture_output=True, text=True, env=dict(os.environ))
+        result = subprocess.run(
+            ["bash", str(site_launcher), *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            env=dict(os.environ),
+        )
         assert result.returncode == 0, result.stderr
         _, passed = _noted(claude)
         claude.unlink()
@@ -274,8 +297,9 @@ def test_print_command_shows_the_library(claude, library, monkeypatch):
 
 def test_the_launcher_and_the_guard_keep_the_same_site_folders():
     launcher = re.search(r"^LIBRARY_SITES=\((.*)\)$", LAUNCHER.read_text(), re.MULTILINE)
-    guard = re.search(r"^LIBRARY_SITES = \((.*)\)$", (ASSISTANT / "guard.py").read_text(),
-                      re.MULTILINE)
+    guard = re.search(
+        r"^LIBRARY_SITES = \((.*)\)$", (ASSISTANT / "guard.py").read_text(), re.MULTILINE
+    )
     sites = launcher.group(1).split()
     assert sites and sites == re.findall(r'"([^"]+)"', guard.group(1))
     for site in sites:
@@ -289,10 +313,19 @@ def _rules() -> dict[str, list[str]]:
 def test_the_client_rules_hold_the_gates():
     rules = _rules()
     for rule in (
-        "Bash(sbatch *)", "Bash(srun *)", "Bash(salloc *)", "Bash(git *)",
+        "Bash(sbatch *)",
+        "Bash(srun *)",
+        "Bash(salloc *)",
+        "Bash(git *)",
         "Bash(python3 scripts/run_series.py * --execute*)",
-        "Edit(**/journal.jsonl)", "Edit(**/*.sbatch)", "Edit(scripts/**)", "Edit(src/**)",
-        "Edit(tests/**)", "Edit(docs/**)", "Edit(assistant/**)", "Edit(.claude/**)",
+        "Edit(**/journal.jsonl)",
+        "Edit(**/*.sbatch)",
+        "Edit(scripts/**)",
+        "Edit(src/**)",
+        "Edit(tests/**)",
+        "Edit(docs/**)",
+        "Edit(assistant/**)",
+        "Edit(.claude/**)",
     ):
         assert rule in rules["deny"], rule
     assert {"Bash(scancel *)", "Edit(configs/lanes/**)"} <= set(rules["ask"])
@@ -303,6 +336,9 @@ def test_the_client_rules_hold_the_gates():
     # Real submissions are not allowed outright: only dry runs are.
     submits = [rule for rule in rules["allow"] if "submit_" in rule]
     assert submits and all("--dry-run" in rule or "--list" in rule for rule in submits)
+    # Nor is a real export to RELION: it writes the tilt series, and asks first.
+    exports = [rule for rule in rules["allow"] if "export_relion" in rule]
+    assert exports and all("--dry-run" in rule for rule in exports)
     # The person is asked, not a classifier, and nothing skips the rules.
     assert rules["defaultMode"] == "default"
     assert rules["disableBypassPermissionsMode"] == rules["disableAutoMode"] == "disable"
@@ -324,23 +360,36 @@ def test_the_guard_runs_on_every_shell_command_and_every_file_edit():
 
 def test_the_rules_deny_the_library_builder():
     deny = _rules()["deny"]
-    assert {"Bash(python3 scripts/build_library.py *)",
-            "Bash(python scripts/build_library.py *)"} <= set(deny)
+    assert {
+        "Bash(python3 scripts/build_library.py *)",
+        "Bash(python scripts/build_library.py *)",
+    } <= set(deny)
 
 
-def _guard(command: str = "", tool: str = "Bash", *, cwd: Path | None = None,
-           env: dict[str, str] | None = None,
-           tool_input: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    call: dict = {"tool_name": tool,
-                  "tool_input": tool_input if tool_input is not None else {"command": command}}
+def _guard(
+    command: str = "",
+    tool: str = "Bash",
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    tool_input: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    call: dict = {
+        "tool_name": tool,
+        "tool_input": tool_input if tool_input is not None else {"command": command},
+    }
     if cwd is not None:
         call["cwd"] = str(cwd)
-    environ = {name: value for name, value in os.environ.items()
-               if not name.startswith("CRYOET_LIBRARY")}
+    environ = {
+        name: value for name, value in os.environ.items() if not name.startswith("CRYOET_LIBRARY")
+    }
     environ.update(env or {})
     return subprocess.run(
-        [sys.executable, str(ASSISTANT / "guard.py")], input=json.dumps(call),
-        capture_output=True, text=True, env=environ,
+        [sys.executable, str(ASSISTANT / "guard.py")],
+        input=json.dumps(call),
+        capture_output=True,
+        text=True,
+        env=environ,
     )
 
 
@@ -366,6 +415,14 @@ def _guard(command: str = "", tool: str = "Bash", *, cwd: Path | None = None,
         "command sbatch x",
         "command -p sbatch x",
         "command -v ls && sbatch x",
+        # RELION itself, which would compute on the login node.
+        "relion_refine --i particles.star --o Refine3D/run",
+        "mpirun -n 3 relion_refine_mpi --ios Extract/job001/optimisation_set.star",
+        "mpiexec -n 2 relion_tomo_subtomo --i optimisation_set.star",
+        "cd outputs/ryr1/relion/run2-class1 && ./relion_commands.sh",
+        "bash outputs/ryr1/relion/run2-class1/relion_commands.sh",
+        "nohup relion_tomo_subtomo --i optimisation_set.star &",
+        "env THREADS=8 ~/relion/bin/relion_refine_mpi --ios x",
     ],
 )
 def test_the_guard_blocks_jobs_batch_scripts_and_journal_writes(command):
@@ -387,6 +444,11 @@ def test_the_guard_blocks_jobs_batch_scripts_and_journal_writes(command):
         "command -v sbatch",
         "command -V srun",
         "type sbatch",
+        # Where RELION is, and what an export holds, run nothing.
+        "command -v relion_tomo_reconstruct_particle",
+        "cat outputs/ryr1/relion/run2-class1/relion_commands.sh",
+        "python3 scripts/export_relion.py --run outputs/ryr1/mra/run2 --class 1 --dry-run",
+        'python3 scripts/export_relion.py --run outputs/ryr1/mra/run2 --class 1 --reason "Anna"',
     ],
 )
 def test_the_guard_lets_the_rest_through(command):
@@ -397,65 +459,74 @@ def test_the_guard_does_not_judge_what_only_reads():
     assert _guard("sbatch x", tool="Read").returncode == 0
 
 
-@pytest.mark.parametrize("command", [
-    "python3 scripts/build_library.py --site mdc --dry-run",
-    "/opt/env/bin/python3 -I /fast/x/scripts/build_library.py --site mdc",
-    "env OVERWRITE=1 python3 scripts/build_library.py --site mdc",
-    "bash -c 'python3 scripts/build_library.py --site mdc'",
-    "./scripts/build_library.py --site mdc",
-])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 scripts/build_library.py --site mdc --dry-run",
+        "/opt/env/bin/python3 -I /fast/x/scripts/build_library.py --site mdc",
+        "env OVERWRITE=1 python3 scripts/build_library.py --site mdc",
+        "bash -c 'python3 scripts/build_library.py --site mdc'",
+        "./scripts/build_library.py --site mdc",
+    ],
+)
 def test_the_guard_blocks_the_library_builder(command):
     result = _guard(command)
     assert result.returncode == 2 and "build_library.py writes" in result.stderr
 
 
-@pytest.mark.parametrize("command", [
-    "rm {snapshot}/text/imod/newstack.md",
-    "mv {root}/current {root}/old",
-    "chmod -R u+w {root}",
-    "echo hi > {snapshot}/text/imod/newstack.md",
-    "sed -i s/a/b/ {snapshot}/text/imod/newstack.md",
-    "cp /etc/hosts {snapshot}/text/",
-    "touch {snapshot}/new.md",
-    "ln -sfn elsewhere {root}/current",
-    "bash -c 'rm {snapshot}/text/imod/newstack.md'",
-    "rm $CRYOET_LIBRARY_SNAPSHOT/text/imod/newstack.md",
-    "find {snapshot} -name '*.md' -delete",
-    "find {snapshot} -name '*.md' -exec rm {{}} +",
-    "python3 -c \"open('{snapshot}/x', 'w')\"",
-    "cat {snapshot}/text/imod/newstack.md | tee {snapshot}/copy.md",
-    "rm {link}/text/imod/newstack.md",
-    "rm {tmp}/cryoet-lib*/current",
-    "grep -rn newstack {snapshot}/text > {snapshot}/hits.txt",
-    "rm /fast/AG_Kudryashev/cryoet-library/current",
-    # The search is a reader only as itself: not a copy of the same name, not
-    # with code run before it, and not writing into the library.
-    "python3 {tmp}/search_library.py x --snapshot {snapshot}",
-    "python3 -c 'import os' scripts/search_library.py x --snapshot {snapshot}",
-    "python3 -c scripts/search_library.py x --snapshot {snapshot}",
-    "python3 scripts/search_library.py x --snapshot {snapshot} > {snapshot}/out.txt",
-])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm {snapshot}/text/imod/newstack.md",
+        "mv {root}/current {root}/old",
+        "chmod -R u+w {root}",
+        "echo hi > {snapshot}/text/imod/newstack.md",
+        "sed -i s/a/b/ {snapshot}/text/imod/newstack.md",
+        "cp /etc/hosts {snapshot}/text/",
+        "touch {snapshot}/new.md",
+        "ln -sfn elsewhere {root}/current",
+        "bash -c 'rm {snapshot}/text/imod/newstack.md'",
+        "rm $CRYOET_LIBRARY_SNAPSHOT/text/imod/newstack.md",
+        "find {snapshot} -name '*.md' -delete",
+        "find {snapshot} -name '*.md' -exec rm {{}} +",
+        "python3 -c \"open('{snapshot}/x', 'w')\"",
+        "cat {snapshot}/text/imod/newstack.md | tee {snapshot}/copy.md",
+        "rm {link}/text/imod/newstack.md",
+        "rm {tmp}/cryoet-lib*/current",
+        "grep -rn newstack {snapshot}/text > {snapshot}/hits.txt",
+        "rm /fast/AG_Kudryashev/cryoet-library/current",
+        # The search is a reader only as itself: not a copy of the same name, not
+        # with code run before it, and not writing into the library.
+        "python3 {tmp}/search_library.py x --snapshot {snapshot}",
+        "python3 -c 'import os' scripts/search_library.py x --snapshot {snapshot}",
+        "python3 -c scripts/search_library.py x --snapshot {snapshot}",
+        "python3 scripts/search_library.py x --snapshot {snapshot} > {snapshot}/out.txt",
+    ],
+)
 def test_the_guard_blocks_every_write_to_the_library(library, command):
     result = _guard(command.format(**library), env=library_env(library))
     assert result.returncode == 2, command
     assert "reference library, which is read-only" in result.stderr
 
 
-@pytest.mark.parametrize("command", [
-    "grep -rn newstack {snapshot}/text",
-    "ls -la {root}",
-    "head -50 {snapshot}/text/imod/newstack.md",
-    "find {snapshot} -name '*.md' | wc -l",
-    "cat {snapshot}/library.json | head -5",
-    "cd {snapshot} && grep -rln newstack text",
-    "grep -c newstack {snapshot}/text/imod/newstack.md > /dev/null",
-    "rm -f {tmp}/scratch.txt",
-    "cat scripts/build_library.py",
-    # The library's own search, given the snapshot by its path.
-    "python3 scripts/search_library.py -e -bin --snapshot {snapshot}",
-    "python3 -I scripts/search_library.py -e -bin --snapshot {snapshot}",
-    "python3 scripts/search_library.py newstack --snapshot $CRYOET_LIBRARY_SNAPSHOT | head -20",
-])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn newstack {snapshot}/text",
+        "ls -la {root}",
+        "head -50 {snapshot}/text/imod/newstack.md",
+        "find {snapshot} -name '*.md' | wc -l",
+        "cat {snapshot}/library.json | head -5",
+        "cd {snapshot} && grep -rln newstack text",
+        "grep -c newstack {snapshot}/text/imod/newstack.md > /dev/null",
+        "rm -f {tmp}/scratch.txt",
+        "cat scripts/build_library.py",
+        # The library's own search, given the snapshot by its path.
+        "python3 scripts/search_library.py -e -bin --snapshot {snapshot}",
+        "python3 -I scripts/search_library.py -e -bin --snapshot {snapshot}",
+        "python3 scripts/search_library.py newstack --snapshot $CRYOET_LIBRARY_SNAPSHOT | head -20",
+    ],
+)
 def test_the_guard_lets_the_library_be_read(library, command):
     assert _guard(command.format(**library), env=library_env(library)).returncode == 0, command
 
@@ -466,23 +537,39 @@ def test_inside_the_library_every_command_only_reads(library):
     assert _guard("grep -rn newstack text", cwd=library["snapshot"], env=env).returncode == 0
 
 
-@pytest.mark.parametrize(("tool", "key"), [
-    ("Edit", "file_path"), ("Write", "file_path"), ("MultiEdit", "file_path"),
-    ("NotebookEdit", "notebook_path"),
-])
+@pytest.mark.parametrize(
+    ("tool", "key"),
+    [
+        ("Edit", "file_path"),
+        ("Write", "file_path"),
+        ("MultiEdit", "file_path"),
+        ("NotebookEdit", "notebook_path"),
+    ],
+)
 def test_no_tool_edits_a_file_in_the_library(library, tool, key):
     env = library_env(library)
-    for path in (library["snapshot"] / "text" / "imod" / "newstack.md",
-                 library["root"] / "current" / "site.md", library["link"] / "new.md"):
+    for path in (
+        library["snapshot"] / "text" / "imod" / "newstack.md",
+        library["root"] / "current" / "site.md",
+        library["link"] / "new.md",
+    ):
         result = _guard(tool=tool, tool_input={key: str(path)}, env=env)
         assert result.returncode == 2 and "no tool edits it" in result.stderr, path
-    assert _guard(tool=tool, tool_input={key: "new.md"}, cwd=library["snapshot"],
-                  env=env).returncode == 2
-    assert _guard(tool=tool, tool_input={key: str(library["tmp"] / "notes.md")},
-                  env=env).returncode == 0
+    assert (
+        _guard(tool=tool, tool_input={key: "new.md"}, cwd=library["snapshot"], env=env).returncode
+        == 2
+    )
+    assert (
+        _guard(tool=tool, tool_input={key: str(library["tmp"] / "notes.md")}, env=env).returncode
+        == 0
+    )
     # A site's folder is guarded when the session names no library.
-    assert _guard(tool=tool, tool_input={
-        key: "/fast/AG_Kudryashev/cryoet-library/current/x.md"}).returncode == 2
+    assert (
+        _guard(
+            tool=tool, tool_input={key: "/fast/AG_Kudryashev/cryoet-library/current/x.md"}
+        ).returncode
+        == 2
+    )
 
 
 def _frontmatter(path: Path) -> dict[str, str]:
@@ -501,7 +588,12 @@ def test_each_skill_has_a_name_and_a_description(skill):
 
 def test_the_skills_are_there():
     assert [path.parent.name for path in SKILLS] == [
-        "emdb-template", "empiar-download", "lane-config", "project-status"]
+        "emdb-template",
+        "empiar-download",
+        "lane-config",
+        "project-status",
+        "relion-export",
+    ]
 
 
 # Repository paths the assistant's files name: scripts, docs, configs, templates.
