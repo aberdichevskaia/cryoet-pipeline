@@ -180,7 +180,8 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
             if row.tilt_range_deg else "–",
             _number(row.mean_defocus_um, "{:.2f}"),
             _number(row.ctf_fit_near_zero_angstrom, "{:.1f}"),
-            _number(row.residual_nm, "{:.2f}"),
+            _number(row.residual_nm, "{:.2f}") + (" *" if row.residual_is_projection_matching
+                                                  else ""),
             _number(row.membrane_percent, "{:.1f}"),
             _number(row.picks, "{:,}"),
             _number(row.above_floor, "{:,}"),
@@ -222,10 +223,15 @@ def _summary_table(rows: list[SummaryRow], steps: list[str]) -> Figure:
     fit_width(table, axes)
 
     legend = "; ".join(f"{qc_step(step).short}: {qc_step(step).label.lower()}" for step in steps)
+    aretomo = (
+        " (* AreTomo2, which has no residual: the mean shift of its last projection-matching "
+        "pass)" if any(row.residual_is_projection_matching for row in rows) else ""
+    )
     style.caption(
         figure,
-        "Tilts: used in the tomogram / collected. CTF fit at 0°: how far CTFFIND fitted Thon "
-        "rings on the tilt nearest 0°. Alignment residual: mean fine-alignment residual. Above "
+        "Tilts: used in the tomogram / collected. Tilt range: the angles the tomogram was built "
+        "with, after alignment. CTF fit at 0°: how far CTFFIND fitted Thon rings on the tilt "
+        f"nearest 0°. Alignment residual: mean fine-alignment residual{aretomo}. Above "
         "the height: picks above the one-false-positive height. Run time: every step from "
         "motion correction or stack import to picking, added up; ≥ when a step's time was not "
         "recorded. " + (f"Verdict columns: {legend}." if legend else ""),

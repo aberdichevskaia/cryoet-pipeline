@@ -59,6 +59,15 @@ The last pass is what AreTomo2 still wanted to move, not a residual after
 moving. It is the closest number its output gives. Its relation to tiltalign's
 residual has not been measured.
 
+`cryoet report` draws the same numbers on the tilt-alignment page, read back
+from the AreTomo2 log kept beside the alignment: the last pass's shift on each
+tilt (paired with the aligned views by tilt, either as printed or moved by the
+measured offset, else not drawn), the mean and largest shift of every pass
+against the 2 px stop, and the QC's numbers. The aligned-tilts page names the
+tilt with the largest last-pass shift, and the summary table puts the last
+pass's mean in the residual column, marked with an asterisk. Before
+2026-11-10 the page said only that tiltalign's files could not be read.
+
 ## Lane config
 
 ```toml

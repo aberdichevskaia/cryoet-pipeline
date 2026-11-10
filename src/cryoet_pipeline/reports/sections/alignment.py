@@ -13,7 +13,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Circle
 
 from cryoet_pipeline.reports import style, timing
-from cryoet_pipeline.reports.collect import AlignmentInfo, SeriesReport, qc_step
+from cryoet_pipeline.reports.collect import ARETOMO_METHOD, AlignmentInfo, SeriesReport, qc_step
 from cryoet_pipeline.reports.imaging import block_mean, display_range, reduction_factor, smooth
 from cryoet_pipeline.reports.sections.tomogram import add_scale_bar, show
 
@@ -35,6 +35,8 @@ TIMED_BY_QC = {
 def alignment_page(report: SeriesReport) -> Figure:
     alignment = report.alignment
     assert alignment is not None
+    if alignment.method == ARETOMO_METHOD:
+        return _aretomo_page(report, alignment)
     figure = style.new_page(f"{report.series} · Tilt alignment", _subtitle(report, alignment))
     grid = GridSpec(
         2, 3, figure=figure, left=0.065, right=0.975, top=style.CONTENT_TOP,
@@ -56,8 +58,102 @@ def alignment_page(report: SeriesReport) -> Figure:
     return figure
 
 
+def _aretomo_page(report: SeriesReport, alignment: AlignmentInfo) -> Figure:
+    """AreTomo2 tracks no points: its own projection matching takes their place."""
+
+    figure = style.new_page(f"{report.series} · Tilt alignment", _subtitle(report, alignment))
+    grid = GridSpec(
+        2, 3, figure=figure, left=0.065, right=0.975, top=style.CONTENT_TOP,
+        bottom=style.CONTENT_BOTTOM, width_ratios=[1.0, 1.0, 0.95], hspace=0.5, wspace=0.3,
+    )
+    _last_pass_panel(figure.add_subplot(grid[0, 0:2]), report, alignment)
+    _passes_panel(figure.add_subplot(grid[1, 0:2]), alignment)
+    _numbers_panel(figure.add_subplot(grid[0:2, 2]), report, alignment)
+    style.caption(
+        figure,
+        "AreTomo2 tracks no points, so there is no residual. It shifts each tilt until it agrees "
+        "with a projection of the others, pass after pass, and stops when no tilt moves by 2 "
+        "pixels of the stack it read. Top: the shift each tilt still got in the last pass; a "
+        "tilt that sticks out agrees worse with the others. How this compares with tiltalign's "
+        "residual has not been measured. Bottom: the mean and the largest shift of each pass, "
+        "which should fall below the stop line.",
+    )
+    return figure
+
+
+def _last_pass_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -> None:
+    axes.set_title("Shift in the last pass, on each tilt", loc="left")
+    axes.set_xlabel("Tilt angle (°)")
+    matching = alignment.projection_matching
+    if matching is None or matching.last_pass_nm is None:
+        why = ("AreTomo2's log holds no projection-matching pass" if matching is None
+               else "the last pass's tilts are not the aligned tilts")
+        axes.text(0.5, 0.5, why, transform=axes.transAxes, ha="center",
+                  color=style.INK_SECONDARY)
+        axes.set_yticks([])
+        return
+    # A view the pass did not print is NaN, which breaks the line rather than bridging it.
+    axes.plot(alignment.tilt_angle_deg, matching.last_pass_nm,
+              color=style.SERIES_BLUE, linewidth=1.0, marker="o", markersize=5)
+    top = float(np.nanmax(matching.last_pass_nm))
+    _reference_line(axes, matching.stop_nm, f"AreTomo2 stops below {matching.stop_nm:.2f} nm "
+                    "(2 px)", top)
+    if report.tomogram is not None:
+        pixel_nm = report.tomogram.voxel_spacing_angstrom / 10.0
+        _reference_line(axes, pixel_nm, f"one tomogram pixel ({pixel_nm:.2f} nm)", top)
+    _mark_left_out(axes, report, alignment)
+    axes.set_ylim(bottom=0.0)
+    axes.set_ylabel("Shift (nm)")
+    axes.grid(True, axis="y")
+
+
+def _passes_panel(axes: Axes, alignment: AlignmentInfo) -> None:
+    axes.set_title("Each projection-matching pass", loc="left")
+    axes.set_xlabel("Pass")
+    matching = alignment.projection_matching
+    if matching is None:
+        axes.text(0.5, 0.5, "AreTomo2's log holds no projection-matching pass",
+                  transform=axes.transAxes, ha="center", color=style.INK_SECONDARY)
+        axes.set_yticks([])
+        return
+    passes = np.arange(1, matching.pass_mean_nm.size + 1)
+    axes.plot(passes, matching.pass_max_nm, color=style.SERIES_ORANGE, linewidth=1.0,
+              marker="o", markersize=5, label="largest shift")
+    axes.plot(passes, matching.pass_mean_nm, color=style.SERIES_BLUE, linewidth=1.0,
+              marker="o", markersize=5, label="mean shift")
+    _reference_line(axes, matching.stop_nm, "the stop line", float(np.max(matching.pass_max_nm)))
+    axes.set_xticks(passes)
+    axes.set_xlim(0.5, passes[-1] + 0.5)
+    axes.set_ylim(bottom=0.0)
+    axes.set_ylabel("Shift (nm)")
+    axes.grid(True, axis="y")
+    axes.legend(loc="upper right", fontsize=style.FONT_TINY, frameon=False)
+
+
+def _reference_line(axes: Axes, value: float, label: str, top: float) -> None:
+    """A labelled horizontal line, drawn only where it does not flatten the data."""
+
+    if value < 3.0 * top:
+        axes.axhline(value, color=style.INK_MUTED, linewidth=0.8)
+        axes.annotate(label, (0.0, value), xycoords=("axes fraction", "data"), xytext=(4, 2),
+                      textcoords="offset points", ha="left", va="bottom",
+                      fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
+
+
+def _mark_left_out(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -> None:
+    excluded = _excluded_angles(report, alignment, solved=True)
+    if excluded:
+        axes.scatter(excluded, [0.0] * len(excluded), marker="x", s=30,
+                     color=style.INK_MUTED, zorder=3, clip_on=False)
+        axes.annotate("× left out", (excluded[0], 0.0), xytext=(6, 4),
+                      textcoords="offset points", fontsize=style.FONT_TINY,
+                      color=style.INK_SECONDARY)
+
+
 def _subtitle(report: SeriesReport, alignment: AlignmentInfo) -> str:
     parts = [alignment.method]
+    if alignment.method == ARETOMO_METHOD:
+        parts[0] = "AreTomo2 projection matching"
     if alignment.fiducial_count is not None:
         noun = "beads" if alignment.method == "gold beads" else "patches"
         parts.append(f"{alignment.fiducial_count} {noun} tracked")
@@ -69,6 +165,9 @@ def _subtitle(report: SeriesReport, alignment: AlignmentInfo) -> str:
     mean = document.get("residual_mean_nm")
     if isinstance(mean, (int, float)):
         parts.append(f"mean residual {mean:.2f} nm")
+    last = document.get("last_pass_correction_mean_nm")
+    if isinstance(last, (int, float)):
+        parts.append(f"last-pass shift {last:.2f} nm")
     took = timing.took(report.timing.page("alignment"))
     if took is not None:
         parts.append(took)
@@ -98,22 +197,31 @@ def _residual_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) 
             axes.annotate(f"one tomogram pixel ({pixel_nm:.2f} nm)", (1.0, pixel_nm),
                           xycoords=("axes fraction", "data"), ha="right", va="bottom",
                           fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
-    excluded = _excluded_angles(report, alignment)
-    if excluded:
-        axes.scatter(excluded, [0.0] * len(excluded), marker="x", s=30,
-                     color=style.INK_MUTED, zorder=3, clip_on=False)
-        axes.annotate("× left out", (excluded[0], 0.0), xytext=(6, 4),
-                      textcoords="offset points", fontsize=style.FONT_TINY,
-                      color=style.INK_SECONDARY)
+    _mark_left_out(axes, report, alignment)
     axes.set_ylim(bottom=0.0)
     axes.set_ylabel("Mean residual (nm)")
     axes.grid(True, axis="y")
 
 
-def _excluded_angles(report: SeriesReport, alignment: AlignmentInfo) -> list[float]:
+def _excluded_angles(
+    report: SeriesReport, alignment: AlignmentInfo, *, solved: bool = False
+) -> list[float]:
+    """The left-out views' angles as collected, or moved by the solved tilt offset.
+
+    A left-out view has no solved angle. On a plot of solved angles it goes where
+    the alignment's offset would have put it: AreTomo2 moved Position_1 of
+    EMPIAR-11830 by +12 deg, so a nominal -9 deg sat among the solved +3 deg.
+    """
+
     angle_by_z = {image.z_value: image.tilt_angle_deg
                   for image in report.artifacts.manifest.images}
-    return [angle_by_z[z] for z in alignment.excluded_z_values if z in angle_by_z]
+    offset = _tilt_offset(report) if solved else 0.0
+    return [angle_by_z[z] + offset for z in alignment.excluded_z_values if z in angle_by_z]
+
+
+def _tilt_offset(report: SeriesReport) -> float:
+    offset = _document(report, "fine_alignment").get("applied_tilt_angle_offset_deg")
+    return float(offset) if isinstance(offset, (int, float)) else 0.0
 
 
 def _points_panel(axes: Axes, alignment: AlignmentInfo) -> None:
@@ -164,11 +272,46 @@ def _tracked_panel(axes: Axes, alignment: AlignmentInfo) -> None:
         add_scale_bar(axes, alignment.tracking_pixel_angstrom, image.shape[1], image.shape[0])
 
 
+def _aretomo_lines(fine: dict[str, object]) -> list[str]:
+    """What AreTomo2's QC records, beyond what tiltalign's lines below read."""
+
+    lines = []
+    version = fine.get("aretomo_version")
+    if isinstance(version, str):
+        lines.append(version)
+    mean = fine.get("last_pass_correction_mean_nm")
+    largest = fine.get("last_pass_correction_max_nm")
+    largest_px = fine.get("last_pass_correction_max_px")
+    if isinstance(mean, (int, float)) and isinstance(largest, (int, float)):
+        text = f"Last pass: mean {mean:.2f} nm, largest {largest:.2f} nm"
+        if isinstance(largest_px, (int, float)):
+            text += f" ({largest_px:.1f} px)"
+        lines.append(text)
+    passes, converged = fine.get("projection_matching_passes"), fine.get("converged")
+    if isinstance(passes, int):
+        stopped = ("stopped under 2 px" if converged is True
+                   else "did not get under 2 px" if converged is False else None)
+        lines.append(f"Passes: {passes}" + (f", {stopped}" if stopped else ""))
+    start, solved = fine.get("initial_tilt_axis_angle_deg"), fine.get("tilt_axis_angle_deg")
+    if isinstance(start, (int, float)) and isinstance(solved, (int, float)):
+        text = f"Tilt axis {start:.1f}° given, {solved:.1f}° solved"
+        spread = fine.get("tilt_axis_spread_deg")
+        if isinstance(spread, (int, float)) and spread >= 0.05:
+            text += f" (spread {spread:.1f}°)"
+        lines.append(text)
+    align_z, pixel = fine.get("align_z_px"), fine.get("input_pixel_spacing_angstrom")
+    if isinstance(align_z, int) and isinstance(pixel, (int, float)):
+        lines.append(f"Aligned as a slab {align_z * pixel / 10.0:.0f} nm thick ({align_z} px)")
+    if fine.get("tilt_offset_applied") is False:
+        lines.append("Tilt offset not measured (TiltCor 0)")
+    return lines
+
+
 def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -> None:
     axes.axis("off")
     axes.set_title("In numbers", loc="left")
     fine = _document(report, "fine_alignment")
-    lines = []
+    lines = _aretomo_lines(fine) if alignment.method == ARETOMO_METHOD else []
     mean, sd = fine.get("residual_mean_nm"), fine.get("residual_sd_nm")
     if isinstance(mean, (int, float)) and isinstance(sd, (int, float)):
         lines.append(f"Mean residual {mean:.2f} ± {sd:.2f} nm")
@@ -187,9 +330,24 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
     x_tilt = fine.get("recommended_x_axis_tilt_deg")
     if isinstance(x_tilt, (int, float)):
         lines.append(f"X-axis tilt {x_tilt:+.2f}°")
-    excluded = _excluded_angles(report, alignment)
+    dark = fine.get("dark_z_values")
+    dark_z = {int(z) for z in dark if isinstance(z, int)} if isinstance(dark, list) else set()
+    angle_by_z = {image.z_value: image.tilt_angle_deg
+                  for image in report.artifacts.manifest.images}
+    excluded = sorted(angle_by_z[z] for z in alignment.excluded_z_values
+                      if z in angle_by_z and z not in dark_z)
+    # As collected: the angles a lane names to leave out, not the solved ones.
+    as_collected = " (as collected)" if _tilt_offset(report) else ""
     if excluded:
-        lines.append("Left out: " + ", ".join(f"{angle:+.0f}°" for angle in excluded))
+        lines.extend(textwrap.wrap(
+            f"Left out{as_collected}: " + ", ".join(f"{angle:+.0f}°" for angle in excluded), 40
+        ))
+    dark_angles = sorted(angle_by_z[z] for z in dark_z if z in angle_by_z)
+    if dark_angles:
+        lines.extend(textwrap.wrap(
+            f"Found dark by AreTomo2{as_collected}: "
+            + ", ".join(f"{angle:+.0f}°" for angle in dark_angles), 40
+        ))
     no_rings = _left_out_for_ctf(alignment)
     if no_rings:
         lines.append("Left out, no Thon rings: "
@@ -219,6 +377,7 @@ def aligned_tilts_page(report: SeriesReport) -> Figure:
     assert alignment is not None and alignment.aligned_stack is not None
     views = _shown_views(alignment)
     worst = _worst_view(alignment, _stack_views(alignment))
+    measure = alignment.per_view_measure()
     subtitle = "The aligned tilt series the tomogram was reconstructed from"
     if alignment.aligned_pixel_angstrom is not None:
         subtitle += f", {alignment.aligned_pixel_angstrom:.2f} Å per pixel"
@@ -238,8 +397,8 @@ def aligned_tilts_page(report: SeriesReport) -> Figure:
             axes = figure.add_subplot(grid[divmod(number, 3)])
             show(axes, reduced, factor, display_range([reduced]))
             title = f"{alignment.tilt_angle_deg[view]:+.1f}°"
-            if alignment.residual_nm is not None:
-                title += f" · residual {alignment.residual_nm[view]:.2f} nm"
+            if measure is not None and np.isfinite(measure[0][view]):
+                title += f" · {measure[1]} {measure[0][view]:.2f} nm"
             if view == worst:
                 title += " · the largest"
             style.image_axes(axes, title)
@@ -307,12 +466,16 @@ def _stack_views(alignment: AlignmentInfo) -> list[int]:
 
 
 def _worst_view(alignment: AlignmentInfo, views: list[int]) -> int | None:
-    """The view with the largest residual among `views`, or None without residuals."""
+    """The view with the largest residual (AreTomo2: last-pass shift) among `views`."""
 
-    residuals = alignment.residual_nm
-    if residuals is None:
+    measure = alignment.per_view_measure()
+    if measure is None:
         return None
-    return max(views, key=lambda view: float(residuals[view]))
+    values = measure[0]
+    known = [view for view in views if np.isfinite(values[view])]
+    if not known:
+        return None
+    return max(known, key=lambda view: float(values[view]))
 
 
 def _slice_of(alignment: AlignmentInfo, view: int, slices: int) -> int:

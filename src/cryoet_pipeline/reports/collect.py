@@ -775,9 +775,104 @@ class AlignmentInfo:
     excluded_z_values: tuple[int, ...]
     fiducial_count: int | None
     tilt_axis_angle_deg: float | None
+    projection_matching: ProjectionMatching | None = None
+    """AreTomo2's own measure, for an alignment it solved; None for tiltalign's."""
 
     def nearest_view(self, angle_deg: float) -> int:
         return int(np.argmin(np.abs(self.tilt_angle_deg - angle_deg)))
+
+    def per_view_measure(self) -> tuple[np.ndarray, str] | None:
+        """Each view's number for the aligned-tilts page, and its name.
+
+        tiltalign's residual; for AreTomo2, which has none, the shift its last
+        projection-matching pass still made (NaN for a view that pass skipped).
+        """
+
+        if self.residual_nm is not None:
+            return self.residual_nm, "residual"
+        matching = self.projection_matching
+        if matching is not None and matching.last_pass_nm is not None:
+            return matching.last_pass_nm, "last-pass shift"
+        return None
+
+
+ARETOMO_METHOD = "AreTomo2"
+"""How the report names an alignment AreTomo2 solved."""
+
+_PRINTED_TILT_TOLERANCE_DEG = 0.1
+"""AreTomo2 prints tilts to two decimals; views are degrees apart."""
+
+
+@dataclass(frozen=True)
+class ProjectionMatching:
+    """AreTomo2's projection matching, read back from its log.
+
+    AreTomo2 tracks no points, so it has no residual in tiltalign's sense. Each
+    pass shifts every view to agree with a projection of the others and prints
+    the shift it made; it stops when the largest is under 2 px of the stack it
+    read. The fine-alignment QC (`AretomoAlignmentQc`) judges the last pass;
+    these are the same numbers, per pass and per view.
+    """
+
+    pass_mean_nm: np.ndarray
+    """(passes,) the mean shift of each pass, over the views it printed."""
+    pass_max_nm: np.ndarray
+    last_pass_nm: np.ndarray | None
+    """(views,) the last pass's shift of each view of the alignment, NaN for a view
+    it did not print; None when its printed tilts are not the alignment's."""
+    stop_nm: float
+    """AreTomo2's own stopping rule, 2 px of the stack it read, in nm."""
+
+
+def load_projection_matching(
+    log_text: str, *, angles: np.ndarray, pixel_angstrom: float, tilt_offset_deg: float | None
+) -> ProjectionMatching | None:
+    """The passes AreTomo2 printed, paired with the alignment's views by tilt.
+
+    Each printed row names its view by its tilt. Whether AreTomo2 prints the
+    tilt before or after the offset it measured is not settled from its source,
+    so both are tried; a pass whose tilts match the solved angles under neither
+    is not paired rather than paired wrongly. None when the log holds no pass.
+    """
+
+    from cryoet_pipeline.backends.aretomo_alignment import (
+        ARETOMO_CONVERGED_PX,
+        parse_projection_matching,
+    )
+
+    passes = parse_projection_matching(log_text)
+    if not passes:
+        return None
+    nm_per_px = pixel_angstrom / 10.0
+    lengths = [np.hypot([row[1] for row in one], [row[2] for row in one]) for one in passes]
+    last = passes[-1]
+    shifts = [0.0] if not tilt_offset_deg else [0.0, float(tilt_offset_deg)]
+    last_pass_nm = None
+    for shift in shifts:
+        views = _views_by_tilt([row[0] + shift for row in last], angles)
+        if views is not None:
+            last_pass_nm = np.full(angles.size, np.nan)
+            last_pass_nm[views] = lengths[-1] * nm_per_px
+            break
+    return ProjectionMatching(
+        pass_mean_nm=np.asarray([float(np.mean(one)) for one in lengths]) * nm_per_px,
+        pass_max_nm=np.asarray([float(np.max(one)) for one in lengths]) * nm_per_px,
+        last_pass_nm=last_pass_nm,
+        stop_nm=ARETOMO_CONVERGED_PX * nm_per_px,
+    )
+
+
+def _views_by_tilt(printed: Sequence[float], angles: np.ndarray) -> list[int] | None:
+    """The view each printed tilt names, or None unless each names its own view."""
+
+    views = []
+    for tilt in printed:
+        distance = np.abs(angles - tilt)
+        view = int(np.argmin(distance))
+        if distance[view] > _PRINTED_TILT_TOLERANCE_DEG:
+            return None
+        views.append(view)
+    return views if len(set(views)) == len(views) else None
 
 
 def load_alignment(
@@ -802,12 +897,29 @@ def load_alignment(
     z_values = np.asarray([one.z_value for one in solved.transforms], dtype=np.int64)
     angles = np.asarray([one.tilt_angle_deg for one in solved.transforms])
 
+    document = qc["fine_alignment"].document if "fine_alignment" in qc else {}
     model = _parent_of_kind(registry, alignment, ArtifactKind.FIDUCIAL_MODEL)
+    projection_matching = None
     if model is not None:
         backend = str(model.parameters.get("backend", model.backend or ""))
         method = "patch tracking" if "patch" in backend else "gold beads"
     else:
         method = str(alignment.parameters.get("backend", alignment.backend or "unknown"))
+    if method == "aretomo":
+        method = ARETOMO_METHOD
+        aretomo_log = _path_parameter(alignment, "aretomo_log_path")
+        pixel = _finite(
+            alignment.parameters.get("raw_pixel_spacing_angstrom",
+                                     document.get("input_pixel_spacing_angstrom"))
+        )
+        if aretomo_log is not None and aretomo_log.is_file() and pixel is not None:
+            offset = _finite(alignment.parameters.get(
+                "applied_tilt_angle_offset_deg", document.get("applied_tilt_angle_offset_deg")
+            ))
+            projection_matching = load_projection_matching(
+                aretomo_log.read_text(), angles=angles, pixel_angstrom=pixel,
+                tilt_offset_deg=offset,
+            )
 
     log = _path_parameter(alignment, "tiltalign_log_path")
     residual_nm = (
@@ -827,7 +939,6 @@ def load_alignment(
     tracking = _parent_of_kind(registry, alignment, ArtifactKind.ALIGNED_TILT_STACK)
     aligned = _parent_of_kind(registry, tomogram, ArtifactKind.ALIGNED_TILT_STACK)
     aligned_order = aligned.parameters.get("included_z_values") if aligned is not None else None
-    document = qc["fine_alignment"].document if "fine_alignment" in qc else {}
     count = document.get("fiducial_count")
     excluded = alignment.parameters.get("excluded_z_values", solved.excluded_z_values) or []
     return AlignmentInfo(
@@ -852,6 +963,7 @@ def load_alignment(
         tilt_axis_angle_deg=_finite(
             document.get("minimum_tilt_rotation_deg", solved.tilt_axis_angle_deg)
         ),
+        projection_matching=projection_matching,
     )
 
 
@@ -1072,11 +1184,20 @@ class SummaryRow:
     statuses: dict[str, str]
     run_time: Timing = field(default_factory=Timing)
     """Every step that made this series' results, from motion correction to picking."""
+    residual_is_projection_matching: bool = False
+    """`residual_nm` is AreTomo2's last projection-matching shift, not a residual."""
 
 
 def summary_row(report: SeriesReport) -> SummaryRow:
     manifest = report.artifacts.manifest
     angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
+    if report.alignment is not None:
+        # The angles the tomogram was built with, as the alignment and CTF pages
+        # show them: AreTomo2 moved Position_1's by +12 deg (11830, 2026-11-10).
+        angle_by_z.update(
+            zip(report.alignment.z_value.tolist(), report.alignment.tilt_angle_deg.tolist(),
+                strict=True)
+        )
     used: list[int] | None = None
     if report.tomogram is not None and report.tomogram.included_z_values is not None:
         used = [z for z in report.tomogram.included_z_values if z in angle_by_z]
@@ -1098,6 +1219,12 @@ def summary_row(report: SeriesReport) -> SummaryRow:
         fraction = _finite(report.qc["tomogram_segmentation"].document.get("foreground_fraction"))
         membranes = fraction * 100.0 if fraction is not None else None
 
+    fine = report.qc["fine_alignment"].document if "fine_alignment" in report.qc else {}
+    residual = _finite(fine.get("residual_mean_nm"))
+    from_aretomo = residual is None and fine.get("backend") == "aretomo"
+    if from_aretomo:
+        residual = _finite(fine.get("last_pass_correction_mean_nm"))
+
     picks = report.picks
     sigma = picks.sigma if picks is not None else None
     return SummaryRow(
@@ -1107,17 +1234,14 @@ def summary_row(report: SeriesReport) -> SummaryRow:
         tilt_range_deg=(min(angles), max(angles)) if angles else None,
         mean_defocus_um=mean_defocus,
         ctf_fit_near_zero_angstrom=fit_near_zero,
-        residual_nm=(
-            _finite(report.qc["fine_alignment"].document.get("residual_mean_nm"))
-            if "fine_alignment" in report.qc
-            else None
-        ),
+        residual_nm=residual,
         membrane_percent=membranes,
         picks=picks.count if picks is not None else None,
         above_floor=picks.above_floor if picks is not None else None,
         best_sigma=float(sigma.max()) if sigma is not None and sigma.size else None,
         statuses={qc_type: record.status for qc_type, record in report.qc.items()},
         run_time=report.timing.total,
+        residual_is_projection_matching=from_aretomo and residual is not None,
     )
 
 

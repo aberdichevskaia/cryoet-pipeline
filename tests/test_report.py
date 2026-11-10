@@ -160,6 +160,166 @@ def test_a_per_tilt_table_for_other_tilts_is_not_paired() -> None:
     assert _per_view_residuals(table, np.asarray([-20.0, 0.0, 20.0])) is None
 
 
+# --- AreTomo2: projection matching in place of tracked points ---------------------------
+
+
+def _aretomo_report(root: Path) -> SeriesReport:
+    project = _project(root, aretomo=True)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    return load_series(registry, cli._report_artifacts(registry, _manifest("TS_A"),
+                                                       variant="bin8"))
+
+
+def _page_text(figure: Figure) -> str:
+    return "\n".join(
+        [text.get_text() for text in figure.texts]
+        + [text.get_text() for axes in figure.axes for text in axes.texts]
+        + [axes.get_title(loc="left") for axes in figure.axes]
+    )
+
+
+def test_an_aretomo_alignment_is_read_from_aretomo_s_own_log(tmp_path: Path) -> None:
+    """Position_1 of EMPIAR-11830 (2026-11-10) got a page of 'could not be read'.
+
+    AreTomo2 has no tiltalign table, no residual file and no tracking stack; what
+    it prints is projection matching, which its QC already judges. The page reads
+    the same log, pairs the last pass with the aligned views by tilt, and its
+    mean is the number the QC judged.
+    """
+
+    report = _aretomo_report(tmp_path)
+
+    info = report.alignment
+    assert info is not None and info.method == "AreTomo2"
+    assert info.residual_nm is None and info.points_per_view is None
+    matching = info.projection_matching
+    assert matching is not None and matching.last_pass_nm is not None
+    # Solved angles -37..+43 (nominal + 3); the last pass printed the nominal ones
+    # and skipped 0 deg. 1.25 A per pixel: 0.125 nm.
+    assert info.tilt_angle_deg.tolist() == [-37.0, -17.0, 3.0, 23.0, 43.0]
+    np.testing.assert_allclose(matching.last_pass_nm, [0.125, 0.0625, np.nan, 0.0625, 0.25])
+    fine = report.qc["fine_alignment"].document
+    assert matching.pass_mean_nm[-1] == pytest.approx(fine["last_pass_correction_mean_nm"])
+    assert matching.pass_max_nm[-1] == pytest.approx(fine["last_pass_correction_max_nm"])
+    np.testing.assert_allclose(matching.pass_mean_nm, [(5 + 1 + 0.5 + 2 + 10) / 5 * 0.125,
+                                                       (1 + 0.5 + 0.5 + 2) / 4 * 0.125])
+    assert matching.stop_nm == pytest.approx(0.25)
+    assert info.per_view_measure() is not None
+    assert info.per_view_measure()[1] == "last-pass shift"  # type: ignore[index]
+
+
+def test_projection_matching_is_paired_by_tilt_or_not_at_all() -> None:
+    from cryoet_pipeline.reports.collect import load_projection_matching
+
+    angles = np.asarray([-37.0, -17.0, 3.0, 23.0])
+
+    def log(tilts: list[float]) -> str:
+        rows = "".join(f"  {tilt:6.2f}  {0.3:8.2f}  {0.4:8.2f}\n" for tilt in tilts)
+        return f"# Projection matching measurements\n# tilt angle   x shift   y shift\n{rows}\n"
+
+    def read(text: str, offset: float | None = 3.0) -> object:
+        return load_projection_matching(text, angles=angles, pixel_angstrom=10.0,
+                                        tilt_offset_deg=offset)
+
+    # Printed after the offset, as solved: paired with no shift.
+    after = read(log([-37.0, -17.0, 3.0, 23.0]))
+    assert after is not None and after.last_pass_nm is not None  # type: ignore[attr-defined]
+    np.testing.assert_allclose(after.last_pass_nm, [0.5] * 4)  # type: ignore[attr-defined]
+    # Printed before it, as collected: paired once the offset is added.
+    before = read(log([-40.0, -20.0, 0.0, 20.0]))
+    assert before is not None and before.last_pass_nm is not None  # type: ignore[attr-defined]
+    # Neither: the passes are still drawn, but no tilt is given a number.
+    neither = read(log([-38.5, -18.5, 1.5, 21.5]))
+    assert neither is not None and neither.last_pass_nm is None  # type: ignore[attr-defined]
+    assert neither.pass_mean_nm.tolist() == [0.5]  # type: ignore[attr-defined]
+    # Without a known offset only the printed tilts themselves are tried.
+    assert read(log([-40.0, -20.0, 0.0, 20.0]), offset=None).last_pass_nm is None  # type: ignore[attr-defined]
+    # Two rows naming one view are not paired.
+    assert read(log([-37.0, -37.05, 3.0])).last_pass_nm is None  # type: ignore[attr-defined]
+    assert read("AreTomo2 printed nothing of the kind\n") is None
+
+
+def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) -> None:
+    report = _aretomo_report(tmp_path)
+
+    page = alignment_pages.alignment_page(report)
+
+    text = _page_text(page)
+    for missing in ("could not be read", "not on disk", "no residual file"):
+        assert missing not in text
+    assert "AreTomo2 projection matching · 5 of 5 tilts aligned" in text
+    assert "last-pass shift 0.12 nm" in text
+    assert "AreTomo2 1.1.3" in text
+    assert "Last pass: mean 0.12 nm, largest 0.25 nm (2.0 px)" in text
+    # 2.0 px is not under AreTomo2's 2 px: the QC warned, and the page says so.
+    assert "Passes: 2, did not get under 2 px" in text
+    assert "Tilt axis 84.1° given, 83.2° solved" in text
+    assert "Tilt angles shifted by +3.00°" in text
+    last, passes = page.axes[0], page.axes[1]
+    np.testing.assert_allclose(last.lines[0].get_ydata(), [0.125, 0.0625, np.nan, 0.0625, 0.25])
+    np.testing.assert_allclose(last.lines[0].get_xdata(), [-37.0, -17.0, 3.0, 23.0, 43.0])
+    assert [line.get_label() for line in passes.lines[:2]] == ["largest shift", "mean shift"]
+    np.testing.assert_allclose(passes.lines[1].get_ydata(), [0.4625, 0.125])
+
+    tilts = _page_text(alignment_pages.aligned_tilts_page(report))
+    assert "+43.0° · last-pass shift 0.25 nm · the largest" in tilts
+    # A tilt the last pass skipped is never the largest, even listed first:
+    # max() keeps a leading NaN, since nothing compares greater than it.
+    matching = report.alignment.projection_matching  # type: ignore[union-attr]
+    assert matching is not None
+    skipped_first = replace(report.alignment, projection_matching=replace(  # type: ignore[type-var]
+        matching, last_pass_nm=np.asarray([np.nan, 0.1, 0.3, 0.2, 0.1])
+    ))
+    assert alignment_pages._worst_view(skipped_first, list(range(5))) == 2
+
+
+def test_left_out_tilts_sit_where_the_solved_offset_puts_them(tmp_path: Path) -> None:
+    """AreTomo2 moved Position_1 by +12 deg; a left-out tilt has no solved angle of its own."""
+
+    report = _aretomo_report(tmp_path)
+    assert report.alignment is not None
+    report.alignment = replace(report.alignment, excluded_z_values=(2,))
+
+    assert alignment_pages._excluded_angles(report, report.alignment) == [0.0]
+    assert alignment_pages._excluded_angles(report, report.alignment, solved=True) == [3.0]
+    page = alignment_pages.alignment_page(report)
+    assert "Left out (as collected): +0°" in _page_text(page)
+    marks = page.axes[0].collections[0].get_offsets()
+    assert marks[:, 0].tolist() == [3.0]
+
+
+def test_the_summary_row_names_aretomo_s_number_and_the_solved_tilt_range(
+    tmp_path: Path,
+) -> None:
+    report = _aretomo_report(tmp_path)
+
+    row = summary_row(report)
+
+    assert row.residual_is_projection_matching
+    assert row.residual_nm == pytest.approx(
+        report.qc["fine_alignment"].document["last_pass_correction_mean_nm"]
+    )
+    # The angles the tomogram was built with, as the other pages show them.
+    assert row.tilt_range_deg == (-37.0, 43.0)
+    table = front.summary_table_pages([row])[0]()
+    cells = [cell.get_text().get_text() for cell in table.axes[0].tables[0].get_celld().values()]
+    assert "0.12 *" in cells
+    assert "* AreTomo2, which has no residual" in "\n".join(text.get_text()
+                                                           for text in table.texts)
+
+
+def test_the_report_has_its_pages_for_an_aretomo_alignment(tmp_path: Path) -> None:
+    project = _project(tmp_path, aretomo=True)
+
+    result = CliRunner().invoke(
+        cli.app, ["report", "--project", str(project), "--variant", "bin8"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "(17 pages)" in result.output
+    assert "could not be shown" not in result.output
+
+
 def test_a_slab_shows_each_pick_at_the_size_of_its_sphere_there() -> None:
     centres = np.asarray([20.0, 23.0, 26.0, 40.0])
 
@@ -514,7 +674,9 @@ def _scored_report(series: str, strong: int, *, sigma: float | None = _SIGMA) ->
 # --- the synthetic project -------------------------------------------------------------
 
 
-def _project(root: Path) -> Path:
+def _project(root: Path, *, aretomo: bool = False) -> Path:
+    """`aretomo`: TS_A aligned by AreTomo2, as its backend registers it, not by beads."""
+
     project = root / "project"
     (project / "manifests").mkdir(parents=True)
     for series in ("TS_A", "TS_B", "TS_C"):
@@ -522,7 +684,7 @@ def _project(root: Path) -> Path:
             _manifest(series).model_dump_json(indent=1)
         )
     registry = ArtifactRegistry.empty()
-    _full_series(project, registry)
+    _full_series(project, registry, aretomo=aretomo)
     _tomogram_only(project, registry)
     registry.write(project / "artifacts.json")
     return project
@@ -548,12 +710,86 @@ def _manifest(series: str) -> TiltSeriesManifest:
     )
 
 
-def _full_series(project: Path, registry: ArtifactRegistry) -> None:
+def _full_series(project: Path, registry: ArtifactRegistry, *, aretomo: bool = False) -> None:
     series = "TS_A"
     rng = np.random.default_rng(11)
     out = project / series
     out.mkdir()
+    alignment = (_aretomo_alignment(out, series, registry) if aretomo
+                 else _bead_alignment(out, series, registry, rng))
+    _after_alignment(out, series, registry, rng, alignment)
 
+
+# AreTomo2's solved tilts are the nominal ones moved by the offset it measured.
+_ARETOMO_OFFSET = 3.0
+# Two passes as AreTomo2 prints them: (printed tilt, dx, dy) in pixels of the stack
+# it read. The last leaves out the 0 deg view, and prints the tilts before the
+# offset; both are unsettled from its source, so the reader must cope with either.
+_ARETOMO_PASSES = (
+    [(-40.0, 3.0, 4.0), (-20.0, 1.0, 0.0), (0.0, 0.0, 0.5), (20.0, -2.0, 0.0), (40.0, 6.0, 8.0)],
+    [(-40.0, 0.6, 0.8), (-20.0, 0.3, 0.4), (20.0, 0.0, -0.5), (40.0, 1.2, 1.6)],
+)
+
+
+def _aretomo_alignment(out: Path, series: str, registry: ArtifactRegistry) -> Artifact:
+    """A fine alignment shaped as AretomoAlignmentBackend registers it, with its log and QC."""
+
+    import subprocess
+
+    from cryoet_pipeline.backends.aretomo_alignment import _qc as aretomo_qc
+    from cryoet_pipeline.backends.command_log import command_log_text
+
+    pixel = 1.25
+    alignment_path = out / "fine_alignment.json"
+    alignment_path.write_text(
+        TiltAlignment(
+            tilt_series_id=series,
+            backend="aretomo",
+            stage="fine",
+            input_stack_id=f"{series}:tilt_stack",
+            input_binning=1,
+            tilt_axis_angle_deg=83.2,
+            transform_semantics="global",
+            transforms=[
+                AlignmentTransform(
+                    z_value=z, tilt_angle_deg=_ANGLES[z] + _ARETOMO_OFFSET, a11=1.0, a12=0.0,
+                    a21=0.0, a22=1.0, shift_x_px=0.0, shift_y_px=0.0,
+                )
+                for z in range(5)
+            ],
+        ).model_dump_json()
+    )
+    stdout = "Rotation align score: 0.912345\n"
+    for rows in _ARETOMO_PASSES:
+        stdout += "# Projection matching measurements\n# tilt angle   x shift   y shift\n"
+        # As CProjAlignMain.cpp prints them (test_aretomo_alignment's fixture).
+        stdout += "".join(f"  {t:6.2f}  {dx:8.2f}  {dy:8.2f}\n" for t, dx, dy in rows) + "\n"
+    command = ["AreTomo2", "-InMrc", "in.mrc", "-OutMrc", "out.mrc"]
+    log = out / "fine_aretomo.log"
+    log.write_text(command_log_text(
+        (command, subprocess.CompletedProcess(command, 0, stdout=stdout, stderr=""))
+    ))
+    alignment = _artifact(
+        f"{series}:alignment:fine", ArtifactKind.ALIGNMENT, alignment_path, series,
+        parameters={"backend": "aretomo", "stage": "fine", "excluded_z_values": [],
+                    "aretomo_log_path": str(log), "raw_pixel_spacing_angstrom": pixel,
+                    "applied_tilt_angle_offset_deg": _ARETOMO_OFFSET},
+    )
+    registry.add(alignment)
+    report = aretomo_qc(
+        alignment_id=alignment.id, manifest=_manifest(series), version="AreTomo2 1.1.3",
+        image_count=5, excluded_before=[], dark_z=[], pixel=pixel, align_z_px=600,
+        initial_axis=84.1, axes=[83.2] * 5, tilt_cor=True, offsets=[_ARETOMO_OFFSET] * 5,
+        passes=[list(rows) for rows in _ARETOMO_PASSES], rotation_scores=[0.91],
+        residual_warning_nm=0.8, residual_failure_nm=1.5,
+    )
+    _qc(registry, out, series, "fine_alignment", alignment.id, report.model_dump(mode="json"))
+    return alignment
+
+
+def _bead_alignment(
+    out: Path, series: str, registry: ArtifactRegistry, rng: np.random.Generator
+) -> Artifact:
     alignment_path = out / "fine_alignment.json"
     alignment_path.write_text(
         TiltAlignment(
@@ -619,7 +855,13 @@ def _full_series(project: Path, registry: ArtifactRegistry) -> None:
          "global_leave_out_error_nm": 1.6, "projection_point_count": 29,
          "pruned_point_count": 1, "applied_tilt_angle_offset_deg": 0.4,
          "recommended_x_axis_tilt_deg": -0.2, "minimum_tilt_rotation_deg": 85.0})
+    return alignment
 
+
+def _after_alignment(
+    out: Path, series: str, registry: ArtifactRegistry, rng: np.random.Generator,
+    alignment: Artifact,
+) -> None:
     ctf_stack = _artifact(f"{series}:aligned_tilt_stack:bin2", ArtifactKind.ALIGNED_TILT_STACK,
                           out / "ctf_stack.mrc", series, parents=[alignment.id], binning=2)
     registry.add(ctf_stack)
