@@ -5,10 +5,14 @@ from __future__ import annotations
 import itertools
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
+from typing import Any, cast
 
+import matplotlib
 import numpy as np
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.table import Table
 
@@ -106,29 +110,81 @@ def total_run_time(rows: Sequence[SummaryRow]) -> tuple[str, str]:
             f"run time of all steps;\n{total.missing} {steps} not recorded")
 
 
+CONTENTS_HALF = 0.43
+"""Width of one of two contents columns, as a fraction of the page; its page number ends there."""
+CONTENTS_NOTE_AT = 0.14
+"""Where a column's notes start at the least, as a fraction of the page."""
+CONTENTS_GAP = 0.015
+"""Space after the longest name, and before the page numbers."""
+CONTENTS_NUMBER = 0.03
+"""Room a right-aligned page number takes."""
+
+
+@dataclass(frozen=True)
+class ContentsLayout:
+    """Where a contents line's three parts go, as fractions of the page from the column's left."""
+
+    columns: int
+    note_at: float
+    number_at: float
+
+
+def contents_layout(rows: Sequence[SummaryRow]) -> ContentsLayout:
+    """Two columns, unless a name and its note do not fit in half the page.
+
+    The note sat at a fixed 0.14 of the page, and a name as long as EMPIAR-11830's
+    01082023_BrnoKrios_Arctis_WebUI_Position_1 ran through it (2026-11-10). Each
+    column's notes now start after its longest name, as the report's own font
+    measures it.
+    """
+
+    names = max((_page_width(row.series, fontsize=style.FONT_TEXT, fontweight="bold")
+                 for row in rows), default=0.0)
+    notes = max((_page_width(_contents_note(row), fontsize=style.FONT_SMALL) for row in rows),
+                default=0.0)
+    note_at = max(CONTENTS_NOTE_AT, names + CONTENTS_GAP)
+    if note_at + notes + CONTENTS_GAP + CONTENTS_NUMBER <= CONTENTS_HALF:
+        return ContentsLayout(columns=2, note_at=note_at, number_at=CONTENTS_HALF)
+    return ContentsLayout(columns=1, note_at=note_at,
+                          number_at=note_at + notes + CONTENTS_GAP + CONTENTS_NUMBER)
+
+
+def _page_width(text: str, **properties: Any) -> float:
+    """How much of the page's width `text` takes, in the report's own style."""
+
+    with matplotlib.rc_context(cast(Any, style.RC)):
+        figure = Figure(figsize=style.PAGE_SIZE)
+        renderer = FigureCanvasAgg(figure).get_renderer()  # type: ignore[no-untyped-call]
+        extent = figure.text(0.0, 0.0, text, **properties).get_window_extent(renderer)
+        return float(extent.width / figure.bbox.width)
+
+
 def contents_pages(
     rows: Sequence[SummaryRow], contents: Mapping[str, int]
 ) -> list[Callable[[], Figure]]:
     """Contents builders; they read `contents` when drawn, after every page has a number."""
 
-    per_page = 2 * CONTENTS_ROWS_PER_COLUMN
+    layout = contents_layout(rows)
+    per_page = layout.columns * CONTENTS_ROWS_PER_COLUMN
     return [
-        partial(_contents_page, list(rows[start : start + per_page]), contents)
+        partial(_contents_page, list(rows[start : start + per_page]), contents, layout)
         for start in range(0, max(1, len(rows)), per_page)
     ]
 
 
-def _contents_page(rows: list[SummaryRow], contents: Mapping[str, int]) -> Figure:
+def _contents_page(
+    rows: list[SummaryRow], contents: Mapping[str, int], layout: ContentsLayout
+) -> Figure:
     figure = style.new_page("Contents", "Where each tilt-series' pages start")
     for index, row in enumerate(rows):
         column, line = divmod(index, CONTENTS_ROWS_PER_COLUMN)
         x = 0.035 + column * 0.47
         y = style.CONTENT_TOP - line * 0.03
         figure.text(x, y, row.series, fontsize=style.FONT_TEXT, fontweight="bold", va="top")
-        figure.text(x + 0.14, y, _contents_note(row), fontsize=style.FONT_SMALL,
+        figure.text(x + layout.note_at, y, _contents_note(row), fontsize=style.FONT_SMALL,
                     color=style.INK_SECONDARY, va="top")
-        figure.text(x + 0.43, y, str(contents.get(row.series, "")), fontsize=style.FONT_TEXT,
-                    ha="right", va="top")
+        figure.text(x + layout.number_at, y, str(contents.get(row.series, "")),
+                    fontsize=style.FONT_TEXT, ha="right", va="top")
     return figure
 
 

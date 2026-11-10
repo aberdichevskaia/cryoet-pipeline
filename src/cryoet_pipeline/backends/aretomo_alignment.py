@@ -26,9 +26,17 @@ AreTomo2, main, version 1.1.3), not measured:
   from the `.aln`, at its precision rather than the `.xf`'s three decimals;
 - `-VolZ` is 1200 in its code although its help says 0, so 0 is passed: the
   pipeline reconstructs, and AreTomo2 only aligns;
-- projection matching prints, per pass, the shift each view still needed, and
-  stops when the largest is under 2 px (CProcessThread.cpp, mProjAlign). The
-  last pass is this backend's QC (`AretomoAlignmentQc`).
+- projection matching prints, per pass, the shift it measured for each view but
+  the reference, the one nearest 0 deg. It runs in rounds, with a search of the
+  tilt axis before each (three after a given axis, CProcessThread::mAlign); a
+  round passes until the largest shift is under 2 px, or until a pass moves one
+  further than the last kept, which is undone though printed (mProjAlign, at most
+  10 passes). The last pass is this backend's QC (`AretomoAlignmentQc`);
+- the tilt offset is the best of 31 whole degrees, -15 to +15
+  (CTiltOffsetMain::mSearch).
+
+Rounds, the undo rule and the offset grid were read on 10 November 2026, after
+Position_1's log showed 6 passes in 3 rounds of 2; the rest earlier.
 """
 
 from __future__ import annotations
@@ -86,6 +94,7 @@ _ALN_RAW_SIZE = re.compile(r"^#\s*RawSize\s*=\s*(\d+)\s+(\d+)\s+(\d+)")
 _ALN_PATCHES = re.compile(r"^#\s*NumPatches\s*=\s*(\d+)")
 _THREE_FLOATS = re.compile(r"^\s*(\S+)\s+(\S+)\s+(\S+)\s*$")
 _ROTATION_SCORE = re.compile(r"Rotation align score:\s*(?P<score>[-+.\deE]+)")
+_NEW_TILT_AXIS = re.compile(r"New tilt axis:\s*(?P<axis>[-+.\deE]+)")
 
 
 @dataclass(frozen=True)
@@ -164,20 +173,53 @@ def parse_aln(text: str) -> AlnFile:
     return AlnFile(raw_size=raw_size, dark_sections=dark, rows=rows, num_patches=num_patches)
 
 
-def parse_projection_matching(stdout: str) -> list[list[tuple[float, float, float]]]:
-    """Every projection-matching pass AreTomo2 printed: (tilt, dx, dy) per view.
+@dataclass(frozen=True)
+class ProjectionPass:
+    """One projection-matching pass as AreTomo2 printed it."""
+
+    rows: list[tuple[float, float, float]]
+    """(tilt, dx, dy) per view but the reference, the view nearest 0 deg."""
+    round: int
+    """1, 2, ...: a round is one call of CProcessThread::mProjAlign; AreTomo2
+    searches the tilt axis again between rounds (mRotAlign)."""
+    tilt_axis_deg: float | None
+    """The last 'New tilt axis' AreTomo2 printed before this pass."""
+
+
+def parse_projection_passes(stdout: str) -> list[ProjectionPass]:
+    """Every projection-matching pass AreTomo2 printed, with the round it belongs to.
 
     A pass starts at `# Projection matching measurements`, then the column line,
-    then one row per view until a line that is not three numbers. Shifts are in
-    pixels of the stack AreTomo2 read (ProjAlign/CProjAlignMain.cpp).
+    then one row per view until a line that is not three numbers. A pass after a
+    `New tilt axis:` line starts a new round. Read from AreTomo2's source (main,
+    CProcessThread::mAlign and mProjAlign, CProjAlignMain::mDoAll; 10 November
+    2026) and matched by its log on EMPIAR-11830 Position_1, 3 rounds of 2:
+
+    - each row is the shift measured for that view in that pass, scaled from the
+      binned stack it matches on back to the full stack; the tilt includes the
+      tilt offset already applied; the reference view is never printed;
+    - a round passes until the largest shift is under 2 px (that pass is kept),
+      or until one is larger than the last kept, which is then undone, though
+      printed; at most 10 passes.
     """
 
-    passes: list[list[tuple[float, float, float]]] = []
+    passes: list[ProjectionPass] = []
     current: list[tuple[float, float, float]] | None = None
+    axis: float | None = None
+    rounds = 0
+    new_round = True
     for line in stdout.splitlines():
+        if (found := _NEW_TILT_AXIS.search(line)) is not None:
+            axis = _finite(found["axis"], "tilt axis")
+            new_round = True
+            current = None
+            continue
         if "Projection matching measurements" in line:
+            if new_round:
+                rounds += 1
+                new_round = False
             current = []
-            passes.append(current)
+            passes.append(ProjectionPass(rows=current, round=rounds, tilt_axis_deg=axis))
             continue
         if current is None:
             continue
@@ -195,7 +237,16 @@ def parse_projection_matching(stdout: str) -> list[list[tuple[float, float, floa
         if not all(math.isfinite(value) for value in values):
             raise ValueError(f"AreTomo printed a non-finite projection shift: {line!r}")
         current.append((values[0], values[1], values[2]))
-    return [one for one in passes if one]
+    return [one for one in passes if one.rows]
+
+
+def parse_projection_matching(stdout: str) -> list[list[tuple[float, float, float]]]:
+    """Every projection-matching pass AreTomo2 printed: (tilt, dx, dy) per view.
+
+    Shifts are in pixels of the stack AreTomo2 read; see `parse_projection_passes`.
+    """
+
+    return [one.rows for one in parse_projection_passes(stdout)]
 
 
 def parse_rotation_scores(stdout: str) -> list[float]:

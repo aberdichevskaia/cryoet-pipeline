@@ -819,9 +819,16 @@ class ProjectionMatching:
     pass_max_nm: np.ndarray
     last_pass_nm: np.ndarray | None
     """(views,) the last pass's shift of each view of the alignment, NaN for a view
-    it did not print; None when its printed tilts are not the alignment's."""
+    it did not print (the reference, nearest 0 deg); None when its printed tilts
+    are not the alignment's."""
     stop_nm: float
     """AreTomo2's own stopping rule, 2 px of the stack it read, in nm."""
+    pass_round: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
+    """(passes,) the round of each pass, from 1; the tilt axis is searched between."""
+    round_axis_deg: tuple[float | None, ...] = ()
+    """The tilt axis each round started from, as AreTomo2 last printed it."""
+    pass_undone: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=bool))
+    """(passes,) a pass that made the largest shift bigger, which AreTomo2 undid."""
 
 
 def load_projection_matching(
@@ -837,14 +844,19 @@ def load_projection_matching(
 
     from cryoet_pipeline.backends.aretomo_alignment import (
         ARETOMO_CONVERGED_PX,
-        parse_projection_matching,
+        parse_projection_passes,
     )
 
-    passes = parse_projection_matching(log_text)
-    if not passes:
+    printed = parse_projection_passes(log_text)
+    if not printed:
         return None
+    passes = [one.rows for one in printed]
     nm_per_px = pixel_angstrom / 10.0
     lengths = [np.hypot([row[1] for row in one], [row[2] for row in one]) for one in passes]
+    largest_px = [float(np.max(one)) for one in lengths]
+    round_axis: dict[int, float | None] = {}
+    for one in printed:
+        round_axis.setdefault(one.round, one.tilt_axis_deg)
     last = passes[-1]
     shifts = [0.0] if not tilt_offset_deg else [0.0, float(tilt_offset_deg)]
     last_pass_nm = None
@@ -854,12 +866,39 @@ def load_projection_matching(
             last_pass_nm = np.full(angles.size, np.nan)
             last_pass_nm[views] = lengths[-1] * nm_per_px
             break
+    rounds = [one.round for one in printed]
     return ProjectionMatching(
         pass_mean_nm=np.asarray([float(np.mean(one)) for one in lengths]) * nm_per_px,
-        pass_max_nm=np.asarray([float(np.max(one)) for one in lengths]) * nm_per_px,
+        pass_max_nm=np.asarray(largest_px) * nm_per_px,
         last_pass_nm=last_pass_nm,
         stop_nm=ARETOMO_CONVERGED_PX * nm_per_px,
+        pass_round=np.asarray(rounds, dtype=np.int64),
+        round_axis_deg=tuple(round_axis[number] for number in sorted(round_axis)),
+        pass_undone=np.asarray(_undone_passes(rounds, largest_px, ARETOMO_CONVERGED_PX)),
     )
+
+
+def _undone_passes(rounds: Sequence[int], largest_px: Sequence[float], stop_px: float
+                   ) -> list[bool]:
+    """Which passes AreTomo2 undid, by its rule in CProcessThread::mProjAlign.
+
+    A round keeps its first pass. Each later one is kept when its largest shift
+    is under `stop_px` (which ends the round) or no larger than the last kept;
+    otherwise the alignment goes back to the last kept and the round ends.
+    """
+
+    undone = [False] * len(rounds)
+    last_kept: float | None = None
+    for index, (number, largest) in enumerate(zip(rounds, largest_px, strict=True)):
+        if index == 0 or number != rounds[index - 1]:
+            last_kept = largest
+            continue
+        assert last_kept is not None
+        if largest < stop_px or largest <= last_kept:
+            last_kept = largest
+        else:
+            undone[index] = True
+    return undone
 
 
 def _views_by_tilt(printed: Sequence[float], angles: np.ndarray) -> list[int] | None:

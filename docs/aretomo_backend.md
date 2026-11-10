@@ -45,9 +45,17 @@ lane without it.
 
 There are no fiducials, so there is no residual in tiltalign's sense. AreTomo2's
 projection matching measures each view against a reprojection of the others
-and prints the shift each view still needs; it stops when the largest is under
-2 px. The QC (`AretomoAlignmentQc`, qc_type `fine_alignment`) reports the last
-pass:
+and prints the shift it gives each view; the reference view, the one nearest
+0 deg after the tilt offset, is never printed. It works in rounds
+(`CProcessThread::mAlign`): with a tilt axis given and refined, three rounds,
+and a common-line search of the axis before the second and third (within 6 and
+then 3 deg). Within a round (`mProjAlign`) it makes passes until the largest
+shift is under 2 px, which ends the round with that pass kept, or until a pass
+moves a view further than the last kept one, which is undone, though its table
+is printed; at most 10 passes. On Position_1 (10 November 2026) that was 6
+passes in 3 rounds of 2, the axis 86.73, then 83.70, then 83.21 deg, and the
+first pass of round 2 large again after the axis moved. The QC
+(`AretomoAlignmentQc`, qc_type `fine_alignment`) reports the last pass:
 
 - `last_pass_correction_mean_nm` against the fine-alignment thresholds
   (warning 0.8 nm, failure 1.5 nm);
@@ -59,14 +67,20 @@ The last pass is what AreTomo2 still wanted to move, not a residual after
 moving. It is the closest number its output gives. Its relation to tiltalign's
 residual has not been measured.
 
+The tilt offset is the best of 31 whole degrees from -15 to +15
+(`CTiltOffsetMain::mSearch`), with no finer step: Position_1's +12.00 is good
+to half a degree, and an offset beyond 15 deg cannot be found.
+
 `cryoet report` draws the same numbers on the tilt-alignment page, read back
 from the AreTomo2 log kept beside the alignment: the last pass's shift on each
 tilt (paired with the aligned views by tilt, either as printed or moved by the
-measured offset, else not drawn), the mean and largest shift of every pass
-against the 2 px stop, and the QC's numbers. The aligned-tilts page names the
-tilt with the largest last-pass shift, and the summary table puts the last
-pass's mean in the residual column, marked with an asterisk. Before
-2026-11-10 the page said only that tiltalign's files could not be read.
+measured offset, else not drawn), the mean and largest shift of every pass on
+a log scale against the 2 px stop, with the rounds shaded and named by the
+axis each started from and an undone pass drawn hollow, and the QC's numbers.
+The aligned-tilts page names the tilt with the largest last-pass shift, and
+the summary table puts the last pass's mean in the residual column, marked
+with an asterisk. Before 2026-11-10 the page said only that tiltalign's files
+could not be read.
 
 ## Lane config
 

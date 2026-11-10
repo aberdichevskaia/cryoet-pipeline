@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import textwrap
 
 import mrcfile  # type: ignore[import-untyped]
@@ -14,7 +15,13 @@ from matplotlib.patches import Circle
 from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 from cryoet_pipeline.reports import style, timing
-from cryoet_pipeline.reports.collect import ARETOMO_METHOD, AlignmentInfo, SeriesReport, qc_step
+from cryoet_pipeline.reports.collect import (
+    ARETOMO_METHOD,
+    AlignmentInfo,
+    ProjectionMatching,
+    SeriesReport,
+    qc_step,
+)
 from cryoet_pipeline.reports.imaging import block_mean, display_range, reduction_factor, smooth
 from cryoet_pipeline.reports.sections.tomogram import add_scale_bar, show
 
@@ -75,20 +82,24 @@ def _aretomo_page(report: SeriesReport, alignment: AlignmentInfo) -> Figure:
     _numbers_panel(figure.add_subplot(grid[0:2, 2]), report, alignment)
     style.caption(
         figure,
-        "AreTomo2 tracks no points, so there is no residual. It shifts each tilt until it agrees "
-        "with a projection of the others, pass after pass, and stops when no tilt moves by 2 "
-        "pixels of the stack it read. Top: the shift each tilt still got in the last pass; a "
-        "tilt that sticks out agrees worse with the others. How this compares with tiltalign's "
-        "residual has not been measured. Bottom: the mean and the largest shift of each pass, "
-        "on a log scale, which should fall below the stop line.",
+        "AreTomo2 tracks no points, so there is no residual. It aligns in rounds, searching the "
+        "tilt axis again before each: pass after pass, it shifts each tilt to agree with a "
+        "projection of the others, until no tilt moves by 2 pixels of the stack it read; a pass "
+        "that moves one further than the pass before is undone and ends the round. Top: each "
+        "tilt's shift in the very last pass; the tilt nearest 0° is the reference and has none. "
+        "How this compares with tiltalign's residual has not been measured. Bottom: every pass, "
+        "on a log scale; a round's first pass is large again when the axis moved.",
     )
     return figure
 
 
 def _last_pass_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -> None:
-    axes.set_title("Shift in the last pass, on each tilt", loc="left")
-    axes.set_xlabel("Tilt angle (°)")
     matching = alignment.projection_matching
+    undone = (matching is not None and matching.pass_undone.size > 0
+              and bool(matching.pass_undone[-1]))
+    axes.set_title("Shift in the last pass, on each tilt"
+                   + (", a pass AreTomo2 undid" if undone else ""), loc="left")
+    axes.set_xlabel("Tilt angle (°)")
     if matching is None or matching.last_pass_nm is None:
         why = ("AreTomo2's log holds no projection-matching pass" if matching is None
                else "the last pass's tilts are not the aligned tilts")
@@ -120,20 +131,37 @@ def _passes_panel(axes: Axes, alignment: AlignmentInfo) -> None:
                   transform=axes.transAxes, ha="center", color=style.INK_SECONDARY)
         axes.set_yticks([])
         return
-    passes = np.arange(1, matching.pass_mean_nm.size + 1)
+    count = matching.pass_mean_nm.size
+    passes = np.arange(1, count + 1)
+    _rounds(axes, matching, passes)
     axes.plot(passes, matching.pass_max_nm, color=style.SERIES_ORANGE, linewidth=1.0,
               marker="o", markersize=5, label="largest shift")
     axes.plot(passes, matching.pass_mean_nm, color=style.SERIES_BLUE, linewidth=1.0,
               marker="o", markersize=5, label="mean shift")
+    if matching.pass_undone.size == count and matching.pass_undone.any():
+        undone = matching.pass_undone
+        axes.scatter(passes[undone], matching.pass_max_nm[undone], s=70, facecolor="white",
+                     edgecolor=style.SERIES_ORANGE, linewidth=1.2, zorder=4)
+        for number in passes[undone]:
+            axes.annotate("undone", (number, matching.pass_max_nm[number - 1]), xytext=(0, 7),
+                          textcoords="offset points", ha="center", va="bottom",
+                          fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
+    # Named at their last pass rather than in a legend, which the round labels would hit.
+    for values, name, colour in ((matching.pass_max_nm, "largest", style.SERIES_ORANGE),
+                                 (matching.pass_mean_nm, "mean", style.SERIES_BLUE)):
+        axes.annotate(name, (passes[-1], values[-1]), xytext=(7, 0), textcoords="offset points",
+                      ha="left", va="center", fontsize=style.FONT_TINY, color=colour)
     axes.set_xticks(passes)
-    axes.set_xlim(0.5, passes[-1] + 0.5)
+    axes.set_xlim(0.5, passes[-1] + 1.2)
     # On a linear axis the first pass (13 nm on Position_1, 2026-11-10) flattened the
     # rest onto the stop line, 0.38 nm: one could not tell which side of it they were.
     values = np.concatenate([matching.pass_mean_nm, matching.pass_max_nm])
     if np.all(values > 0.0):
         axes.set_yscale("log")
-        # 1, 2 and 5 of each decade: passes within one decade still get numbers.
-        axes.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)))
+        # Passes within a decade or two get 1, 2 and 5 of each; wider, decades alone.
+        decades = math.log10(float(np.max(values)) / min(float(np.min(values)), matching.stop_nm))
+        subs = (1.0, 2.0, 5.0) if decades <= 2.0 else (1.0,)
+        axes.yaxis.set_major_locator(LogLocator(base=10.0, subs=subs))
         axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
         axes.yaxis.set_minor_formatter(NullFormatter())
         axes.axhline(matching.stop_nm, color=style.INK_MUTED, linewidth=0.8)
@@ -142,12 +170,34 @@ def _passes_panel(axes: Axes, alignment: AlignmentInfo) -> None:
                       textcoords="offset points", ha="left", va="bottom",
                       fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
         axes.set_ylabel("Shift (nm, log scale)")
+        # Headroom for the round labels above the first pass.
+        low = min(float(np.min(values)), matching.stop_nm)
+        axes.set_ylim(low / 1.6, float(np.max(values)) * 8.0)
     else:
         _reference_line(axes, matching.stop_nm, "the stop line", float(np.max(values)))
-        axes.set_ylim(bottom=0.0)
+        axes.set_ylim(0.0, float(np.max(values)) * 1.4)
         axes.set_ylabel("Shift (nm)")
     axes.grid(True, axis="y")
-    axes.legend(loc="upper right", fontsize=style.FONT_TINY, frameon=False)
+
+
+def _rounds(axes: Axes, matching: ProjectionMatching, passes: np.ndarray) -> None:
+    """Every other round shaded, each named with the tilt axis it started from."""
+
+    rounds = matching.pass_round
+    if rounds.size != passes.size:
+        return
+    for number in np.unique(rounds):
+        members = passes[rounds == number]
+        left, right = float(members[0]) - 0.5, float(members[-1]) + 0.5
+        if number % 2 == 0:
+            axes.axvspan(left, right, color=style.GRID, alpha=0.6, linewidth=0, zorder=0)
+        label = f"round {number}"
+        if number - 1 < len(matching.round_axis_deg):
+            axis = matching.round_axis_deg[number - 1]
+            if axis is not None:
+                label += f"\naxis {axis:.1f}°"
+        axes.text((left + right) / 2.0, 0.97, label, transform=axes.get_xaxis_transform(),
+                  ha="center", va="top", fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
 
 
 def _reference_line(axes: Axes, value: float, label: str, top: float) -> None:
@@ -292,8 +342,8 @@ def _tracked_panel(axes: Axes, alignment: AlignmentInfo) -> None:
         add_scale_bar(axes, alignment.tracking_pixel_angstrom, image.shape[1], image.shape[0])
 
 
-def _aretomo_lines(fine: dict[str, object]) -> list[str]:
-    """What AreTomo2's QC records, beyond what tiltalign's lines below read."""
+def _aretomo_lines(fine: dict[str, object], matching: ProjectionMatching | None) -> list[str]:
+    """What AreTomo2's QC and log record, beyond what tiltalign's lines below read."""
 
     lines = []
     version = fine.get("aretomo_version")
@@ -309,9 +359,13 @@ def _aretomo_lines(fine: dict[str, object]) -> list[str]:
         lines.append(text)
     passes, converged = fine.get("projection_matching_passes"), fine.get("converged")
     if isinstance(passes, int):
-        stopped = ("stopped under 2 px" if converged is True
-                   else "did not get under 2 px" if converged is False else None)
-        lines.append(f"Passes: {passes}" + (f", {stopped}" if stopped else ""))
+        rounds = len(np.unique(matching.pass_round)) if matching is not None else 0
+        text = f"Passes: {passes}" + (f" in {rounds} rounds" if rounds > 1 else "")
+        stopped = ("last under 2 px" if converged is True
+                   else "last not under 2 px" if converged is False else None)
+        if stopped:
+            text += ", " + stopped
+        lines.append(text)
     start, solved = fine.get("initial_tilt_axis_angle_deg"), fine.get("tilt_axis_angle_deg")
     if isinstance(start, (int, float)) and isinstance(solved, (int, float)):
         text = f"Tilt axis {start:.1f}° given, {solved:.1f}° solved"
@@ -331,7 +385,8 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
     axes.axis("off")
     axes.set_title("In numbers", loc="left")
     fine = _document(report, "fine_alignment")
-    lines = _aretomo_lines(fine) if alignment.method == ARETOMO_METHOD else []
+    aretomo = alignment.method == ARETOMO_METHOD
+    lines = _aretomo_lines(fine, alignment.projection_matching) if aretomo else []
     mean, sd = fine.get("residual_mean_nm"), fine.get("residual_sd_nm")
     if isinstance(mean, (int, float)) and isinstance(sd, (int, float)):
         lines.append(f"Mean residual {mean:.2f} ± {sd:.2f} nm")
@@ -347,6 +402,9 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
     offset = fine.get("applied_tilt_angle_offset_deg")
     if isinstance(offset, (int, float)):
         lines.append(f"Tilt angles shifted by {offset:+.2f}°")
+        if aretomo:
+            # CTiltOffsetMain::mSearch: 31 offsets, -15 to +15 deg, no finer step.
+            lines.append("  searched in whole degrees, -15° to +15°")
     x_tilt = fine.get("recommended_x_axis_tilt_deg")
     if isinstance(x_tilt, (int, float)):
         lines.append(f"X-axis tilt {x_tilt:+.2f}°")

@@ -124,6 +124,39 @@ def test_picks_per_tomogram_is_a_bar_per_series_with_picks() -> None:
     assert [label.get_text() for label in axes.get_yticklabels()] == ["TS_1", "TS_2"]
 
 
+def test_a_contents_line_keeps_name_note_and_page_apart() -> None:
+    """EMPIAR-11830's series name ran through its note on the contents page (2026-11-10)."""
+
+    import matplotlib
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    def row(series: str) -> SummaryRow:
+        return SummaryRow(series, None, 41, None, None, None, None, None, 1022, 511, None, {})
+
+    long_rows = [row("01082023_BrnoKrios_Arctis_WebUI_Position_1")]
+    layout = front.contents_layout(long_rows)
+    assert layout.columns == 1
+
+    with matplotlib.rc_context(style.RC):  # type: ignore[arg-type]
+        page = front.contents_pages(long_rows, {long_rows[0].series: 5})[0]()
+        renderer = FigureCanvasAgg(page).get_renderer()
+        # After the page's title and subtitle: the name, its note, its page number.
+        name, note, number = (text.get_window_extent(renderer) for text in page.texts[2:5])
+
+    assert page.texts[3].get_text() == "1,022 picks, 511 above the height"
+    assert name.x1 < note.x0
+    assert note.x1 < number.x0
+    assert number.x1 <= 0.975 * page.bbox.x1
+
+    # Short names keep two columns and the note where it always was.
+    short = front.contents_layout([row("TS_01"), row("TS_43")])
+    assert (short.columns, short.note_at, short.number_at) == (2, 0.14, 0.43)
+    # One column holds half as many lines per page.
+    many = [row(f"01082023_BrnoKrios_Arctis_WebUI_Position_{n}") for n in range(30)]
+    assert len(front.contents_pages(many, {})) == 2
+    assert len(front.contents_pages([row(f"TS_{n:02d}") for n in range(30)], {})) == 1
+
+
 def test_alignment_pairs_each_tilt_with_its_residual_and_its_beads(tmp_path: Path) -> None:
     project = _project(tmp_path)
     registry = ArtifactRegistry.load(project / "artifacts.json")
@@ -252,7 +285,10 @@ def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) 
     assert "AreTomo2 1.1.3" in text
     assert "Last pass: mean 0.12 nm, largest 0.25 nm\n  (2.0 px)" in text
     # 2.0 px is not under AreTomo2's 2 px: the QC warned, and the page says so.
-    assert "Passes: 2, did not get under 2 px" in text
+    assert "Passes: 2 in 2 rounds, last not under 2 px" in text
+    assert "round 1\naxis 86.7°" in text and "round 2\naxis 83.7°" in text
+    assert "searched in whole degrees, -15° to +15°" in text
+    assert "undone" not in [text.get_text() for text in page.axes[1].texts]
     assert "Tilt axis 84.1° given, 83.2° solved" in text
     assert "Tilt angles shifted by +3.00°" in text
     last, passes = page.axes[0], page.axes[1]
@@ -278,6 +314,89 @@ def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) 
         matching, last_pass_nm=np.asarray([np.nan, 0.1, 0.3, 0.2, 0.1])
     ))
     assert alignment_pages._worst_view(skipped_first, list(range(5))) == 2
+
+
+def _aretomo_log(passes: list[tuple[float, ...]]) -> str:
+    """A log shaped as Position_1's (EMPIAR-11830, 10 November 2026): two coarse axis
+    searches, the tilt offset, then 3 rounds of 2 passes with an axis search before
+    rounds 2 and 3. Each pass gives its views shifts of the listed lengths, in px."""
+
+    tilts = [-6.0, 9.0, 12.0]
+    text = ("Pre-align tilt series\nInitial estimate of tilt axes:\nNew tilt axis: 86.73\n\n"
+            "Initial estimate of tilt axes:\nNew tilt axis: 86.73\n\n"
+            "Determine tilt angle offset.\nTilt offset:    12.00,  CC: 0.0050\n\n")
+    for number, lengths in enumerate(passes):
+        if number in (2, 4):
+            axis = 83.70 if number == 2 else 83.21
+            text += ("CommonLine: Line Size = 3996\nScores of potential tilt axes.\n"
+                     f"Best tilt axis:    0, Score:   0.16366\n\nInitial estimate of tilt axes:\n"
+                     f"New tilt axis: {axis:.2f}\n\n")
+        text += "Rot center Z:     0.00     53.30     53.30\n\n"
+        text += "# Projection matching measurements\n# tilt angle   x shift   y shift\n"
+        text += "".join(f"  {tilt:6.2f}  {length:8.2f}  {0.0:8.2f}\n"
+                        for tilt, length in zip(tilts, lengths, strict=True))
+        text += "\n\n"
+    return (text + "Start Fourier cropping ......\n  image    0 has been processed.\n"
+            "Total time: 93.36 sec\n")
+
+
+def test_projection_matching_is_read_in_rounds_with_the_passes_aretomo_undid() -> None:
+    from cryoet_pipeline.reports.collect import load_projection_matching
+
+    angles = np.asarray([-6.0, -3.0, 9.0, 12.0])
+    real_like = [(68.0, 1.0, 9.0), (1.0, 0.5, 0.8), (6.0, 2.0, 1.0), (0.5, 0.4, 0.9),
+                 (2.4, 1.0, 1.0), (0.9, 0.2, 0.5)]
+
+    matching = load_projection_matching(_aretomo_log(real_like), angles=angles,
+                                        pixel_angstrom=10.0, tilt_offset_deg=12.0)
+
+    assert matching is not None
+    assert matching.pass_round.tolist() == [1, 1, 2, 2, 3, 3]
+    assert matching.round_axis_deg == (86.73, 83.70, 83.21)
+    # Every round ended under 2 px, so nothing was undone; the 0.00 'Rot center Z'
+    # and 'Best tilt axis' lines are not taken for rows.
+    assert not matching.pass_undone.any()
+    np.testing.assert_allclose(matching.pass_max_nm, [68.0, 1.0, 6.0, 0.9, 2.4, 0.9])
+    # -3 deg is the reference, which AreTomo2 never prints.
+    assert np.isnan(matching.last_pass_nm[1])  # type: ignore[index]
+
+    # The last round's second pass moved a view further than its first, and above
+    # 2 px: AreTomo2 went back to the first and ended the round.
+    worse = real_like[:5] + [(3.0, 0.2, 0.5)]
+    undone = load_projection_matching(_aretomo_log(worse), angles=angles, pixel_angstrom=10.0,
+                                      tilt_offset_deg=12.0)
+    assert undone is not None
+    assert undone.pass_undone.tolist() == [False] * 5 + [True]
+    # Not larger than the last kept: kept, though still above 2 px.
+    kept = load_projection_matching(_aretomo_log(real_like[:5] + [(2.2, 0.2, 0.5)]),
+                                    angles=angles, pixel_angstrom=10.0, tilt_offset_deg=12.0)
+    assert kept is not None and not kept.pass_undone.any()
+    # Larger than the last kept but under 2 px: the 2 px test comes first, so kept.
+    # (A round always makes a second pass, however small its first was.)
+    small = load_projection_matching(_aretomo_log(real_like[:4] + [(1.0, 0.2, 0.5),
+                                                                   (1.5, 0.2, 0.5)]),
+                                     angles=angles, pixel_angstrom=10.0, tilt_offset_deg=12.0)
+    assert small is not None and not small.pass_undone.any()
+
+
+def test_an_undone_last_pass_is_named_on_the_page(tmp_path: Path) -> None:
+    report = _aretomo_report(tmp_path)
+    assert report.alignment is not None and report.alignment.projection_matching is not None
+    matching = report.alignment.projection_matching
+    report.alignment = replace(report.alignment, projection_matching=replace(
+        matching, pass_round=np.asarray([1, 1]), round_axis_deg=(86.73,),
+        pass_undone=np.asarray([False, True]),
+    ))
+
+    page = alignment_pages.alignment_page(report)
+
+    assert page.axes[0].get_title(loc="left").endswith(", a pass AreTomo2 undid")
+    passes = page.axes[1]
+    assert [text.get_text() for text in passes.texts].count("undone") == 1
+    # Drawn hollow, over the largest shift of the second pass.
+    hollow = passes.collections[-1]
+    assert hollow.get_offsets().tolist() == [[2.0, pytest.approx(matching.pass_max_nm[1])]]
+    assert "Passes: 2, last not under 2 px" in _page_text(page)
 
 
 def test_the_numbers_stay_on_the_page(tmp_path: Path) -> None:
@@ -792,7 +911,9 @@ def _aretomo_alignment(out: Path, series: str, registry: ArtifactRegistry) -> Ar
         ).model_dump_json()
     )
     stdout = "Rotation align score: 0.912345\n"
-    for rows in _ARETOMO_PASSES:
+    # A round per pass here, each after a search of the tilt axis.
+    for rows, axis in zip(_ARETOMO_PASSES, (86.73, 83.70), strict=True):
+        stdout += f"Initial estimate of tilt axes:\nNew tilt axis: {axis:.2f}\n\n"
         stdout += "# Projection matching measurements\n# tilt angle   x shift   y shift\n"
         # As CProjAlignMain.cpp prints them (test_aretomo_alignment's fixture).
         stdout += "".join(f"  {t:6.2f}  {dx:8.2f}  {dy:8.2f}\n" for t, dx, dy in rows) + "\n"
