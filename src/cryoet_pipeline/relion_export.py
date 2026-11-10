@@ -597,22 +597,6 @@ class SeriesSources:
     manifest: TiltSeriesManifest
 
 
-def _ancestors(registry: ArtifactRegistry, artifact: Artifact) -> list[Artifact]:
-    seen: dict[str, Artifact] = {}
-    queue = list(artifact.parent_ids)
-    while queue:
-        parent_id = queue.pop(0)
-        if parent_id in seen:
-            continue
-        try:
-            parent = registry.get(parent_id)
-        except KeyError:
-            continue
-        seen[parent_id] = parent
-        queue.extend(parent.parent_ids)
-    return list(seen.values())
-
-
 def _fine_alignment(artifact: Artifact) -> TiltAlignment | None:
     if artifact.kind is not ArtifactKind.ALIGNMENT:
         return None
@@ -630,37 +614,72 @@ def _only(found: list[Artifact], what: str, tomogram: Artifact) -> Artifact:
     return found[0]
 
 
+def _parents_of_kind(
+    registry: ArtifactRegistry, artifact: Artifact, kind: ArtifactKind
+) -> list[Artifact]:
+    found = []
+    for parent_id in artifact.parent_ids:
+        try:
+            parent = registry.get(parent_id)
+        except KeyError:
+            continue
+        if parent.kind is kind:
+            found.append(parent)
+    return found
+
+
 def series_sources(project: Path, name: str, tomogram_id: str | None = None) -> SeriesSources:
-    """The tomogram (by default `<name>:tomogram:fine`) and what it was made from."""
+    """The tomogram (by default `<name>:tomogram:fine`) and what it was made from.
+
+    Followed along the reconstruction, not gathered from every ancestor: the stack
+    the tomogram was reconstructed from, back through CTF correction (whose CTF
+    model it takes) to the final aligned stack, and that stack's raw tilt stack and
+    fine alignment. A CTF model is fitted on a stack of its own, which may be
+    another lane's final stack (RyR1's 039 at MDC, 10 November 2026): gathered from
+    every ancestor, that stack was a second final stack.
+    """
 
     registry = ArtifactRegistry.load(project / "artifacts.json")
     tomogram = registry.get(tomogram_id or f"{name}:tomogram:fine")
-    ancestors = _ancestors(registry, tomogram)
-    fine = [artifact for artifact in ancestors if _fine_alignment(artifact) is not None]
-    alignment_artifact = _only(fine, "fine alignment", tomogram)
-    raw = _only(
-        [a for a in ancestors if a.kind is ArtifactKind.TILT_STACK], "raw tilt stack", tomogram
-    )
-    final = [
-        a
-        for a in ancestors
-        if a.kind is ArtifactKind.ALIGNED_TILT_STACK
-        and a.parameters.get("purpose") == "final_alignment"
+    stacks = _parents_of_kind(registry, tomogram, ArtifactKind.ALIGNED_TILT_STACK)
+    stack = _only(stacks, "stack it was reconstructed from", tomogram)
+    ctf_model: Artifact | None = None
+    for _ in range(8):
+        if stack.parameters.get("purpose") == "final_alignment":
+            break
+        models = _parents_of_kind(registry, stack, ArtifactKind.CTF_MODEL)
+        if models and ctf_model is None:
+            ctf_model = _only(models, f"CTF model of {stack.id}", tomogram)
+        stack = _only(
+            _parents_of_kind(registry, stack, ArtifactKind.ALIGNED_TILT_STACK),
+            f"aligned stack {stack.id} was made from",
+            tomogram,
+        )
+    else:
+        raise ValueError(f"{tomogram.id}: no final aligned stack along its reconstruction")
+    final_stack = stack
+    fine = [
+        artifact
+        for artifact in _parents_of_kind(registry, final_stack, ArtifactKind.ALIGNMENT)
+        if _fine_alignment(artifact) is not None
     ]
-    final_stack = _only(final, "final aligned stack", tomogram)
-    models = [a for a in ancestors if a.kind is ArtifactKind.CTF_MODEL]
+    alignment = _fine_alignment(_only(fine, f"fine alignment of {final_stack.id}", tomogram))
+    assert alignment is not None
+    raw = _only(
+        _parents_of_kind(registry, final_stack, ArtifactKind.TILT_STACK),
+        f"raw tilt stack of {final_stack.id}",
+        tomogram,
+    )
     manifest = TiltSeriesManifest.model_validate_json(
         (project / "manifests" / f"{name}.json").read_text()
     )
-    alignment = _fine_alignment(alignment_artifact)
-    assert alignment is not None
     return SeriesSources(
         name=name,
         tomogram=tomogram,
         alignment=alignment,
         raw_stack=raw,
         final_stack=final_stack,
-        ctf_model=_only(models, "CTF model", tomogram) if models else None,
+        ctf_model=ctf_model,
         manifest=manifest,
     )
 

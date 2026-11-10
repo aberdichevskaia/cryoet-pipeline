@@ -655,3 +655,116 @@ def test_a_run_nothing_traces_is_refused(tmp_path) -> None:
     (tmp_path / "lonely").mkdir()
     with pytest.raises(ValueError, match="nothing says where"):
         read_run_class(tmp_path / "lonely", 1)
+
+
+def test_sources_follow_the_reconstruction_not_every_ancestor(tmp_path) -> None:
+    # As RyR1's 039 at MDC: the CTF model that corrected the stack was fitted on
+    # another lane's final stack, so the tomogram has two final stacks as ancestors.
+    import json
+
+    from cryoet_pipeline.artifacts import ArtifactRegistry
+    from cryoet_pipeline.models import Artifact, ArtifactKind
+    from cryoet_pipeline.relion_export import series_sources
+
+    project = tmp_path / "ryr1"
+    (project / "manifests").mkdir(parents=True)
+    alignment = project / "fine.json"
+    alignment.write_text(
+        json.dumps(
+            {
+                "tilt_series_id": "039",
+                "backend": "imod_tiltalign",
+                "stage": "fine",
+                "input_stack_id": "039:tilt_stack",
+                "input_binning": 4,
+                "tilt_axis_angle_deg": 85.0,
+                "transform_semantics": "global",
+                "transforms": [
+                    {
+                        "z_value": 0,
+                        "tilt_angle_deg": 0.0,
+                        "a11": 1.0,
+                        "a12": 0.0,
+                        "a21": 0.0,
+                        "a22": 1.0,
+                        "shift_x_px": 0.0,
+                        "shift_y_px": 0.0,
+                    }
+                ],
+            }
+        )
+    )
+    (project / "manifests" / "039.json").write_text(
+        json.dumps(
+            {
+                "tilt_series_id": "039",
+                "images": [
+                    {
+                        "z_value": 0,
+                        "tilt_angle_deg": 0.0,
+                        "subframe_path": "a.tif",
+                        "num_subframes": 10,
+                        "pixel_spacing_angstrom": 1.68,
+                        "binning": 1,
+                    }
+                ],
+            }
+        )
+    )
+
+    def artifact(id_, kind, parents=(), **parameters):
+        return Artifact(
+            id=id_,
+            kind=kind,
+            path=project / f"{id_}.x",
+            parent_ids=list(parents),
+            parameters=parameters,
+        )
+
+    registry = ArtifactRegistry.empty()
+    registry.add(artifact("039:tilt_stack", ArtifactKind.TILT_STACK))
+    registry.add(
+        Artifact(
+            id="039:alignment:fine",
+            kind=ArtifactKind.ALIGNMENT,
+            path=alignment,
+            parent_ids=["039:tilt_stack"],
+        )
+    )
+    for final in ("039:aligned_tilt_stack:final", "039:aligned_tilt_stack:final:bin8"):
+        registry.add(
+            artifact(
+                final,
+                ArtifactKind.ALIGNED_TILT_STACK,
+                ("039:tilt_stack", "039:alignment:fine"),
+                purpose="final_alignment",
+            )
+        )
+    registry.add(
+        artifact(
+            "039:ctf_model",
+            ArtifactKind.CTF_MODEL,
+            ("039:aligned_tilt_stack:final", "039:alignment:fine"),
+        )
+    )
+    registry.add(
+        artifact(
+            "039:aligned_tilt_stack:ctf:bin8",
+            ArtifactKind.ALIGNED_TILT_STACK,
+            ("039:aligned_tilt_stack:final:bin8", "039:ctf_model"),
+            purpose="ctf_corrected",
+        )
+    )
+    registry.add(
+        artifact(
+            "039:tomogram:fine:bin8",
+            ArtifactKind.TOMOGRAM,
+            ("039:aligned_tilt_stack:ctf:bin8", "039:alignment:fine"),
+        )
+    )
+    registry.write(project / "artifacts.json")
+
+    sources = series_sources(project, "039", "039:tomogram:fine:bin8")
+    assert sources.final_stack.id == "039:aligned_tilt_stack:final:bin8"
+    assert sources.ctf_model is not None and sources.ctf_model.id == "039:ctf_model"
+    assert sources.raw_stack.id == "039:tilt_stack" and sources.alignment.stage == "fine"
