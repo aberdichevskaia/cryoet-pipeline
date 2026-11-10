@@ -240,20 +240,23 @@ alignment solved without one; not decided.
   someone's `relion/xchu/v4`, `/v5`; nothing on PATH. `relion_commands.sh` loads the
   module `RELION5_MODULE` names, stops if RELION is not found, and gives Refine3D
   the job's GPUs. `module show`: RELION 5.0.1 (`build-gpu_sm86_cu11.7`), with
-  `openmpi/v5.0.10` loaded as a requirement. On the login node max023 its
-  `relion_refine --version` fails: `libucp.so.0` (UCX, Open MPI 5's network
-  library) is not found, and in an A40 job too (`ldd`: libucp, libucs, libucm,
-  libuct, libxpmem not found; none of them under the group's software, /usr/lib64
-  or /opt). With the group's other Open MPI, `openmpi/v5.0.5-xchu` (the same
+  `openmpi/v5.0.10` loaded as a requirement. On max023, a node of an interactive
+  A40 job (job 3914387, one task), its `relion_refine --version` fails:
+  `libucp.so.0` (UCX, Open MPI 5's network library) is not found (`ldd`: libucp,
+  libucs, libucm, libuct, libxpmem not found; none of them under the group's
+  software, /usr/lib64 or /opt). With the group's other Open MPI, `openmpi/v5.0.5-xchu` (the same
   libmpi.so.40), the same RELION starts: `5.0.1-commit-cad71b`, `CUDA-ACC=single`,
   nothing missing. relion_commands.sh therefore takes `RELION5_MODULE` as one or more
   modules and `RELION5_HOME` as an installation whose bin/ and lib/ go first, and at
   MDC: `RELION5_MODULE=openmpi/v5.0.5-xchu`,
   `RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7`.
   It runs `relion_refine --version` first and stops, naming what is missing, if it
-  fails. `mpirun` of 5.0.5 starting `relion_refine_mpi` is not yet tried: run outside
-  a two-task allocation it refused (`not enough slots`, it takes its slots from
-  Slurm), and PRTE warned that its session directory, with the ranks' shared memory,
+  fails. In that one-task job `mpirun` of 5.0.5 refused two ranks (`not enough
+  slots`, it takes its slots from Slurm; a second `srun --ntasks=2` inside the job
+  is refused too); with `--map-by :OVERSUBSCRIBE` both ranks started
+  `relion_refine_mpi --version` (5.0.1, CUDA-ACC=single), after which prterun called
+  rank 0's exit improper, as RELION exits after `--version` without `MPI_Finalize`.
+  A real Extract and Refine3D has not run there yet. PRTE had also warned that its session directory, with the ranks' shared memory,
   sat on GPFS (TMPDIR on /fast). relion_commands.sh now stops when the job has fewer
   Slurm tasks than MPI ranks, and puts that directory in /dev/shm unless
   `RELION5_MPI_TMPDIR` names another.
