@@ -11,6 +11,7 @@ from matplotlib.collections import PatchCollection
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Circle
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 from cryoet_pipeline.reports import style, timing
 from cryoet_pipeline.reports.collect import ARETOMO_METHOD, AlignmentInfo, SeriesReport, qc_step
@@ -19,6 +20,9 @@ from cryoet_pipeline.reports.sections.tomogram import add_scale_bar, show
 
 SHOWN_TILTS = (-60.0, -30.0, 0.0, 30.0, 60.0, -45.0, 45.0)
 """Tilts shown on the aligned-tilts page, nearest first; the worst residual is added."""
+
+NUMBERS_WIDTH = 42
+"""Characters per line of the numbers panel: the page's right-hand column."""
 
 ALIGNMENT_STEPS = ("coarse_alignment_report", "fiducial_seed", "fiducial_tracking",
                    "fine_alignment")
@@ -76,7 +80,7 @@ def _aretomo_page(report: SeriesReport, alignment: AlignmentInfo) -> Figure:
         "pixels of the stack it read. Top: the shift each tilt still got in the last pass; a "
         "tilt that sticks out agrees worse with the others. How this compares with tiltalign's "
         "residual has not been measured. Bottom: the mean and the largest shift of each pass, "
-        "which should fall below the stop line.",
+        "on a log scale, which should fall below the stop line.",
     )
     return figure
 
@@ -121,11 +125,27 @@ def _passes_panel(axes: Axes, alignment: AlignmentInfo) -> None:
               marker="o", markersize=5, label="largest shift")
     axes.plot(passes, matching.pass_mean_nm, color=style.SERIES_BLUE, linewidth=1.0,
               marker="o", markersize=5, label="mean shift")
-    _reference_line(axes, matching.stop_nm, "the stop line", float(np.max(matching.pass_max_nm)))
     axes.set_xticks(passes)
     axes.set_xlim(0.5, passes[-1] + 0.5)
-    axes.set_ylim(bottom=0.0)
-    axes.set_ylabel("Shift (nm)")
+    # On a linear axis the first pass (13 nm on Position_1, 2026-11-10) flattened the
+    # rest onto the stop line, 0.38 nm: one could not tell which side of it they were.
+    values = np.concatenate([matching.pass_mean_nm, matching.pass_max_nm])
+    if np.all(values > 0.0):
+        axes.set_yscale("log")
+        # 1, 2 and 5 of each decade: passes within one decade still get numbers.
+        axes.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)))
+        axes.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+        axes.yaxis.set_minor_formatter(NullFormatter())
+        axes.axhline(matching.stop_nm, color=style.INK_MUTED, linewidth=0.8)
+        axes.annotate("the stop line", (0.0, matching.stop_nm),
+                      xycoords=("axes fraction", "data"), xytext=(4, 2),
+                      textcoords="offset points", ha="left", va="bottom",
+                      fontsize=style.FONT_TINY, color=style.INK_SECONDARY)
+        axes.set_ylabel("Shift (nm, log scale)")
+    else:
+        _reference_line(axes, matching.stop_nm, "the stop line", float(np.max(values)))
+        axes.set_ylim(bottom=0.0)
+        axes.set_ylabel("Shift (nm)")
     axes.grid(True, axis="y")
     axes.legend(loc="upper right", fontsize=style.FONT_TINY, frameon=False)
 
@@ -368,6 +388,10 @@ def _numbers_panel(axes: Axes, report: SeriesReport, alignment: AlignmentInfo) -
         lines.append(f"{qc_step(qc_type).label}: " + " · ".join(items))
         for warning in record.warnings if record is not None else ():
             lines.extend("  " + line for line in textwrap.wrap(warning, 40))
+    # The column ends at the page edge: AreTomo2's "Last pass: ... (0.9 px)" ran past
+    # it on Position_1 (2026-11-10). Warnings above are already this narrow.
+    lines = [piece for line in lines
+             for piece in textwrap.wrap(line, NUMBERS_WIDTH, subsequent_indent="  ") or [""]]
     axes.text(0.0, 0.98, "\n".join(lines), transform=axes.transAxes, va="top",
               fontsize=style.FONT_SMALL, linespacing=1.45)
 

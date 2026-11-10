@@ -250,7 +250,7 @@ def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) 
     assert "AreTomo2 projection matching · 5 of 5 tilts aligned" in text
     assert "last-pass shift 0.12 nm" in text
     assert "AreTomo2 1.1.3" in text
-    assert "Last pass: mean 0.12 nm, largest 0.25 nm (2.0 px)" in text
+    assert "Last pass: mean 0.12 nm, largest 0.25 nm\n  (2.0 px)" in text
     # 2.0 px is not under AreTomo2's 2 px: the QC warned, and the page says so.
     assert "Passes: 2, did not get under 2 px" in text
     assert "Tilt axis 84.1° given, 83.2° solved" in text
@@ -260,6 +260,13 @@ def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) 
     np.testing.assert_allclose(last.lines[0].get_xdata(), [-37.0, -17.0, 3.0, 23.0, 43.0])
     assert [line.get_label() for line in passes.lines[:2]] == ["largest shift", "mean shift"]
     np.testing.assert_allclose(passes.lines[1].get_ydata(), [0.4625, 0.125])
+    # A first pass ten times the rest must not flatten them onto the stop line.
+    assert passes.get_yscale() == "log"
+    assert passes.lines[2].get_ydata()[0] == pytest.approx(0.25)
+    # Here the passes span less than a decade, and still get numbers.
+    low, high = passes.get_ylim()
+    shown = [tick for tick in passes.get_yticks() if low <= tick <= high]
+    assert len(shown) >= 2
 
     tilts = _page_text(alignment_pages.aligned_tilts_page(report))
     assert "+43.0° · last-pass shift 0.25 nm · the largest" in tilts
@@ -271,6 +278,31 @@ def test_the_aretomo_alignment_page_draws_aretomo_s_own_numbers(tmp_path: Path) 
         matching, last_pass_nm=np.asarray([np.nan, 0.1, 0.3, 0.2, 0.1])
     ))
     assert alignment_pages._worst_view(skipped_first, list(range(5))) == 2
+
+
+def test_the_numbers_stay_on_the_page(tmp_path: Path) -> None:
+    """Position_1's 'Last pass: mean 0.07 nm, largest 0.17 nm (0.9 px)' ran off the
+    right edge of the page (2026-11-10); the synthetic line is as long."""
+
+    import matplotlib
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    report = _aretomo_report(tmp_path)
+
+    with matplotlib.rc_context(style.RC):  # type: ignore[arg-type]
+        page = alignment_pages.alignment_page(report)
+        style.tidy_figure_text(page)
+        canvas = FigureCanvasAgg(page)
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        numbers = page.axes[2]
+        assert numbers.get_title(loc="left") == "In numbers"
+        right = max(text.get_window_extent(renderer).x1 for text in numbers.texts)
+
+    assert right <= 0.975 * page.bbox.x1
+    lines = numbers.texts[0].get_text().splitlines()
+    assert "Last pass: mean 0.12 nm, largest 0.25 nm" in lines
+    assert "  (2.0 px)" in lines
 
 
 def test_left_out_tilts_sit_where_the_solved_offset_puts_them(tmp_path: Path) -> None:
