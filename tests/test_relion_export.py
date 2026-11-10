@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
 from types import SimpleNamespace
 
 import numpy as np
@@ -19,10 +20,14 @@ from cryoet_pipeline.relion_export import (
     TomogramPlacement,
     _defocus_by_z,
     acquisition_ranks,
+    assign_halves,
+    box_start,
     defocus_angle_in_raw_frame,
+    optimisation_set_text,
     pre_exposures,
     relion_pose,
     relion_tilt,
+    remove_duplicates,
     standard_frame_reference,
     star_text,
     write_particles,
@@ -517,3 +522,70 @@ def test_defocus_is_read_by_z_value_from_the_ctf_model(tmp_path) -> None:
     plotter = _defocus_by_z(_ctf_sources(tmp_path, backend="ctfplotter"), notes)
     assert plotter[11] == (30001.0 - 500.0, 30001.0 - 500.0, 0.0)
     assert any("without astigmatism" in note for note in notes)
+
+
+# A class of an MRA run -------------------------------------------------------
+
+
+def test_box_start_is_where_extraction_cut_the_box() -> None:
+    from cryoet_pipeline.backends.subtomogram import _unclipped_start
+
+    rng = np.random.default_rng(5)
+    picks = list(rng.uniform(0, 300, size=(200, 3))) + [np.array([10.5, 11.5, 12.5])]
+    for box in (32, 48, 64):
+        for pick in picks:
+            row = SimpleNamespace(x_px=float(pick[0]), y_px=float(pick[1]), z_px=float(pick[2]))
+            z, y, x = _unclipped_start(row, half=box // 2)
+            assert box_start(pick, box) == (x, y, z)
+
+
+def test_duplicates_leave_out_the_worse_of_two_close_particles() -> None:
+    centres = {
+        1: np.array([0.0, 0, 0]),
+        2: np.array([1.0, 0, 0]),
+        3: np.array([10.0, 0, 0]),
+        4: np.array([0.5, 0, 0]),
+    }
+    series = {1: "a", 2: "a", 3: "a", 4: "b"}
+    score = {1: 0.5, 2: 0.9, 3: 0.1, 4: 0.2}
+    kept, dropped = remove_duplicates(centres, series, score, min_distance=3.0)
+    assert kept == [2, 3, 4] and dropped == [(1, 2)]
+    # A chain: 1-2 and 2-3 are close, 1-3 are not. 2 scores best, so both go.
+    chain = {1: np.array([0.0, 0, 0]), 2: np.array([2.0, 0, 0]), 3: np.array([4.0, 0, 0])}
+    kept, dropped = remove_duplicates(
+        chain, dict.fromkeys(chain, "a"), {1: 0.1, 2: 0.9, 3: 0.2}, 3.0
+    )
+    assert kept == [2] and sorted(dropped) == [(1, 2), (3, 2)]
+
+
+def test_halves_keep_neighbours_together_and_balance_each_series() -> None:
+    rng = np.random.default_rng(1)
+    centres, series = {}, {}
+    tag = 0
+    for name in ("a", "b"):
+        for _ in range(40):  # lone particles, far apart
+            tag += 1
+            centres[tag] = rng.uniform(0, 1000, size=3) * np.array([10.0, 10, 1])
+            series[tag] = name
+    group = []
+    for offset in range(3):  # three neighbours within a box
+        tag += 1
+        centres[tag] = np.array([5.0 + 20 * offset, 5.0, 5.0])
+        series[tag] = "a"
+        group.append(tag)
+    halves, linked = assign_halves(centres, series, link_distance=48.0, seed=3)
+    assert linked == 1
+    assert len({halves[member] for member in group}) == 1
+    for name in ("a", "b"):
+        counts = Counter(halves[t] for t in halves if series[t] == name)
+        assert abs(counts[1] - counts[2]) <= 3
+    assert assign_halves(centres, series, 48.0, seed=3) == (halves, linked)
+
+
+def test_optimisation_set_names_the_particles_and_tomograms() -> None:
+    text = optimisation_set_text("particles.star", "tomograms.star")
+    assert "_rlnTomoParticlesFile particles.star" in text
+    assert "_rlnTomoTomogramsFile tomograms.star" in text
+    assert "data_" in text.splitlines()
+    with pytest.raises(ValueError):
+        optimisation_set_text("a b.star", "tomograms.star")

@@ -14,23 +14,76 @@ polishing.
 
 Agreed on 9 November 2026: RELION 5, the geometry first, checked by RELION.
 
-## The folder (planned)
+## The step
+
+```bash
+python scripts/export_relion.py --run <project>/mra/<NAME> --class 1 --dry-run
+python scripts/export_relion.py --run <project>/mra/<NAME> --class 1
+```
+
+It reads a run of the registry (`<project>/mra/<NAME>`, the run-record layout): the
+class's members after the last finished iteration (`--iteration` for another),
+decoys left out, with `--agree RUN:CLASS` only those also in another run's class
+(as the consensus split takes them), their poses of that iteration, and their picks
+from the setup's table. Each particle's tomogram is its particle stack's parent in
+the registry. A particle whose centre (box corner + N/2 + the MRA shift) came within
+`--min-distance` (a quarter of the box) of a better-scoring one of its series is a
+duplicate and left out. Halves: particles of a series within a box of each other are
+linked and a linked group goes to one half, so no half holds the other's density;
+groups are dealt with `--seed` to the smaller half of their series.
+
+The dry run prints those numbers and every series' stack (views, binning, size)
+and writes nothing; the person confirms the numbers. Then:
 
 ```text
-<project>/relion/<label>/
-  README.md              what is inside, the numbers, the checks it passed, the commands
-  run.json               the step's record (run_records.md)
+<project>/relion/<NAME>-class<C>/
+  README.md              the numbers, the frame, what the rows fall back on, the commands
+  run.json               the step's record (run_records.md), written last
   tomograms.star         per series: optics, size, hand, its tilt_series/<TS>.star
   tilt_series/<TS>.star  per tilt image: geometry, CTF, pre-exposure
-  tilt_series/<TS>.mrcs  the raw tilt images the alignment kept, unaligned, not phase-flipped
+  tilt_series/<TS>.mrcs  the raw tilt images the tomogram used, unaligned, not phase-flipped
   particles.star         the class: positions, poses, rlnRandomSubset
   optimisation_set.star
-  reference/             the class average in RELION's frame, rescaled and low-passed; the mask
-  relion_refine.sbatch   Extract + Refine3D, C1, local searches around the MRA poses
+  reference/             the class average and the MRA mask, mirrored in z, at the MRA's pixel
+  relion_commands.sh     Extract at the MRA's pixel and box, Refine3D local from the poses, C1
+  selection.json         each particle's tag, RELION name and half; duplicates and what they duplicate
 ```
 
 The folder is the RELION project: paths in it are relative, RELION runs from it.
-The step submits nothing.
+The step submits nothing. The tilt images are binned to 1 A per pixel or coarser by
+default (`--stack-binning`): super-resolution sums are written at the camera's pixel.
+RELION's first round extracts at the MRA's pixel and box, so the reference fits as it
+is (relion_refine refuses a reference of another size); finer pixels are later rounds.
+`--relion-check` has RELION reconstruct the exported class and compares it with the
+exported reference.
+
+### Tried (10 November 2026)
+
+On a registry run made locally from TS_01: 640 picks on structured parts of the
+tomogram with random orientations, extracted at 48 voxels (`cryoet extract-particles
+--picks-star`), one MRA iteration of two channels (`scripts/mra_port_run.py --source`,
+28 minutes on the Mac's CPU). Class 1 held 319 particles. The export took 19 s: no
+duplicates, halves 160 and 159 with 34 groups of neighbours kept together, the tilt
+images binned 2 (1.35 A, 2.3 GB), RELION at --bin 4 for the MRA's 5.4 A. With
+`--relion-check`, RELION's reconstruction of the class from the tilt images was the
+exported reference: NCC 0.749 against 0.088 for the next reversal, offset 0.01 voxel
+(0.80 against its weighted map). RELION read `optimisation_set.star` there, and its
+Extract (`relion_tomo_subtomo`, the first line of relion_commands.sh) ran on the
+folder as written. relion_refine without MPI refuses `--split_random_halves`, as it
+should; the script runs `relion_refine_mpi` under mpirun.
+
+The gold-standard Refine3D itself was not run on the Mac: there an Open MPI program
+hangs at its start (`mpirun -n 2 relion_refine_mpi` sits at 0% CPU and prints
+nothing, while `mpirun -n 2 hostname` runs), and without MPI RELION 5.0 refuses half
+sets ("Mixing gold-standard separation"; the `--debug_split_random_half` its message
+suggests is no option of 5.0). Up to that refusal Refine3D read the Extract's
+optimisation set, the pseudo-subtomograms, the reference and the mask, set its local
+searches (3.75 deg, 100 orientations) and began its first expectation. Without half
+sets (`--K 1 --iter 2`, the script's arguments otherwise) two whole iterations ran on
+the exported particles (318 of 319; Extract left one out). They moved the poses by a
+median 11 deg, which says nothing either way: these picks hold no particle for poses
+to converge on. The gold-standard command is for max (or any machine with a working
+MPI), with a real class.
 
 ## Built: the tilt geometry
 
@@ -157,13 +210,15 @@ alignment solved without one; not decided.
 - **Dose.** rlnMicrographPreExposure counts every acquired view in acquisition
   order, the left-out ones too. Some mdocs give no dose (10164: ExposureDose 0),
   so the lane has to give one.
-- **The step itself** (next): `export-relion` reading an MRA run's class (the
-  run's selection `class <c>`, poses of the chosen iteration, positions from the
-  setup table), decoys out, duplicates after the MRA shifts, beads, halves from
-  the consensus split, the class average mirrored and rescaled to the extraction
-  pixel, a mask by the processing rules, README, sbatch and run.json.
+- **Beads** are not looked for: a class with gold beads in it exports them. MRA
+  usually puts them in a class of their own; the fiducial model would say where
+  they are on bead-aligned series.
+- **Runs in Dynamo's layout** (export folders) are refused: the step reads runs of
+  the registry, whose setup table names each particle's stack.
 - **CTF from a CTF model** is unit-tested only: the local TS_01 project has no
   CTF model, so no RELION run has read a fitted defocus from this export yet.
+- **A real class.** The step has run on a class of picks with random orientations
+  (below), not on a particle: RyR1 or Gag on max is the first real one.
 - **RELION at MDC.** Unknown whether RELION 5 is installed on max. The check
   runs anywhere RELION 5 does, on a series copied at its tomogram's binning.
 

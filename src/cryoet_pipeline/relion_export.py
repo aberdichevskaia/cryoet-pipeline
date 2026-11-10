@@ -56,11 +56,13 @@ RELION's documentation says has to be determined experimentally.
 
 from __future__ import annotations
 
+import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import mrcfile  # type: ignore[import-untyped]
 import numpy as np
@@ -857,3 +859,273 @@ def _defocus_by_z(
             f" on {model.parameters.get('input_stack_id')}"
         )
     return result
+
+
+# A class of an MRA run --------------------------------------------------------
+
+
+def box_start(pick_xyz: Sequence[float], box: int) -> tuple[int, int, int]:
+    """The corner (x, y, z) of the box extraction cut around a pick, as
+    `subtomogram._crop_start` and `_unclipped_start` place it: the rounded pick
+    less half the box (Python's round, halves to even)."""
+
+    half = box // 2
+    x, y, z = (int(round(float(value))) - half for value in pick_xyz)
+    return x, y, z
+
+
+@dataclass(frozen=True)
+class ClassMember:
+    tag: int
+    series: str
+    stack_id: str
+    pick_xyz: tuple[float, float, float]
+    angles_deg: tuple[float, float, float]  # Dynamo's, after the iteration
+    shifts_px: tuple[float, float, float]  # Dynamo's, about N/2, in box voxels
+    cc: float
+
+
+@dataclass(frozen=True)
+class RunClass:
+    """One class of an MRA run of the registry, as the export reads it."""
+
+    run: Path
+    project: Path
+    iteration: int
+    channel: int
+    box: int
+    pixel_angstrom: float
+    members: tuple[ClassMember, ...]
+    decoys_left_out: int
+    not_agreed: int
+    agreed_with: str | None
+    average: Path
+    mask: Path
+    record_fingerprints: dict[str, str]
+
+
+def _registry_run(run: Path) -> bool:
+    plan = run / "plan.json"
+    if not plan.is_file():
+        return False
+    return isinstance(json.loads(plan.read_text()).get("particles"), dict)
+
+
+def _class_members(run: Path, channel: int, iteration: int | None) -> tuple[Any, int, set[int]]:
+    from cryoet_pipeline.reports.classification_reader import read_classification
+
+    classification = read_classification(run, compute_initial_average=False)
+    if not classification.iterations:
+        raise ValueError(f"{run}: no finished iteration")
+    numbers = [result.number for result in classification.iterations]
+    number = numbers[-1] if iteration is None else iteration
+    if number not in numbers:
+        raise ValueError(f"{run}: iteration {number} has not finished; finished: {numbers}")
+    classes = classification.iterations[numbers.index(number)].classes
+    if channel not in classes:
+        raise ValueError(
+            f"{run}: iteration {number} has no class {channel}; it has {sorted(classes)}"
+        )
+    return classification, number, {int(tag) for tag in classes[channel].members}
+
+
+def read_run_class(
+    run: Path,
+    channel: int,
+    *,
+    iteration: int | None = None,
+    agree: tuple[Path, int] | None = None,
+) -> RunClass:
+    """The members of `channel` after `iteration` (the last finished by default) of an
+    MRA run of the registry, decoys left out, with their poses of that iteration and
+    their picks; with `agree`, only those also in that run's class after its last
+    finished iteration, as scripts/consensus_halves.py takes them."""
+
+    from cryoet_pipeline.mra_runs import PARTICLES, node_folder
+    from cryoet_pipeline.particle_tables import read_particle_table
+    from cryoet_pipeline.runs import completed
+
+    run = Path(run)
+    if not _registry_run(run):
+        raise ValueError(f"{run} is not an MRA run of the registry (plan.json with its particles)")
+    classification, number, members = _class_members(run, channel, iteration)
+    decoys = members & {int(tag) for tag in classification.decoys}
+    members -= decoys
+    agreed_with = None
+    not_agreed = 0
+    if agree is not None:
+        other, other_channel = agree
+        _, _, others = _class_members(Path(other), other_channel, None)
+        not_agreed = len(members - others)
+        members &= others
+        agreed_with = f"{Path(other).name}:{other_channel}"
+    if not members:
+        raise ValueError(f"{run}: class {channel} of iteration {number} has no particle to export")
+
+    assert classification.poses is not None
+    poses = classification.poses((number, channel))
+    row_of = {int(tag): row for row, tag in enumerate(poses.tags)}
+    setup, about = read_particle_table(node_folder(run, 0) / PARTICLES)
+    setup_row = {int(tag): row for row, tag in enumerate(setup["particle_id"])}
+    chosen = []
+    for tag in sorted(members):
+        row, srow = row_of[tag], setup_row[tag]
+        chosen.append(
+            ClassMember(
+                tag=tag,
+                series=str(setup["tilt_series_id"][srow]),
+                stack_id=str(setup["stack_id"][srow]),
+                pick_xyz=tuple(float(setup[f"position_{axis}_px"][srow]) for axis in "xyz"),  # type: ignore[arg-type]
+                angles_deg=tuple(float(value) for value in poses.angles[row]),  # type: ignore[arg-type]
+                shifts_px=tuple(float(value) for value in poses.shifts[row]),  # type: ignore[arg-type]
+                cc=float(poses.cc[row]),
+            )
+        )
+    fingerprints = {}
+    for name, folder in (
+        ("mra_setup", node_folder(run, 0)),
+        ("mra_iteration", node_folder(run, number)),
+    ):
+        record = completed(folder)
+        if record is None:
+            raise ValueError(f"{folder} has no finished run record")
+        fingerprints[name] = record.fingerprint
+    average = node_folder(run, number) / f"average_{channel}.mrc"
+    if not average.is_file():
+        raise ValueError(f"{average} is missing")
+    return RunClass(
+        run=run,
+        project=Path(str(about["project"])),
+        iteration=number,
+        channel=channel,
+        box=int(about["box_px"]),
+        pixel_angstrom=float(about["pixel_size_angstrom"]),
+        members=tuple(chosen),
+        decoys_left_out=len(decoys),
+        not_agreed=not_agreed,
+        agreed_with=agreed_with,
+        average=average,
+        mask=node_folder(run, 0) / "mask.mrc",
+        record_fingerprints=fingerprints,
+    )
+
+
+def particle_centre(member: ClassMember, box: int) -> np.ndarray:
+    """Where the class's reference centre lies in the canonical tomogram (x, y, z voxels):
+    the box corner plus N/2 plus the Dynamo shift."""
+
+    return np.asarray(box_start(member.pick_xyz, box), dtype=float) + box // 2 + member.shifts_px
+
+
+def remove_duplicates(
+    centres: Mapping[int, np.ndarray],
+    series: Mapping[int, str],
+    score: Mapping[int, float],
+    min_distance: float,
+) -> tuple[list[int], list[tuple[int, int]]]:
+    """Particles whose centres came within `min_distance` of a better-scoring one of
+    the same series are left out: what they hold is already in the set. Returns the
+    kept tags and each left-out tag with the one it duplicates."""
+
+    from scipy.spatial import cKDTree  # type: ignore[import-untyped]
+
+    kept: list[int] = []
+    dropped: list[tuple[int, int]] = []
+    by_series: dict[str, list[int]] = {}
+    for tag in centres:
+        by_series.setdefault(series[tag], []).append(tag)
+    for name in sorted(by_series):
+        tags = sorted(by_series[name], key=lambda tag: (-score[tag], tag))
+        points = np.array([centres[tag] for tag in tags], dtype=float)
+        tree = cKDTree(points)
+        taken = np.zeros(len(tags), dtype=bool)
+        for index, tag in enumerate(tags):
+            near = [
+                other
+                for other in tree.query_ball_point(points[index], r=min_distance)
+                if other != index and taken[other]
+            ]
+            if near:
+                dropped.append((tag, tags[min(near)]))
+            else:
+                taken[index] = True
+                kept.append(tag)
+    return sorted(kept), dropped
+
+
+def assign_halves(
+    centres: Mapping[int, np.ndarray],
+    series: Mapping[int, str],
+    link_distance: float,
+    seed: int,
+) -> tuple[dict[int, int], int]:
+    """rlnRandomSubset for each particle, groups of neighbours kept together.
+
+    Particles of one series whose centres lie within `link_distance` of each other
+    (a box: their boxes overlap) are linked, and a linked group goes to one half, so
+    no half holds the other's density. Within each series the groups are shuffled
+    with `seed` and each goes to the half with fewer particles so far. Returns the
+    halves and how many groups held more than one particle.
+    """
+
+    from scipy.spatial import cKDTree
+
+    rng = np.random.default_rng(seed)
+    halves: dict[int, int] = {}
+    linked_groups = 0
+    by_series: dict[str, list[int]] = {}
+    for tag in centres:
+        by_series.setdefault(series[tag], []).append(tag)
+    for name in sorted(by_series):
+        tags = sorted(by_series[name])
+        points = np.array([centres[tag] for tag in tags], dtype=float)
+        pairs = cKDTree(points).query_pairs(r=link_distance)
+        ordered = [[tags[index] for index in group] for group in _linked(len(tags), pairs)]
+        linked_groups += sum(1 for group in ordered if len(group) > 1)
+        counts = {1: 0, 2: 0}
+        for group in (ordered[index] for index in rng.permutation(len(ordered))):
+            half = 1 if counts[1] <= counts[2] else 2
+            for tag in group:
+                halves[tag] = half
+            counts[half] += len(group)
+    return halves, linked_groups
+
+
+def _linked(count: int, pairs: Iterable[tuple[int, int]]) -> list[list[int]]:
+    """The groups `pairs` link among `count` items (union-find), each sorted, by first item."""
+
+    parent = list(range(count))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for first, second in pairs:
+        parent[root(first)] = root(second)
+    groups: dict[int, list[int]] = {}
+    for index in range(count):
+        groups.setdefault(root(index), []).append(index)
+    return sorted(groups.values())
+
+
+def optimisation_set_text(particles: str, tomograms: str) -> str:
+    """RELION 5's optimisation set: which particles and tomograms a job reads."""
+
+    for value in (particles, tomograms):
+        if not value or any(character.isspace() for character in value):
+            raise ValueError(f"not a STAR file name: {value!r}")
+    return "\n".join(
+        [
+            "",
+            STAR_VERSION_LINE,
+            "",
+            "data_",
+            "",
+            f"_rlnTomoParticlesFile {particles}",
+            f"_rlnTomoTomogramsFile {tomograms}",
+            "",
+            "",
+        ]
+    )
