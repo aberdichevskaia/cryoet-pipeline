@@ -11,12 +11,13 @@ clone + install ─▶ copy frames ─▶ check them ─▶ create the project
    ─▶ look at the report
    ─▶ submission 2: MRA classification                      (1 Slurm job, 4 GPUs)
    ─▶ read the classification report
+   ─▶ optional: export a class to RELION 5 and refine it there
 ```
 
 You will end with tomograms of all five series at 13.44 Å/px, RyR1 picks on
 their membranes, and an MRA classification of the picks: a few class averages
-and a noise class that collects the false picks. A resolution is not part of
-this tutorial (see [Where to go next](#where-to-go-next)).
+and a noise class that collects the false picks. A resolution is not part of the
+pipeline's own steps: step 12 hands a class to RELION 5 for one.
 
 There is a second tutorial for the same data with the assistant:
 [ryr1-with-assistant.md](ryr1-with-assistant.md).
@@ -390,6 +391,72 @@ particles or only in how they are seen? On these data at bin8, earlier MRA runs
 split the particles by viewing direction, top views against side views, which
 the missing wedge makes look different: two such classes are one particle.
 
+## 12. A class to RELION 5 (optional)
+
+The MRA sorts the particles; it does not give a resolution. For a gold-standard
+refinement, a class that looks like RyR1 can go to RELION 5.
+`scripts/export_relion.py` writes one folder that RELION runs as it is. It
+submits nothing.
+
+**The dry run first.** It names the class's particles after the run's last
+finished iteration, the duplicates it leaves out, the two halves and a note per
+series:
+
+```bash
+python3 scripts/export_relion.py --run outputs/ryr1-tutorial/mra/bin8-ssn-all \
+    --class <C> --dry-run
+```
+
+`<C>` is the class number in the classification report (without 161, the run
+is `bin8-ssn`). For these data the notes will say that the acquisition order
+comes from the tilt order and that there is no dose. Here the tilt order is the
+angle order, not the order the tilts were taken in. **Do not give
+`--dose-per-tilt` for these data:** with the order unknown, a dose would weight
+the wrong tilts if they were taken dose-symmetrically. Without a dose, RELION
+weights no tilt by dose. Look at the two halves' sizes too: they are dealt
+within each series, with neighbours closer than a box kept together, so they
+can come out unequal (782 and 404 for a RyR1 class on 10 November 2026).
+
+**Then the export**, the same command without `--dry-run`. It writes
+`outputs/ryr1-tutorial/relion/bin8-ssn-all-class<C>/`:
+
+- the tilt series, tomograms and particles as RELION 5 reads them;
+- the class average and the MRA's mask, in RELION's frame;
+- `relion_commands.sh`: an Extract, then a gold-standard Refine3D with local
+  searches from the MRA's poses, without symmetry;
+- `README.md`, which says why each value is what it is.
+
+Both run at the MRA's pixel, 13.44 Å here, so this first refinement checks the
+export rather than reaching ~20 Å. Finer pixels come after, by extracting again
+at a lower `--bin` (the README says how). At the end, the export prints the
+`sbatch` line that runs the commands, with the folder filled in.
+
+**RELION on max.** The module `relion/v5/gpu/sm86-cu11.7` does not start RELION
+(its Open MPI lacks UCX). The group's RELION 5.0.1 build does, with another Open
+MPI. Set both in the shell you submit from; the job takes them from there:
+
+```bash
+export RELION5_MODULE=openmpi/v5.0.5-xchu
+export RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7
+```
+
+Then run the line the export printed, with max's GPU options in place of
+`<GPU partition and --gres>`:
+
+```bash
+sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
+    --partition=gpu --gres=gpu:a40:2 \
+    --chdir=<the folder it printed> --wrap "./relion_commands.sh"
+```
+
+`relion_commands.sh` first checks that RELION starts, and stops, naming what is
+missing, if it does not. The job's log, `slurm-<job id>.out`, is written in the
+export's folder.
+
+> **Status, 10 November 2026.** The export is new. A RyR1 class was exported on
+> max that day; RELION's Extract and Refine3D have not run on max yet. Tell
+> Anna what happens.
+
 ## Where to go next
 
 - **Run one class again.** If a class looks like RyR1, its particles can be
@@ -399,10 +466,10 @@ the missing wedge makes look different: two such classes are one particle.
   has the keys.
 - **A finer tomogram.** bin4 (6.72 Å/px) is the next step towards ~20 Å:
   `configs/lanes/ryr1-bin4.toml` and its comments.
-- **A resolution.** Halves split after a joint classification give the map's
-  consistency, not its resolution:
-  [docs/agent/playbook/averaging.md](../agent/playbook/averaging.md), entries V-3
-  and V-4, and [docs/halves_from_runs.md](../halves_from_runs.md).
+- **A resolution.** A class in RELION 5, [step 12](#12-a-class-to-relion-5-optional).
+  Halves split after a joint classification give the map's consistency, not its
+  resolution: [docs/agent/playbook/averaging.md](../agent/playbook/averaging.md),
+  entries V-3 and V-4.
 - **Your own data.** The README's
   [Processing your own data on the cluster](../../README.md#processing-your-own-data-on-the-cluster),
   starting from `configs/lanes/example.toml`.

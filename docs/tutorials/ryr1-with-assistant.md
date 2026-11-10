@@ -3,7 +3,7 @@
 This tutorial runs the same data to the same end as
 [ryr1-without-assistant.md](ryr1-without-assistant.md): five tilt-series of RyR1
 in native membranes, from SerialEM TIFF frames to tomograms, picks on their
-membranes and an MRA classification. The difference is who types the commands.
+membranes and an MRA classification, and optionally a class exported to RELION 5. The difference is who types the commands.
 Here the pipeline's terminal assistant reads the data, writes the lane files,
 checks them and submits them; you answer its questions, read what it shows you,
 and say yes or no.
@@ -18,6 +18,8 @@ pipeline's own instructions, skills and permission rules
 | read a data folder (`show_folder.py`), dry runs | ✓ | | |
 | write a lane file | | ✓ (Claude Code asks you to approve the file) | |
 | submit, with `--overwrite`, cancel a job | | ✓ each its own yes | |
+| export a class of an MRA run to RELION 5 | | ✓ | |
+| run RELION, `relion_commands.sh` or `mpirun` (you run them, in a job) | | | ✓ |
 | `sbatch` directly, git, change code, docs or the journal | | | ✓ |
 
 The submission scripts hold it to its yes themselves: a submission from the
@@ -262,6 +264,66 @@ It writes a copy of the lane whose `[mra]` names the run and the class
 (`from_run`, `from_classes`), with any settings you change, and submits it with
 `--from-stage mra` after the dry run and your yes.
 
+## 11. A class to RELION 5 (optional)
+
+The MRA sorts the particles; it does not give a resolution. For a gold-standard
+refinement, a class that looks like RyR1 can go to RELION 5:
+
+> Export class 2 of bin8-ssn-all to RELION.
+
+Its `relion-export` skill runs `scripts/export_relion.py` as a dry run and
+shows you what it printed:
+
+- the class's particles after the run's last finished iteration;
+- the duplicates it leaves out;
+- the two halves. They are dealt within each series, with neighbours closer
+  than a box kept together, so they can come out unequal (782 and 404 for a
+  RyR1 class on 10 November 2026);
+- a note per series. For these frames, which have no mdocs, the notes say that
+  the acquisition order comes from the tilt order, here the angle order, and
+  that there is no dose.
+
+**For these data, no dose.** If it offers `--dose-per-tilt`, say no: with the
+order unknown, a dose would weight the wrong tilts if they were taken
+dose-symmetrically. Without a dose, RELION weights no tilt by dose.
+
+After your yes it exports, to
+`outputs/ryr1-tutorial/relion/bin8-ssn-all-class2/`:
+
+- `relion_commands.sh`: an Extract, then a gold-standard Refine3D with local
+  searches from the MRA's poses, without symmetry, both at the MRA's pixel
+  (13.44 Å here). This first refinement checks the export rather than reaching
+  ~20 Å; finer pixels come after, by extracting again at a lower `--bin`;
+- `README.md`, which says why each value is what it is.
+
+It then gives you the `sbatch` line the export printed. RELION is yours to run:
+the assistant never runs RELION, `relion_commands.sh` or `mpirun`, and cannot
+call `sbatch`. In your own terminal (not with `!`), set RELION for the job. On
+max the module `relion/v5/gpu/sm86-cu11.7` does not start RELION (its Open MPI
+lacks UCX); the group's RELION 5.0.1 build does, with another Open MPI:
+
+```bash
+export RELION5_MODULE=openmpi/v5.0.5-xchu
+export RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7
+```
+
+Then run that line, with max's GPU options in place of
+`<GPU partition and --gres>`:
+
+```bash
+sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
+    --partition=gpu --gres=gpu:a40:2 \
+    --chdir=<the folder it gave you> --wrap "./relion_commands.sh"
+```
+
+`relion_commands.sh` first checks that RELION starts, and stops, naming what is
+missing, if it does not. The job's log, `slurm-<job id>.out`, is written in the
+export's folder; the assistant can read it for you.
+
+> **Status, 10 November 2026.** The export is new. A RyR1 class was exported on
+> max that day; RELION's Extract and Refine3D have not run on max yet. Tell
+> Anna what happens.
+
 ## Good to know
 
 - **It submits only through `submit_lanes.py` and `submit_recipe.py`.** It
@@ -276,9 +338,9 @@ It writes a copy of the lane whose `[mra]` names the run and the class
 - **Downloads are yours.** For an EMPIAR entry it writes and checks the layout
   and gives you the `cryoet download-empiar` command, which can run for hours,
   to run in your own shell.
-- **Every submission it makes is in the journal**,
-  `outputs/ryr1-tutorial/journal.jsonl`, with the model, your reason and the
-  lane file's text.
+- **Every submission and every export it makes is in the journal**,
+  `outputs/ryr1-tutorial/journal.jsonl`, with the model and your reason; a
+  submission also with the lane file's text.
 - **When something refuses**, the table at the end of the
   [other tutorial](ryr1-without-assistant.md#when-something-refuses) says what
   it means; the assistant shows you the refusal and explains it.
