@@ -69,6 +69,9 @@ Tell the person:
 - that rlnTomoHand is -1, not measured for their data;
 - the next step: `relion_commands.sh` in the folder, Extract at the MRA's pixel,
   then a gold-standard Refine3D from the MRA poses. The folder's README.md says why.
+  Give the person the `sbatch` line the export printed last, with the folder already
+  in it, and the site's GPU options in place of its placeholder. Never make up the
+  folder: a job sent to a folder with no export fails at once (exit 127).
 
 ## 4. RELION itself
 

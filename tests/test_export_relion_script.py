@@ -227,3 +227,10 @@ def test_mpirun_keeps_its_session_files_where_it_is_told(tmp_path) -> None:
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr
     assert log.read_text().splitlines()[-1] == f"PRTE={local}"
+
+
+def test_the_submission_hint_names_the_export_folder(tmp_path) -> None:
+    folder = tmp_path / "relion" / "run2-class1"
+    hint = _script().submit_hint(folder)
+    assert f"--chdir={folder.resolve()}" in hint
+    assert "--ntasks=3" in hint and '--wrap "./relion_commands.sh"' in hint

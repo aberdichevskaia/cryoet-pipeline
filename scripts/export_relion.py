@@ -392,6 +392,18 @@ mpirun -n "$MPI" relion_refine_mpi --ios Extract/job001/optimisation_set.star \\
 """
 
 
+def submit_hint(out: Path) -> str:
+    """The line that runs an export's commands in a Slurm job, with the folder filled
+    in: a person who has to guess the folder submits from the wrong one (MDC, job
+    3914512, 10 November 2026: a folder with no export, exit 127). The GPU options are
+    the site's: at MDC --partition=gpu --gres=gpu:a40:2."""
+
+    return (
+        "sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 <GPU partition and --gres> "
+        f'--chdir={Path(out).resolve()} --wrap "./relion_commands.sh"'
+    )
+
+
 def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: float) -> str:
     notes = sorted({note for series in written["series"] for note in series["notes"]})
     lines = [
@@ -432,7 +444,12 @@ def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: floa
         "CPUs each (8), and GPUs for Refine3D, which it uses unless `USE_GPU=0`. RELION comes",
         "from PATH, from the modules `RELION5_MODULE` names, and from `RELION5_HOME` (its",
         "bin/ and lib/); the script's header says what works at MDC. It first checks that",
-        "RELION starts, and stops before running anything if it does not.",
+        "RELION starts, and stops before running anything if it does not. From any",
+        "folder (at MDC the GPU options are `--partition=gpu --gres=gpu:a40:2`):",
+        "",
+        "```bash",
+        submit_hint(plan.out),
+        "```",
         "",
         "## Checks",
         "",
@@ -775,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
         for note in series["notes"]:
             print(f"note, {series['name']}: {note}")
     print(f"wrote {plan.out}")
+    print(f"next, RELION in a job (README.md): {submit_hint(plan.out)}")
     if args.relion_check:
         return 0 if relion_check(plan, args.relion_check, args.threads) else 1
     return 0

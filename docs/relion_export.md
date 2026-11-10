@@ -55,7 +55,10 @@ default (`--stack-binning`): super-resolution sums are written at the camera's p
 RELION's first round extracts at the MRA's pixel and box, so the reference fits as it
 is (relion_refine refuses a reference of another size); finer pixels are later rounds.
 `--relion-check` has RELION reconstruct the exported class and compares it with the
-exported reference.
+exported reference. The export ends by printing the `sbatch` line that runs
+relion_commands.sh with `--chdir` set to its folder (the README holds it too): on
+10 November 2026 a RELION job sent with a guessed folder, before any export,
+failed at once with exit 127 (job 3914512).
 
 ### Tried (10 November 2026)
 
