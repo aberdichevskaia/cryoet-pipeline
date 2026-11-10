@@ -89,3 +89,26 @@ def test_the_assistant_exports_only_the_dry_run_it_showed() -> None:
     assert "no dry run" in _refusal(later, [_dry_run(record)])
     used = [_dry_run(record, minutes_ago=6), _dry_run(record, minutes_ago=1, event="submit")]
     assert "submitted" in _refusal(record, used)
+
+
+def test_the_commands_load_relion_check_it_and_use_the_gpus(tmp_path) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    plan = SimpleNamespace(
+        chosen=SimpleNamespace(box=48, pixel_angstrom=5.4, channel=1),
+        series=[SimpleNamespace(relion_bin=4)],
+    )
+    text = _script().commands_text(plan, diameter=130.0, ini_high=40.0)
+    script = tmp_path / "relion_commands.sh"
+    script.write_text(text)
+    assert subprocess.run(["bash", "-n", str(script)], capture_output=True).returncode == 0
+    assert 'module load "$RELION5_MODULE"' in text
+    assert "--b 96 --crop 48 --bin 4" in text and "reference/class_1.mrc" in text
+    assert '${GPU_ARGS[@]+"${GPU_ARGS[@]}"}' in text
+    assert "--particle_diameter 130 " in text and "--ini_high 40 " in text
+    # Without RELION it stops before anything runs, saying what is missing.
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env)
+    assert result.returncode == 2 and "relion_tomo_subtomo not found" in result.stderr
+    assert not (tmp_path / "Extract").exists()

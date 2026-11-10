@@ -234,8 +234,13 @@ alignment solved without one; not decided.
   CTF model, so no RELION run has read a fitted defocus from this export yet.
 - **A real class.** The step has run on a class of picks with random orientations
   (below), not on a particle: RyR1 or Gag on max is the first real one.
-- **RELION at MDC.** Unknown whether RELION 5 is installed on max. The check
-  runs anywhere RELION 5 does, on a series copied at its tomogram's binning.
+- **RELION at MDC.** Found 10 November 2026: Environment Modules (no `module
+  spider`) list `relion/v5/gpu/sm86-cu11.7` (an A40 build; the group's
+  `/fast/AG_Kudryashev/software/relion-5.0.1`), `relion/v4/gpu/sm86-cu11.7` and
+  someone's `relion/xchu/v4`, `/v5`; nothing on PATH. `relion_commands.sh` loads the
+  module `RELION5_MODULE` names, stops if RELION is not found, and gives Refine3D
+  the job's GPUs. Its version, MPI and CUDA are not yet checked (`module show`,
+  `relion_refine --version`).
 
 ## RELION 5 on a Mac, for checks
 

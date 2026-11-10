@@ -313,12 +313,35 @@ def _write_mrc(path: Path, volume: np.ndarray, pixel: float) -> None:
 def commands_text(plan: ExportPlan, diameter: float, ini_high: float) -> str:
     box, relion_bin = plan.chosen.box, plan.series[0].relion_bin
     return f"""#!/usr/bin/env bash
-# RELION 5, run from this folder. Written by scripts/export_relion.py and not run by
-# it: review before submitting (README.md says why each value is what it is).
+# RELION 5, run from this folder in a job with MPI (and GPUs for Refine3D). Written by
+# scripts/export_relion.py and not run by it: review before submitting (README.md says
+# why each value is what it is).
+#
+# RELION comes from PATH, or from the module RELION5_MODULE names, loaded here: at MDC
+# relion/v5/gpu/sm86-cu11.7, an A40 build. Refine3D uses the GPUs the job sees, unless
+# USE_GPU=0. THREADS and MPI set the threads per rank and the ranks.
 set -euo pipefail
 cd "$(dirname "$0")"
 THREADS=${{THREADS:-8}}
 MPI=${{MPI:-3}}
+
+if [ -n "${{RELION5_MODULE:-}}" ]; then
+    if ! type module >/dev/null 2>&1 && [ -n "${{MODULESHOME:-}}" ]; then
+        source "$MODULESHOME/init/bash"
+    fi
+    module load "$RELION5_MODULE"
+fi
+for program in relion_tomo_subtomo relion_refine_mpi mpirun; do
+    if ! command -v "$program" >/dev/null 2>&1; then
+        echo "$program not found: load RELION 5 (set RELION5_MODULE) or put it on PATH" >&2
+        exit 2
+    fi
+done
+GPU_ARGS=()
+if [ "${{USE_GPU:-1}}" != 0 ] && command -v nvidia-smi >/dev/null 2>&1 \\
+        && nvidia-smi -L >/dev/null 2>&1; then
+    GPU_ARGS=(--gpu "")
+fi
 
 # Pseudo-subtomograms at the MRA's pixel ({plan.chosen.pixel_angstrom:.3f} A) and box,
 # so the reference fits them as it is.
@@ -335,7 +358,8 @@ mpirun -n "$MPI" relion_refine_mpi --ios Extract/job001/optimisation_set.star \\
     --particle_diameter {diameter:g} --flatten_solvent --zero_mask --ctf --pad 2 \\
     --healpix_order 4 --auto_local_healpix_order 4 --sigma_ang 3 \\
     --offset_range 3 --offset_step 1 --sym C1 --norm --scale \\
-    --dont_combine_weights_via_disc --pool 10 --j "$THREADS"
+    --dont_combine_weights_via_disc --pool 10 --j "$THREADS" \\
+    ${{GPU_ARGS[@]+"${{GPU_ARGS[@]}}"}}
 """
 
 
@@ -374,6 +398,12 @@ def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: floa
         f"3 pixels), C1, from the reference low-passed to {ini_high:g} A, with a particle",
         f"diameter of {diameter:g} A. They are starting points; finer pixels come after, by",
         "extracting again at a lower --bin.",
+        "",
+        "Run it in a job with MPI: as many tasks as `MPI` ranks (3 by default), `THREADS`",
+        "CPUs each (8), and GPUs for Refine3D, which it uses unless `USE_GPU=0`. RELION comes",
+        "from PATH, or from the module `RELION5_MODULE` names, which the script loads (at",
+        "MDC `relion/v5/gpu/sm86-cu11.7`, built for A40s). Without RELION it stops before",
+        "running anything.",
         "",
         "## Checks",
         "",
