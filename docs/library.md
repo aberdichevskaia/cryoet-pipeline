@@ -39,6 +39,15 @@ Status, 2026-11-05:
   - it answered from the manual page, citing "IMOD 5.1.12, man/newstack.html"
     with the page's line numbers.
 - **Not built yet:** the web sources and the git channel.
+- **AreTomo2, added 2026-11-08** with the AreTomo route of fine alignment
+  ([aretomo_backend.md](aretomo_backend.md)). The installation channel reads
+  its version and its `--help`. `mdc-2026-11-05` predates it, so MDC needs a
+  new snapshot, built from a shell in which `$ARETOMO` runs: the module
+  `aretomo/v2-cu12.5` loaded, since AreTomo2 cannot start without its CUDA
+  libraries. The dry run then names `AreTomo2 1.1.3`; without them it reports
+  that no version was found, and the build writes no page for it. Its manual
+  is a PDF in its repository and waits for the web channel (see
+  [Later](#later)).
 
 ## Core rule
 
@@ -119,13 +128,14 @@ The assistant reads in three tiers, as other agentic systems do (see
 ## What goes in
 
 The programs listed here are the ones the code and the lane files call, as of
-2026-11-05.
+2026-11-05, and AreTomo2 since 2026-11-08.
 
 | Source | Contents | Channel |
 |---|---|---|
 | IMOD | The whole manual (5.6 MB of HTML, 4.3 MB of text). The code calls newstack, tilt, tiltalign, tiltxcorr, beadtrack, autofidseed, xftoxg, xfproduct, ctfplotter, ctfphaseflip, imodinfo, point2model and model2point. | installation: `VERSION`, and `html/IMOD.qch` or the HTML files in `html/`, else the formatted pages in `man/`. The Mac install has `IMOD.qch`; the cluster installs show theirs in a dry run. |
 | MotionCor3 | README, usage text | web; installation |
 | CTFFIND5 | cisTEM documentation, usage text | web; installation |
+| AreTomo2 | Usage text, a line or two per option; the manual (*AreTomo2 1.1 User Manual*, a PDF of 14 pages, revised 19 February 2024) and the release notes (`Readme.txt`), both in its repository | installation; web, pinned: github.com/czimaginginstitute/AreTomo2 at commit `01e7219c7963d53a89ff5387c811c704e1be2d44`, the source of the 1.1.3 that MDC runs (the banner it prints, "Built on Aug 19 2024", is a fixed string in that commit). 1.1.3 has no tag. |
 | pytom-match-pick | Documentation of the installed version; usage text of the four `pytom_*.py` scripts | web; installation |
 | MemBrain-seg | Documentation, usage text | web; installation |
 | Dynamo | Wiki pages on tables, MRA, alignment parameters and GPU use | web, dated |
@@ -186,6 +196,8 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
   pytom-match-pick   package metadata in the environment its scripts run in
   MemBrain-seg       package metadata in the environment it runs in
   MotionCor3         not known yet how it reports its version
+  AreTomo2           what it states for --version, with its name: "AreTomo2 1.1.3"
+                     (AreTomo3 is another program, with another command line)
   Slurm              sinfo -V
   bash               bash --version
   ```
@@ -371,6 +383,7 @@ pytom-match-pick   package metadata in the environment its scripts run in (packa
 MemBrain-seg       package metadata in the environment it runs in (package_version_of)
 CTFFIND            the version its banner states in the run itself: estimate-ctf, and the defocus hint
 MotionCor3         what it states for --version (motioncor3_version_of); a motioncor3_version given overrides it
+AreTomo2           what it states for --version, with its name (aretomo_version_of), since 2026-11-08
 IsoNet2            "external": its backend is a skeleton
 numpy, torch, zarr, mrcfile   the installed package versions
 ```
@@ -391,7 +404,8 @@ MemBrain-seg 0.0.10, Slurm 26.05.4, bash 5.1.8
 ```
 
 MotionCor3 states its version for `--version`, the first thing
-`stated_version` asks it.
+`stated_version` asks it. AreTomo2 at MDC (module `aretomo/v2-cu12.5`) stated
+`AreTomo2 version 1.1.3` on 2026-11-09, read by hand; no snapshot holds it yet.
 
 The builder and the backends read versions the same way, so a record's version
 and a library page's version are the same string, and a run can be matched to
@@ -462,6 +476,21 @@ Parked on 2026-11-05, while the work is at MDC.
   CTFFIND's defaults on 2026-11-05. It found only that output in the library,
   said so, and answered with the values the pipeline passes, read from
   `backends/ctf.py`.
+- **AreTomo2's manual.** Its `--help` gives each option a line or two, and is
+  wrong about two defaults: it says 256 for `-AlignZ` and 0 for `-VolZ`, where
+  the code (`CInput.cpp`) sets 600 and 1200. The manual gives 600 for
+  `-AlignZ`, and a volume is reconstructed unless `-VolZ 0` is given. It explains
+  what the pipeline's AreTomo route depends on: `-AlignZ`, `-TiltCor`,
+  `-TiltAxis`, `-DarkTol`, the `.aln` file. The playbook cites it (A-9 to A-12
+  in [playbook/alignment.md](agent/playbook/alignment.md)), read on 2026-11-11.
+  - It goes in through the web channel, pinned to the commit in
+    [What goes in](#what-goes-in): `docs/AreTomo2_Manual_1.1.pdf`, 1,796,718
+    bytes, sha256 `d7637fe9e501475bc084967b359da0a0849670178ffa83e8fe093864a995b570`,
+    unchanged since 1.1.2; and `Readme.txt`, the release notes.
+  - The PDF needs a converter, and the pipeline's environment has no PDF
+    reader: neither pdfplumber nor pypdf was installed on the Mac on
+    2026-11-11. pdfplumber reads the manual's 14 pages as 23.7 kB of clean
+    text.
 
 ## Open questions
 
@@ -477,8 +506,10 @@ Parked on 2026-11-05, while the work is at MDC.
    environment and pytom-match-pick environment, at the 0.14.0 the snapshot
    documents. The group's other tools are named in
    `/fast/AG_Kudryashev/software/cryoet-tools.sh` (README, "0. One-time
-   setup"). Still open: that file has to exist before the README's steps work.
-   The snapshot should then be built from a shell that sources it.
+   setup"). The file has existed since 2026-11-06. Its paths are the ones
+   `mdc-2026-11-05` was built with, so that snapshot already documents those
+   tools. pytom-match-pick stays per person, pinned to the snapshot's
+   version.
 4. Whether MDC's cluster has a wiki of its own (Munich's: see
    [Later](#later)).
 5. Whether Claude Code's Bash sandbox runs on the login nodes.

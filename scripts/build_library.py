@@ -837,6 +837,14 @@ def collect_usage(snapshot: Snapshot, tool: Tool, item: Item, out: Path, env: di
     if not result.output.strip():
         snapshot.problems.append(f"{shown} printed nothing")
         return
+    if result.exit_code == 127:
+        # What a program prints when it cannot start: the dynamic loader's
+        # complaint (AreTomo2 1.1.3 links cuFFT and the CUDA runtime from the
+        # shell's library path, its makefile11), or a wrapper's "command not
+        # found". Not its usage, so not a page of a snapshot that never changes.
+        said = result.output.strip().splitlines()[0]
+        snapshot.problems.append(f"{shown}: could not start (exit code 127): {said}")
+        return
     raw = f"raw/{tool.name}/{item.name}.txt"
     write(out / raw, result.output)
     if result.stopped:
@@ -1039,12 +1047,15 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
     print(f"Library snapshot {snapshot.id}{where}: dry run, nothing written.\n")
     print("Tools")
     width = max(len(name) for name in snapshot.tools) + 2
+    # AreTomo's version carries its name ("AreTomo2 1.1.3"), longer than a number.
+    said = max([10] + [len(tool.version_text) + 2 for tool in snapshot.tools.values()
+                       if tool.path is not None])
     for tool in snapshot.tools.values():
         if tool.path is None:
-            print(f"  {tool.name:<{width}}{'-':<10}{tool.problem or tool.note}")
+            print(f"  {tool.name:<{width}}{'-':<{said}}{tool.problem or tool.note}")
             continue
         how = f"; version from {tool.version.how}" if tool.version else ""
-        print(f"  {tool.name:<{width}}{tool.version_text:<10}{tool.path}  ({tool.found}{how})")
+        print(f"  {tool.name:<{width}}{tool.version_text:<{said}}{tool.path}  ({tool.found}{how})")
     print("\nWould read")
     for name in snapshot.tools:
         mine = [item for item in items if item.tool == name]

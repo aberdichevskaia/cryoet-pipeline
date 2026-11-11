@@ -167,7 +167,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[fine_align] robust_fitting, auto_prune_outliers` | rule | the values of the block kept |
 | `[fine_align] surfaces_to_analyze` | rule | 2 with beads, which sit on both faces; 1 with patches, which are coplanar. The config does not enforce it, so keep the block's value |
 | `[fine_align] max_pruned_fraction` | rule | unset with beads; 0.08 with patches, as block B explains |
-| `[fine_align] backend` | rule, person | unset: tiltalign after the `[fiducials]` steps. `aretomo` only when the person asks for AreTomo2; that lane has no `[fiducials]`, needs `[reconstruct] thickness` and a GPU stage, and has not run on real data yet (docs/aretomo_backend.md) |
+| `[fine_align] backend` | rule, person | unset: tiltalign after the `[fiducials]` steps. `aretomo` only when the person asks for AreTomo2; that lane has no `[fiducials]`, needs `[reconstruct] thickness` and a GPU stage, and has run on one series so far (docs/aretomo_backend.md; playbook A-8 to A-13) |
 | `[fine_align] aretomo_align_z_nm, aretomo_tilt_cor, aretomo_dark_tol, aretomo_gpu` | rule | unset: AreTomo2's own defaults, with the tilt offset applied (docs/aretomo_backend.md) |
 | `[reconstruct] thickness` | person, rule | with beads, unset: the beads measure it. With patches, required: question 3a |
 | `[ctf] voltage_kv` | data, card | the mdocs' `Voltage`, else the instrument card |

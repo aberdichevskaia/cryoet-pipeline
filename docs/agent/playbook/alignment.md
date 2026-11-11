@@ -7,10 +7,12 @@
 > - Answer the questions at the end, a line each, and add what is missing.
 > - Any language and any form: edit this file, comment on it, or reply by email.
 > - Entries marked *for the maintainer* are about our code; skip them if you like.
+> - A-8 to A-13, the AreTomo route, were added on 11 November 2026 from one
+>   series (EMPIAR-11830 Position_1) and AreTomo2's manual and source.
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md). The
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). The
 steps, their keys and their QC are in [pipeline_map.md](../pipeline_map.md),
 steps 2 to 6.
 
@@ -18,20 +20,26 @@ steps 2 to 6.
   - Coarse alignment: `tiltxcorr` and `xftoxg`.
   - Beads: `autofidseed` and `beadtrack`.
   - Patches: `tiltxcorr` patch tracking.
-  - Fine alignment: `tiltalign`.
+  - Fine alignment: `tiltalign`, or AreTomo2. At MDC AreTomo2 was 1.1.3
+    (module `aretomo/v2-cu12.5`) on 9 November 2026.
 - **The steps.**
   1. `align-tilt-series` (coarse alignment).
   2. `qc-coarse-alignment`.
   3. `generate-fiducial-seed`.
   4. `track-fiducials`.
   5. `fine-align-tilt-series`.
-- **Two routes.** Gold beads (`imod-autofidseed` with `imod-beadtrack`) or
-  patches (`imod-patch-seed` with `imod-patch-tracking`). A lamella without
-  beads takes patches.
+
+  On the AreTomo route steps 3 and 4 do not run.
+- **Three routes.**
+  - Gold beads: `imod-autofidseed` with `imod-beadtrack`.
+  - Patches: `imod-patch-seed` with `imod-patch-tracking`.
+  - AreTomo2: `[fine_align] backend = "aretomo"`, with no `[fiducials]`
+    section. It aligns from the tilt stack itself by projection matching, on a
+    GPU ([aretomo_backend.md](../../aretomo_backend.md)).
+
+  A lamella without beads takes patches or AreTomo2.
 - **Shared by every lane.** All these steps are shared by every lane of a
   project. Redoing them for a series changes what every lane sees for it.
-- **Not covered.** An AreTomo route is being built (November 2026) and is not
-  covered here.
 
 ## How a healthy run looks
 
@@ -39,6 +47,11 @@ steps 2 to 6.
   15–24 beads per series.
 - **Fine alignment on patches.** EMPIAR-11538 at MDC: a mean residual of
   1.39 nm on TS_0306, where the report lists 50 of 61 tilts aligned.
+- **Fine alignment by AreTomo2.** EMPIAR-11830 Position_1 at MDC, 10 November
+  2026, the only series so far: QC pass, 34 of 41 tilts aligned, 6
+  projection-matching passes in 3 rounds, the last pass's mean 0.07 nm (not a
+  residual, A-8). The tilt axis was solved at 83.2° from the lane's 84.1°, and
+  the tilt offset was +12° (A-9, A-10).
 - **Coarse alignment QC.** On EMPIAR-11830 Position_1 with whole-frame motion
   correction: rms 0.30 px, max 1.0 px.
 - **Run times per series** (RyR1 and HIV-1 Gag):
@@ -63,7 +76,9 @@ steps 2 to 6.
 3. **IMOD's own logs**, next to the outputs. The real error is often there:
    - `alignments/<TS>/` for `tiltxcorr` and `xftoxg`;
    - `fiducials/<TS>/` for `autofidseed` and `beadtrack`;
-   - `alignments/<TS>/fine/` for `tiltalign` and the outlier pruning.
+   - `alignments/<TS>/fine/` for `tiltalign` and the outlier pruning, or for
+     AreTomo2: `<TS>_fine_aretomo.log` (its whole output) and
+     `<TS>_fine_aretomo.aln`.
 4. **The QC records:** `qc/<TS>/coarse_alignment/` (with a coarse-aligned
    preview stack), `fiducials/<TS>/<TS>_tracking_qc.json` and
    `alignments/<TS>/fine/<TS>_fine_alignment_qc.json`.
@@ -83,6 +98,14 @@ steps 2 to 6.
 - **The thickness on patch lanes.** A patch lane without
   `[reconstruct] thickness` is refused, since patches do not measure the
   specimen's depth ([tomogram.md](tomogram.md)).
+- **The AreTomo route.** Before the job runs, the dry run refuses:
+  - an AreTomo lane without `[reconstruct] thickness` (AreTomo2 measures no
+    depth either);
+  - a `[fiducials]` section, or tiltalign's keys in `[fine_align]`;
+  - a stage that runs `fine-align-tilt-series` without asking for a GPU.
+
+  The step itself refuses AreTomo3, whose command line is not AreTomo2's
+  (A-13).
 
 ## Checks before trusting the result
 
@@ -93,6 +116,9 @@ steps 2 to 6.
 3. **The tilt axis angle** of the fine alignment against the lane's or the
    authors' value. A drift of several degrees along the series means a failed
    fit. *General.*
+4. **On the AreTomo route**, an xz slice of the bin8 tomogram: the lamella
+   should lie flat. AreTomo2's QC number does not show this (A-8), and a wrong
+   tilt offset does (A-9).
 
 ## Problems
 
@@ -279,8 +305,9 @@ motion and coarse alignment passed.
 1. Read the motion QC and the coarse QC first.
 2. Ask the maintainer. Splitting the patch contours into chunks (IMOD's
    `imodchopconts`, an etomo option that is not its default) brought the
-   residual down from 17.7 to 8.2 nm locally, still above the threshold. An
-   AreTomo route is being built.
+   residual down from 17.7 to 8.2 nm locally, still above the threshold.
+3. The AreTomo route (`[fine_align] backend = "aretomo"`), which aligned this
+   series on 10 November 2026 (A-8 to A-10).
 
 **What not to do:**
 - Drop views by darkness alone (`[align] min_std_ratio`). No darkness rule
@@ -349,6 +376,219 @@ views. The EMPIAR-11538 lanes, which are stack lanes, use 0.84.
 - On EMPIAR-11830, dropping the dark end views by this ratio was proposed, but
   the defect was in the sums (M-2).
 
+### A-8. AreTomo: the QC number is not a residual
+
+**Kind:** reading results · **Evidence:** measured; how it compares with
+tiltalign's residual is not
+
+**Where it shows:** `last_pass_correction_mean_nm` in the fine-alignment QC, the
+tilt-alignment page of `cryoet report`, and the residual column of the report's
+summary table, marked `*`.
+
+**What it means:** AreTomo2 has no fiducials. Its projection matching compares
+each view with a reprojection of the others and shifts the view to match. The
+QC reports the shifts of the last pass: what AreTomo2 still moved, not what is
+left after fitting a model, as tiltalign's residual is. The two do not compare.
+On Position_1 the last pass moved the views by 0.07 nm on average, where
+tiltalign on patches had left 18.5 nm (A-5); the alignment is not 250 times
+better. The 0.8 and 1.5 nm thresholds are tiltalign's, reused.
+
+**How the passes read** (AreTomo2's source, and Position_1's log agrees):
+- It works in rounds. With the axis given and refined, as the pipeline runs it,
+  there are three, and the axis is searched again before the second and third.
+- Within a round it makes passes until the largest shift is under 2 px. A pass
+  that moves a view further than the last kept one is undone, although its table
+  is printed; the report draws it hollow.
+- The first pass of a round can be large again after the axis moved. That is not
+  a fault.
+- The reference view, the one nearest 0° after the tilt offset, is never
+  printed. One aligned tilt without a point on the report's page is expected.
+
+**What to check instead:** the lamella in an xz slice of the bin8 tomogram, the
+tilt offset (A-9), the tilt axis (A-10), and whether picking finds the specimen.
+
+**What not to do:** put it beside bead or patch residuals in a table or on a
+slide; tighten the thresholds on it.
+
+**Applies to:** AreTomo2 1.1.3; the report's page since 10 November 2026.
+
+**Source:** EMPIAR-11830 Position_1, MDC, 10 November 2026: 6 passes in 3
+rounds of 2, the rounds starting from axes 86.73, 83.70 and 83.21°; in the last
+pass the largest shift was 0.17 nm (0.9 px). The rounds and the undo rule were
+read in AreTomo2's source the same day (`CProcessThread::mAlign` and
+`mProjAlign`).
+
+### A-9. AreTomo: every tilt angle moves by a whole-degree offset
+
+**Kind:** reading results · **Evidence:** measured on one series (the log and
+AreTomo2's source agree); the advice on averaging is *manual*
+
+**Where it shows:** `applied_tilt_angle_offset_deg` in the fine-alignment QC,
+and every page after it: the tilt range in the report's summary, the
+aligned-tilts page, the CTF page. On Position_1 the view taken at +45° shows as
++57°.
+
+**What it means:**
+- With `[fine_align] aretomo_tilt_cor` unset or true, AreTomo2 measures the
+  offset between the stage's angles and the specimen's, which milling or
+  mounting gives, and the pipeline applies it from then on. The final stack, the
+  CTF fit and the reconstruction all take the nominal angle plus the offset, so
+  that the lamella lies flat in the tomogram.
+- The offset is the best of 31 whole degrees from −15 to +15, with no finer step
+  (`CTiltOffsetMain::mSearch`). It is good to half a degree at best, and an
+  offset beyond 15° cannot be found.
+
+**How to confirm a wrong offset:** an xz slice of the bin8 tomogram. A lamella
+lying at an angle about the tilt axis has the wrong offset, by about that angle.
+
+**Causes, common to rare:**
+1. A failed measurement. AreTomo2's manual (1.1, section 6) says it is
+   occasionally wrong.
+2. A true offset beyond ±15°.
+
+**What to try:**
+1. `[fine_align] aretomo_tilt_cor = false` on one series, on a config copy
+   (recipe B). AreTomo2 then measures the offset for its own alignment only, and
+   the tomogram keeps the nominal angles. Compare the xz slices.
+2. Not built yet: AreTomo2 takes a known offset as the second value of
+   `-TiltCor`, and the pipeline does not pass one. Ask the maintainer.
+
+**What not to do:** read an angle on a later page as the nominal one; take the
+offset as right without looking at the slice.
+
+**Before averaging:** AreTomo2's manual (1.1, sections 16.1 and 16.4) advises
+against applying the offset before subtomogram averaging: it rotates the
+tomogram, and the missing wedge then differs between tomograms. The pipeline
+carries the corrected angles into every later step, as the authors of
+EMPIAR-11830 did (their deposited `.tlt` has +8° applied). *For the
+maintainer:* whether the RELION export carries the same angles has not been
+checked.
+
+**Applies to:** AreTomo2 1.1.3, with the pipeline's default
+`aretomo_tilt_cor = true` (`-TiltCor 1`).
+
+**Source:** EMPIAR-11830 Position_1, MDC, 10 November 2026: +12.00°, where the
+authors' files have +8°. The difference has not been looked into.
+
+### A-10. AreTomo: the tilt axis it solves is not the lane's
+
+**Kind:** reading results · **Evidence:** measured on one series; the search
+window is *manual* and AreTomo2's source
+
+**Where it shows:** `tilt_axis_angle_deg` against `initial_tilt_axis_angle_deg`
+in the fine-alignment QC, with `tilt_axis_spread_deg`; the round labels on the
+report's tilt-alignment page.
+
+**What it means:** the pipeline gives AreTomo2 the coarse alignment's axis, the
+lane's `[align] tilt_axis_angle`, as `-TiltAxis <axis> 1`. AreTomo2 searches
+near it, again before each later round, and then solves an axis for every view
+(manual 1.1, section 15). The manual gives the window as ±3°; the source
+searches within 6° and then 3°. A few degrees from the lane's value is normal.
+The spread is the range of the per-view axes.
+
+**When it is not fine:**
+- The solved axis sits about 6° from the lane's, at the edge of the window. Then
+  the lane's axis is probably wrong: check it on the coarse preview.
+- The lane took its axis from someone else's AreTomo files. Theirs may be of a
+  mirrored stack: the authors' `.xf` for Position_1 has −84.6°, on a stack
+  mirrored in Y, where ours solves +83.2°.
+
+**What not to do:** copy an axis from deposited files without checking how
+their stack is oriented.
+
+**Applies to:** AreTomo2 1.1.3.
+
+**Source:** EMPIAR-11830 Position_1, MDC, 10 November 2026: the lane's 84.1°,
+the rounds starting from 86.73, 83.70 and 83.21°.
+
+### A-11. AreTomo: the alignment height is 600 pixels, whatever the pixel
+
+**Kind:** silent · **Evidence:** manual (AreTomo2 1.1, section 13); its effect on
+our data is not measured
+
+**Where it shows:** `align_z_px` in the fine-alignment QC. Nothing warns.
+
+**What it means:** AreTomo2's `-AlignZ` is the height of the volume it
+reconstructs for projection matching, in pixels of the stack it reads. The
+manual counts it among the settings that matter most for accuracy, and wants it
+close to the specimen's thickness. Unset, the pipeline passes AreTomo2's own
+default, 600 px of the full-resolution stack: 120 nm at 2 Å per pixel, 60 nm at
+1 Å. `[fine_align] aretomo_align_z_nm` sets it in nm.
+
+**How to confirm:** `align_z_px` times the stack's pixel size, against the
+lamella's thickness measured in an xz slice.
+
+**What to try:** `aretomo_align_z_nm` near the measured thickness on one series,
+on a config copy (recipe B). Compare the xz slices and the picks.
+
+**What not to do:** set it to a padded `[reconstruct] thickness`. The manual
+wants the alignment height smaller than the reconstruction's.
+
+**Applies to:** AreTomo2 1.1.3. Its `--help` says 256; its code and manual say
+600.
+
+**Source:** AreTomo2's manual 1.1 (revised 19 February 2024) and `CInput.cpp`,
+read on 11 November 2026. Not met on our data.
+
+### A-12. AreTomo leaves out views it finds dark
+
+**Kind:** warning · **Evidence:** code; the threshold is *manual*
+
+**Error text** (fine-alignment QC): `AreTomo left out views it found dark: z
+<z values>`
+
+**What it means:** AreTomo2 drops views darker than its `-DarkTol`, 0.7 by
+default; a lower value drops fewer (manual 1.1, section 17). Since 1.1.3 it also
+drops nearly flat views. The pipeline leaves them out of the final stack, the
+CTF fit and the reconstruction, as it does the views coarse alignment left out
+(A-7).
+
+**When it is not fine:**
+- Views in the middle of the tilt range, or many views.
+- On a frames lane, a tilt that motion correction cut into tiles can look dark.
+  Read the motion QC of those tilts first (M-2).
+
+**What to try:** look at the views; then a lower `[fine_align] aretomo_dark_tol`
+on one series, on a config copy (recipe B).
+
+**Applies to:** AreTomo2 1.1.3.
+
+**Source:** read in `backends/aretomo_alignment.py`, AreTomo2's manual 1.1 and
+its release notes for 1.1.3 (`Readme.txt`). Not met on our data yet.
+
+### A-13. AreTomo2 does not start in the lane job
+
+**Kind:** crash · **Evidence:** code for the messages; cause 1 is *general*, not
+met
+
+**Error text:**
+- `AreTomo exited with code <n>; see <path>/<TS>_fine_aretomo.log`
+- `AreTomo executable not found: <path>`
+- `no AreTomo executable: pass --aretomo-executable (a lane's [executables]
+  aretomo), or put AreTomo2 on PATH`
+- `<path> is AreTomo3 <version>; this backend drives AreTomo2 (or AreTomo 1.x),
+  whose command line AreTomo3 does not share`
+
+**Causes, common to rare:**
+1. The CUDA libraries are not found. AreTomo2 1.1.3 links cuFFT and the CUDA
+   runtime when it starts, with no path to them built in (its `makefile11`). A
+   lane job takes its environment from the shell it was submitted from (E-9). At
+   MDC, load `aretomo/v2-cu12.5` in that shell, after unloading the other
+   AreTomo modules (`v1-cu11.7`, `v3-cu12.5`).
+2. `$ARETOMO` is unset in the submit shell, or names another program.
+3. AreTomo3 is named. It reads movies and mdocs instead of one stack.
+
+**How to confirm:** in a new shell, set up as for submitting:
+- `"$ARETOMO" --version` prints `AreTomo2 version 1.1.3`;
+- `ldd "$ARETOMO" | grep 'not found'` prints nothing.
+
+**What not to do:** resubmit, or move to another node, before those two checks.
+
+**Applies to:** AreTomo2 1.1.3 at MDC, November 2026.
+
+**Source:** setting up the first AreTomo lane at MDC, 9 November 2026. Its run
+on 10 November started; this failure has not been met.
+
 ## Questions for reviewers
 
 Please answer in a line each; "don't know" is a useful answer.
@@ -362,5 +602,9 @@ Please answer in a line each; "don't know" is a useful answer.
   correction after positioning? The QC warns above 0.1° and 1 px.
 - **Q-A5.** For lamellae, which aligner works for you: etomo patch tracking,
   AreTomo, something else? With which settings?
+- **Q-A7.** If you align lamellae with AreTomo or AreTomo2: which `-AlignZ`,
+  `-TiltCor`, `-DarkTol` and `-Patch` do you use, and why?
+- **Q-A8.** How do you judge an AreTomo alignment good: by its log, the xz
+  slice, the tomogram, the picks?
 - **Q-A6.** Have you met an alignment problem that is not here? In a line each:
   what you saw, what it turned out to be, what helped.

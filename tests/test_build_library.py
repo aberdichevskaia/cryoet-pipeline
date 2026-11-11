@@ -216,7 +216,8 @@ def host(tmp_path, monkeypatch):
         """))
     monkeypatch.setenv("PATH", f"{bin_}:{pytom}:{imod / 'bin'}:/usr/bin:/bin")
     monkeypatch.setenv("PYTOMO_MP_DIR", str(pytom))
-    for variable in ("IMOD_DIR", "CTFFIND5", "MOTIONCOR3", "MEMBRAIN_EXE", "CRYOET_LIBRARY"):
+    for variable in ("IMOD_DIR", "CTFFIND5", "MOTIONCOR3", "ARETOMO", "MEMBRAIN_EXE",
+                     "CRYOET_LIBRARY"):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(bl, "SRC", src)
     monkeypatch.setattr(bl, "today", lambda: DAY)
@@ -344,6 +345,67 @@ def test_a_lane_that_names_an_unset_variable_is_a_problem(host, capsys):
     lane.write_text('[executables]\nctffind = "$CTFFIND5"\n')
     assert run(host, "--dry-run", "--config", str(lane)) == 0
     assert '$CTFFIND5 is not set in this shell' in capsys.readouterr().out
+
+
+def with_aretomo(host, monkeypatch, body: str) -> Path:
+    """An AreTomo2 stand-in named by $ARETOMO, and sources that ask it for --help."""
+    exe = executable(host["tmp"] / "AreTomo2-cu12.5" / "AreTomo2", body)
+    monkeypatch.setenv("ARETOMO", str(exe))
+    with host["sources"].open("a") as sources:
+        sources.write('[aretomo]\nusage = [["--help"]]\n')
+    return exe
+
+
+def test_aretomo_is_found_by_its_variable_and_documented_under_its_name(host, capsys,
+                                                                        monkeypatch):
+    # What AreTomo2 1.1.3 prints (CAreTomoMain.cpp and CInput.cpp at main
+    # 01e7219c79, read on 2026-11-11).
+    exe = with_aretomo(host, monkeypatch, """\
+        case "$1" in
+          --version) printf 'AreTomo2 version 1.1.3\\nBuilt on Aug 19 2024\\n' ;;
+          --help) printf '\\nUsage: AreTomo2 Tags\\n-InMrc    \\n'
+                  printf '   1. Input MRC file that stores tomo tilt series.\\n\\n' ;;
+        esac
+        """)
+    assert run(host, "--dry-run") == 0
+    printed = capsys.readouterr().out
+    # The name is part of the version, and the path does not run into it.
+    assert (f"  {'aretomo':<18}AreTomo2 1.1.3  {exe}  ($ARETOMO; version from "
+            "AreTomo2 --version)") in printed
+    assert f"  {'imod':<18}{'5.1.12':<16}" in printed
+    assert "Problems: none" in printed
+
+    assert run(host) == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    record = json.loads((snapshot / "library.json").read_text())
+    assert {tool["name"]: tool["version"] for tool in record["tools"]}["aretomo"] == \
+        "AreTomo2 1.1.3"
+    assert record["problems"] == []
+    page = (snapshot / "text" / "aretomo" / "help.md").read_text()
+    assert page.startswith('---\ntool: "aretomo"\nversion: "AreTomo2 1.1.3"\n'
+                           'channel: "installation"\n')
+    assert "1. Input MRC file that stores tomo tilt series." in page
+
+
+def test_a_program_that_cannot_start_leaves_a_problem_and_no_page(host, capsys, monkeypatch):
+    # How a dynamically linked program ends when a library it links is not on
+    # the library path: the loader's message, exit code 127.
+    with_aretomo(host, monkeypatch, """\
+        said="error while loading shared libraries: libcufft.so.12"
+        echo "$0: $said: cannot open shared object file: No such file or directory" >&2
+        exit 127
+        """)
+    assert run(host, "--dry-run") == 0
+    assert "aretomo: no version found" in capsys.readouterr().out
+    assert run(host) == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    assert not (snapshot / "text" / "aretomo").exists()
+    assert not (snapshot / "raw" / "aretomo").exists()
+    problems = json.loads((snapshot / "library.json").read_text())["problems"]
+    assert [problem for problem in problems if "AreTomo2 --help" in problem] == [
+        f"AreTomo2 --help: could not start (exit code 127): {host['tmp']}/AreTomo2-cu12.5/"
+        "AreTomo2: error while loading shared libraries: libcufft.so.12: cannot open shared "
+        "object file: No such file or directory"]
 
 
 def test_a_given_version_is_kept_with_what_the_tool_said(host):
