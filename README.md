@@ -114,12 +114,13 @@ Only the tools in the group folder are shared.
 
 1. Your clone, and its `cryoet-pipeline` environment, with micromamba. `gpu`
    brings PyTorch, which the MRA stage runs on; `viz` brings matplotlib, which
-   the reports need:
+   the reports need; `library` brings pypdf, which reads AreTomo2's manual into
+   the assistant's reference library:
 
    ```bash
    micromamba create -n cryoet-pipeline -c conda-forge python=3.13
    micromamba activate cryoet-pipeline
-   python -m pip install -e ".[io,viz,gpu]"
+   python -m pip install -e ".[io,viz,gpu,library]"
    ```
 
 2. Your pytom-match-pick environment, at 0.14.0. That is the version the group's

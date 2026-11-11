@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
 import sys
@@ -146,6 +147,76 @@ def test_a_list_of_sources_may_name_only_tools_it_can_find(tmp_path):
     sources.write_text("[dynamo]\nusage = [['--help']]\n")
     with pytest.raises(SystemExit, match="dynamo"):
         bl.read_sources(sources)
+
+
+def tiny_pdf(*pages: str) -> bytes:
+    """A PDF whose pages each show one line of Helvetica: a converter's fixture,
+    written out here so that the test needs nothing to make it."""
+
+    objects = ["<< /Type /Catalog /Pages 2 0 R >>", "",
+               "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    kids = []
+    for text in pages:
+        stream = f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET"
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream")
+        objects.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents "
+                       f"{len(objects)} 0 R /Resources << /Font << /F1 3 0 R >> >> >>")
+        kids.append(len(objects))
+    objects[1] = (f"<< /Type /Pages /Kids [{' '.join(f'{kid} 0 R' for kid in kids)}] "
+                  f"/Count {len(kids)} >>")
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    out += (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n"
+            "%%EOF\n").encode()
+    return out
+
+
+def test_a_pdf_gives_its_text_page_by_page_with_single_spaces():
+    pdf = tiny_pdf("Tilt  axis:   -TiltAxis  initVal  refineFlag", "The second page")
+    markdown, pages = bl.pdf_to_markdown(pdf, "Manual.pdf")
+    assert pages == 2
+    assert markdown == ("# Manual.pdf\n\n## Page 1\n\nTilt axis: -TiltAxis initVal refineFlag\n\n"
+                        "## Page 2\n\nThe second page\n")
+    assert bl.pdf_to_markdown(pdf, "Manual.pdf") == (markdown, pages)
+
+
+PIN = {"repository": "https://github.com/owner/tool", "commit": "0123456789" * 4,
+       "version": "AreTomo2 1.1.3", "files": {"docs/Manual.pdf": "a" * 64}}
+
+
+@pytest.mark.parametrize("change, said", [
+    ({"commit": "main"}, "full 40-character commit"),
+    ({"repository": "https://gitlab.com/owner/tool"}, "https://github.com"),
+    ({"version": " "}, "version must be"),
+    ({"files": {}}, "files must map"),
+    ({"files": {"../Manual.pdf": "a" * 64}}, "inside the repository"),
+    ({"files": {"Manual.docx": "a" * 64}}, "ending in"),
+    ({"files": {"Manual.pdf": "A" * 64}}, "64 lower-case hex"),
+    ({"branch": "main"}, "nothing else"),
+])
+def test_a_pin_must_name_a_commit_its_version_and_each_files_sha256(tmp_path, change, said):
+    sources = tmp_path / "sources.toml"
+    pin = {**PIN, **change}
+    sources.write_text("[aretomo]\n")
+    with pytest.raises(SystemExit, match=re.escape(said)):
+        bl.check_pin(sources, "aretomo", pin)
+
+
+def test_the_pins_of_the_list_of_sources_are_well_formed():
+    sources = bl.read_sources(bl.SOURCES)
+    assert sources["aretomo"]["pinned"]["version"] == "AreTomo2 1.1.3"
+
+
+def test_a_fetch_that_fails_stops_the_build():
+    # Port 9 (discard) on this host: refused at once, without the network.
+    with pytest.raises(SystemExit, match="could not fetch http://127.0.0.1:9/"):
+        bl.fetch("http://127.0.0.1:9/Manual.pdf")
 
 
 # --- a build on a host made of stand-ins ----------------------------------------------
@@ -347,6 +418,17 @@ def test_a_lane_that_names_an_unset_variable_is_a_problem(host, capsys):
     assert '$CTFFIND5 is not set in this shell' in capsys.readouterr().out
 
 
+# What AreTomo2 1.1.3 prints (CAreTomoMain.cpp and CInput.cpp at main
+# 01e7219c79, read on 2026-11-11).
+ARETOMO_113 = """\
+    case "$1" in
+      --version) printf 'AreTomo2 version 1.1.3\\nBuilt on Aug 19 2024\\n' ;;
+      --help) printf '\\nUsage: AreTomo2 Tags\\n-InMrc    \\n'
+              printf '   1. Input MRC file that stores tomo tilt series.\\n\\n' ;;
+    esac
+    """
+
+
 def with_aretomo(host, monkeypatch, body: str) -> Path:
     """An AreTomo2 stand-in named by $ARETOMO, and sources that ask it for --help."""
     exe = executable(host["tmp"] / "AreTomo2-cu12.5" / "AreTomo2", body)
@@ -358,15 +440,7 @@ def with_aretomo(host, monkeypatch, body: str) -> Path:
 
 def test_aretomo_is_found_by_its_variable_and_documented_under_its_name(host, capsys,
                                                                         monkeypatch):
-    # What AreTomo2 1.1.3 prints (CAreTomoMain.cpp and CInput.cpp at main
-    # 01e7219c79, read on 2026-11-11).
-    exe = with_aretomo(host, monkeypatch, """\
-        case "$1" in
-          --version) printf 'AreTomo2 version 1.1.3\\nBuilt on Aug 19 2024\\n' ;;
-          --help) printf '\\nUsage: AreTomo2 Tags\\n-InMrc    \\n'
-                  printf '   1. Input MRC file that stores tomo tilt series.\\n\\n' ;;
-        esac
-        """)
+    exe = with_aretomo(host, monkeypatch, ARETOMO_113)
     assert run(host, "--dry-run") == 0
     printed = capsys.readouterr().out
     # The name is part of the version, and the path does not run into it.
@@ -406,6 +480,104 @@ def test_a_program_that_cannot_start_leaves_a_problem_and_no_page(host, capsys, 
         f"AreTomo2 --help: could not start (exit code 127): {host['tmp']}/AreTomo2-cu12.5/"
         "AreTomo2: error while loading shared libraries: libcufft.so.12: cannot open shared "
         "object file: No such file or directory"]
+
+
+def with_pinned(host, monkeypatch, version: str = "AreTomo2 1.1.3",
+                sha: dict[str, str] | None = None) -> list[str]:
+    """AreTomo2 1.1.3 with a manual and release notes pinned in a stand-in
+    repository; returns the list the fetches are counted in."""
+
+    with_aretomo(host, monkeypatch, ARETOMO_113)
+    served = {"docs/Manual.pdf": tiny_pdf("13. Volume z height for alignment:  -AlignZ"),
+              "Readme.txt": b"AreTomo2 1.1.3 [06-17-2024]\r\n1. Bug fix.\r\n"}
+    pins = {path: hashlib.sha256(data).hexdigest() for path, data in served.items()}
+    pins.update(sha or {})
+    with host["sources"].open("a") as sources:
+        sources.write(textwrap.dedent(f"""\
+            [aretomo.pinned]
+            repository = "https://github.com/owner/AreTomo2"
+            commit = "{PIN['commit']}"
+            version = "{version}"
+            [aretomo.pinned.files]
+            """) + "".join(f'"{path}" = "{digest}"\n' for path, digest in pins.items()))
+    fetched: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        fetched.append(url)
+        prefix = f"https://raw.githubusercontent.com/owner/AreTomo2/{PIN['commit']}/"
+        assert url.startswith(prefix)
+        return served[url.removeprefix(prefix)]
+
+    monkeypatch.setattr(bl, "fetch", fetch)
+    return fetched
+
+
+def test_pinned_files_are_fetched_checked_kept_and_converted(host, capsys, monkeypatch):
+    fetched = with_pinned(host, monkeypatch)
+    assert run(host, "--dry-run") == 0
+    printed = capsys.readouterr().out
+    assert ("help; docs/Manual.pdf of github.com/owner/AreTomo2 at 0123456789; Readme.txt of "
+            "github.com/owner/AreTomo2 at 0123456789") in printed
+    assert "Problems: none" in printed
+    assert fetched == []
+
+    assert run(host) == 0
+    assert len(fetched) == 2
+    snapshot = host["root"] / f"test-{DAY}"
+    record = json.loads((snapshot / "library.json").read_text())
+    assert record["problems"] == []
+    pinned = {source["path"]: source for source in record["sources"] if source["kind"] == "pinned"}
+    assert set(pinned) == {"docs/Manual.pdf", "Readme.txt"}
+    manual = pinned["docs/Manual.pdf"]
+    assert manual["channel"] == "web, pinned" and manual["version"] == "AreTomo2 1.1.3"
+    assert manual["commit"] == PIN["commit"] and manual["pages"] == 1
+    assert manual["converter"].startswith("pdf 1 (pypdf ")
+    raw = (snapshot / manual["raw"]).read_bytes()
+    assert raw.startswith(b"%PDF") and hashlib.sha256(raw).hexdigest() == manual["sha256"]
+
+    text = (snapshot / "text" / "aretomo" / "docs" / "Manual.md").read_text()
+    assert text.startswith('---\ntool: "aretomo"\nversion: "AreTomo2 1.1.3"\n'
+                           'channel: "web, pinned"\nsource: "https://github.com/owner/AreTomo2/'
+                           f'blob/{PIN["commit"]}/docs/Manual.pdf"\ndocument: "docs/Manual.pdf"\n')
+    assert "13. Volume z height for alignment: -AlignZ" in text
+    # Bytes: read_text would turn the "\r\n" it should not hold into "\n" itself.
+    notes = (snapshot / "text" / "aretomo" / "Readme.md").read_bytes().decode()
+    assert "```text\nAreTomo2 1.1.3 [06-17-2024]\n1. Bug fix.\n```" in notes
+    assert (snapshot / "text" / "aretomo" / "help.md").is_file()
+
+
+def test_a_pinned_file_that_changed_stops_the_build_and_leaves_nothing(host, monkeypatch):
+    with_pinned(host, monkeypatch, sha={"Readme.txt": "b" * 64})
+    with pytest.raises(SystemExit, match="pins " + "b" * 64):
+        run(host)
+    assert list(host["root"].iterdir()) == []
+
+
+def test_pinned_files_of_another_version_are_left_out(host, capsys, monkeypatch):
+    fetched = with_pinned(host, monkeypatch, version="AreTomo2 1.1.2")
+    assert run(host) == 0
+    assert fetched == []
+    snapshot = host["root"] / f"test-{DAY}"
+    problems = json.loads((snapshot / "library.json").read_text())["problems"]
+    assert len(problems) == 2
+    assert all("documents AreTomo2 1.1.2, and the aretomo here states AreTomo2 1.1.3" in problem
+               for problem in problems)
+    # What the installation itself says stays.
+    assert (snapshot / "text" / "aretomo" / "help.md").is_file()
+    assert not (snapshot / "raw" / "aretomo" / "docs").exists()
+
+
+def test_a_pdf_without_pypdf_is_a_problem_and_the_rest_is_read(host, monkeypatch):
+    fetched = with_pinned(host, monkeypatch)
+    monkeypatch.setattr(bl, "pdf_reader", lambda: None)
+    assert run(host) == 0
+    assert [url.rsplit("/", 1)[1] for url in fetched] == ["Readme.txt"]
+    snapshot = host["root"] / f"test-{DAY}"
+    problems = json.loads((snapshot / "library.json").read_text())["problems"]
+    assert problems == ["aretomo: docs/Manual.pdf is a PDF, and pypdf is not installed in this "
+                        "environment; it is left out. Install it (pip install pypdf) and build "
+                        "again"]
+    assert (snapshot / "text" / "aretomo" / "Readme.md").is_file()
 
 
 def test_a_given_version_is_kept_with_what_the_tool_said(host):

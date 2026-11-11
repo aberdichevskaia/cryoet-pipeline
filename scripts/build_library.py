@@ -5,8 +5,12 @@
     python3 scripts/build_library.py --site mdc --root /fast/AG_Kudryashev/cryoet-library
 
 docs/library.md says what the library is and why it is kept this way. This
-script builds its first part, the installation channel: what this site's own
-installation says, at the version installed here. Web sources come later.
+script builds the installation channel: what this site's own installation says,
+at the version installed here. Of the web channel it builds pinned files: files
+of a tool's GitHub repository at the commit of the version installed here, each
+checked against the sha256 configs/library.toml pins (AreTomo2's manual first).
+A file that cannot be fetched, or has changed, stops the build, and the last
+snapshot stays.
 
 The sources are listed in configs/library.toml. The script finds each tool the
 way the pipeline does:
@@ -39,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -47,6 +52,8 @@ import socket
 import sqlite3
 import sys
 import tomllib
+import urllib.error
+import urllib.request
 import zlib
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -74,7 +81,17 @@ SOURCES = ROOT / "configs" / "library.toml"
 SRC = ROOT / "src"
 SCHEMA = 1
 # A converter's number goes up whenever its output for the same input changes.
-CONVERTERS = {"html": 1, "terminal": 1}
+CONVERTERS = {"html": 1, "terminal": 1, "pdf": 1, "text": 1}
+# Pinned files come from a GitHub repository at a commit, as its raw file.
+GITHUB = re.compile(r"^https://github\.com/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+)$")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# The kinds of pinned file a converter here reads.
+PINNED_KINDS = {".pdf": "pdf", ".txt": "text", ".md": "text"}
+# One request at a time, under a generic client name (docs/library.md, "Politeness").
+USER_AGENT = "cryoet-pipeline-library-builder"
+FETCH_SECONDS = 120.0
+FETCH_LIMIT = 64 << 20
 SITE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 # The tools this script knows how to find and ask. configs/library.toml may name
@@ -158,11 +175,14 @@ class Tool:
 class Item:
     tool: str
     kind: str
-    """"manual", "man" or "usage"."""
+    """"manual", "man", "usage" or "pinned"."""
     name: str
     """Its file name under text/<tool>/, without .md."""
     command: tuple[str, ...] = ()
     page: str = ""
+    """A manual page's name; for a pinned file, its path in the repository."""
+    pin: dict[str, Any] | None = None
+    """For a pinned file: its tool's [<tool>.pinned] table."""
 
 
 @dataclass
@@ -326,7 +346,35 @@ def plan(sources: dict[str, Any], tools: dict[str, Tool]) -> list[Item]:
         else:
             for args in usage:
                 items.append(Item(name, "usage", usage_name(args), (str(tool.path), *args)))
+        pin = section.get("pinned")
+        for path in (pin or {}).get("files", {}):
+            items.append(Item(name, "pinned", path, (pinned_url(pin, path),), page=path, pin=pin))
     return items
+
+
+def pinned_url(pin: dict[str, Any], path: str) -> str:
+    """Where a pinned file is fetched from: its repository's raw file at the commit."""
+
+    found = GITHUB.match(pin["repository"])
+    assert found
+    return (f"https://raw.githubusercontent.com/{found['owner']}/{found['name']}/"
+            f"{pin['commit']}/{path}")
+
+
+def pin_problem(tool: Tool, item: Item) -> str | None:
+    """Why a pinned file is left out on this host, or None to read it. The files
+    document one version; another version installed here would be misread by
+    them."""
+
+    assert item.pin is not None
+    if tool.version_text != item.pin["version"]:
+        return (f"{item.page} at {item.pin['commit'][:10]} documents {item.pin['version']}, "
+                f"and the {tool.name} here states {tool.version_text}; it is left out. Pin the "
+                f"commit of this version in [{tool.name}.pinned] of configs/library.toml")
+    if PINNED_KINDS[PurePosixPath(item.page).suffix.lower()] == "pdf" and pdf_reader() is None:
+        return (f"{item.page} is a PDF, and pypdf is not installed in this environment; it is "
+                "left out. Install it (pip install pypdf) and build again")
+    return None
 
 
 def usage_name(args: list[str], script: str = "") -> str:
@@ -868,6 +916,95 @@ def collect_usage(snapshot: Snapshot, tool: Tool, item: Item, out: Path, env: di
     })
 
 
+def fetch(url: str) -> bytes:
+    """One file from the web, whole. A failure stops the build: a source that has
+    gone or changed fails loudly, and the last snapshot stays (docs/library.md)."""
+
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=FETCH_SECONDS) as response:
+            data: bytes = response.read(FETCH_LIMIT + 1)
+    except (urllib.error.URLError, OSError) as error:
+        raise SystemExit(f"could not fetch {url}: {error}; nothing was built") from None
+    if len(data) > FETCH_LIMIT:
+        raise SystemExit(f"{url} is larger than {FETCH_LIMIT} bytes; nothing was built")
+    return data
+
+
+def pdf_reader() -> Any:
+    """pypdf, if this environment has it. Only a PDF source needs it."""
+
+    try:
+        import pypdf
+    except ImportError:
+        return None
+    return pypdf
+
+
+def pdf_to_markdown(data: bytes, title: str) -> tuple[str, int]:
+    """A PDF's text, page by page, under the page's number. Each line keeps its
+    words with single spaces between them, so that a phrase is found whatever
+    spacing the PDF placed between its words."""
+
+    pypdf = pdf_reader()
+    assert pypdf is not None
+    reader = pypdf.PdfReader(io.BytesIO(data))
+    parts = [f"# {title}\n"]
+    for number, page in enumerate(reader.pages, start=1):
+        lines = (" ".join(line.split()) for line in (page.extract_text() or "").splitlines())
+        text = "\n".join(line for line in lines if line)
+        parts.append(f"## Page {number}\n\n{text}\n" if text else f"## Page {number}\n")
+    return "\n".join(parts), len(reader.pages)
+
+
+def converter_name(kind: str) -> str:
+    if kind == "pdf":
+        return f"pdf {CONVERTERS['pdf']} (pypdf {pdf_reader().__version__})"
+    return f"{kind} {CONVERTERS[kind]}"
+
+
+def collect_pinned(snapshot: Snapshot, tool: Tool, item: Item, out: Path) -> None:
+    """A file of the tool's repository at the pinned commit: fetched, checked
+    against its pinned sha256, kept as it came, and converted to markdown."""
+
+    assert item.pin is not None
+    if problem := pin_problem(tool, item):
+        snapshot.problems.append(f"{tool.name}: {problem}")
+        return
+    url = item.command[0]
+    data = fetch(url)
+    digest = hashlib.sha256(data).hexdigest()
+    pinned = item.pin["files"][item.page]
+    if digest != pinned:
+        raise SystemExit(f"{url} has sha256 {digest}, where [{tool.name}.pinned] in "
+                         f"configs/library.toml pins {pinned}; nothing was built")
+    relative = safe_name(item.page)
+    assert relative is not None
+    raw = f"raw/{tool.name}/{relative}"
+    write(out / raw, data)
+    kind = PINNED_KINDS[relative.suffix.lower()]
+    record: dict[str, Any] = {}
+    if kind == "pdf":
+        markdown, pages = pdf_to_markdown(data, relative.name)
+        record["pages"] = pages
+    else:
+        text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").strip("\n")
+        markdown = f"# {relative.name}\n\n{_fenced(text)}\n"
+    source = f"{item.pin['repository']}/blob/{item.pin['commit']}/{item.page}"
+    text_path = f"text/{tool.name}/{relative.with_suffix('.md')}"
+    write(out / text_path,
+          front_matter({"tool": tool.name, "version": item.pin["version"],
+                        "channel": "web, pinned", "source": source, "document": item.page})
+          + markdown)
+    snapshot.documents += 1
+    snapshot.records.append({
+        "tool": tool.name, "kind": "pinned", "channel": "web, pinned",
+        "version": item.pin["version"], "repository": item.pin["repository"],
+        "commit": item.pin["commit"], "path": item.page, "url": url, "raw": raw,
+        "sha256": digest, "converter": converter_name(kind), "text": text_path, **record,
+    })
+
+
 def collect_site(snapshot: Snapshot, out: Path, env: dict[str, str]) -> None:
     lines = [
         f"# Site card: {snapshot.site}", "",
@@ -942,6 +1079,8 @@ def build(root: Path, snapshot: Snapshot, items: list[Item]) -> Path:
                 collect_manual(snapshot, tool, partial)
             elif item.kind == "man":
                 collect_man(snapshot, tool, item, partial, env)
+            elif item.kind == "pinned":
+                collect_pinned(snapshot, tool, item, partial)
             else:
                 collect_usage(snapshot, tool, item, partial, env)
         collect_site(snapshot, partial, env)
@@ -1020,7 +1159,33 @@ def read_sources(path: Path) -> dict[str, Any]:
     if unknown:
         raise SystemExit(f"{path} names {', '.join(unknown)}, which this script does not know how "
                          f"to find; it knows {', '.join(KNOWN)}")
+    for name, section in sources.items():
+        if "pinned" in section:
+            check_pin(path, name, section["pinned"])
     return sources
+
+
+def check_pin(path: Path, name: str, pin: Any) -> None:
+    where = f"{path} [{name}.pinned]"
+    if not isinstance(pin, dict) or set(pin) != {"repository", "commit", "version", "files"}:
+        raise SystemExit(f"{where} needs repository, commit, version and files, and nothing else")
+    if not isinstance(pin["repository"], str) or not GITHUB.match(pin["repository"]):
+        raise SystemExit(f"{where}: repository must be https://github.com/<owner>/<name>")
+    if not isinstance(pin["commit"], str) or not COMMIT.match(pin["commit"]):
+        raise SystemExit(f"{where}: commit must be a full 40-character commit, not a branch or tag")
+    if not isinstance(pin["version"], str) or not pin["version"].strip():
+        raise SystemExit(f"{where}: version must be the version the files document, as the "
+                         "tool states it")
+    files = pin["files"]
+    if not isinstance(files, dict) or not files:
+        raise SystemExit(f"{where}: files must map each file's path to its sha256")
+    for file, digest in files.items():
+        relative = safe_name(file)
+        if relative is None or relative.suffix.lower() not in PINNED_KINDS:
+            raise SystemExit(f"{where}: {file!r} must be a path inside the repository, ending in "
+                             f"{', '.join(PINNED_KINDS)}")
+        if not isinstance(digest, str) or not SHA256.match(digest):
+            raise SystemExit(f"{where}: the sha256 of {file} must be 64 lower-case hex digits")
 
 
 def read_lane(path: Path) -> Lane:
@@ -1046,7 +1211,7 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
     where = f" in {root}" if root else ""
     print(f"Library snapshot {snapshot.id}{where}: dry run, nothing written.\n")
     print("Tools")
-    width = max(len(name) for name in snapshot.tools) + 2
+    width = max(len(name) for name in [*snapshot.tools, "site card"]) + 2
     # AreTomo's version carries its name ("AreTomo2 1.1.3"), longer than a number.
     said = max([10] + [len(tool.version_text) + 2 for tool in snapshot.tools.values()
                        if tool.path is not None])
@@ -1065,6 +1230,12 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
         for item in mine:
             if item.kind == "manual":
                 shown.append(manual_summary(snapshot, snapshot.tools[name]))
+            elif item.kind == "pinned":
+                assert item.pin is not None
+                if problem := pin_problem(snapshot.tools[name], item):
+                    snapshot.problems.append(f"{name}: {problem}")
+                shown.append(f"{item.page} of {item.pin['repository'].removeprefix('https://')} "
+                             f"at {item.pin['commit'][:10]}")
             elif item.kind == "man":
                 # `man -w` names a page's file without showing it: a compute
                 # node may have no manual pages where a login node has them.

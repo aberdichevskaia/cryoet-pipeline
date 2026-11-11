@@ -38,16 +38,29 @@ Status, 2026-11-05:
   - it found the snapshot and searched it with the script;
   - it answered from the manual page, citing "IMOD 5.1.12, man/newstack.html"
     with the page's line numbers.
-- **Not built yet:** the web sources and the git channel.
+- **Built 2026-11-11:** the web channel's pinned files. They are files of a
+  tool's GitHub repository, at the commit of the version installed on the site,
+  each checked against its sha256 in `configs/library.toml`. AreTomo2's manual
+  and release notes are the first (see
+  [How a snapshot is built](#how-a-snapshot-is-built)).
+- **Not built yet:** dated web pages, and the git channel.
 - **AreTomo2, added 2026-11-08** with the AreTomo route of fine alignment
-  ([aretomo_backend.md](aretomo_backend.md)). The installation channel reads
-  its version and its `--help`. `mdc-2026-11-05` predates it, so MDC needs a
-  new snapshot, built from a shell in which `$ARETOMO` runs: the module
-  `aretomo/v2-cu12.5` loaded, since AreTomo2 cannot start without its CUDA
-  libraries. The dry run then names `AreTomo2 1.1.3`; without them it reports
-  that no version was found, and the build writes no page for it. Its manual
-  is a PDF in its repository and waits for the web channel (see
-  [Later](#later)).
+  ([aretomo_backend.md](aretomo_backend.md)).
+  - The installation channel reads its version and its `--help`. Since
+    2026-11-11 the web channel adds its manual (a PDF) and its release notes,
+    pinned to the commit of 1.1.3.
+  - `mdc-2026-11-05` predates both, so MDC needs a new snapshot. It has to be
+    built from a shell in which `$ARETOMO` runs, with the module
+    `aretomo/v2-cu12.5` loaded, since AreTomo2 cannot start without its CUDA
+    libraries. That shell's environment needs pypdf (`.[library]`), and its
+    host has to reach raw.githubusercontent.com.
+  - The dry run then names `AreTomo2 1.1.3`. Without the libraries it reports
+    that no version was found, and the build writes no page for AreTomo2 and
+    leaves out its pinned files.
+  - Checked on the Mac on 2026-11-11, with a stand-in that states 1.1.3 (the
+    real AreTomo2 needs a GPU): both files were fetched and matched their pins.
+    The manual became 14 pages of text, and `search_library.py` found
+    "-AlignZ" and "tilt offset" in it.
 
 ## Core rule
 
@@ -105,7 +118,13 @@ Which kind a fact is decides whether a library can help with it at all.
 - **Written in a source**: a manual page, a wiki, a README. The library helps.
 - **True only of the installed version**: flags and defaults. Only the
   installation says this exactly, through its usage text, its own manual and
-  `man`.
+  `man`. Usage text can still be wrong. AreTomo2 1.1.3's `--help` says 256 for
+  `-AlignZ` and 0 for `-VolZ`, where its code (`CInput.cpp`) sets 600 and
+  1200. Its manual agrees with the code on `-AlignZ` and explains the options
+  the AreTomo route depends on (`-AlignZ`, `-TiltCor`, `-TiltAxis`,
+  `-DarkTol`, the `.aln` file). That is why the library pins the manual of the
+  installed version beside the usage text. The playbook cites it (A-9 to A-12
+  in [playbook/alignment.md](agent/playbook/alignment.md)).
 - **Found by measurement.** An example is that `tilt -LOCALFILE` patches are
   indexed by specimen X,Y. The `tiltalign` manual page gives the file's format
   but never says this; it was measured with `tilt -ProjectModel`. No library
@@ -209,8 +228,22 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
   pages in `man/`. On the Mac that gives 364 pages, 5.1 MB of markdown, in
   about 4 s. `autodoc/` holds the same options again, so it is not read.
 - **Web sources** are fetched by the same run, from the list of sources. A
-  pinned source is fetched at the tag its version names, a dated page as it is
-  on that day. Nobody downloads them by hand.
+  pinned source is fetched at the tag or commit of its version, a dated page as
+  it is on that day. Nobody downloads them by hand.
+- **Pinned files** (built 2026-11-11). `[<tool>.pinned]` in
+  `configs/library.toml` names four things:
+  - a GitHub repository;
+  - a full commit, since a version may have no tag (AreTomo2 1.1.3 has none);
+  - the version those files document, as the tool states it;
+  - each file's path, with its sha256.
+
+  The builder reads them only when the tool on this site states that version;
+  otherwise it lists a problem and leaves them out. Each file comes from
+  raw.githubusercontent.com at the commit, one request at a time. A file that
+  cannot be fetched, or whose sha256 differs, stops the build, and the last
+  snapshot stays. The original goes to `raw/<tool>/<path>`, its text to
+  `text/<tool>/<path>.md`, with the channel `web, pinned` and the file's address
+  on GitHub. The dry run fetches nothing.
 - **Sources behind a sign-in.**
   - If a site wiki is a git repository (a GitLab project wiki is one), the
     builder clones it with the user's own credentials and pins the commit.
@@ -226,6 +259,12 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
 - **Converters** turn HTML, PDF and Qt help into markdown. They are
   deterministic code, tested on small fixtures. The original is kept, so that
   a better converter can redo the text.
+  - A PDF is read by pypdf, page by page, with the words of each line joined
+    by single spaces, so that a phrase is found whatever spacing the PDF
+    placed between its words. pypdf's version is part of the converter's name
+    in `library.json`, since another version may read the same PDF
+    differently. Without pypdf the PDF is a problem and is left out.
+  - A text file is kept as it is, in a fence.
   - database_design.md's rule applies here: generated converters are for data
     that leaves the system, not for data that informs a decision.
   - A summary written by a model is not part of the library. It may go into
@@ -241,7 +280,9 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
   - Each build lists, as a problem, any IMOD program the code resolves
     (`resolve_imod_executable("…")`) that has no page in the installed manual.
 - **Politeness.** Downloads go one request at a time, under a generic client
-  name. Each site's terms are checked when its source is added.
+  name. Each site's terms are checked when its source is added. AreTomo2's
+  repository is public under a BSD 3-clause licence, and each site downloads
+  its own copy.
 
 ## Read only, enforced in layers
 
@@ -476,21 +517,6 @@ Parked on 2026-11-05, while the work is at MDC.
   CTFFIND's defaults on 2026-11-05. It found only that output in the library,
   said so, and answered with the values the pipeline passes, read from
   `backends/ctf.py`.
-- **AreTomo2's manual.** Its `--help` gives each option a line or two, and is
-  wrong about two defaults: it says 256 for `-AlignZ` and 0 for `-VolZ`, where
-  the code (`CInput.cpp`) sets 600 and 1200. The manual gives 600 for
-  `-AlignZ`, and a volume is reconstructed unless `-VolZ 0` is given. It explains
-  what the pipeline's AreTomo route depends on: `-AlignZ`, `-TiltCor`,
-  `-TiltAxis`, `-DarkTol`, the `.aln` file. The playbook cites it (A-9 to A-12
-  in [playbook/alignment.md](agent/playbook/alignment.md)), read on 2026-11-11.
-  - It goes in through the web channel, pinned to the commit in
-    [What goes in](#what-goes-in): `docs/AreTomo2_Manual_1.1.pdf`, 1,796,718
-    bytes, sha256 `d7637fe9e501475bc084967b359da0a0849670178ffa83e8fe093864a995b570`,
-    unchanged since 1.1.2; and `Readme.txt`, the release notes.
-  - The PDF needs a converter, and the pipeline's environment has no PDF
-    reader: neither pdfplumber nor pypdf was installed on the Mac on
-    2026-11-11. pdfplumber reads the manual's 14 pages as 23.7 kB of clean
-    text.
 
 ## Open questions
 

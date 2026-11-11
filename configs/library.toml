@@ -13,6 +13,12 @@
 #   usage           argument lists to run the tool with; each run's output is kept
 #   scripts         for pytom-match-pick: the scripts to ask, from the folder its
 #                   pytom_match_template.py is in
+#
+# The web channel so far takes pinned files: [<tool>.pinned] names a GitHub
+# repository, the commit of the version installed here, that version as the tool
+# states it, and each file's path with its sha256. They are read only when the
+# tool here states that version. A file that cannot be fetched, or whose sha256
+# differs, stops the build. A PDF needs pypdf in the builder's environment.
 
 [imod]
 manual = true
@@ -26,6 +32,19 @@ usage = [["--help"]]
 [aretomo]
 # AreTomo2 prints every tag with --help (CAreTomoMain.cpp).
 usage = [["--help"]]
+
+# Its manual and its release notes, at the commit the 1.1.3 at MDC was built
+# from: the banner it prints, "Built on Aug 19 2024", is a fixed string in that
+# commit's CAreTomoMain.cpp. 1.1.3 has no tag. The manual has not changed since
+# 1.1.2. Hashes taken on 2026-11-11.
+[aretomo.pinned]
+repository = "https://github.com/czimaginginstitute/AreTomo2"
+commit = "01e7219c7963d53a89ff5387c811c704e1be2d44"
+version = "AreTomo2 1.1.3"
+
+[aretomo.pinned.files]
+"docs/AreTomo2_Manual_1.1.pdf" = "d7637fe9e501475bc084967b359da0a0849670178ffa83e8fe093864a995b570"
+"Readme.txt" = "9f795193051af4dcdb8622fe0dd5108cc0c72734c74550173e26e52d7c6a467e"
 
 [pytom-match-pick]
 scripts = [

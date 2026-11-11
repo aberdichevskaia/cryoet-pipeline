@@ -33,7 +33,12 @@ gpu = [
 viz = [
   "matplotlib>=3.8",
 ]
+# scripts/build_library.py: the PDF manuals it pins (AreTomo2's).
+library = [
+  "pypdf>=7.0",
+]
 dev = [
+  "pypdf>=7.0",
   "pytest>=8.2",
   "ruff>=0.5",
   "mypy>=1.10",
