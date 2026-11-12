@@ -926,6 +926,13 @@ class TemplatePreparationQc(BaseModel):
     """How far the density reaches along each axis, measured from the produced
     template. Recorded per axis because a reference map is not always a compact
     blob, and the three disagreeing is what says a spherical mask is wrong."""
+    source_axis_order: tuple[int, int, int] | None = None
+    """The source map header's mapc, mapr, maps: which axis, 1 X, 2 Y, 3 Z, its
+    columns, rows and sections hold. None in documents written before it was
+    recorded."""
+    source_reordered: bool = False
+    """True when the source map was stored in another order than columns X, rows Y,
+    sections Z and was rewritten in that order for pytom, which reads every map so."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
 

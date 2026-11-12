@@ -102,10 +102,28 @@ class PytomTemplateBackend:
             temporary_template = temporary_root / "template.mrc"
             temporary_mask = temporary_root / "mask.mrc"
 
+            # pytom reads every map as columns X, rows Y, sections Z.
+            source_axis_order = _source_axis_order(source_map)
+            pytom_input = source_map.resolve()
+            reordered = False
+            axis_order_warning: str | None = None
+            if source_axis_order != STANDARD_AXIS_ORDER:
+                if sorted(source_axis_order) == [1, 2, 3]:
+                    pytom_input = temporary_root / "source_in_xyz_order.mrc"
+                    _write_in_standard_axis_order(source_map, source_axis_order, pytom_input)
+                    reordered = True
+                else:
+                    axis_order_warning = (
+                        f"the source map's header gives its axis order as {source_axis_order} "
+                        "(mapc, mapr, maps), which names no order of X, Y and Z; it went to "
+                        "pytom as stored, read as columns X, rows Y, sections Z. Check the "
+                        "template's hand against the map in ChimeraX"
+                    )
+
             template_command = [
                 str(create_template),
                 "-i",
-                str(source_map.resolve()),
+                str(pytom_input),
                 "-o",
                 str(temporary_template),
                 "--output-voxel-size-angstrom",
@@ -200,6 +218,9 @@ class PytomTemplateBackend:
 
         warnings: list[str] = []
         status = QcStatus.PASS
+        if axis_order_warning is not None:
+            status = QcStatus.WARNING
+            warnings.append(axis_order_warning)
         if not _contrast_matches_inversion(template_statistics, inverted=invert):
             status = QcStatus.WARNING
             expected = "dark (negative)" if invert else "bright (positive)"
@@ -277,6 +298,8 @@ class PytomTemplateBackend:
             density_extent_x_px=template_statistics.density_extent_px[0],
             density_extent_y_px=template_statistics.density_extent_px[1],
             density_extent_z_px=template_statistics.density_extent_px[2],
+            source_axis_order=source_axis_order,
+            source_reordered=reordered,
             status=status,
             warnings=warnings,
         )
@@ -288,6 +311,8 @@ class PytomTemplateBackend:
             "tomogram_id": tomogram.id,
             "source_map_path": str(source_map.resolve()),
             "emdb_id": emdb_id,
+            "source_axis_order": list(source_axis_order),
+            "source_reordered": reordered,
             "box_size_px": actual_box_size,
             # What was asked of pytom, given or from the diameter; None left it
             # to the map. pytom keeps the map's own box when that is larger.
@@ -560,6 +585,58 @@ def _contrast_matches_inversion(
     if math.isclose(below, above, rel_tol=1e-6, abs_tol=1e-12):
         return True
     return below > above if inverted else above > below
+
+
+STANDARD_AXIS_ORDER = (1, 2, 3)
+"""The MRC header's mapc, mapr, maps when columns hold X, rows Y and sections Z.
+
+pytom_create_template.py reads every map in this order: pytom-match-pick's
+read_mrc transposes the stored array and does not read the three fields (main,
+read 12 November 2026). A map stored in another order then reaches pytom with
+its axes exchanged, and an exchange of two axes is a mirror. EMD-4805 declares
+(3, 2, 1), and EMDB's validation reads it so: its central slices along X, Y and Z
+are those of the header's axes, where the model 6RD4 is fitted. Its template would
+have come out the mirror image of the deposited dimer. Such a map is rewritten in
+this order before pytom reads it (`_write_in_standard_axis_order`).
+"""
+
+
+def _source_axis_order(path: Path) -> tuple[int, int, int]:
+    """The axes (1 X, 2 Y, 3 Z) a map's columns, rows and sections hold: mapc, mapr, maps."""
+
+    with mrcfile.open(path, permissive=True, header_only=True) as mrc:
+        header = mrc.header
+        return int(header.mapc), int(header.mapr), int(header.maps)
+
+
+def _write_in_standard_axis_order(
+    source: Path, axis_order: tuple[int, int, int], destination: Path
+) -> None:
+    """Write `source` with columns X, rows Y and sections Z, as `STANDARD_AXIS_ORDER` says.
+
+    The voxel sizes and the origin are along X, Y and Z in any order, and are kept;
+    the first column, row and section (nxstart, nystart, nzstart) follow their axes.
+    """
+
+    mapc, mapr, maps = axis_order
+    with mrcfile.open(source, permissive=True) as mrc:
+        data = np.asarray(mrc.data)
+        voxel_size = (float(mrc.voxel_size.x), float(mrc.voxel_size.y), float(mrc.voxel_size.z))
+        origin = (float(mrc.header.origin.x), float(mrc.header.origin.y),
+                  float(mrc.header.origin.z))
+        stored_starts = (int(mrc.header.nzstart), int(mrc.header.nystart),
+                         int(mrc.header.nxstart))
+    # The axis each array index holds, sections first as numpy stores them.
+    held = (maps, mapr, mapc)
+    standard = np.ascontiguousarray(data.transpose(held.index(3), held.index(2), held.index(1)))
+    start_of = dict(zip(held, stored_starts, strict=True))
+    with mrcfile.new(destination, overwrite=True) as out:
+        out.set_data(standard)
+        out.voxel_size = voxel_size
+        out.header.origin = origin
+        out.header.nxstart = start_of[1]
+        out.header.nystart = start_of[2]
+        out.header.nzstart = start_of[3]
 
 
 def _source_voxel_size(path: Path) -> float:

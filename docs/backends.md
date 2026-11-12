@@ -33,7 +33,7 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | `reconstruct-tomogram` | `imod-tilt` | ✓ | IMOD | Weighted back-projection. |
 | `restore-tomogram` | `isonet2` | ✓ | IsoNet2 | Needs a trained model; optional stage. |
 | `segment-tomogram` | `membrain-seg` | ✓ | MemBrain-seg, GPU | Membrane segmentation. |
-| `prepare-template` | `pytom` | ✓ | pytom-match-pick | `pytom_create_template.py` + `pytom_create_mask.py`. |
+| `prepare-template` | `pytom` | ✓ | pytom-match-pick | `pytom_create_template.py` + `pytom_create_mask.py`. pytom reads every map as columns X, rows Y, sections Z, so a map whose header declares another order (EMD-4805: 3, 2, 1) is rewritten in that order first, or its template would be the mirror image; the QC records `source_axis_order` and `source_reordered`. |
 | `pick-particles` | `pytom-match-pick` | ✓ | pytom-match-pick, **CUDA** | Template matching. No CPU path. |
 | `extract-particles` | `cubic-crop` | ✓ | — | Crops cubic subvolumes at pick locations. |
 | `average-particles` | `dynamo-search` | ✓ | — | Dynamo's local search + Dynamo's averaging, K=1; `--gold-standard` for independent halves. See [dynamo_search.md](dynamo_search.md). |

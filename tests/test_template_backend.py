@@ -939,3 +939,138 @@ def test_a_soft_edge_cut_off_by_the_box_is_warned_about() -> None:
     # Room enough, or no soft edge at all: nothing to say.
     assert _clipped_edge_warning(sphere, sigma_px=1.0, box_size=30) is None
     assert _clipped_edge_warning(sphere, sigma_px=None, box_size=24) is None
+
+
+# --- The source map's axis order -------------------------------------------------------
+
+_PERMUTATIONS = [(1, 2, 3), (1, 3, 2), (2, 1, 3), (2, 3, 1), (3, 1, 2), (3, 2, 1)]
+
+
+def _asymmetric() -> np.ndarray:
+    """A (Z, Y, X) = (6, 8, 10) volume in which no two voxels are alike, so that any
+    exchange or reversal of axes shows."""
+
+    return np.arange(6 * 8 * 10, dtype=np.float32).reshape(6, 8, 10)
+
+
+def _store_in_axis_order(
+    path: Path,
+    data_zyx: np.ndarray,
+    axis_order: tuple[int, int, int],
+    *,
+    voxel_size: float = 1.53,
+    starts_xyz: tuple[int, int, int] = (0, 0, 0),
+    origin_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> Path:
+    """Write `data_zyx` stored as `axis_order` (mapc, mapr, maps) declares, the way a map
+    such as EMD-4805, (3, 2, 1), is stored."""
+
+    mapc, mapr, maps = axis_order
+    held = (maps, mapr, mapc)  # the axis each stored array index holds, sections first
+    stored = np.ascontiguousarray(data_zyx.transpose([3 - axis for axis in held]))
+    start = dict(zip((1, 2, 3), starts_xyz, strict=True))
+    with mrcfile.new(path, overwrite=True) as mrc:
+        mrc.set_data(stored)
+        mrc.voxel_size = voxel_size
+        mrc.header.mapc, mrc.header.mapr, mrc.header.maps = mapc, mapr, maps
+        mrc.header.nxstart, mrc.header.nystart, mrc.header.nzstart = (
+            start[mapc], start[mapr], start[maps])
+        mrc.header.origin = origin_xyz
+    return path
+
+
+def _runner_reading_its_input(seen: dict[str, object]):
+    """The fake pytom, which also reads the map it is given, as pytom does: columns X,
+    rows Y, sections Z."""
+
+    write = _runner_factory()
+
+    def runner(command, *, cwd, env, stdin=None):
+        command_list = list(command)
+        if "create_template" in command_list[0]:
+            source = Path(command_list[command_list.index("-i") + 1])
+            with mrcfile.open(source, permissive=True) as mrc:
+                header = mrc.header
+                seen["path"] = source
+                seen["data"] = np.array(mrc.data)
+                seen["axis_order"] = (int(header.mapc), int(header.mapr), int(header.maps))
+                seen["voxel_size"] = tuple(
+                    float(mrc.voxel_size[axis]) for axis in ("x", "y", "z"))
+                seen["starts"] = (int(header.nxstart), int(header.nystart),
+                                  int(header.nzstart))
+                seen["origin"] = tuple(float(header.origin[axis]) for axis in ("x", "y", "z"))
+        return write(command, cwd=cwd, env=env, stdin=stdin)
+
+    return runner
+
+
+def _prepare_from(tmp_path: Path, source: Path, seen: dict[str, object]) -> list[Artifact]:
+    create_template, create_mask = _executables(tmp_path)
+    return PytomTemplateBackend(_runner_reading_its_input(seen)).prepare(
+        source,
+        _tomogram(tmp_path),
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs",
+            device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                "template_particle_diameter_angstrom": 150.0,
+            },
+        ),
+    )
+
+
+@pytest.mark.parametrize("axis_order", _PERMUTATIONS)
+def test_pytom_reads_the_map_in_the_order_its_header_declares(
+    tmp_path: Path, axis_order: tuple[int, int, int]
+) -> None:
+    source = _store_in_axis_order(tmp_path / "emd_9.map", _asymmetric(), axis_order)
+    seen: dict[str, object] = {}
+    template, _, qc_artifact = _prepare_from(tmp_path, source, seen)
+    report = json.loads(qc_artifact.path.read_text())
+
+    # pytom reads columns as X, rows as Y and sections as Z: what it reads is the map.
+    np.testing.assert_array_equal(seen["data"], _asymmetric())
+    assert seen["axis_order"] == (1, 2, 3)
+    standard = axis_order == (1, 2, 3)
+    assert (seen["path"] == source.resolve()) is standard
+    assert report["source_axis_order"] == list(axis_order)
+    assert report["source_reordered"] is not standard
+    assert template.parameters["source_axis_order"] == list(axis_order)
+    assert template.parameters["source_reordered"] is not standard
+    assert report["status"] == QcStatus.PASS.value
+
+
+def test_a_rewritten_map_keeps_its_pixel_origin_and_first_indices_and_the_source_is_kept(
+    tmp_path: Path,
+) -> None:
+    source = _store_in_axis_order(
+        tmp_path / "emd_4805.map", _asymmetric(), (3, 2, 1), voxel_size=1.053,
+        starts_xyz=(7, 8, 9), origin_xyz=(10.0, 20.0, 30.0))
+    before = source.read_bytes()
+    seen: dict[str, object] = {}
+    _prepare_from(tmp_path, source, seen)
+
+    assert seen["voxel_size"] == pytest.approx((1.053, 1.053, 1.053))
+    assert seen["starts"] == (7, 8, 9)
+    assert seen["origin"] == pytest.approx((10.0, 20.0, 30.0))
+    assert source.read_bytes() == before
+
+
+def test_a_header_that_names_no_axis_order_goes_to_pytom_as_stored_and_is_warned_about(
+    tmp_path: Path,
+) -> None:
+    source = _store_in_axis_order(tmp_path / "old.map", _asymmetric(), (1, 2, 3))
+    with mrcfile.open(source, mode="r+", permissive=True) as mrc:
+        mrc.header.mapc, mrc.header.mapr, mrc.header.maps = 0, 0, 0
+    seen: dict[str, object] = {}
+    _, _, qc_artifact = _prepare_from(tmp_path, source, seen)
+    report = json.loads(qc_artifact.path.read_text())
+
+    assert seen["path"] == source.resolve()
+    np.testing.assert_array_equal(seen["data"], _asymmetric())
+    assert (report["source_axis_order"], report["source_reordered"]) == ([0, 0, 0], False)
+    assert report["status"] == QcStatus.WARNING.value
+    assert any("names no order of X, Y and Z" in warning for warning in report["warnings"])
