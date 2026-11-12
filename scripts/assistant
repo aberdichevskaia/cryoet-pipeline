@@ -1,31 +1,29 @@
 #!/usr/bin/env bash
-# The pipeline's terminal assistant: Claude Code, started in the repository root,
-# under the person's own account, with the assistant's own settings, instructions
-# and skills from assistant/ (see assistant/README.md).
+# The pipeline's terminal assistant, started in the repository root, under the
+# person's own account, with the assistant's own settings, instructions and skills
+# from assistant/ (see assistant/README.md). It runs in Claude Code, or in
+# OpenAI's Codex for a person whose account is ChatGPT's.
 #
-#     scripts/assistant                      start a session
+#     scripts/assistant                      start a session (Claude Code)
+#     scripts/assistant --codex              start a session in Codex
 #     scripts/assistant -c                   continue the last one
 #     scripts/assistant --model claude-sonnet-5-5
 #     scripts/assistant --print-command      show what would run, and run nothing
+#     scripts/assistant --codex --login      sign the assistant's Codex in, once;
+#                                            add --device-auth where no browser opens
 #
-# What it sets up:
+# --claude (the default) and --codex choose the client. CRYOET_ASSISTANT_BACKEND=codex,
+# in ~/.bashrc say, makes Codex the default for a person who has only ChatGPT;
+# the options still win.
+#
+# What it sets up for either client:
 #   CRYOET_ASSISTANT        marks the session as the assistant's; submit_lanes.py
 #                           and submit_recipe.py journal it and hold it to their gate
 #   CRYOET_ASSISTANT_MODEL  the model it starts, for the journal; a full model ID
-#                           (claude-opus-5-5 unless --model or the variable says)
-#   --setting-sources user  the person's own settings, but not this clone's
-#                           .claude/settings*.json, which belong to development
-#   --settings              assistant/settings.json: the permission rules, and
-#                           assistant/guard.py on every shell command
-#   --plugin-dir            assistant/plugin: the skills
-#   --append-system-prompt  assistant/instructions.md, in every turn
-#   --strict-mcp-config     no MCP servers: none from the person's settings or
-#                           plugins, and (ENABLE_CLAUDEAI_MCP_SERVERS=false) none
-#                           of their claude.ai account's connectors. Each person
-#                           has a different set, and none is the pipeline's
-#   CLAUDE_CODE_AUTO_CONNECT_IDE=false
-#                           no editor either (VS Code over SSH, say): its tools
-#                           are not shell commands, so the guard never sees them
+#                           (claude-opus-5-5 in Claude Code and gpt-6.1-sol in
+#                           Codex, unless --model or the variable says)
+#   instructions            assistant/instructions.md, in every turn
+#   the skills              assistant/plugin/skills
 #   CRYOET_LIBRARY          the reference library (docs/library.md): the folder
 #                           that holds its snapshots, or "none" for a session
 #                           without it. Unset, a session for a person takes the
@@ -33,20 +31,68 @@
 #                           headless run (-p) takes none, so that an evaluation
 #                           reads the library only when it says so. The snapshot
 #                           `current` names at the start is the one the session
-#                           reads, by its own name: --add-dir lets the session
-#                           read it, assistant/library.md and its path join the
-#                           instructions, and CRYOET_LIBRARY_ROOT and
-#                           CRYOET_LIBRARY_SNAPSHOT tell assistant/guard.py what
-#                           is never to be written
+#                           reads, by its own name: assistant/library.md and its
+#                           path join the instructions, and CRYOET_LIBRARY_ROOT
+#                           and CRYOET_LIBRARY_SNAPSHOT tell assistant/guard.py
+#                           what is never to be written
 #
-# Other options pass on to claude, except the ones that would undo the above.
-# --permission-mode acceptEdits passes only with -p, for a headless run such as
-# scripts/run_cases.py's evaluation, where nobody is there to approve an edit:
-# it stands in for the person who would. In the working directory it lets edits
-# through, and mkdir, touch, cp, mv, rm, rmdir and sed too. Every deny and ask
-# rule still holds, and anything else that would ask is refused, since a -p run
-# has nobody to ask. A session started for a person asks before each edit, as
-# before.
+# In Claude Code:
+#   --setting-sources user  the person's own settings, but not this clone's
+#                           .claude/settings*.json, which belong to development
+#   --settings              assistant/settings.json: the permission rules, and
+#                           assistant/guard.py on every shell command
+#   --plugin-dir            assistant/plugin: the skills
+#   --append-system-prompt  the instructions
+#   --add-dir               the library's snapshot, which the session may read
+#   --strict-mcp-config     no MCP servers: none from the person's settings or
+#                           plugins, and (ENABLE_CLAUDEAI_MCP_SERVERS=false) none
+#                           of their claude.ai account's connectors. Each person
+#                           has a different set, and none is the pipeline's
+#   CLAUDE_CODE_AUTO_CONNECT_IDE=false
+#                           no editor either (VS Code over SSH, say): its tools
+#                           are not shell commands, so the guard never sees them
+#
+# In Codex:
+#   CODEX_HOME              the assistant's own Codex home: CRYOET_ASSISTANT_CODEX_HOME,
+#                           or ~/.cryoet-assistant/codex. It keeps its own sign-in
+#                           and sessions, and none of the person's ~/.codex
+#                           applies. At every start the launcher copies into it
+#                           assistant/codex/config.toml (the clone marked
+#                           untrusted, so that a .codex/ of its own never
+#                           applies), hooks.json, and assistant.rules as
+#                           rules/assistant.rules, and links skills/cryoet to
+#                           assistant/plugin/skills: the clone started last is
+#                           the one whose skills a session reads
+#   CRYOET_ASSISTANT_REPO   where hooks.json finds assistant/guard.py, which runs
+#                           before every shell command and every patch
+#   -s read-only -a on-request
+#                           Codex's sandbox: commands read, write nothing and
+#                           have no network, except those assistant.rules allows;
+#                           an edit, and anything more, asks the person
+#   --dangerously-bypass-hook-trust
+#                           without it, Codex skips a hook that nobody has
+#                           trusted in /hooks, and says nothing. The home holds
+#                           no hook but the guard
+#   --no-daemon             the session's commands get the environment set here,
+#                           not that of a background server started earlier
+#   --strict-config         a setting this Codex does not know stops the start,
+#                           rather than being ignored
+#   -c developer_instructions
+#                           the instructions, with assistant/codex/instructions.md
+#                           after them
+#   -c, -r [ID]             continue the last session, or pick one: Codex's
+#                           `resume --last` and `resume`
+# Codex takes nothing else from the command line but a prompt (one argument),
+# -i <image> and --no-alt-screen. A headless run (-p) is Claude Code's only, for now.
+#
+# Claude Code: other options pass on to claude, except the ones that would undo
+# the above. --permission-mode acceptEdits passes only with -p, for a headless
+# run such as scripts/run_cases.py's evaluation, where nobody is there to
+# approve an edit: it stands in for the person who would. In the working
+# directory it lets edits through, and mkdir, touch, cp, mv, rm, rmdir and sed
+# too. Every deny and ask rule still holds, and anything else that would ask is
+# refused, since a -p run has nobody to ask. A session started for a person asks
+# before each edit, as before.
 # Switching the model inside a session (/model) leaves CRYOET_ASSISTANT_MODEL
 # naming the first one: start a new session instead.
 #
@@ -56,12 +102,21 @@
 set -euo pipefail
 
 REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-model=${CRYOET_ASSISTANT_MODEL:-claude-opus-5-5}
+client=${CRYOET_ASSISTANT_BACKEND:-claude}
+chosen=
+model=${CRYOET_ASSISTANT_MODEL:-}
 print_only=0
-accept_edits=0
 passed=()
 while (($#)); do
     case "$1" in
+        --claude | --codex)
+            if [[ -n "$chosen" && "$chosen" != "${1#--}" ]]; then
+                echo "scripts/assistant: give --claude or --codex, not both" >&2
+                exit 2
+            fi
+            chosen=${1#--}
+            shift
+            ;;
         --model)
             model=${2:?--model needs a model ID}
             shift 2
@@ -78,71 +133,184 @@ while (($#)); do
             sed -n '2,/^$/s/^# \{0,1\}//p' "${BASH_SOURCE[0]}"
             exit 0
             ;;
-        --permission-mode=acceptEdits)
-            accept_edits=1
-            shift
-            ;;
-        --permission-mode)
-            if [[ "${2:-}" != acceptEdits ]]; then
-                echo "scripts/assistant: --permission-mode ${2:-} would undo what the" \
-                    "assistant is started with (see the header of scripts/assistant)" >&2
-                exit 2
-            fi
-            accept_edits=1
-            shift 2
-            ;;
-        --dangerously-skip-permissions | --allow-dangerously-skip-permissions | \
-        --permission-mode | --permission-mode=* | --settings | --settings=* | \
-        --setting-sources | --setting-sources=* | --allowedTools | --allowedTools=* | \
-        --allowed-tools | --allowed-tools=* | --tools | --tools=* | \
-        --system-prompt | --system-prompt=* | --system-prompt-file | --system-prompt-file=* | \
-        --plugin-dir | --plugin-dir=* | --plugin-url | --plugin-url=* | --safe-mode | --bare | \
-        --mcp-config | --mcp-config=* | --ide)
-            echo "scripts/assistant: ${1%%=*} would undo what the assistant is started with" \
-                "(see the header of scripts/assistant); run claude itself for that" >&2
-            exit 2
-            ;;
         *)
             passed+=("$1")
             shift
             ;;
     esac
 done
-
-# The journal names the model by what is given here, and an alias names a
-# different model as releases move on.
-case "$model" in
-    opus | sonnet | haiku | fable | default | best | opusplan)
-        echo "scripts/assistant: give a full model ID, such as claude-opus-5-5, not the" \
-            "alias '$model', so that the journal says which model it was" >&2
+client=${chosen:-$client}
+case "$client" in
+    claude | codex) ;;
+    *)
+        echo "scripts/assistant: CRYOET_ASSISTANT_BACKEND is '$client'; give claude or codex" >&2
         exit 2
         ;;
 esac
 
-claude=$(command -v claude || true)
-if [[ -z "$claude" ]]; then
-    echo "scripts/assistant: Claude Code (claude) is not on PATH. Install it, or ask" \
-        "whoever set up the assistant on this machine." >&2
-    exit 1
+# A TOML string, for Codex's -c and its config: quotes, backslashes and the
+# control characters of a text escaped.
+toml_string() {
+    local text=$1
+    text=${text//\\/\\\\}
+    text=${text//\"/\\\"}
+    text=${text//$'\n'/\\n}
+    text=${text//$'\r'/\\r}
+    text=${text//$'\t'/\\t}
+    printf '"%s"' "$text"
+}
+
+# --- what each client takes from the command line ----------------------------
+
+accept_edits=0
+headless=0
+forwarded=()
+resume=()
+login=0
+login_options=()
+prompt_given=()
+set -- ${passed[@]+"${passed[@]}"}
+if [[ "$client" == claude ]]; then
+    while (($#)); do
+        case "$1" in
+            --permission-mode=acceptEdits)
+                accept_edits=1
+                shift
+                ;;
+            --permission-mode)
+                if [[ "${2:-}" != acceptEdits ]]; then
+                    echo "scripts/assistant: --permission-mode ${2:-} would undo what the" \
+                        "assistant is started with (see the header of scripts/assistant)" >&2
+                    exit 2
+                fi
+                accept_edits=1
+                shift 2
+                ;;
+            --dangerously-skip-permissions | --allow-dangerously-skip-permissions | \
+            --permission-mode | --permission-mode=* | --settings | --settings=* | \
+            --setting-sources | --setting-sources=* | --allowedTools | --allowedTools=* | \
+            --allowed-tools | --allowed-tools=* | --tools | --tools=* | \
+            --system-prompt | --system-prompt=* | --system-prompt-file | --system-prompt-file=* | \
+            --plugin-dir | --plugin-dir=* | --plugin-url | --plugin-url=* | --safe-mode | --bare | \
+            --mcp-config | --mcp-config=* | --ide)
+                echo "scripts/assistant: ${1%%=*} would undo what the assistant is started with" \
+                    "(see the header of scripts/assistant); run claude itself for that" >&2
+                exit 2
+                ;;
+            *)
+                if [[ "$1" == -p || "$1" == --print ]]; then headless=1; fi
+                forwarded+=("$1")
+                shift
+                ;;
+        esac
+    done
+else
+    while (($#)); do
+        case "$1" in
+            -c | --continue)
+                resume=(resume --last)
+                shift
+                ;;
+            -r | --resume)
+                resume=(resume)
+                shift
+                if (($#)) && [[ "$1" != -* ]]; then
+                    resume+=("$1")
+                    shift
+                fi
+                ;;
+            --login)
+                login=1
+                shift
+                ;;
+            --device-auth | --with-api-key)
+                login_options+=("$1")
+                shift
+                ;;
+            -i | --image)
+                forwarded+=("$1" "${2:?$1 needs an image file}")
+                shift 2
+                ;;
+            --no-alt-screen)
+                forwarded+=("$1")
+                shift
+                ;;
+            -p | --print)
+                echo "scripts/assistant: a headless run (-p) is Claude Code's only, for now;" \
+                    "start it without --codex" >&2
+                exit 2
+                ;;
+            -*)
+                echo "scripts/assistant: ${1%%=*} is not passed on to Codex (see the header" \
+                    "of scripts/assistant); run codex itself for that" >&2
+                exit 2
+                ;;
+            *)
+                prompt_given+=("$1")
+                shift
+                ;;
+        esac
+    done
+    if ((${#prompt_given[@]} > 1)); then
+        echo "scripts/assistant: give the prompt as one argument, in quotes" >&2
+        exit 2
+    fi
+    if ((${#login_options[@]})) && ((!login)); then
+        echo "scripts/assistant: ${login_options[0]} goes with --login" >&2
+        exit 2
+    fi
 fi
-version=$("$claude" --version 2>/dev/null | head -n 1 || true)
-export CRYOET_ASSISTANT="cryoet-assistant; claude-code ${version%% *}"
+
+# --- the model ------------------------------------------------------------------
+
+if [[ "$client" == claude ]]; then
+    model=${model:-claude-opus-5-5}
+    # The journal names the model by what is given here, and an alias names a
+    # different model as releases move on.
+    case "$model" in
+        opus | sonnet | haiku | fable | default | best | opusplan)
+            echo "scripts/assistant: give a full model ID, such as claude-opus-5-5, not the" \
+                "alias '$model', so that the journal says which model it was" >&2
+            exit 2
+            ;;
+    esac
+else
+    model=${model:-gpt-6.1-sol}
+    if [[ "$model" == claude-* ]]; then
+        echo "scripts/assistant: Codex runs OpenAI's models, and $model is Claude's: give one" \
+            "such as gpt-6.1-sol, or start Claude Code with --claude" >&2
+        exit 2
+    fi
+fi
+
+# --- the client's program ---------------------------------------------------------
+
+if [[ "$client" == claude ]]; then
+    program=$(command -v claude || true)
+    if [[ -z "$program" ]]; then
+        echo "scripts/assistant: Claude Code (claude) is not on PATH. Install it, or ask" \
+            "whoever set up the assistant on this machine. With a ChatGPT account, start" \
+            "scripts/assistant --codex instead." >&2
+        exit 1
+    fi
+    version=$("$program" --version 2>/dev/null | head -n 1 || true)
+    export CRYOET_ASSISTANT="cryoet-assistant; claude-code ${version%% *}"
+else
+    program=$(command -v codex || true)
+    if [[ -z "$program" ]]; then
+        echo "scripts/assistant: OpenAI's Codex (codex) is not on PATH. Install it, or ask" \
+            "whoever set up the assistant on this machine. With Claude Code, start" \
+            "scripts/assistant without --codex." >&2
+        exit 1
+    fi
+    version=$("$program" --version 2>/dev/null | head -n 1 || true)
+    export CRYOET_ASSISTANT="cryoet-assistant; codex ${version##* }"
+fi
 export CRYOET_ASSISTANT_MODEL=$model
-export ENABLE_CLAUDEAI_MCP_SERVERS=false
-export CLAUDE_CODE_AUTO_CONNECT_IDE=false
 
 cd "$REPO"
-options=(
-    --model "$model"
-    --setting-sources user
-    --settings "$REPO/assistant/settings.json"
-    --plugin-dir "$REPO/assistant/plugin"
-    --strict-mcp-config
-)
-headless=0
-for arg in ${passed[@]+"${passed[@]}"}; do
-    if [[ "$arg" == -p || "$arg" == --print ]]; then headless=1; fi
-done
+
+# --- the reference library --------------------------------------------------------
 
 # The reference library's folders on the sites; assistant/guard.py guards the
 # same ones.
@@ -163,7 +331,6 @@ if [[ -n "$library" && "$library" != none ]]; then
         snapshot=$(cd "$library/current" && pwd -P)
         root=$(cd "$library" && pwd -P)
         export CRYOET_LIBRARY_ROOT=$root CRYOET_LIBRARY_SNAPSHOT=$snapshot
-        options+=(--add-dir "$snapshot")
     else
         echo "scripts/assistant: no library snapshot at $library/current; the session" \
             "starts without the library" >&2
@@ -175,40 +342,139 @@ if [[ -n "$snapshot" ]]; then
     prompt+=$'\n\n'"This session's library is $snapshot (snapshot ${snapshot##*/})."
 fi
 
-if ((accept_edits)); then
-    if ((!headless)); then
-        echo "scripts/assistant: --permission-mode acceptEdits is for a headless run (-p)," \
-            "where nobody can approve an edit; a session asks the person instead" >&2
-        exit 2
+# --- Claude Code ------------------------------------------------------------------
+
+if [[ "$client" == claude ]]; then
+    export ENABLE_CLAUDEAI_MCP_SERVERS=false
+    export CLAUDE_CODE_AUTO_CONNECT_IDE=false
+    options=(
+        --model "$model"
+        --setting-sources user
+        --settings "$REPO/assistant/settings.json"
+        --plugin-dir "$REPO/assistant/plugin"
+        --strict-mcp-config
+    )
+    if [[ -n "$snapshot" ]]; then
+        options+=(--add-dir "$snapshot")
     fi
-    options+=(--permission-mode acceptEdits)
+    if ((accept_edits)); then
+        if ((!headless)); then
+            echo "scripts/assistant: --permission-mode acceptEdits is for a headless run (-p)," \
+                "where nobody can approve an edit; a session asks the person instead" >&2
+            exit 2
+        fi
+        options+=(--permission-mode acceptEdits)
+    fi
+    if ((print_only)); then
+        printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
+            "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"
+        printf 'ENABLE_CLAUDEAI_MCP_SERVERS=false\nCLAUDE_CODE_AUTO_CONNECT_IDE=false\n'
+        if [[ -n "$snapshot" ]]; then
+            printf 'CRYOET_LIBRARY_ROOT=%q\nCRYOET_LIBRARY_SNAPSHOT=%q\n' "$root" "$snapshot"
+        fi
+        printf 'cd %q\n' "$REPO"
+        printf '%q' "$program"
+        printf ' %q' "${options[@]}"
+        if [[ -n "$snapshot" ]]; then
+            printf ' --append-system-prompt "$(cat assistant/instructions.md assistant/library.md)'
+            printf ' and the library'\''s path"'
+        else
+            printf ' --append-system-prompt "$(cat assistant/instructions.md)"'
+        fi
+        printf ' --name cryoet-assistant'
+        # printf repeats its format at least once, so with nothing passed on it
+        # would print an empty argument.
+        if ((${#forwarded[@]})); then printf ' %q' "${forwarded[@]}"; fi
+        printf '\n'
+        exit 0
+    fi
+    if [[ -n "$snapshot" ]]; then
+        echo "scripts/assistant: library snapshot ${snapshot##*/}, read-only" >&2
+    fi
+    exec "$program" "${options[@]}" \
+        --append-system-prompt "$prompt" \
+        --name cryoet-assistant ${forwarded[@]+"${forwarded[@]}"}
 fi
+
+# --- Codex ------------------------------------------------------------------------
+
+home=${CRYOET_ASSISTANT_CODEX_HOME:-$HOME/.cryoet-assistant/codex}
+prompt+=$'\n\n'"$(cat "$REPO/assistant/codex/instructions.md")"
+options=(
+    --no-daemon
+    --strict-config
+    --dangerously-bypass-hook-trust
+    -C "$REPO"
+    -m "$model"
+    -s read-only
+    -a on-request
+)
+
 if ((print_only)); then
+    printf '# into %q: assistant/codex/config.toml, hooks.json and assistant.rules,' "$home"
+    printf ' and skills/cryoet -> assistant/plugin/skills\n'
+    printf 'CODEX_HOME=%q\nCRYOET_ASSISTANT_REPO=%q\n' "$home" "$REPO"
     printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
         "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"
-    printf 'ENABLE_CLAUDEAI_MCP_SERVERS=false\nCLAUDE_CODE_AUTO_CONNECT_IDE=false\n'
     if [[ -n "$snapshot" ]]; then
         printf 'CRYOET_LIBRARY_ROOT=%q\nCRYOET_LIBRARY_SNAPSHOT=%q\n' "$root" "$snapshot"
     fi
     printf 'cd %q\n' "$REPO"
-    printf '%q' "$claude"
+    printf '%q' "$program"
+    if ((login)); then
+        printf ' login'
+        if ((${#login_options[@]})); then printf ' %q' "${login_options[@]}"; fi
+        printf '\n'
+        exit 0
+    fi
+    if ((${#resume[@]})); then printf ' %q' "${resume[@]}"; fi
     printf ' %q' "${options[@]}"
     if [[ -n "$snapshot" ]]; then
-        printf ' --append-system-prompt "$(cat assistant/instructions.md assistant/library.md)'
-        printf ' and the library'\''s path"'
+        printf ' -c developer_instructions="$(cat assistant/instructions.md assistant/library.md'
+        printf ' assistant/codex/instructions.md) and the library'\''s path"'
     else
-        printf ' --append-system-prompt "$(cat assistant/instructions.md)"'
+        printf ' -c developer_instructions="$(cat assistant/instructions.md'
+        printf ' assistant/codex/instructions.md)"'
     fi
-    printf ' --name cryoet-assistant'
-    # printf repeats its format at least once, so with nothing passed on it
-    # would print an empty argument.
-    if ((${#passed[@]})); then printf ' %q' "${passed[@]}"; fi
+    if ((${#forwarded[@]})); then printf ' %q' "${forwarded[@]}"; fi
+    if ((${#prompt_given[@]})); then printf ' %q' "${prompt_given[@]}"; fi
     printf '\n'
     exit 0
+fi
+
+# The assistant's Codex home: only the person can read it, since it holds the
+# sign-in. Each file is written whole and then moved in, so that a session
+# starting at the same moment reads the old file or the new one.
+old_umask=$(umask)
+umask 077
+mkdir -p "$home/rules" "$home/skills"
+umask "$old_umask"
+{
+    cat "$REPO/assistant/codex/config.toml"
+    printf '\n# The clone the launcher started last, never trusted: its own .codex/, if\n'
+    printf '# it ever has one, belongs to development.\n'
+    printf '[projects.%s]\ntrust_level = "untrusted"\n' "$(toml_string "$REPO")"
+} > "$home/config.toml.$$"
+mv -f "$home/config.toml.$$" "$home/config.toml"
+cp "$REPO/assistant/codex/hooks.json" "$home/hooks.json.$$"
+mv -f "$home/hooks.json.$$" "$home/hooks.json"
+cp "$REPO/assistant/codex/assistant.rules" "$home/rules/assistant.rules.$$"
+mv -f "$home/rules/assistant.rules.$$" "$home/rules/assistant.rules"
+ln -sfn "$REPO/assistant/plugin/skills" "$home/skills/cryoet"
+export CODEX_HOME=$home CRYOET_ASSISTANT_REPO=$REPO
+
+if ((login)); then
+    exec "$program" login ${login_options[@]+"${login_options[@]}"}
+fi
+if ! "$program" login status > /dev/null 2>&1; then
+    echo "scripts/assistant: the assistant's Codex is not signed in yet. Sign in once with" \
+        "scripts/assistant --codex --login, adding --device-auth where no browser opens" \
+        "(on the cluster, say)." >&2
+    exit 1
 fi
 if [[ -n "$snapshot" ]]; then
     echo "scripts/assistant: library snapshot ${snapshot##*/}, read-only" >&2
 fi
-exec "$claude" "${options[@]}" \
-    --append-system-prompt "$prompt" \
-    --name cryoet-assistant ${passed[@]+"${passed[@]}"}
+exec "$program" ${resume[@]+"${resume[@]}"} "${options[@]}" \
+    -c "developer_instructions=$(toml_string "$prompt")" \
+    ${forwarded[@]+"${forwarded[@]}"} ${prompt_given[@]+"${prompt_given[@]}"}

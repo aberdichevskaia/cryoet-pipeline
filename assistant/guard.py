@@ -3,12 +3,14 @@
 
 Claude Code runs this, with the call as JSON on stdin, before every Bash call
 and every Edit, Write, MultiEdit and NotebookEdit call of a session that
-scripts/assistant started (assistant/settings.json, PreToolUse). Exit 2 blocks
-the call and shows the assistant the message on stderr. Exit 0 leaves the call
-to the session's permission rules.
+scripts/assistant started (assistant/settings.json, PreToolUse). Codex runs it
+before every shell command and every apply_patch of a session that
+`scripts/assistant --codex` started (assistant/codex/hooks.json), with the same
+fields. Exit 2 blocks the call and shows the assistant the message on stderr.
+Exit 0 leaves the call to the session's permission rules.
 
 It blocks what the assistant must never do itself, wherever it sits in a command
-line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c`:
+line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c` (or -lc):
 
 * starting a Slurm job (sbatch, srun, salloc), which would skip the checks and
   the journal of scripts/submit_lanes.py and scripts/submit_recipe.py;
@@ -19,20 +21,30 @@ line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c`:
   mpirun/mpiexec, which would compute on the login node. The person runs RELION,
   in a job on the cluster;
 * running scripts/build_library.py, which writes the reference library;
+* running scripts/run_series.py with --execute, which computes on the login node;
+* a shell with nothing to run (a bare `bash`, or `... | bash`), which reads its
+  commands from its input, where this guard never sees them. Codex can start one
+  and type into it later;
 * changing the reference library (docs/library.md). A command line that names
   the library, or runs inside it, may run only commands that read. An edit of a
-  file in the library is refused, whatever the tool.
+  file in the library is refused, whatever the tool;
+* a Codex patch (apply_patch, as its own tool or as a shell command) of a file
+  the Edit rules of assistant/settings.json deny. Claude Code applies those rules
+  itself; Codex has no rules for files, so they are read from there. A patch
+  whose files cannot be read is refused.
 
 Like the permission rules, this is a second layer and not a sandbox: a command
 that hides the call (a Python one-liner that runs sbatch, say) gets past it.
 Such a command is not on the session's allow list, so the person is asked for
-it. The first layer is the scripts' own checks, and for the library its file
-permissions, since a snapshot is written read-only.
+it; under Codex it runs in its read-only sandbox, without the network. The first
+layer is the scripts' own checks, and for the library its file permissions,
+since a snapshot is written read-only.
 
 Written for the python3 of a login node, which may be old: standard library only,
 nothing newer than Python 3.6.
 """
 
+import fnmatch
 import glob
 import json
 import os
@@ -87,6 +99,29 @@ FILE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SEARCH = os.path.realpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "search_library.py")
 )
+# A shell's -c, alone or among other one-letter options (-lc, -ec): the word
+# after it is the script the shell runs.
+_SHELL_C = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
+# What a shell takes that runs nothing: its version or its help.
+SHELL_INFO = {"--version", "--help"}
+# Redirections that give a shell its input, and those that take its output; the
+# word after each is a file, not a script for the shell to run.
+INPUTS = {"<", "<<", "<<<", "<<-"}
+RUNNER = "run_series.py"
+EXECUTE = "--execute"
+# Codex's tool for edits: its patch comes in tool_input["command"], each file on
+# a line of its own. Codex also takes `apply_patch <<'EOF' ...` as a shell
+# command and applies it, and then the guard sees it as a shell command.
+PATCH_TOOL = "apply_patch"
+_PATCH_FILE = re.compile(
+    r"^[ \t]*\*\*\* (?:Add File|Update File|Delete File|Move to):[ \t]*(.*?)[ \t\r]*$",
+    re.MULTILINE,
+)
+_PATCH_COMMAND = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?apply_?patch\b")
+REPOSITORY = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+# The client rules that Claude Code reads; the guard reads their Edit rules for
+# Codex's patches.
+SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 
 def tokens(command):
@@ -149,11 +184,13 @@ def problem(command, depth=0):
                 continue
             if name in SHELLS or name in ("source", "."):
                 rest = words[i + 1:]
-                if "-c" in rest and depth < 3:
-                    script = rest[rest.index("-c") + 1] if rest.index("-c") + 1 < len(rest) else ""
+                script = shell_script(rest)
+                if script is not None and depth < 3:
                     found = problem(script, depth + 1)
                     if found:
                         return found
+                if name in SHELLS and runs_its_input(words, i):
+                    return input_shell_message(name)
                 operands = [one for one in rest if not one.startswith("-")]
                 if operands and os.path.basename(operands[0]).endswith(".sbatch"):
                     return batch_message(operands[0])
@@ -173,6 +210,45 @@ def problem(command, depth=0):
         previous = word
         i += 1
     return None
+
+
+def shell_script(rest):
+    """The script a shell runs with -c (or -lc, -ec and the like), or None."""
+    for at, word in enumerate(rest):
+        if _SHELL_C.match(word):
+            return rest[at + 1] if at + 1 < len(rest) else ""
+    return None
+
+
+def runs_its_input(words, at):
+    """Whether the shell at words[at] has nothing to run but what comes on its
+    input: no -c, no script file, nor only its version or help. Its input may be
+    a pipe, a redirection, a here-document or a terminal that Codex types into
+    later; the guard sees none of it."""
+    j = at + 1
+    while j < len(words) and words[j] not in SEPARATORS:
+        word = words[j]
+        if word in INPUTS:
+            return True
+        if word in REDIRECTS:
+            j += 2
+            continue
+        if word in SHELL_INFO or _SHELL_C.match(word):
+            return False
+        if word in ("-o", "-O", "+o", "+O", "--rcfile", "--init-file"):
+            j += 2
+            continue
+        if not word.startswith(("-", "+")):
+            return False
+        j += 1
+    return True
+
+
+def input_shell_message(name):
+    return (
+        f"`{name}` with nothing to run reads its commands from its input, which this "
+        "guard never sees. Run the command itself, or the script as `bash <file>`."
+    )
 
 
 def slurm_message(name):
@@ -239,9 +315,9 @@ def commands_in(command, depth=0):
             end += 1
         rest = words[i + 1:end]
         found.append((name, rest))
-        if name in SHELLS and "-c" in rest and depth < 3:
-            at = rest.index("-c") + 1
-            inner = commands_in(rest[at], depth + 1) if at < len(rest) else []
+        script = shell_script(rest) if name in SHELLS else None
+        if script is not None and depth < 3:
+            inner = commands_in(script, depth + 1)
             if inner is None:
                 return None
             found.extend(inner)
@@ -268,6 +344,139 @@ def builder_message():
         "scripts/build_library.py writes the reference library. The person builds "
         "it; the assistant only reads it."
     )
+
+
+def runner_problem(command):
+    """scripts/run_series.py with --execute, in any form. argparse takes any
+    beginning of an option for it (--exe, say), and --execute is its only option
+    that starts with --e."""
+    commands = commands_in(command)
+    if commands is None:
+        return runner_message() if re.search(r"\brun_series\.py\b.*\s--e", command) else None
+    for name, rest in commands:
+        script, arguments = name, rest
+        if name.startswith("python"):
+            at = next((k for k, one in enumerate(rest) if not one.startswith("-")), None)
+            if at is None:
+                continue
+            script, arguments = rest[at], rest[at + 1:]
+        if os.path.basename(script) != RUNNER:
+            continue
+        for one in arguments:
+            option = one.split("=", 1)[0]
+            if len(option) > 2 and EXECUTE.startswith(option):
+                return runner_message()
+    return None
+
+
+def runner_message():
+    return (
+        "scripts/run_series.py --execute would run pipeline steps here, on the login "
+        "node. Without --execute it prints them; a run goes to the cluster through "
+        "scripts/submit_lanes.py."
+    )
+
+
+def patch_paths(patch):
+    """The files a Codex patch adds, changes, deletes or moves to."""
+    return [path for path in _PATCH_FILE.findall(patch) if path]
+
+
+def denied_edits():
+    """The Edit rules assistant/settings.json denies, as written inside Edit(...),
+    or None when the file cannot be read."""
+    try:
+        with open(SETTINGS) as handle:
+            deny = json.load(handle)["permissions"]["deny"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return [
+        rule[len("Edit("):-1]
+        for rule in deny
+        if rule.startswith("Edit(") and rule.endswith(")")
+    ]
+
+
+def _match(pattern, parts):
+    """Whether path parts match pattern parts: ** is any number of folders, and
+    each other part a name with * and ? in it."""
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_match(pattern[1:], parts[k:]) for k in range(len(parts) + 1))
+    return (
+        bool(parts)
+        and fnmatch.fnmatchcase(parts[0], pattern[0])
+        and _match(pattern[1:], parts[1:])
+    )
+
+
+def rule_matches(rule, path):
+    """Whether the Edit rule (as Claude Code reads it) names the file at path, an
+    absolute, resolved path. //x is the absolute path /x; ~/x is in the home
+    folder; /x is next to settings.json; anything else is in the repository,
+    where the assistant runs. A rule that starts with ** names the file wherever
+    the rest of it matches."""
+    if rule.startswith("//"):
+        base, pattern = os.sep, rule[2:]
+    elif rule.startswith("~/"):
+        base, pattern = os.path.expanduser("~"), rule[2:]
+    elif rule.startswith("/"):
+        base, pattern = os.path.dirname(SETTINGS), rule[1:]
+    else:
+        base, pattern = REPOSITORY, rule[2:] if rule.startswith("./") else rule
+    parts = [one for one in pattern.split("/") if one]
+    if parts and parts[0] == "**":
+        return _match(parts, [one for one in path.split(os.sep) if one])
+    base = os.path.realpath(base)
+    if not inside(path, {base}):
+        return False
+    return _match(parts, [one for one in os.path.relpath(path, base).split(os.sep) if one])
+
+
+def library_file_message(path):
+    return (
+        f"{path} is in the reference library, which is read-only (docs/library.md): "
+        "no tool edits it."
+    )
+
+
+def patch_problem(patch, cwd, environ):
+    """A Codex patch that changes a file in the library, or a file the Edit rules
+    of assistant/settings.json deny; and a patch whose files cannot be read."""
+    if not isinstance(patch, str):
+        return (
+            "this patch came in a form the guard cannot read, so it cannot tell "
+            "which files it changes."
+        )
+    paths = patch_paths(patch)
+    if not paths:
+        return (
+            "the guard cannot tell which files this patch changes, so it does not "
+            "let it through."
+        )
+    rules = denied_edits()
+    if rules is None:
+        return "assistant/settings.json cannot be read, so the guard cannot check this patch."
+    roots = library_roots(environ)
+    for path in paths:
+        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
+        if inside(resolved, roots):
+            return library_file_message(path)
+        rule = next((one for one in rules if rule_matches(one, resolved)), None)
+        if rule is not None:
+            return (
+                f"{path} is not the assistant's to change: assistant/settings.json denies "
+                f"Edit({rule})."
+            )
+    return None
+
+
+def shell_patch_problem(command, cwd, environ):
+    """A patch given to apply_patch as a shell command, which Codex applies itself."""
+    if "*** Begin Patch" not in command or not _PATCH_COMMAND.search(command):
+        return None
+    return patch_problem(command, cwd, environ)
 
 
 def library_roots(environ):
@@ -365,10 +574,7 @@ def file_problem(tool_input, cwd, environ):
     """An edit, by any tool, of a file in the library."""
     path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
     if path and inside(resolve(path, cwd), library_roots(environ)):
-        return (
-            f"{path} is in the reference library, which is read-only (docs/library.md): "
-            "no tool edits it."
-        )
+        return library_file_message(path)
     return None
 
 
@@ -384,10 +590,15 @@ def main():
     cwd = call.get("cwd") or os.getcwd()
     if tool == "Bash":
         command = tool_input.get("command") or ""
-        found = (problem(command) or builder_problem(command)
-                 or library_problem(command, cwd, os.environ))
+        if isinstance(command, list):
+            command = " ".join(shlex.quote(str(word)) for word in command)
+        found = (problem(command) or builder_problem(command) or runner_problem(command)
+                 or library_problem(command, cwd, os.environ)
+                 or shell_patch_problem(command, cwd, os.environ))
     elif tool in FILE_TOOLS:
         found = file_problem(tool_input, cwd, os.environ)
+    elif tool == PATCH_TOOL:
+        found = patch_problem(tool_input.get("command"), cwd, os.environ)
     else:
         return 0
     if found:

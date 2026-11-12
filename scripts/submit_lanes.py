@@ -41,8 +41,9 @@ config's text, how it differs from the lane file it was copied from, the commit,
 gives --reason and the config's latest journal entry is the same person's dry
 run of exactly this plan, without problems, at most 30 minutes old: what is
 submitted is what was shown, once. The assistant is known by CRYOET_ASSISTANT,
-which its launcher sets, or by the AI_AGENT or CLAUDECODE its client sets (see
-docs/agent_architecture.md, "First increment").
+which its launcher sets, or by the AI_AGENT or CLAUDECODE Claude Code sets, or
+the CODEX_THREAD_ID Codex sets (see docs/agent_architecture.md, "First
+increment").
 
 Two jobs on one series write the same files, so a series that a queued or
 running job of the same project works on is refused, in a dry run as in a
@@ -123,12 +124,15 @@ JOURNAL = "journal.jsonl"
 # outputs may have moved on, and so may what the person remembers agreeing to.
 DRY_RUN_FRESH = timedelta(minutes=30)
 # Any of these, set and not empty, means an agentic client runs this.
-# CRYOET_ASSISTANT is set by the assistant's launcher. Claude Code sets the other
-# two in every shell it starts, and some other clients set AI_AGENT too.
-ASSISTANT_MARKERS = ("CRYOET_ASSISTANT", "AI_AGENT", "CLAUDECODE")
+# CRYOET_ASSISTANT is set by the assistant's launcher. Claude Code sets AI_AGENT
+# and CLAUDECODE in every shell it starts, and some other clients set AI_AGENT
+# too. Codex (0.167.2) sets CODEX_THREAD_ID in every command it runs, its
+# session's id.
+ASSISTANT_MARKERS = ("CRYOET_ASSISTANT", "AI_AGENT", "CLAUDECODE", "CODEX_THREAD_ID")
 # Copied into the journal as they are, when set: the client, the model (the
 # launcher's CRYOET_ASSISTANT_MODEL), and the session whose transcript holds the
-# conversation. Nothing else from the environment is, apart from a plan's $VARs.
+# conversation (Claude Code's CLAUDE_CODE_SESSION_ID, Codex's CODEX_THREAD_ID).
+# Nothing else from the environment is, apart from a plan's $VARs.
 CLIENT_VARIABLES = (
     *ASSISTANT_MARKERS, "CRYOET_ASSISTANT_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_SESSION_ID",
 )

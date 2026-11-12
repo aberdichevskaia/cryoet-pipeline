@@ -630,7 +630,7 @@ the hashes of the files they name.
     the queue.
 - **A dry run and a submission's first entry** name the user, the host, and the
   client's own variables, as they are: `CRYOET_ASSISTANT`, `AI_AGENT`,
-  `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, and the model as
+  `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, Codex's `CODEX_THREAD_ID`, and the model as
   `CRYOET_ASSISTANT_MODEL`. The two `CRYOET_` variables come from the launcher,
   `scripts/assistant`; a session started without it does not record the model.
 
@@ -663,8 +663,9 @@ the assistant:
     the series, the stages, `--overwrite`, and the values of the variables the
     commands name. One dry run stands for one submission;
   - the assistant is recognised by `CRYOET_ASSISTANT` (its launcher) or by the
-    `AI_AGENT` or `CLAUDECODE` that Claude Code sets in every shell it starts.
-    A client that sets neither has to go through the launcher;
+    `AI_AGENT` or `CLAUDECODE` that Claude Code sets in every shell it starts,
+    or the `CODEX_THREAD_ID` that Codex sets in every command it runs. A client
+    that sets none of them has to go through the launcher;
   - a series that a queued or running job of the project works on is refused,
     in the dry run as in the submission. `squeue` lists the user's jobs; the
     journal, or the job's log once it runs, says which series each one is on;

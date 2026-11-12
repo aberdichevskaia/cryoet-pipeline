@@ -1,0 +1,97 @@
+# The assistant's command rules for Codex (`scripts/assistant --codex`), which
+# the launcher copies into the assistant's Codex home at every start. They mirror
+# the Bash rules of assistant/settings.json, which Claude Code reads:
+#
+#   allow      runs without asking, outside Codex's sandbox: the Slurm queries
+#              and the scripts reach the cluster and the network, and a dry run
+#              writes the project's journal;
+#   prompt     asks the person first;
+#   forbidden  never runs, with the reason given to the assistant.
+#
+# Every other command runs in the read-only sandbox without the network, and
+# asks the person when it needs more. assistant/guard.py checks every command
+# and every patch before any of this.
+#
+# A rule matches the start of a command. Two rules of settings.json have a * in
+# the middle, and are kept here as:
+#   - Bash(python3 scripts/submit_lanes.py * --dry-run*): a dry run is allowed
+#     with --dry-run right after the script; with it anywhere else, it asks.
+#     Likewise for submit_recipe.py and export_relion.py;
+#   - Bash(python3 scripts/run_series.py * --execute*): assistant/guard.py
+#     blocks it wherever --execute stands.
+#
+# Check a command against them:
+#   codex execpolicy check --rules assistant/codex/assistant.rules -- <command>
+
+PYTHON = ["python3", "python"]
+
+# What reads the pipeline's state, the cluster's queue and the library.
+prefix_rule(
+    pattern = [PYTHON, [
+        "scripts/show_project.py",
+        "scripts/show_failure.py",
+        "scripts/show_series.py",
+        "scripts/show_folder.py",
+        "scripts/show_empiar.py",
+        "scripts/show_emdb.py",
+        "scripts/run_series.py",
+        "scripts/search_library.py",
+    ]],
+    decision = "allow",
+    match = [
+        "python3 scripts/show_project.py ryr1",
+        "python scripts/show_emdb.py 65574",
+    ],
+    not_match = ["python3 -c 'import os' scripts/show_project.py"],
+)
+prefix_rule(
+    pattern = [PYTHON, ["scripts/submit_lanes.py", "scripts/submit_recipe.py", "scripts/export_relion.py"], "--dry-run"],
+    decision = "allow",
+    match = ["python3 scripts/submit_lanes.py --dry-run configs/lanes/ryr1-bin8.toml"],
+    not_match = ["python3 scripts/submit_lanes.py configs/lanes/ryr1-bin8.toml"],
+)
+prefix_rule(
+    pattern = [PYTHON, "scripts/submit_recipe.py", "--list"],
+    decision = "allow",
+)
+prefix_rule(
+    pattern = [["squeue", "sacct", "sinfo", "ls"]],
+    decision = "allow",
+    match = ["squeue -u anna", "sacct -j 3670792 -o JobID,State", "sinfo"],
+)
+# Readers that write nothing, so that `show_project.py ... | head` runs as the
+# script alone would.
+prefix_rule(
+    pattern = [["cat", "head", "tail", "grep", "wc", "cut"]],
+    decision = "allow",
+)
+
+# A job is the person's to cancel.
+prefix_rule(
+    pattern = ["scancel"],
+    decision = "prompt",
+    justification = "cancelling a job is the person's decision: ask, naming the job and why",
+)
+
+# Never by the assistant.
+prefix_rule(
+    pattern = [["sbatch", "srun", "salloc"]],
+    decision = "forbidden",
+    justification = "a job goes through scripts/submit_lanes.py or scripts/submit_recipe.py: dry run, shown, an explicit yes, then --reason",
+    match = ["sbatch scripts/lane.sbatch", "srun -n1 hostname"],
+)
+prefix_rule(
+    pattern = ["git"],
+    decision = "forbidden",
+    justification = "the repository is not the assistant's to change or to read through git",
+)
+prefix_rule(
+    pattern = [PYTHON, "scripts/build_library.py"],
+    decision = "forbidden",
+    justification = "scripts/build_library.py writes the reference library; the person builds it",
+)
+prefix_rule(
+    pattern = [PYTHON, "scripts/run_series.py", "--execute"],
+    decision = "forbidden",
+    justification = "run_series.py --execute computes on the login node; runs go through scripts/submit_lanes.py",
+)

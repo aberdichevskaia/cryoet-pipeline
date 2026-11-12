@@ -2,7 +2,9 @@
 
 The pipeline's assistant for biologists is Claude Code, started by
 [`scripts/assistant`](../scripts/assistant) with its own settings,
-instructions and skills. The design is in
+instructions and skills. For a person whose account is ChatGPT's, the same
+launcher starts OpenAI's Codex with the same instructions, skills and guard
+(`--codex`, below). The design is in
 [docs/agent_architecture.md](../docs/agent_architecture.md), sections *First
 increment* and *Portability*. This is its first increment: four skills, and the
 rules around them.
@@ -21,11 +23,16 @@ scripts/assistant
 | `scripts/assistant --model claude-sonnet-5-5` | starts another model; give a full model ID, not an alias |
 | `scripts/assistant --print-command` | shows what would run, and runs nothing |
 | `scripts/assistant -p "…" --permission-mode acceptEdits` | a headless run, as `scripts/run_cases.py` makes them: edits go through as a person who approves them would let them; only with `-p` |
+| `scripts/assistant --codex` | starts the assistant in Codex instead; `-c`, `--model` and `--print-command` work the same |
+| `scripts/assistant --codex --login` | signs the assistant's Codex in, once; add `--device-auth` on a login node, where no browser opens |
 
-It needs Claude Code (`claude`) on PATH, signed in to an account whose terms
-exclude training on the data (agent_architecture.md, "What leaves the cluster").
-Run it under your own Unix account, so that the jobs, the files and the quotas
-are yours.
+`export CRYOET_ASSISTANT_BACKEND=codex`, in `~/.bashrc` say, makes Codex the
+default, and `--claude` still starts Claude Code.
+
+It needs Claude Code (`claude`) on PATH, or Codex (`codex`) for `--codex`,
+signed in to an account whose terms exclude training on the data
+(agent_architecture.md, "What leaves the cluster"). Run it under your own Unix
+account, so that the jobs, the files and the quotas are yours.
 
 ## What is here
 
@@ -38,7 +45,8 @@ are yours.
 | [plugin/skills/lane-config](plugin/skills/lane-config/SKILL.md) | writing a lane config with the source of every value: the data read with `show_folder.py`, then checking it, dry run, yes, and submit |
 | [plugin/skills/relion-export](plugin/skills/relion-export/SKILL.md) | a class of an MRA run exported for RELION 5 with `export_relion.py`: dry run, shown with its notes, yes, export with `--reason`; RELION itself is the person's to run |
 | [settings.json](settings.json) | the client's permission rules, and the guard on shell commands |
-| [guard.py](guard.py) | that guard: it blocks `sbatch`, `srun` and `salloc`, batch scripts run directly, writes to a journal, and RELION's programs and `mpirun`, wherever they sit in a command line |
+| [guard.py](guard.py) | that guard: it blocks `sbatch`, `srun` and `salloc`, batch scripts run directly, writes to a journal, RELION's programs and `mpirun`, `run_series.py --execute`, and a shell that would run what comes on its input, wherever they sit in a command line; and Codex's patches of files that settings.json's Edit rules deny |
+| [codex/](codex/) | the same for Codex: [config.toml](codex/config.toml) (sandbox, approvals by the person, nothing but the shell and patches), [hooks.json](codex/hooks.json) (the guard), [assistant.rules](codex/assistant.rules) (settings.json's command rules, in Codex's form), and [instructions.md](codex/instructions.md) (three notes after the instructions) |
 
 The skills are thin. They point at the knowledge base in
 [docs/agent/](../docs/agent/README.md), which is plain markdown that a person
@@ -119,6 +127,61 @@ What the rules do not cover:
   `allowManagedHooksOnly`, would void the guard. `/status`
   inside a session shows what applies.
 
+## In Codex
+
+`scripts/assistant --codex` starts Codex with the same instructions, skills and
+guard. The settings below were read from Codex 0.167.2 and checked on the Mac on
+12 November 2026, against a stand-in model server on 127.0.0.1 that asked for
+what the guard must stop. No session with a real model has run yet.
+
+- **Its own Codex home.** `CODEX_HOME` is `~/.cryoet-assistant/codex` (or
+  `CRYOET_ASSISTANT_CODEX_HOME`). It holds the assistant's sign-in and sessions.
+  None of your own `~/.codex` applies: your settings, rules, hooks, MCP servers
+  and `AGENTS.md` stay out, and the assistant's settings stay out of your own
+  Codex. At every start the launcher copies `codex/config.toml`, `hooks.json`
+  and `assistant.rules` into it. It also links `skills/cryoet` to this clone's
+  skills, which Codex lists as `cryoet:lane-config` and so on. Sign in once with
+  `--login`.
+- **The guard runs before every shell command and every patch.** That includes
+  the calls GPT-6.1 makes from inside its JavaScript tool, and a patch given to
+  the shell as `apply_patch <<'EOF'`, which Codex applies too. A command blocked
+  with exit 2 is never run, and the model gets the guard's message.
+  - Codex runs a hook only once someone has trusted it in `/hooks`. An untrusted
+    hook is skipped without a word: on 12 November a patch the guard blocks went
+    through that way. So the launcher passes `--dangerously-bypass-hook-trust`,
+    and the home holds no hook but the guard.
+  - Codex has no rules for files, so the guard reads the Edit rules of
+    `settings.json` for Codex's patches.
+- **The sandbox does the asking.** Commands run read-only and without the
+  network (`-s read-only -a on-request`), and `approvals_reviewer = "user"`.
+  - Every patch asks you, as Claude Code asks before each edit.
+  - A command that needs to write or to reach the network asks you too.
+  - The rules in `assistant.rules` are `settings.json`'s, in Codex's form. Their
+    `allow` runs a command outside the sandbox (checked: a `touch` outside the
+    workspace worked under read-only), which is why the Slurm queries, the
+    `show_*.py` scripts and the dry runs are there. `prompt` asks before
+    `scancel`, and `forbidden` refuses `sbatch`, `git` and the library builder.
+  - Codex's rules match the start of a command, so a dry run runs outside the
+    sandbox only with `--dry-run` right after the script.
+    [codex/instructions.md](codex/instructions.md) tells the model so, and the
+    tests check the rules against `settings.json`.
+- **Nothing else acts.** Web search, apps (ChatGPT's connectors), browser and
+  computer use, and Codex's own skills are off. `--strict-config` stops the
+  start if this Codex does not know one of these settings. `--no-daemon` gives
+  the session's commands the launcher's variables, rather than those of a
+  background server started earlier.
+- **The journal.** Commands see `CRYOET_ASSISTANT` ("cryoet-assistant; codex
+  0.167.2"), `CRYOET_ASSISTANT_MODEL` (`gpt-6.1-sol` unless `--model` says) and
+  Codex's own `CODEX_THREAD_ID`. `submit_lanes.py` counts the last one as an
+  assistant too, so a Codex session started without the launcher is held to the
+  gate, and journals it as the session's id.
+
+Not checked yet, and only a real session can show it: how the terminal UI asks
+for a patch or an escalation, signing in to the separate home with a workspace
+account, and whether the project's trust question still appears. On max: whether
+Codex's sandbox (bubblewrap) runs on a login node, and whether the Slurm queries
+and dry runs run there through the allow rules.
+
 ## Sessions so far
 
 - **Munich, 28 October 2026**, on a login node, with Claude Code 2.1.312 and a
@@ -154,6 +217,9 @@ Slurm. Batches have run on the Mac since 30 October 2026. Their records are in
   without every line naming their case's answer, which they have done since
   4 November.
 - **Five cases have no evidence yet:** E06, E07, E09, E10 and E15.
+- **Codex has no headless runs.** `scripts/run_cases.py` drives Claude Code
+  only, so the cases have not run in Codex, and `--codex -p` is refused until
+  they can.
 - **No run against an open-weight model.** `scripts/run_cases.py --base-url`
   and `scripts/open_model_cases.sbatch` are written, and nothing has run on max.
 - **Stricter loading needs a newer Claude Code.** Claude Code 2.1.248 and later

@@ -216,6 +216,18 @@ def test_the_assistant_says_why(lane, monkeypatch):
     assert not _overwrite_per_call(lane)
 
 
+def test_a_codex_session_is_held_to_the_gate_and_named_in_the_journal(lane, capsys, monkeypatch):
+    # Codex sets CODEX_THREAD_ID in every command it runs, with or without the launcher.
+    monkeypatch.setenv("CODEX_THREAD_ID", "01a1d045-3fd9-7721-bd8a-0f3b0a576f50")
+    with pytest.raises(SystemExit, match="needs --reason"):
+        submit_lanes.main([str(lane)])
+    _run(capsys, lane, "--dry-run")
+    assert _run(capsys, lane, *REASON)[0] == 0
+    _, submitted, _ = _journal(lane)
+    assert submitted["assistant"] is True
+    assert submitted["client"] == {"CODEX_THREAD_ID": "01a1d045-3fd9-7721-bd8a-0f3b0a576f50"}
+
+
 def test_the_journal_says_what_was_shown_and_submitted_and_by_whom(lane, capsys, monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "session-1")

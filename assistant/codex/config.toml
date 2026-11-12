@@ -1,0 +1,32 @@
+# The assistant's Codex settings, for `scripts/assistant --codex`. The launcher
+# copies this file into the assistant's own Codex home at every start, so none
+# of a person's own ~/.codex settings, rules, hooks or MCP servers apply to the
+# assistant's sessions, and none of these apply to the person's own Codex.
+
+# Commands run in Codex's sandbox, which reads everything and writes nothing,
+# without the network. An edit, and a command that needs more, asks the person
+# first; the commands in assistant.rules run without the sandbox. The person
+# answers, not a reviewing model. The launcher passes the first two again as
+# options, so that nothing else sets them.
+sandbox_mode = "read-only"
+approval_policy = "on-request"
+approvals_reviewer = "user"
+# What the assistant reads comes from the scripts, the playbook and the library,
+# not from a web search that runs without asking.
+web_search = "disabled"
+# A person cannot update a shared installation from a session.
+check_for_update_on_startup = false
+
+[features]
+# assistant/guard.py runs through hooks.json, and only with hooks on.
+hooks = true
+# Nothing that acts through other tools than the shell and apply_patch, which
+# the guard sees.
+apps = false
+browser_use = false
+browser_use_external = false
+computer_use = false
+
+[skills.bundled]
+# Codex's own skills (images, installing skills) are not the pipeline's.
+enabled = false
