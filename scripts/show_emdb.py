@@ -36,8 +36,11 @@ diameter a mask around the box centre needs to hold it, which it proposes.
 prepare-template draws the mask, and turns the template, about the box centre.
 It reads the size again at 1.5 times the level, to show how much the size
 depends on it. Density that reaches the map's edge is more than one particle,
-and then no diameter is proposed. A map file has no authors' contour, so it
-needs --level.
+and then no diameter is proposed. The map's outermost voxels say what reached
+it: noise, when at least half as many of them are as far below their median as
+the level is above it as are above the level, so that the level is in the
+noise; otherwise a membrane, a neighbour or a lattice. A map file has no
+authors' contour, so it needs --level.
 
 The entries are for the person to choose from. The weighing, in the order of
 docs/roadmap.md section 23, is the assistant's emdb-template skill.
@@ -359,7 +362,8 @@ def measure(args: argparse.Namespace, read: Callable[[str], str]) -> dict[str, A
 
 
 def size_report(size: Any) -> dict[str, Any]:
-    return {**dataclasses.asdict(size), "mask_diameter_angstrom": size.mask_diameter_angstrom}
+    return {**dataclasses.asdict(size), "mask_diameter_angstrom": size.mask_diameter_angstrom,
+            "in_noise": size.in_noise}
 
 
 # --- Output ---------------------------------------------------------------------------
@@ -451,7 +455,8 @@ def render_measure(report: dict[str, Any]) -> str:
     level = "the authors' contour" if report["level_from"] == "authors" else "the level"
     box = " x ".join(map(str, first["box_px"]))
     out = [f"{name} above {level}, {report['level']:g} (a {box} box at "
-           f"{first['voxel_size_angstrom']:g} A/px):"]
+           f"{first['voxel_size_angstrom']:g} A/px; {first['share_of_map']:.1%} of the map "
+           "is above it):"]
     if first["kept"] == 1:
         line = f"  one piece holds {first['kept_share']:.0%} of the volume above it"
     elif first["kept"] <= MOST_PIECES:
@@ -472,9 +477,18 @@ def render_measure(report: dict[str, Any]) -> str:
                f"template, it reaches {first['from_centre_angstrom']:.0f} A: a mask holds it at "
                f"{first['mask_diameter_angstrom']:.0f} A across")
     if first["faces_reached"]:
-        out.append(f"  it reaches the map's edge on {first['faces_reached']} of 6 faces: a "
-                   "membrane, a neighbour or a lattice is in the map, so these are the map's "
-                   "sizes, not one particle's; look at it in ChimeraX")
+        edge = (f"of the map's outermost voxels, {first['edge_above']:.1%} are above the level "
+                f"and {first['edge_below']:.1%} as far below their median, "
+                f"{first['edge_median']:.3g}, as the level is above it")
+        if first["in_noise"]:
+            out.append(f"  it reaches the map's edge on {first['faces_reached']} of 6 faces, and "
+                       f"what reaches them is noise: {edge}. The level is in the noise: noise "
+                       "above it is measured with the particle, so these sizes are the noise's")
+        else:
+            out.append(f"  it reaches the map's edge on {first['faces_reached']} of 6 faces, and "
+                       f"not as noise does: {edge}. A membrane, a neighbour or a lattice is in "
+                       "the map, so these are the map's sizes, not one particle's; look at it in "
+                       "ChimeraX")
     else:
         out.append(f"  it stays {first['inside_angstrom']:.0f} A or more inside the map's edges")
     if report["second_level"] is not None:
@@ -485,12 +499,17 @@ def render_measure(report: dict[str, Any]) -> str:
         else:
             out.append(f"  at {LEVEL_STEP:g} x the level, {second['level']:g}: "
                        f"{second['widest_angstrom']:.0f} A across, "
-                       f"{second['mask_diameter_angstrom']:.0f} A for the mask")
+                       f"{second['mask_diameter_angstrom']:.0f} A for the mask"
+                       + ("; in the noise there too" if second["in_noise"] else ""))
     if report["diameter_angstrom"] is None:
-        why = ("the density reaches the map's edge" if first["faces_reached"]
-               else f"more than {MOST_PIECES} pieces are measured")
-        out.append(f"No diameter to propose: {why}. Measure one particle in ChimeraX, or give "
-                   "another --level")
+        if first["in_noise"]:
+            out.append("No diameter to propose: the level is in the noise. Give a higher "
+                       "--level, or measure one particle in ChimeraX")
+        else:
+            why = ("the density reaches the map's edge" if first["faces_reached"]
+                   else f"more than {MOST_PIECES} pieces are measured")
+            out.append(f"No diameter to propose: {why}. Measure one particle in ChimeraX, or "
+                       "give another --level")
     else:
         out.append(f"For [pick] particle_diameter_angstrom: {report['diameter_angstrom']} A, "
                    "the mask's diameter")

@@ -78,11 +78,19 @@ person both numbers. Then check the entry with that diameter (section 3).
 
 Say what the tool says besides the numbers:
 - pieces measured together, which may or may not be one particle;
-- density that reaches the map's edge, a membrane or a neighbour in the map;
+- density that reaches the map's edge, and what the tool says reached it:
+  noise, so that the level is in the noise, or a membrane, a neighbour or a
+  lattice. Name only the cause it gives; a micelle or another cause it did not
+  report is a guess, and the person should hear it as one;
 - the second reading at 1.5 times the level, which shows how much the size
   depends on the level.
 
-When it proposes no diameter, the person measures one particle in ChimeraX.
+When the level is in the noise, the authors' contour does not show the
+particle. Run the tool again with a higher `--level`, doubling it each time,
+until it no longer says so. Tell the person the level is yours, not the
+authors', and show the share of the map above it beside the two numbers.
+Otherwise, when it proposes no diameter, the person measures one particle in
+ChimeraX.
 
 The map's box ("N A across" in `entry`) is not the particle. Measure a map
 with this tool only, never with code of your own: a number the person

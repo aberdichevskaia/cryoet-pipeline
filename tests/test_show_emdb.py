@@ -329,7 +329,9 @@ def test_an_entrys_map_is_measured_at_the_authors_contour(fetched, tmp_path, cap
     assert show_emdb.main(argv, read=apis) == 0
     text = capsys.readouterr().out
     diameter = report["diameter_angstrom"]
-    assert "EMD-90001 above the authors' contour, 0.0787 (a 48 x 48 x 48 box at 2 A/px):" in text
+    assert report["first"]["share_of_map"] == pytest.approx(expected.share_of_map)
+    assert ("EMD-90001 above the authors' contour, 0.0787 (a 48 x 48 x 48 box at 2 A/px; "
+            f"{expected.share_of_map:.1%} of the map is above it):") in text
     assert f"widest across: {expected.widest_angstrom:.0f} A" in text
     assert f"For [pick] particle_diameter_angstrom: {diameter} A, the mask's diameter" in text
     assert (f"show_emdb.py entry EMD-90001 --pixel <tomogram A/px> --diameter {diameter}"
@@ -374,6 +376,52 @@ def test_no_diameter_is_proposed_for_what_is_not_one_particle(tmp_path, capsys, 
     assert json.loads(capsys.readouterr().out)["diameter_angstrom"] is None
     assert show_emdb.main(["measure", str(path), "--level", "0.5"], read=FakeApis()) == 0
     assert f"No diameter to propose: {why}." in capsys.readouterr().out
+
+
+def correlated_noise(sd: float, seed: int = 1, box: int = 48) -> np.ndarray:
+    from scipy import ndimage
+
+    white = np.random.default_rng(seed).standard_normal((box, box, box))
+    smooth = ndimage.gaussian_filter(white, 1.0, mode="wrap")
+    return (sd * smooth / smooth.std()).astype(np.float32)
+
+
+def test_a_level_in_the_noise_is_said_to_be_and_no_membrane_is_blamed(tmp_path, capsys):
+    # A particle 6 sd high in noise, measured at 0.5 sd and then above the noise.
+    path = map_file(tmp_path / "noisy.mrc", correlated_noise(1.0) + 6.0 * density((8, (0, 0, 0))))
+    argv = ["measure", str(path), "--level", "0.5"]
+    assert show_emdb.main([*argv, "--json"], read=FakeApis()) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert show_emdb.main(argv, read=FakeApis()) == 0
+    text = capsys.readouterr().out
+
+    assert report["first"]["in_noise"] and report["second"]["in_noise"]
+    assert report["diameter_angstrom"] is None
+    assert "it reaches the map's edge on 6 of 6 faces, and what reaches them is noise" in text
+    assert "The level is in the noise: noise above it is measured with the particle" in text
+    assert "in the noise there too" in text
+    assert ("No diameter to propose: the level is in the noise. Give a higher --level, or "
+            "measure one particle in ChimeraX") in text
+    assert "membrane" not in text
+
+    assert show_emdb.main(["measure", str(path), "--level", "3", "--json"],
+                          read=FakeApis()) == 0
+    above = json.loads(capsys.readouterr().out)
+    assert not above["first"]["in_noise"] and above["diameter_angstrom"] is not None
+
+
+def test_a_membrane_that_reaches_the_edge_is_not_taken_for_noise(tmp_path, capsys):
+    slab = np.pad(np.ones((4, 48, 48), np.float32), ((22, 22), (0, 0), (0, 0)))
+    path = map_file(tmp_path / "membrane.mrc",
+                    np.maximum(slab, density((8, (10, 0, 0)))) + correlated_noise(0.2))
+    assert show_emdb.main(["measure", str(path), "--level", "0.7"], read=FakeApis()) == 0
+    text = capsys.readouterr().out
+
+    assert ("it reaches the map's edge on 4 of 6 faces, and not as noise does: of the map's "
+            "outermost voxels") in text
+    assert "A membrane, a neighbour or a lattice is in the map" in text
+    assert "No diameter to propose: the density reaches the map's edge." in text
+    assert "in the noise" not in text
 
 
 def test_an_entry_without_a_map_or_a_contour_downloads_nothing(fetched, capsys):

@@ -23,8 +23,17 @@ deposited.
 The density above the level falls into pieces. Those of at least `KEEP_SHARE`
 of the largest are measured together, so that a complex that comes apart at
 the contour is measured whole; the rest, noise mostly, is left out and counted.
-Density that reaches a face of the box is more than one particle: a membrane, a
-neighbour, a lattice. Its sizes are then the map's, which `faces_reached` says.
+Density that reaches a face of the box is more than one particle. Its sizes
+are then the map's, which `faces_reached` says.
+
+What reaches the faces is told on the map's outermost voxels. Noise falls as far
+below their median as the level is above it as often as it rises above the
+level; a membrane, a neighbour or a lattice adds density above the level only.
+When the density reaches a face and the outermost voxels are noise by that count
+(`EDGE_NOISE`), the level is in the noise (`in_noise`): noise above it has joined
+the particle into one piece, as on EMD-4805, whose authors' contour is 0.03 sd of
+the map. The level is not judged in sds: EMD-4805's noise is strong in a ball
+about the centre and weak in the box's corners, and no one sd describes both.
 """
 
 from __future__ import annotations
@@ -65,6 +74,22 @@ diameter falls 18% at 1.5 times the authors' contour, so a threshold that
 flagged a membrane would flag ordinary maps too.
 """
 
+EDGE_NOISE = 0.5
+"""What reaches the faces is noise when, of the map's outermost voxels, those as far
+below their median as the level is above it are at least this share of those above
+the level.
+
+Noise falls below as often as it rises above, so the share is near 1 where noise
+reaches the faces: 0.90 to 1.01 for a ball in correlated noise at 0.5 to 1.5 sd
+(two seeds), for EMD-16721 at 0.0015 and 0.001 (its authors' contour is 0.0033),
+and for EMD-4805 from 0.04, its authors' contour, to 1.0, every level at which the
+density reached a face. A membrane across the box gave 0.00 to 0.13 at 2.5 and
+3.5 times its noise's sd, and 0.63 to 0.65 at 1.5 sd, where noise does join it.
+One with a negative band two voxels wide along each side, 0.6 of its height deep,
+as a sharpened map may have, gave 0.59 to 0.62 at 2.5 sd and 0.23 to 0.25 at
+3.5 sd: it reads as noise until the level is raised.
+"""
+
 _ALL_NEIGHBOURS = np.ones((3, 3, 3), dtype=bool)
 """Voxels that touch at a face, an edge or a corner are one piece.
 
@@ -101,12 +126,28 @@ class MapSize:
     """The faces of the box, of 6, that the kept density touches."""
     inside_angstrom: float
     """How far the kept density stays from the nearest face; 0 when it reaches one."""
+    share_of_map: float
+    """The volume above the level as a share of the map's."""
+    edge_median: float
+    """The median of the map's outermost voxels, those on its six faces."""
+    edge_above: float
+    """The share of the outermost voxels above the level."""
+    edge_below: float
+    """The share of the outermost voxels as far below their median as the level is
+    above it: below 2 * `edge_median` - level."""
 
     @property
     def mask_diameter_angstrom(self) -> float:
         """The diameter a mask around the box centre needs to hold the kept density."""
 
         return 2.0 * self.from_centre_angstrom
+
+    @property
+    def in_noise(self) -> bool:
+        """The density reaches a face, and what reaches the faces is noise: the level
+        is in the noise (`EDGE_NOISE`)."""
+
+        return self.faces_reached > 0 and self.edge_below >= EDGE_NOISE * self.edge_above
 
 
 def read_map(path: Path) -> tuple[np.ndarray, float]:
@@ -157,6 +198,8 @@ def measure_density(data: np.ndarray, voxel_size_angstrom: float, level: float) 
         * voxel_size_angstrom
     # The voxels left empty between the density and each face, low side then high.
     gaps = np.concatenate([points.min(axis=0), np.asarray(volume.shape) - 1 - points.max(axis=0)])
+    edge = _outermost(volume)
+    edge_median = float(np.median(edge))
     return MapSize(
         level=level,
         voxel_size_angstrom=voxel_size_angstrom,
@@ -169,7 +212,23 @@ def measure_density(data: np.ndarray, voxel_size_angstrom: float, level: float) 
         from_centre_angstrom=from_centre,
         faces_reached=int((gaps == 0).sum()),
         inside_angstrom=float(gaps.min()) * voxel_size_angstrom,
+        share_of_map=float(sizes.sum()) / float(volume.size),
+        edge_median=edge_median,
+        edge_above=float((edge > level).mean()),
+        edge_below=float((edge < 2.0 * edge_median - level).mean()),
     )
+
+
+def _outermost(volume: np.ndarray) -> np.ndarray:
+    """The voxels on the six faces of the box, each once."""
+
+    if min(volume.shape) < 3:
+        return volume.ravel()
+    return np.concatenate([
+        volume[0].ravel(), volume[-1].ravel(),
+        volume[1:-1, 0].ravel(), volume[1:-1, -1].ravel(),
+        volume[1:-1, 1:-1, 0].ravel(), volume[1:-1, 1:-1, -1].ravel(),
+    ])
 
 
 def _outer_points(points: np.ndarray) -> np.ndarray:

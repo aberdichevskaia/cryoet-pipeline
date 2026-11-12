@@ -6,9 +6,10 @@ import math
 import mrcfile
 import numpy as np
 import pytest
+from scipy import ndimage
 from scipy.spatial.distance import pdist
 
-from cryoet_pipeline.map_size import KEEP_SHARE, MapSize, measure_density, read_map
+from cryoet_pipeline.map_size import EDGE_NOISE, KEEP_SHARE, MapSize, measure_density, read_map
 
 BOX = 48
 VOXEL = 2.0
@@ -129,6 +130,84 @@ def test_density_that_reaches_the_box_is_said_to():
             measure_density(rod, VOXEL, 0.5).inside_angstrom) == (0, 1 * VOXEL)
     rod[20:28, 20:28, 0] = 1.0
     assert measure_density(rod, VOXEL, 0.5).faces_reached == 1
+
+
+def noise(sd: float = 1.0, seed: int = 1, box: int = BOX) -> np.ndarray:
+    """Gaussian noise correlated over about a voxel, as a map's is, at sd `sd`."""
+
+    white = np.random.default_rng(seed).standard_normal((box, box, box))
+    smooth = ndimage.gaussian_filter(white, 1.0, mode="wrap")
+    return (sd * smooth / smooth.std()).astype(np.float32)
+
+
+def membrane() -> np.ndarray:
+    slab = np.zeros((BOX, BOX, BOX), np.float32)
+    slab[22:26, :, :] = 1.0  # across the box, normal along z
+    return np.maximum(slab, ball(8, at=(10, 0, 0)))
+
+
+def test_a_level_in_the_noise_is_told_from_a_membrane_that_reaches_the_faces():
+    # A particle 6 sd high in noise: at 0.5 sd the noise above the level joins it and
+    # reaches every face, as on EMD-4805 at its authors' contour.
+    in_noise = measure_density(noise() + 6.0 * ball(8), VOXEL, 0.5)
+    # A membrane in noise of sd 0.2, at 3.5 sd: it reaches four faces by itself.
+    across = measure_density(membrane() + noise(0.2), VOXEL, 0.7)
+
+    assert in_noise.faces_reached == 6 and in_noise.in_noise
+    assert in_noise.edge_below / in_noise.edge_above == pytest.approx(1.0, abs=0.15)
+    assert across.faces_reached == 4 and not across.in_noise
+    assert across.edge_below < 0.1 * EDGE_NOISE * across.edge_above
+
+
+def test_above_the_noise_the_particle_is_measured_and_not_in_the_noise():
+    size = measure_density(noise() + 6.0 * ball(8), VOXEL, 3.0)
+
+    assert (size.faces_reached, size.kept, size.in_noise) == (0, 1, False)
+    # Noise still touches the particle: the mask is a few voxels wider than the ball's.
+    assert 2 * 8.5 * VOXEL <= size.mask_diameter_angstrom <= 2 * 12 * VOXEL
+
+
+def test_the_noise_is_counted_about_the_median_of_the_edge_not_about_zero():
+    data = noise() + 6.0 * ball(8)
+    size = measure_density(data, VOXEL, 0.5)
+    shifted = measure_density(data + 100.0, VOXEL, 100.5)
+
+    assert shifted.edge_median == pytest.approx(size.edge_median + 100.0, abs=1e-3)
+    assert shifted.in_noise
+    assert (shifted.edge_above, shifted.edge_below) == pytest.approx(
+        (size.edge_above, size.edge_below), abs=1e-3)
+
+
+def test_a_particle_that_fills_most_of_its_box_is_not_taken_for_noise():
+    # Clipped by every face, the ball holds most of the map, so the map's median lies
+    # in the particle; the faces' median is still the noise's.
+    data = noise(0.2) + 6.0 * ball(26)
+    size = measure_density(data, VOXEL, 1.0)
+
+    assert np.median(data) > 3.0
+    assert abs(size.edge_median) < 0.2
+    assert size.faces_reached == 6 and not size.in_noise
+
+
+def test_a_map_without_noise_is_never_in_the_noise():
+    # Nothing on the faces is below their median, and nothing above the level either.
+    alone = measure_density(ball(8), VOXEL, 0.5)
+    across = measure_density(membrane(), VOXEL, 0.5)
+
+    assert (alone.faces_reached, alone.edge_above, alone.edge_below) == (0, 0.0, 0.0)
+    assert not alone.in_noise
+    assert (across.faces_reached, across.edge_below, across.in_noise) == (4, 0.0, False)
+
+
+def test_the_outermost_voxels_are_each_counted_once_and_the_map_share_is_exact():
+    data = np.zeros((10, 10, 10), np.float32)
+    data[:, :, 0] = 1.0  # one face of 100 voxels, of the 1000 - 8**3 = 488 outermost
+    size = measure_density(data, VOXEL, 0.5)
+
+    assert size.edge_above == pytest.approx(100 / 488)
+    assert size.share_of_map == pytest.approx(100 / 1000)
+    # The face's rim lies on the four faces beside it.
+    assert (size.faces_reached, size.in_noise) == (5, False)
 
 
 def test_a_level_above_everything_is_refused_with_the_maximum():
