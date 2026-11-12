@@ -92,7 +92,9 @@ The results go into `outputs/eval-runs/<UTC time>/`. Each run gets:
 
 - its transcript (`transcript.jsonl`);
 - its answer (`answer.md`);
-- what it did (`actions.md`), with any Slurm call flagged;
+- what it did (`actions.md`): each call with what came back, each Edit as a diff and
+  each Write whole, refused or not, as the person would see them to approve, and any
+  Slurm call flagged;
 - a record (`record.json`): case, model, client version, commit and the files
   changed since, the plugins and the memory the client used, cost, turns, the
   largest context, and the server when it is not Anthropic's.
@@ -140,6 +142,22 @@ pulled, that it answers a request with a tool call, that it sits wholly on the
 GPUs, and that one run of E11 gets through the client with a tool call. Given a
 `claude-` model, it runs the same cases against Anthropic with no server, so both
 arms are made on the same kind of node.
+
+A model that another service runs behind an OpenAI-compatible API, such as
+GLM-5.3-Flash on Helmholtz's Blablador, needs no GPU. With `API_BASE`,
+`API_MODEL` and `API_KEY_FILE` (a file only you can read, holding the service's
+key), the job starts a LiteLLM proxy on
+127.0.0.1 instead of Ollama. The proxy turns the client's Anthropic requests into
+the service's chat/completions and answers only this job's own key. It also holds
+requests to `REQUESTS_PER_MINUTE` (9; `scripts/litellm_pacer.py`), since Blablador
+throttles a user over 10 a minute for up to an hour. Check 1 is then that the
+service lists the model under the key, and there is no GPU check. Through the
+proxy the client records 0 input tokens, since LiteLLM opens its stream before the
+service has answered, so the runs' records have no largest context. The proxy logs
+the service's own count of each prompt instead. The batch folder gets
+`backend.txt` with the service, the model, the LiteLLM release, how many requests
+were held and the largest prompt, and `usage.jsonl` with every answer's counts. The script's header has the install, with a pinned LiteLLM
+release (1.82.7 and 1.82.8 on PyPI stole credentials), and the submit line.
 
 ## Checks a script can run
 
