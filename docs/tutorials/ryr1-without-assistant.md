@@ -59,6 +59,16 @@ micromamba activate cryoet-pipeline
 python -m pip install -e ".[io,viz,gpu]"
 ```
 
+If pip stops on a broken download (`error: incomplete-download` or another
+network error), the network dropped, not the pipeline: run the same command
+again. What pip has already downloaded is cached. With `--resume-retries 10`
+pip resumes a broken download itself, which matters most for PyTorch and its
+CUDA libraries, the largest downloads here:
+
+```bash
+python -m pip install --resume-retries 10 -e ".[io,viz,gpu]"
+```
+
 Check that PyTorch is a CUDA build. The second number must be a CUDA version,
 not `None` (the login node has no GPU, which is fine: the jobs run on GPU
 nodes).
@@ -413,9 +423,10 @@ comes from the tilt order and that there is no dose. Here the tilt order is the
 angle order, not the order the tilts were taken in. **Do not give
 `--dose-per-tilt` for these data:** with the order unknown, a dose would weight
 the wrong tilts if they were taken dose-symmetrically. Without a dose, RELION
-weights no tilt by dose. Look at the two halves' sizes too: they are dealt
-within each series, with neighbours closer than a box kept together, so they
-can come out unequal (782 and 404 for a RyR1 class on 10 November 2026).
+weights no tilt by dose. Look at the two halves' sizes too: neighbours closer
+than a box stay in one half and the halves are balanced over the whole class,
+so they come out nearly equal unless one group of neighbours holds a large part
+of the class; the dry run names the largest group.
 
 **Then the export**, the same command without `--dry-run`. It writes
 `outputs/ryr1-tutorial/relion/bin8-ssn-all-class<C>/`:
@@ -444,7 +455,7 @@ Then run the line the export printed, with max's GPU options in place of
 `<GPU partition and --gres>`:
 
 ```bash
-sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
+sbatch --nodes=1 --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
     --partition=gpu --gres=gpu:a40:2 \
     --chdir=<the folder it printed> --wrap "./relion_commands.sh"
 ```

@@ -123,6 +123,16 @@ Only the tools in the group folder are shared.
    python -m pip install -e ".[io,viz,gpu,library]"
    ```
 
+   If pip stops on a broken download (`error: incomplete-download` or another
+   network error), the network dropped, not the pipeline: run the same command
+   again. What pip has already downloaded is cached. With `--resume-retries 10`
+   pip resumes a broken download itself, which matters most for PyTorch and its
+   CUDA libraries, the largest downloads here:
+
+   ```bash
+   python -m pip install --resume-retries 10 -e ".[io,viz,gpu,library]"
+   ```
+
 2. Your pytom-match-pick environment, at 0.14.0. That is the version the group's
    runs and the assistant's reference library use:
 
