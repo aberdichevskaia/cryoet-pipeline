@@ -542,6 +542,29 @@ def test_a_named_ctffind_whose_variable_is_not_set_is_refused_once(lane, capsys,
     assert "[executables] ctffind" not in err
 
 
+@pytest.mark.parametrize("dry_run", [[], ["--dry-run"]], ids=["submit", "dry-run"])
+def test_unset_variables_are_followed_once_by_where_they_come_from(
+        lane, capsys, monkeypatch, dry_run):
+    # "$X is not set" alone was read as "X is not installed" on a first dry run on max.
+    _name_ctffind(lane)
+    monkeypatch.delenv("CTFFIND5", raising=False)
+    monkeypatch.delenv("PYTOMO_MP_DIR")
+    code, _, err = _run(capsys, lane, *dry_run)
+    assert code == (0 if dry_run else 1)
+    assert "$CTFFIND5 is not set" in err and "$PYTOMO_MP_DIR is not set" in err
+    assert err.count(submit_lanes.UNSET_HINT) == 1
+    assert "cryoet-tools.sh" in submit_lanes.UNSET_HINT
+    assert not _overwrite_per_call(lane)
+
+
+def test_no_word_on_variables_when_every_one_is_set(lane, capsys, monkeypatch):
+    _name_ctffind(lane)
+    monkeypatch.setenv("CTFFIND5", str(lane.parent / "bin" / "ctffind5"))
+    code, _, err = _run(capsys, lane, "--dry-run")
+    assert code == 0 and "refuse" not in err
+    assert submit_lanes.UNSET_HINT not in err
+
+
 # --- Combinations that have not run on real data -----------------------------------
 
 UNTRIED = "has not run on real data yet"

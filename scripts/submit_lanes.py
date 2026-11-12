@@ -344,14 +344,33 @@ def project_series(project: str) -> tuple[str, ...]:
     return tuple(sorted(path.stem for path in (ROOT / project / "manifests").glob("*.json")))
 
 
+# Printed once under the refusals when a $VAR is not set. On max, a first dry run
+# (2026-11-12) refused five of them, and "is not set" was read as "not installed".
+UNSET_HINT = (
+    "the $ variables above say where the tools are, and the jobs take them from this "
+    "shell: set them in ~/.bashrc, then open a new terminal (README, \"0. One-time "
+    "setup\"; at MDC, the two lines that source "
+    "/fast/AG_Kudryashev/software/cryoet-tools.sh and set PYTOMO_MP_DIR)"
+)
+
+
+def unset_variables(stages: tuple[Stage, ...]) -> list[tuple[str, Stage]]:
+    """The $VARs the stages' commands name that this shell leaves empty."""
+
+    return [
+        (name, stage)
+        for stage in stages
+        for name in sorted(stage.env)
+        if not os.environ.get(name)
+    ]
+
+
 def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list[str]:
     """What would make the submitted jobs fail at once, found on the submit node."""
 
     found = [
         f"${name} is not set (used by stage {stage.name!r})"
-        for stage in stages
-        for name in sorted(stage.env)
-        if not os.environ.get(name)
+        for name, stage in unset_variables(stages)
     ]
     found += mra_problems(lane, stages)
     # The MRA is no step of the chain each series runs: its checks are mra_problems'.
@@ -1364,6 +1383,8 @@ def main(argv: list[str] | None = None) -> int:
     found = [f"{one.lane.config}: {problem}" for one in lanes for problem in one.problems]
     for problem in found:
         print(f"{'would refuse' if args.dry_run else 'refused'}: {problem}", file=sys.stderr)
+    if any(unset_variables(one.stages) for one in lanes):
+        print(UNSET_HINT, file=sys.stderr)
     if found and not args.dry_run:
         return 1
 

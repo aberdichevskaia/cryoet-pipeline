@@ -252,6 +252,7 @@ def test_what_would_stop_the_job_at_once_is_refused_in_its_dry_run(
     monkeypatch.delenv("IMOD_DIR")
     code, _, err = _run(capsys, lane, *CTF_A)
     assert code == 1 and "$IMOD_DIR is not set (used by the recipe's job)" in err
+    assert err.count(submit_recipe.submit_lanes.UNSET_HINT) == 1
     assert not _calls(lane)
 
 

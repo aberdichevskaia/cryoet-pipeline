@@ -519,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{'would refuse' if args.dry_run else 'refused'}: {args.config}: {problem}",
             file=sys.stderr,
         )
+    if any(not os.environ.get(key) for key in variables):
+        print(submit_lanes.UNSET_HINT, file=sys.stderr)
     if problems and not args.dry_run:
         return 1
     if who["assistant"] and not args.dry_run:
