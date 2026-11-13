@@ -3,6 +3,10 @@
 # of a person's own ~/.codex settings, rules, hooks or MCP servers apply to the
 # assistant's sessions, and none of these apply to the person's own Codex.
 
+# A login node has no desktop keyring. Keep the renewable login in this
+# CODEX_HOME's auth.json; the launcher uses a private directory and umask 077.
+cli_auth_credentials_store = "file"
+
 # Commands run in Codex's sandbox, which reads everything and writes nothing,
 # without the network. An edit, and a command that needs more, asks the person
 # first; the commands in assistant.rules run without the sandbox. The person

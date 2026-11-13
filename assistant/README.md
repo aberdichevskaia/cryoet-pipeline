@@ -24,7 +24,8 @@ scripts/assistant
 | `scripts/assistant --print-command` | shows what would run, and runs nothing |
 | `scripts/assistant -p "…" --permission-mode acceptEdits` | a headless run, as `scripts/run_cases.py` makes them: edits go through as a person who approves them would let them; only with `-p` |
 | `scripts/assistant --codex` | starts the assistant in Codex instead; `-c`, `--model` and `--print-command` work the same |
-| `scripts/assistant --codex --login` | signs the assistant's Codex in, once; add `--device-auth` on a login node, where no browser opens |
+| `scripts/assistant --codex --login` | signs the assistant's Codex in, once; over SSH or on Linux without a display, uses a device code entered in your own computer's browser |
+| `scripts/assistant --codex --login --browser-auth` | browser login, locally or through an SSH tunnel (below) |
 
 `export CRYOET_ASSISTANT_BACKEND=codex`, in `~/.bashrc` say, makes Codex the
 default, and `--claude` still starts Claude Code.
@@ -33,6 +34,68 @@ It needs Claude Code (`claude`) on PATH, or Codex (`codex`) for `--codex`,
 signed in to an account whose terms exclude training on the data
 (agent_architecture.md, "What leaves the cluster"). Run it under your own Unix
 account, so that the jobs, the files and the quotas are yours.
+
+## Signing in to Codex on a cluster
+
+In your SSH session on the login node, run:
+
+```bash
+scripts/assistant --codex --login
+```
+
+The launcher selects `codex login --device-auth` over SSH, or on Linux without
+a display. Open the link it prints in your **own computer's browser**, sign in
+with the intended ChatGPT account and workspace, and enter the one-time code.
+The login node does not need a browser or an inbound connection. It does need
+outbound HTTPS access to OpenAI, both for login and for subsequent sessions.
+`--login --device-auth` selects this method explicitly on any machine.
+
+Device code login must first be enabled in your ChatGPT security settings, or
+by your workspace admin. If that option is unavailable, use the standard
+browser login through an SSH tunnel instead. From a terminal on **your own
+computer**, open a new SSH connection to the login node:
+
+```bash
+ssh -o ExitOnForwardFailure=yes -L 1455:localhost:1455 USER@LOGIN_NODE
+```
+
+Use your usual SSH destination and options, including a jump host if needed.
+In that SSH session, change to your clone and run:
+
+```bash
+scripts/assistant --codex --login --browser-auth
+```
+
+Open the printed login URL in your computer's browser. The tunnel delivers
+the browser's `localhost:1455` callback to Codex on the login node. Keep that
+SSH session open until login completes. Port 1455 must be free on both ends;
+if you normally connect through a load-balanced alias, the tunnel and Codex
+must use this same SSH session and node. On a local computer, `--browser-auth`
+works without a tunnel; a local `--login` also defaults to browser login when
+a desktop is available.
+
+After either method, start `scripts/assistant --codex` normally. Credentials
+are saved in `~/.cryoet-assistant/codex/auth.json`, or under
+`CRYOET_ASSISTANT_CODEX_HOME` when set. The launcher explicitly selects file
+storage, keeps that directory private (`0700`), and uses `umask 077` during
+setup and login so new credentials have mode `0600`. Normal sessions retain
+your usual umask for project outputs. Codex refreshes the saved
+ChatGPT tokens during use. Sign in on the cluster itself; no token needs to
+be pasted into the terminal or copied from your personal Codex installation.
+Treat `auth.json` like a password and keep it out of the repository and shared
+project directories. Changing `CRYOET_ASSISTANT_CODEX_HOME` selects a different
+login and session store, so use the same value for login and normal starts.
+
+For an API account, the explicit alternative is
+`printenv OPENAI_API_KEY | scripts/assistant --codex --login --with-api-key`.
+This uses API billing rather than the ChatGPT subscription. The launcher
+does not switch to it when ChatGPT login fails.
+
+These methods follow the official OpenAI documentation on
+[headless login](https://learn.chatgpt.com/docs/auth#login-on-headless-devices)
+and [credential storage](https://learn.chatgpt.com/docs/auth#credential-storage).
+Workspace policies can restrict sign-in methods and credential storage; the
+launcher does not override administrator requirements.
 
 ## What is here
 
@@ -141,7 +204,8 @@ what the guard must stop. No session with a real model has run yet.
   Codex. At every start the launcher copies `codex/config.toml`, `hooks.json`
   and `assistant.rules` into it. It also links `skills/cryoet` to this clone's
   skills, which Codex lists as `cryoet:lane-config` and so on. Sign in once with
-  `--login`.
+  `--login`, using the cluster instructions above. The login is stored in this
+  home's `auth.json`, independently of a desktop keyring.
 - **The guard runs before every shell command and every patch.** That includes
   the calls GPT-6.1 makes from inside its JavaScript tool, and a patch given to
   the shell as `apply_patch <<'EOF'`, which Codex applies too. A command blocked

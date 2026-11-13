@@ -9,8 +9,13 @@
 #     scripts/assistant -c                   continue the last one
 #     scripts/assistant --model claude-sonnet-5-5
 #     scripts/assistant --print-command      show what would run, and run nothing
-#     scripts/assistant --codex --login      sign the assistant's Codex in, once;
-#                                            add --device-auth where no browser opens
+#     scripts/assistant --codex --login      sign in once; uses a device code over
+#                                            SSH or on Linux without a display
+#     scripts/assistant --codex --login --browser-auth
+#                                            browser login, locally or through
+#                                            SSH forwarding of port 1455
+#     scripts/assistant --codex --login --with-api-key
+#                                            read an API key from stdin (API billing)
 #
 # --claude (the default) and --codex choose the client. CRYOET_ASSISTANT_BACKEND=codex,
 # in ~/.bashrc say, makes Codex the default for a person who has only ChatGPT;
@@ -63,6 +68,8 @@
 #                           rules/assistant.rules, and links skills/cryoet to
 #                           assistant/plugin/skills: the clone started last is
 #                           the one whose skills a session reads
+#                           Credentials use auth.json in this private directory,
+#                           so a login node needs no desktop keyring
 #   CRYOET_ASSISTANT_REPO   where hooks.json finds assistant/guard.py, which runs
 #                           before every shell command and every patch
 #   -s read-only -a on-request
@@ -167,6 +174,7 @@ headless=0
 forwarded=()
 resume=()
 login=0
+login_method=
 login_options=()
 prompt_given=()
 set -- ${passed[@]+"${passed[@]}"}
@@ -223,8 +231,13 @@ else
                 login=1
                 shift
                 ;;
-            --device-auth | --with-api-key)
-                login_options+=("$1")
+            --device-auth | --browser-auth | --with-api-key)
+                if [[ -n "$login_method" && "$login_method" != "$1" ]]; then
+                    echo "scripts/assistant: choose one login method: --device-auth," \
+                        "--browser-auth or --with-api-key" >&2
+                    exit 2
+                fi
+                login_method=$1
                 shift
                 ;;
             -i | --image)
@@ -255,9 +268,25 @@ else
         echo "scripts/assistant: give the prompt as one argument, in quotes" >&2
         exit 2
     fi
-    if ((${#login_options[@]})) && ((!login)); then
-        echo "scripts/assistant: ${login_options[0]} goes with --login" >&2
+    if [[ -n "$login_method" ]] && ((!login)); then
+        echo "scripts/assistant: $login_method goes with --login" >&2
         exit 2
+    fi
+    if ((login)); then
+        if ((${#resume[@]} + ${#forwarded[@]} + ${#prompt_given[@]})); then
+            echo "scripts/assistant: --login cannot be combined with a session or prompt" >&2
+            exit 2
+        fi
+        case "$login_method" in
+            --device-auth | --with-api-key) login_options=("$login_method") ;;
+            --browser-auth) ;; # Codex's default browser flow; no CLI option needed.
+            *)
+                if [[ -n "${SSH_CONNECTION:-}${SSH_CLIENT:-}${SSH_TTY:-}" ||
+                    ( "$OSTYPE" == linux* && -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ) ]]; then
+                    login_options=(--device-auth)
+                fi
+                ;;
+        esac
     fi
 fi
 
@@ -443,12 +472,14 @@ if ((print_only)); then
 fi
 
 # The assistant's Codex home: only the person can read it, since it holds the
-# sign-in. Each file is written whole and then moved in, so that a session
-# starting at the same moment reads the old file or the new one.
-old_umask=$(umask)
+# sign-in. Keep a private umask during setup and login, including the new
+# auth.json, and fix the mode of a home made before this launcher ran.
+# Each file is written whole and then moved in, so that a session starting at
+# the same moment reads the old file or the new one.
+session_umask=$(umask)
 umask 077
 mkdir -p "$home/rules" "$home/skills"
-umask "$old_umask"
+chmod 700 "$home"
 {
     cat "$REPO/assistant/codex/config.toml"
     printf '\n# The clone the launcher started last, never trusted: its own .codex/, if\n'
@@ -464,17 +495,43 @@ ln -sfn "$REPO/assistant/plugin/skills" "$home/skills/cryoet"
 export CODEX_HOME=$home CRYOET_ASSISTANT_REPO=$REPO
 
 if ((login)); then
-    exec "$program" login ${login_options[@]+"${login_options[@]}"}
+    if [[ "${login_options[0]:-}" == --device-auth ]]; then
+        echo "scripts/assistant: open Codex's link in your own computer's browser and enter" \
+            "the one-time code there. Device code login must be enabled in ChatGPT's" \
+            "security settings or by your workspace admin." >&2
+    fi
+    if "$program" login ${login_options[@]+"${login_options[@]}"}; then
+        exit 0
+    else
+        login_exit_code=$?
+    fi
+    if [[ "$login_method" != --with-api-key ]]; then
+        echo "scripts/assistant: sign-in failed. If device code login is unavailable, open" \
+            "a new SSH session from your computer with callback forwarding:" >&2
+        echo "  ssh -o ExitOnForwardFailure=yes -L 1455:localhost:1455 USER@LOGIN_NODE" >&2
+        echo "Then, in that SSH session, from this clone, run:" >&2
+        echo "  scripts/assistant --codex --login --browser-auth" >&2
+        echo "Open the printed login URL in your computer's browser. See assistant/README.md." >&2
+    fi
+    exit "$login_exit_code"
 fi
-if ! "$program" login status > /dev/null 2>&1; then
-    echo "scripts/assistant: the assistant's Codex is not signed in yet. Sign in once with" \
-        "scripts/assistant --codex --login, adding --device-auth where no browser opens" \
-        "(on the cluster, say)." >&2
+if auth_status=$("$program" login status 2>&1); then
+    :
+else
+    echo "scripts/assistant: cannot confirm the assistant's Codex sign-in. Sign in with" \
+        "scripts/assistant --codex --login (a device code over SSH). If that fails, see" \
+        "assistant/README.md for browser login through an SSH tunnel." >&2
+    # Show Codex's own diagnosis too: a failed status may mean a storage or
+    # configuration error rather than missing credentials. It does not print tokens.
+    printf '%s\n' "$auth_status" >&2
     exit 1
 fi
 if [[ -n "$snapshot" ]]; then
     echo "scripts/assistant: library snapshot ${snapshot##*/}, read-only" >&2
 fi
+# Pipeline commands keep the person's usual permissions for project outputs.
+# The credential store remains protected by the private Codex home.
+umask "$session_umask"
 exec "$program" ${resume[@]+"${resume[@]}"} "${options[@]}" \
     -c "developer_instructions=$(toml_string "$prompt")" \
     ${forwarded[@]+"${forwarded[@]}"} ${prompt_given[@]+"${prompt_given[@]}"}

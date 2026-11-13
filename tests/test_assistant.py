@@ -789,7 +789,7 @@ def test_the_skills_are_there():
 
 
 # Repository paths the assistant's files name: scripts, docs, configs, templates.
-_PATH = re.compile(r"(?<![\w/.<])((?:scripts|docs|configs|assistant)/[\w./-]*[\w/])")
+_PATH = re.compile(r"(?<![-\w/.<])((?:scripts|docs|configs|assistant)/[\w./-]*[\w/])")
 
 
 @pytest.mark.parametrize(
@@ -826,7 +826,7 @@ CODEX = """#!/bin/bash
 if [[ "$1" == "--version" ]]; then echo "codex-cli 9.9.9"; exit 0; fi
 if [[ "$1" == "login" && "$2" == "status" ]]; then
     if [[ "${CODEX_STUB_SIGNED_IN:-1}" == 1 ]]; then echo "Logged in using ChatGPT"; exit 0; fi
-    echo "Not logged in"; exit 1
+    echo "${CODEX_STUB_STATUS_ERROR:-Not logged in}"; exit 1
 fi
 {
     echo "cwd=$PWD"
@@ -838,6 +838,12 @@ fi
     echo "CRYOET_LIBRARY_SNAPSHOT=${CRYOET_LIBRARY_SNAPSHOT:-}"
     for arg in "$@"; do printf 'arg=%s\\0' "$arg"; done
 } > "$CODEX_CALLS"
+if [[ "$1" == "login" ]]; then
+    if [[ "${CODEX_STUB_WRITE_AUTH:-0}" == 1 ]]; then
+        printf '{"tokens": "test-only"}\\n' > "$CODEX_HOME/auth.json"
+    fi
+    exit "${CODEX_STUB_LOGIN_EXIT:-0}"
+fi
 """
 
 
@@ -849,7 +855,20 @@ def codex(tmp_path, monkeypatch, claude):
     (tmp_path / "bin" / "codex").chmod(0o755)
     monkeypatch.setenv("CODEX_CALLS", str(tmp_path / "codex-calls"))
     monkeypatch.setenv("CRYOET_ASSISTANT_CODEX_HOME", str(tmp_path / "codex-home"))
-    monkeypatch.delenv("CODEX_STUB_SIGNED_IN", raising=False)
+    for name in (
+        "CODEX_STUB_SIGNED_IN",
+        "CODEX_STUB_LOGIN_EXIT",
+        "CODEX_STUB_WRITE_AUTH",
+        "CODEX_STUB_STATUS_ERROR",
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    # A local desktop by default, even on a Linux CI runner. Tests for SSH or
+    # a headless Linux host override these explicitly.
+    monkeypatch.setenv("DISPLAY", ":test")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     return {"calls": tmp_path / "codex-calls", "home": tmp_path / "codex-home"}
 
 
@@ -929,6 +948,7 @@ def test_the_codex_settings_hold_the_gates():
     # The person approves, not a reviewing model.
     assert config["approvals_reviewer"] == "user"
     assert config["web_search"] == "disabled"
+    assert config["cli_auth_credentials_store"] == "file"
     assert config["features"] == {
         "hooks": True,
         "apps": False,
@@ -991,6 +1011,14 @@ def test_the_client_comes_from_the_variable_and_an_option_wins(codex, monkeypatc
         ["--codex", "--model", "claude-opus-5-5"],
         ["--codex", "one", "two"],
         ["--codex", "--device-auth"],
+        ["--codex", "--browser-auth"],
+        ["--codex", "--with-api-key"],
+        ["--codex", "--login", "--device-auth", "--browser-auth"],
+        ["--codex", "--login", "--device-auth", "--with-api-key"],
+        ["--codex", "--login", "--browser-auth", "--with-api-key"],
+        ["--codex", "--login", "-c"],
+        ["--codex", "--login", "a prompt"],
+        ["--codex", "--login", "--no-alt-screen"],
         ["--claude", "--codex"],
     ],
 )
@@ -1013,14 +1041,105 @@ def test_codex_not_signed_in_is_told_how(codex, monkeypatch):
     assert not codex["calls"].exists()
 
 
+def test_codex_status_errors_are_not_hidden(codex, monkeypatch):
+    monkeypatch.setenv("CODEX_STUB_SIGNED_IN", "0")
+    monkeypatch.setenv("CODEX_STUB_STATUS_ERROR", "Credential store is unavailable")
+    result = _launch("--codex", cwd=ROOT)
+    assert result.returncode == 1
+    assert "Credential store is unavailable" in result.stderr
+    assert "SSH tunnel" in result.stderr
+    assert not codex["calls"].exists()
+
+
 @pytest.mark.parametrize(
-    ("args", "login"), [([], ["login"]), (["--device-auth"], ["login", "--device-auth"])]
+    ("args", "login"),
+    [
+        ([], ["login"]),
+        (["--device-auth"], ["login", "--device-auth"]),
+        (["--browser-auth"], ["login"]),
+        (["--with-api-key"], ["login", "--with-api-key"]),
+    ],
 )
 def test_the_assistants_codex_signs_in_in_its_own_home(codex, monkeypatch, args, login):
     monkeypatch.setenv("CODEX_STUB_SIGNED_IN", "0")
     assert _launch("--codex", "--login", *args, cwd=ROOT).returncode == 0
     fields, passed = _noted(codex["calls"])
     assert passed == login and fields["CODEX_HOME"] == str(codex["home"])
+
+
+@pytest.mark.parametrize("variable", ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"])
+def test_codex_login_uses_device_auth_over_ssh(codex, monkeypatch, variable):
+    monkeypatch.setenv(variable, "test SSH session")
+    result = _launch("--codex", "--login", cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    _, args = _noted(codex["calls"])
+    assert args == ["login", "--device-auth"]
+    assert "own computer's browser" in result.stderr
+    assert "workspace admin" in result.stderr
+
+
+@pytest.mark.parametrize("display", [None, "DISPLAY", "WAYLAND_DISPLAY"])
+def test_codex_login_uses_device_auth_on_linux_without_a_display(codex, monkeypatch, display):
+    monkeypatch.setenv("OSTYPE", "linux-gnu")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    if display:
+        monkeypatch.setenv(display, ":test")
+    result = _launch("--codex", "--login", cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    _, args = _noted(codex["calls"])
+    assert args == (["login"] if display else ["login", "--device-auth"])
+
+
+@pytest.mark.parametrize("method", ["--browser-auth", "--with-api-key"])
+def test_an_explicit_login_method_wins_over_ssh_detection(codex, monkeypatch, method):
+    monkeypatch.setenv("SSH_CONNECTION", "test SSH session")
+    result = _launch("--codex", "--login", method, cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    _, args = _noted(codex["calls"])
+    assert args == (["login"] if method == "--browser-auth" else ["login", method])
+
+
+def test_failed_device_login_explains_the_tunnel_and_keeps_the_exit_code(codex, monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "test SSH session")
+    monkeypatch.setenv("CODEX_STUB_LOGIN_EXIT", "42")
+    result = _launch("--codex", "--login", cwd=ROOT)
+    assert result.returncode == 42
+    assert "-L 1455:localhost:1455" in result.stderr
+    assert "--login --browser-auth" in result.stderr
+    _, args = _noted(codex["calls"])
+    assert args == ["login", "--device-auth"]  # No automatic retry or switch to API billing.
+
+
+def test_api_key_login_failure_does_not_suggest_a_different_login(codex, monkeypatch):
+    monkeypatch.setenv("CODEX_STUB_LOGIN_EXIT", "42")
+    result = _launch("--codex", "--login", "--with-api-key", cwd=ROOT)
+    assert result.returncode == 42
+    assert "SSH" not in result.stderr and "device" not in result.stderr
+
+
+def test_codex_login_keeps_credentials_private_in_an_existing_home(codex, monkeypatch):
+    home = codex["home"]
+    home.mkdir(mode=0o755)
+    monkeypatch.setenv("CODEX_STUB_WRITE_AUTH", "1")
+    result = _launch("--codex", "--login", "--device-auth", cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    assert home.stat().st_mode & 0o777 == 0o700
+    for name in ("auth.json", "config.toml", "hooks.json", "rules/assistant.rules"):
+        assert (home / name).stat().st_mode & 0o777 == 0o600
+    # Starting a session rewrites settings, and keeps the existing login intact.
+    auth = (home / "auth.json").read_bytes()
+    assert _launch("--codex", cwd=ROOT).returncode == 0
+    assert (home / "auth.json").read_bytes() == auth
+
+
+@pytest.mark.parametrize("browser", [False, True])
+def test_printing_a_login_uses_the_selected_method_without_writing(codex, monkeypatch, browser):
+    monkeypatch.setenv("SSH_CONNECTION", "test SSH session")
+    extra = ["--browser-auth"] if browser else []
+    result = _launch("--codex", "--login", "--print-command", *extra, cwd=ROOT)
+    assert result.returncode == 0, result.stderr
+    assert not codex["calls"].exists() and not codex["home"].exists()
+    assert result.stdout.rstrip().endswith(" login" if browser else " login --device-auth")
 
 
 def test_print_command_for_codex_runs_and_writes_nothing(codex):
