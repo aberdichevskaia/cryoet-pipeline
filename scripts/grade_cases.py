@@ -79,7 +79,8 @@ _BOX = re.compile(r"^- \[ \] (?P<box>.+)$")
 _PART = re.compile(r"^## (?P<n>\d+)\. ")
 _CALL = re.compile(r"^(?P<n>\d+)\. (?P<tool>[\w:.-]+): `", re.MULTILINE)
 _CALL_END = re.compile(r"`(?: → |\n|$)")
-_WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# apply_patch: one file of a Codex patch, as scripts/run_cases.py lists it.
+_WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"}
 _CHECK_KEYS = {
     "box",
     "in",

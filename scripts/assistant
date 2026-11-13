@@ -89,8 +89,24 @@
 #                           after them
 #   -c, -r [ID]             continue the last session, or pick one: Codex's
 #                           `resume --last` and `resume`
+#   --effort LEVEL          how much the model reasons, as model_reasoning_effort;
+#                           config.toml sets high
+#   allow_login_shell = false (config.toml)
+#                           commands get this environment, PATH in its order,
+#                           not the one a login profile would make
 # Codex takes nothing else from the command line but a prompt (one argument),
-# -i <image> and --no-alt-screen. A headless run (-p) is Claude Code's only, for now.
+# -i <image> and --no-alt-screen.
+#
+# A headless run, `scripts/assistant --codex -p "<prompt>"`, is `codex exec`, for
+# scripts/run_cases.py's evaluation. --json prints Codex's events, -r ID resumes
+# that session with a new prompt, and --permission-mode acceptEdits stands in for
+# the person who would approve edits, as in Claude Code: the sandbox becomes
+# workspace-write, where patches, and commands' writes, go through inside the
+# repository and nowhere else. `codex exec` asks nobody: whatever would ask the
+# person is refused. CRYOET_ASSISTANT_HEADLESS=1 tells assistant/guard.py so, and
+# it refuses what assistant/settings.json has Claude Code ask for, and a
+# submission without --dry-run, which the person approves through the sandbox's
+# question in a session.
 #
 # Claude Code: other options pass on to claude, except the ones that would undo
 # the above. --permission-mode acceptEdits passes only with -p, for a headless
@@ -147,6 +163,8 @@ while (($#)); do
     esac
 done
 client=${chosen:-$client}
+# Only a headless Codex run below sets it: whatever this shell had does not carry over.
+unset CRYOET_ASSISTANT_HEADLESS
 case "$client" in
     claude | codex) ;;
     *)
@@ -171,6 +189,8 @@ toml_string() {
 
 accept_edits=0
 headless=0
+json=0
+effort=
 forwarded=()
 resume=()
 login=0
@@ -249,9 +269,33 @@ else
                 shift
                 ;;
             -p | --print)
-                echo "scripts/assistant: a headless run (-p) is Claude Code's only, for now;" \
-                    "start it without --codex" >&2
-                exit 2
+                headless=1
+                shift
+                ;;
+            --json)
+                json=1
+                shift
+                ;;
+            --permission-mode=acceptEdits)
+                accept_edits=1
+                shift
+                ;;
+            --permission-mode)
+                if [[ "${2:-}" != acceptEdits ]]; then
+                    echo "scripts/assistant: --permission-mode ${2:-} would undo what the" \
+                        "assistant is started with (see the header of scripts/assistant)" >&2
+                    exit 2
+                fi
+                accept_edits=1
+                shift 2
+                ;;
+            --effort)
+                effort=${2:?--effort needs a level, such as high}
+                shift 2
+                ;;
+            --effort=*)
+                effort=${1#--effort=}
+                shift
                 ;;
             -*)
                 echo "scripts/assistant: ${1%%=*} is not passed on to Codex (see the header" \
@@ -272,8 +316,21 @@ else
         echo "scripts/assistant: $login_method goes with --login" >&2
         exit 2
     fi
+    if ((!headless && (accept_edits || json))); then
+        echo "scripts/assistant: --permission-mode acceptEdits and --json are for a headless" \
+            "run (-p), where nobody can approve an edit; a session asks the person instead" >&2
+        exit 2
+    fi
+    if ((headless)) && ((${#prompt_given[@]} != 1)); then
+        echo "scripts/assistant: a headless run (-p) needs the prompt, as one argument" >&2
+        exit 2
+    fi
+    if [[ -n "$effort" && ! "$effort" =~ ^[a-z]+$ ]]; then
+        echo "scripts/assistant: --effort takes a level such as medium or high, not '$effort'" >&2
+        exit 2
+    fi
     if ((login)); then
-        if ((${#resume[@]} + ${#forwarded[@]} + ${#prompt_given[@]})); then
+        if ((${#resume[@]} + ${#forwarded[@]} + ${#prompt_given[@]} + headless)); then
             echo "scripts/assistant: --login cannot be combined with a session or prompt" >&2
             exit 2
         fi
@@ -429,15 +486,44 @@ fi
 
 home=${CRYOET_ASSISTANT_CODEX_HOME:-$HOME/.cryoet-assistant/codex}
 prompt+=$'\n\n'"$(cat "$REPO/assistant/codex/instructions.md")"
-options=(
-    --no-daemon
-    --strict-config
-    --dangerously-bypass-hook-trust
-    -C "$REPO"
-    -m "$model"
-    -s read-only
-    -a on-request
-)
+if ((headless)); then
+    # `codex exec` has no daemon and no approvals to set: it asks nobody, so
+    # whatever would ask is refused (Codex 0.167.2: approval_policy "never").
+    for one in ${forwarded[@]+"${forwarded[@]}"}; do
+        if [[ "$one" == --no-alt-screen ]]; then
+            echo "scripts/assistant: --no-alt-screen is for a session, not a headless run (-p)" >&2
+            exit 2
+        fi
+    done
+    before=(exec)
+    options=(
+        --strict-config
+        --dangerously-bypass-hook-trust
+        -C "$REPO"
+        -m "$model"
+    )
+    if ((accept_edits)); then options+=(-s workspace-write); else options+=(-s read-only); fi
+    if ((json)); then options+=(--json); fi
+    # `codex exec [options] resume ID PROMPT`: the options go before resume,
+    # which takes neither -s nor -C itself.
+    after=(${resume[@]+"${resume[@]}"})
+    export CRYOET_ASSISTANT_HEADLESS=1
+else
+    before=(${resume[@]+"${resume[@]}"})
+    options=(
+        --no-daemon
+        --strict-config
+        --dangerously-bypass-hook-trust
+        -C "$REPO"
+        -m "$model"
+        -s read-only
+        -a on-request
+    )
+    after=()
+fi
+if [[ -n "$effort" ]]; then
+    options+=(-c "model_reasoning_effort=$(toml_string "$effort")")
+fi
 
 if ((print_only)); then
     printf '# into %q: assistant/codex/config.toml, hooks.json and assistant.rules,' "$home"
@@ -448,6 +534,7 @@ if ((print_only)); then
     if [[ -n "$snapshot" ]]; then
         printf 'CRYOET_LIBRARY_ROOT=%q\nCRYOET_LIBRARY_SNAPSHOT=%q\n' "$root" "$snapshot"
     fi
+    if ((headless)); then printf 'CRYOET_ASSISTANT_HEADLESS=1\n'; fi
     printf 'cd %q\n' "$REPO"
     printf '%q' "$program"
     if ((login)); then
@@ -456,7 +543,7 @@ if ((print_only)); then
         printf '\n'
         exit 0
     fi
-    if ((${#resume[@]})); then printf ' %q' "${resume[@]}"; fi
+    if ((${#before[@]})); then printf ' %q' "${before[@]}"; fi
     printf ' %q' "${options[@]}"
     if [[ -n "$snapshot" ]]; then
         printf ' -c developer_instructions="$(cat assistant/instructions.md assistant/library.md'
@@ -466,6 +553,7 @@ if ((print_only)); then
         printf ' assistant/codex/instructions.md)"'
     fi
     if ((${#forwarded[@]})); then printf ' %q' "${forwarded[@]}"; fi
+    if ((${#after[@]})); then printf ' %q' "${after[@]}"; fi
     if ((${#prompt_given[@]})); then printf ' %q' "${prompt_given[@]}"; fi
     printf '\n'
     exit 0
@@ -532,6 +620,7 @@ fi
 # Pipeline commands keep the person's usual permissions for project outputs.
 # The credential store remains protected by the private Codex home.
 umask "$session_umask"
-exec "$program" ${resume[@]+"${resume[@]}"} "${options[@]}" \
+exec "$program" ${before[@]+"${before[@]}"} "${options[@]}" \
     -c "developer_instructions=$(toml_string "$prompt")" \
-    ${forwarded[@]+"${forwarded[@]}"} ${prompt_given[@]+"${prompt_given[@]}"}
+    ${forwarded[@]+"${forwarded[@]}"} ${after[@]+"${after[@]}"} \
+    ${prompt_given[@]+"${prompt_given[@]}"}

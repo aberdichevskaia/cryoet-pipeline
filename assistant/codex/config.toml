@@ -18,6 +18,20 @@ approvals_reviewer = "user"
 # What the assistant reads comes from the scripts, the playbook and the library,
 # not from a web search that runs without asking.
 web_search = "disabled"
+# How much the model reasons. gpt-6.1-sol's own default is low, which is far
+# below the assistant in Claude Code (Opus 5.5 at Claude Code's default, medium:
+# `/effort status` in a headless run, 13 November 2026). High is the level whose
+# scores match it: Artificial Analysis index v5.0.1 gives 50 against Opus's 48,
+# Terminal-Bench 4.0 51.5 against 52.5 and Terminal-Bench-Science 46.2 against
+# 43.3, where low gives 35, 30.8 and 11.0. `scripts/assistant --codex --effort`
+# chooses another level for a session.
+model_reasoning_effort = "high"
+# Commands run in the environment the assistant was started in, as in Claude
+# Code. A login shell reads the profile again: on a Mac that put /usr/bin and
+# /opt/homebrew/bin ahead of the PATH the session was given (measured), and on
+# a cluster it can put the system's own programs ahead of the ones a person or
+# an evaluation's stand-ins chose. The model is told so when it asks for one.
+allow_login_shell = false
 # A person cannot update a shared installation from a session.
 check_for_update_on_startup = false
 

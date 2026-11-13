@@ -28,6 +28,7 @@ python3 scripts/run_cases.py --list
 python3 scripts/run_cases.py E11 E12 --runs 3
 python3 scripts/run_cases.py --all --runs 3
 python3 scripts/run_cases.py --all --runs 1 --dry-run
+python3 scripts/run_cases.py --all --runs 3 --codex
 ```
 
 Each run starts the assistant through `scripts/assistant`, headless, with the
@@ -117,6 +118,33 @@ nothing about reasoning.
 
 Each run costs model use on the account the client is signed in to. Three runs of
 every built case are 21 runs.
+
+## The assistant in Codex
+
+`--codex` runs the cases in OpenAI's Codex, through `scripts/assistant --codex -p`,
+signed in to the assistant's own Codex home (`scripts/assistant --codex --login`
+once, or `CRYOET_ASSISTANT_CODEX_HOME` for another one). A follow-up resumes the
+session. The model is gpt-6.1-sol at high effort unless `--model` and `--effort`
+say otherwise; Claude Code runs at medium (`--effort`; why, in
+[../eval_cases.md](../eval_cases.md), "How the cases are run").
+
+What differs from a Claude Code run:
+
+- the sandbox is Codex's workspace-write: patches and commands' writes go
+  through inside the run's copy, and nowhere else. Nothing is asked; Codex
+  refuses what would ask, and the guard refuses what Claude Code would ask the
+  person for (`CRYOET_ASSISTANT_HEADLESS` in `assistant/guard.py`);
+- the transcript is Codex's own record of the session (its rollout file),
+  which leaves out the calls Codex refused, so the guard notes every call it
+  sees in the run's `calls.jsonl` and `actions.md` is made from both. Each
+  shell command is a `Bash` call and each file a patch changes an
+  `apply_patch` call, which `scripts/grade_cases.py` counts as a write;
+- the Slurm stand-ins note their calls in a folder of `TMPDIR`, which Codex's
+  sandbox lets commands write, and the note is copied into the run's folder;
+- a turn that only reconnects is stopped after 10 such events in a row: Codex
+  retries a server it cannot reach for ever. Two runs in a row that could not
+  reach OpenAI, or that found the assistant's Codex signed out, stop the batch;
+- there is no cost (a ChatGPT account) and no turn limit, only `--timeout`.
 
 ## An open-weight model in Claude's place
 

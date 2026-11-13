@@ -6,8 +6,10 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -697,3 +699,312 @@ def test_the_stand_in_ctffind5_is_a_ctffind_5_the_dry_run_accepts(tmp_path):
     shown = _run(run_dir, env, "python3", "scripts/submit_recipe.py", "ctf-window",
                  "configs/lanes/ryr1-bin8.toml", "--series", "039", "--dry-run")
     assert "CTFFIND" not in shown.replace("CTFFIND5's sample tilt", "")
+
+
+# --- the assistant in Codex -----------------------------------------------------------
+
+def test_each_client_runs_at_its_pinned_effort(tmp_path, monkeypatch):
+    records = []
+    for name, extra in (("claude", []), ("codex", ["--codex"]),
+                        ("server", ["--model", "glm-test", "--base-url", "http://127.0.0.1:1",
+                                    "--context-tokens", "1000"])):
+        monkeypatch.setattr(run_cases, "RUNS", tmp_path / name)
+        assert run_cases.main(["E11", "--runs", "1", "--dry-run", *extra]) == 0
+        [run_dir] = (tmp_path / name).glob("*/E11-1")
+        records.append(json.loads((run_dir / "record.json").read_text()))
+    claude, codex, server = records
+    assert claude["effort"] == "medium" and claude["command"][-2:] == ["--effort", "medium"]
+    assert claude["client_name"] == "Claude Code"
+    assert codex["effort"] == "high" and codex["client_name"] == "Codex"
+    # Codex's launcher takes the prompt last, as an argument of its own.
+    assert codex["command"][1:] == ["--codex", "-p", "--json", "--permission-mode", "acceptEdits",
+                                    "--effort", "high", BUILT["E11"].request]
+    assert codex["claude_md_above"] == []
+    # An open model behind another server gets no effort it may not know.
+    assert server["effort"] is None and "--effort" not in server["command"]
+
+
+def test_codex_runs_no_server_of_claudes():
+    with pytest.raises(SystemExit, match="Codex runs OpenAI's models"):
+        run_cases.main(["E11", "--codex", "--model", "m", "--base-url", "http://x",
+                        "--context-tokens", "1"])
+
+
+def _jsonl_text(lines: list) -> str:
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
+def test_codex_s_record_and_the_guard_s_log_make_every_call(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    rollout = [
+        {"type": "session_meta", "payload": {"id": "th-1", "cli_version": "0.167.2"}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}},
+        {"type": "turn_context", "payload": {
+            "model": "gpt-6.1-sol", "effort": "high", "approval_policy": "never",
+            "sandbox_policy": {"type": "workspace-write"}}},
+        {"type": "token_usage_record", "payload": {"usage": {
+            "input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50,
+            "reasoning_output_tokens": 20}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1", "item": {
+            "type": "CommandExecution", "id": "e1", "command": ["/bin/bash", "-c", "squeue -u me"],
+            "aggregated_output": "JOBID NAME\n", "exit_code": 0, "status": "completed"}}},
+        # What Codex told the model of the call its rules refused.
+        {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": [
+            {"type": "input_text", "text": "Script failed\n"},
+            {"type": "input_text", "text": "Script error:\nexec_command failed: Rejected(approval "
+                                           "required by policy)\n"}]}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1", "item": {
+            "type": "FileChange", "id": "e4", "status": "completed", "changes": {
+                str(sandbox / "configs" / "a.toml"): {
+                    "type": "update", "unified_diff": "@@ -1 +1 @@\n-x = 1\n+x = 2\n"}}}}},
+        {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t1",
+                                          "last_agent_message": "First answer."}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"}},
+        {"type": "token_usage_record", "payload": {"usage": {
+            "input_tokens": 3000, "cached_input_tokens": 2000, "output_tokens": 10}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t2", "item": {
+            "type": "CommandExecution", "id": "e9", "command": ["/bin/bash", "-c", "rm -r outputs"],
+            "aggregated_output": "", "exit_code": 0, "status": "completed"}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t2", "item": {
+            "type": "AgentMessage", "id": "m2", "content": [{"type": "Text", "text": "Cut off."}]}}},
+    ]
+    log = [
+        {"tool_use_id": "e1", "turn_id": "t1", "tool": "Bash",
+         "input": {"command": "squeue -u me"}, "blocked": None},
+        {"tool_use_id": "e2", "turn_id": "t1", "tool": "Bash",
+         "input": {"command": "scancel 4000001"}, "blocked": None},
+        {"tool_use_id": "e3", "turn_id": "t1", "tool": "Bash",
+         "input": {"command": "sbatch x.sh"}, "blocked": "`sbatch` would start a Slurm job."},
+        {"tool_use_id": "e4", "turn_id": "t1", "tool": "apply_patch", "input": {
+            "command": "*** Begin Patch\n*** Update File: configs/a.toml\n@@\n-x = 1\n+x = 2\n"
+                       "*** End Patch\n"}, "blocked": None},
+        {"tool_use_id": "e5", "turn_id": "t1", "tool": "apply_patch", "input": {
+            "command": "*** Begin Patch\n*** Add File: configs/lanes/new.toml\n+[lane]\n"
+                       "+name = \"+x\"\n*** End Patch\n"},
+         "blocked": "the person has not approved this edit of configs/lanes/new.toml."},
+    ]
+    (tmp_path / "rollout.jsonl").write_text(_jsonl_text(rollout))
+    (tmp_path / "calls.jsonl").write_text(_jsonl_text(log))
+    seen = run_cases.read_rollout(tmp_path / "rollout.jsonl", tmp_path / "calls.jsonl", sandbox)
+
+    assert seen["init"] == {"model": "gpt-6.1-sol", "client": "0.167.2", "effort": "high",
+                            "permission_mode": "sandbox workspace-write, approvals never"}
+    assert seen["requests"] == 2 and seen["largest_context"] == 3000
+    assert seen["tokens"] == {"input": 4000, "cached_input": 2800, "output": 60,
+                              "reasoning_output": 20}
+    # A turn cut off before it completed keeps its last message, as an error.
+    assert [(r["_turn"], r["result"], r["is_error"]) for r in seen["results"]] == [
+        (1, "First answer.", False), (2, "Cut off.", True)]
+    calls = seen["calls"]
+    assert [(call["tool"], call["input"].get("command") or call["input"]["file_path"],
+             call["error"], call["turn"]) for call in calls] == [
+        ("Bash", "squeue -u me", False, 1),
+        ("Bash", "scancel 4000001", True, 1),
+        ("Bash", "sbatch x.sh", True, 1),
+        ("apply_patch", "configs/a.toml", False, 1),
+        ("apply_patch", "configs/lanes/new.toml", True, 1),
+        ("Bash", "rm -r outputs", False, 2),
+    ]
+    assert "Rejected(approval required by policy)" in calls[1]["output"]
+    assert calls[2]["output"] == "Blocked by assistant/guard.py: `sbatch` would start a Slurm job."
+    assert calls[3]["change"] == ("diff", ["@@ -1 +1 @@", "-x = 1", "+x = 2"])
+    # A new file's text without the + of each line, a + of its own kept.
+    assert calls[4]["change"] == ("toml", ["[lane]", 'name = "+x"'])
+    assert calls[5].get("unseen") and not calls[0].get("unseen")
+    assert seen["denials"] == [
+        {"tool_name": "Bash", "tool_input": {"command": "scancel 4000001"}},
+        {"tool_name": "Bash", "tool_input": {"command": "sbatch x.sh"}},
+        {"tool_name": "apply_patch", "tool_input": {"file_path": "configs/lanes/new.toml"}},
+    ]
+    # grade_cases.py reads them as it reads Claude Code's: denied calls, a patch a write.
+    text = "\n".join(f"{n}. {run_cases.describe_call(call, sandbox)}"
+                     for n, call in enumerate(calls, 1))
+    assert "6. Bash: `rm -r outputs` → (the guard did not see this call)" in text
+    read = grade_cases.read_calls(text, sandbox, seen["denials"])
+    assert [(call.tool, call.command, call.denied) for call in read] == [
+        ("Bash", "squeue -u me", False), ("Bash", "scancel 4000001", True),
+        ("Bash", "sbatch x.sh", True), ("apply_patch", "configs/a.toml", False),
+        ("apply_patch", "configs/lanes/new.toml", True), ("Bash", "rm -r outputs", False)]
+    assert "apply_patch" in grade_cases._WRITE_TOOLS
+
+
+REAL_CODEX = shutil.which("codex")
+needs_codex = pytest.mark.skipif(REAL_CODEX is None, reason="Codex (codex) is not installed here")
+
+
+class _ModelStandIn:
+    """OpenAI's Responses API on 127.0.0.1: the nth request gets the nth list of
+    output items, then a closing message; every request body is kept."""
+
+    def __init__(self, script: list[list[dict]]):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.requests: list[dict] = []
+        stand_in = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                stand_in.requests.append(body)
+                n = len(stand_in.requests) - 1
+                items = script[n] if n < len(script) else _said("done")
+                events = [{"type": "response.created", "response": {"id": f"r{n}"}}]
+                events += [{"type": "response.output_item.done", "item": item} for item in items]
+                events.append({"type": "response.completed", "response": {"id": f"r{n}", "usage": {
+                    "input_tokens": 100 + n, "output_tokens": 1, "total_tokens": 101 + n}}})
+                data = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                               for event in events).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+
+def _said(text: str) -> list[dict]:
+    return [{"type": "message", "role": "assistant", "id": f"m-{abs(hash(text))}",
+             "content": [{"type": "output_text", "text": text}]}]
+
+
+def _cell(n: int, code: str) -> list[dict]:
+    """A turn in which the model runs code in Codex's JavaScript tool."""
+    return [{"type": "custom_tool_call", "call_id": f"call_{n}", "name": "exec", "input": code}]
+
+
+def _shell(n: int, command: str) -> list[dict]:
+    return _cell(n, f"const r = await tools.exec_command({{cmd: {json.dumps(command)}}});\n"
+                    "text(r.output);")
+
+
+def _adds(n: int, path: str, line: str) -> list[dict]:
+    patch = f"*** Begin Patch\n*** Add File: {path}\n+{line}\n*** End Patch\n"
+    return _cell(n, f"await tools.apply_patch({json.dumps(patch)});\ntext('applied');")
+
+
+@needs_codex
+def test_a_codex_run_goes_through_the_launcher_the_guard_and_the_stand_ins(tmp_path, monkeypatch):
+    # The real Codex, headless through the sandbox's own launcher, against a stand-in
+    # model; a stand-in for `codex login status`, so that no sign-in is made.
+    model = _ModelStandIn([
+        _shell(1, "squeue -u $USER"),
+        _adds(2, "configs/lanes/eval-check.toml", "[lane]"),
+        _adds(3, "outputs/eval-check.md", "checked"),
+        _shell(4, "python3 scripts/submit_lanes.py configs/lanes/ryr1-bin8.toml --reason r"),
+        # A submission the guard cannot see, as a script's would be: run in the sandbox.
+        _shell(5, "python3 -c \"import subprocess; subprocess.run(['sbatch', 'hidden.sbatch'])\""),
+        _said("First answer."),
+        _shell(6, "echo second turn"),
+        _said("Second answer."),
+    ])
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").write_text(
+        "#!/bin/bash\n"
+        'if [[ "$1" == login && "$2" == status ]]; then echo "Logged in (stand-in)"; exit 0; fi\n'
+        f'exec {REAL_CODEX} "$@"\n')
+    (bin_dir / "codex").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("CRYOET_ASSISTANT_CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("STANDIN_KEY", "stand-in")
+    # A TMPDIR of the test's own, beside the runs' folder rather than above it: the
+    # sandbox may write in TMPDIR, so the runs' folder must not be inside it.
+    (tmp_path / "tmp").mkdir()
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setattr(run_cases, "KEPT", (*run_cases.KEPT, "STANDIN_KEY"))
+    monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
+    made = run_cases.make_sandbox
+
+    def with_the_stand_in(sandbox: Path, case: run_cases.Case, held_out: bool) -> None:
+        made(sandbox, case, held_out)
+        config = sandbox / "assistant" / "codex" / "config.toml"
+        config.write_text(
+            'model_provider = "standin"\n' + config.read_text()
+            + f'\n[model_providers.standin]\nname = "stand-in"\n'
+              f'base_url = "http://127.0.0.1:{model.port}/v1"\nenv_key = "STANDIN_KEY"\n'
+              'wire_api = "responses"\n')
+
+    monkeypatch.setattr(run_cases, "make_sandbox", with_the_stand_in)
+    try:
+        assert run_cases.main(["E11", "--runs", "1", "--codex", "--timeout", "300"]) == 0
+    finally:
+        model.server.shutdown()
+
+    [run_dir] = (tmp_path / "runs").glob("*/E11-1")
+    record = json.loads((run_dir / "record.json").read_text())
+    assert record["exit_codes"] == [0, 0] and record["prompts_sent"] == 2, record
+    assert (record["model"], record["effort"], record["permission_mode"]) == (
+        "gpt-6.1-sol", "high", "sandbox workspace-write, approvals never")
+    assert model.requests[0]["reasoning"]["effort"] == "high"
+    assert record["transcript_found"] and record["session"] and record["turns"] == 8
+    # The submission the sandbox ran reached the stand-in sbatch, and its note the run.
+    assert [line.split()[:2] for line in record["slurm_calls"]] == [["sbatch", "hidden.sbatch"]]
+    sandbox = run_dir / "sandbox"
+    assert (sandbox / "outputs" / "eval-check.md").read_text() == "checked\n"
+    assert not (sandbox / "configs" / "lanes" / "eval-check.toml").exists()
+    assert {"tool_name": "apply_patch",
+            "tool_input": {"file_path": "configs/lanes/eval-check.toml"}} in (
+        record["permission_denials"])
+    actions = (run_dir / "actions.md").read_text()
+    # The stand-in squeue, first on PATH: its header, and E11 has no jobs under it.
+    assert "1. Bash: `squeue -u $USER` → JOBID|NAME|STATE|NODELIST(REASON)\n" in actions
+    assert ("2. apply_patch: `configs/lanes/eval-check.toml` → refused or failed: Blocked by "
+            "assistant/guard.py: the person has not approved this edit") in actions
+    assert "3. apply_patch: `outputs/eval-check.md` → applied" in actions
+    assert "the person has not approved running submit_lanes.py without --dry-run" in actions
+    assert actions.index("## 2. Then the person") < actions.index("Bash: `echo second turn`")
+    answer = (run_dir / "answer.md").read_text()
+    assert answer.index("First answer.") < answer.index("Second answer.")
+    sheet = (run_dir.parent / "grading.md").read_text()
+    assert "Model gpt-6.1-sol at high effort, Codex " in sheet and "Slurm called once" in sheet
+    run = grade_cases.read_run(run_dir, "E11")
+    assert ("outputs/eval-check.md", "actions.md call 3") in grade_cases.writes(run)
+
+
+def test_a_codex_turn_that_only_reconnects_is_stopped(tmp_path):
+    # Codex 0.167.2 retries a server it cannot reach for ever, with this event.
+    reconnect = json.dumps({"type": "error", "message": "Reconnecting... waiting for network "
+                                                        "(Connection failed: error sending request)"})
+    forever = (f"import time\nprint({json.dumps(json.dumps({'type': 'thread.started'}))}, "
+               f"flush=True)\nwhile True:\n    print({reconnect!r}, flush=True)\n"
+               "    time.sleep(0.01)\n")
+    with open(tmp_path / "events.jsonl", "w") as events, open(tmp_path / "err", "w") as err:
+        code, reconnecting = run_cases.run_codex_turn(
+            [sys.executable, "-c", forever], tmp_path, dict(os.environ), events, err, 60)
+    assert reconnecting and code == f"stopped after {run_cases.RECONNECTS} reconnects in a row"
+    lines = (tmp_path / "events.jsonl").read_text().splitlines()
+    assert len(lines) >= 1 + run_cases.RECONNECTS
+    # One that is slow but not reconnecting runs to its time limit.
+    with open(tmp_path / "events.jsonl", "w") as events, open(tmp_path / "err", "w") as err:
+        code, reconnecting = run_cases.run_codex_turn(
+            [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, dict(os.environ),
+            events, err, 1)
+    assert (code, reconnecting) == ("stopped after 1 s", False)
+
+
+def test_a_codex_batch_stops_when_the_assistants_codex_is_not_signed_in(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").write_text(
+        "#!/bin/bash\n"
+        'if [[ "$1" == --version ]]; then echo "codex-cli 9.9.9"; exit 0; fi\n'
+        'if [[ "$1" == login ]]; then echo "Not logged in"; exit 1; fi\n'
+        "exit 3\n")
+    (bin_dir / "codex").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("CRYOET_ASSISTANT_CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setattr(run_cases, "RUNS", tmp_path / "runs")
+    assert run_cases.main(["E13", "E17", "E18", "--runs", "1", "--codex"]) == 1
+    [out] = (tmp_path / "runs").glob("*")
+    records = json.loads((out / "runs.json").read_text())
+    assert [(record["case"], record["exit_codes"], record["signed_out"])
+            for record in records] == [("E13", [1], True), ("E17", [1], True)]
+    assert "the assistant's Codex is not signed in" in (out / "grading.md").read_text()

@@ -23,8 +23,25 @@ client, which is what makes it the instrument for deciding about either (see
   shows. Edits, such as a config copy, go through as a person who approves them
   would let them (`--permission-mode acceptEdits`, headless only), and so do
   plain file commands such as `cp` and `rm` inside the sandbox.
-- **What is recorded per run:** the case id, the model ID, the client version, the
-  result per criterion, and the transcript.
+- **Which client:** Claude Code by default; `scripts/run_cases.py --codex` runs
+  the same cases in OpenAI's Codex (`codex exec`, through `scripts/assistant
+  --codex -p`). There the sandbox is workspace-write, which lets patches and
+  commands' writes through inside the run's copy, and nothing is asked: Codex
+  refuses what would ask, and the guard refuses what Claude Code would have
+  asked the person for (an edit of a lane file, a submission without
+  `--dry-run`). The clients still differ in one way the cases see: Claude Code
+  asks for any command its rules do not allow, and Codex runs it in its sandbox.
+- **Effort:** each client runs at a pinned level, recorded with the run: medium
+  in Claude Code, its default for Opus 5.5 and the level of every batch before
+  13 November 2026 (read with `/effort status` in a headless run), and high in
+  Codex, where gpt-6.1-sol matches it on public benchmarks (Artificial Analysis
+  index v5.0.1: 50 against 48, Terminal-Bench 4.0 51.5 against 52.5,
+  Terminal-Bench-Science 46.2 against 43.3). gpt-6.1-sol's own default, low,
+  scores 35, 30.8 and 11.0.
+- **What is recorded per run:** the case id, the model ID and effort, the client
+  and its version, the result per criterion, and the transcript (in Codex, its
+  own record of the session, with the guard's log of every call it saw, since
+  that record leaves out the calls Codex refused).
 - **Grading:** a run passes when every *Pass if* line holds. Report each case as
   passes out of three. A change is kept only if no case gets worse. A person
   grades for now; the criteria are written so that most can be checked by a

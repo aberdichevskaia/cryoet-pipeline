@@ -9,6 +9,7 @@ own, and lay out what every run did for a person to grade.
     python3 scripts/run_cases.py E12 --dry-run      build the sandbox, show the command, run nothing
     python3 scripts/run_cases.py --all --model glm-5.3 --base-url http://127.0.0.1:11434 \
         --context-tokens 131072                      an open-weight model in Claude's place
+    python3 scripts/run_cases.py --all --codex       the assistant in OpenAI's Codex
 
 A case is a folder docs/agent/cases/<id>/ (see the README there): case.toml with
 the request and the grading lines, tree/ with the files its evidence consists
@@ -55,6 +56,30 @@ client compacts within it, so that the server never has to cut a conversation
 itself: Ollama drops the oldest messages that do not fit, and says so only in a
 debug log.
 
+--effort is how much the model reasons, passed to the launcher: by default
+medium in Claude Code, the level the earlier batches ran at (Claude Code's own
+default for Opus 5.5, read with `/effort status` in a headless run on 13 November
+2026), and high in Codex, where gpt-6.1-sol's scores match it
+(assistant/codex/config.toml). A --base-url run passes none unless given.
+
+--codex runs the assistant in OpenAI's Codex, signed in to the assistant's own
+Codex home (scripts/assistant --codex --login), through `scripts/assistant
+--codex -p`: `codex exec`, with the sandbox workspace-write, where patches and
+commands' writes go through inside the run's copy, as approved edits do in
+Claude Code, and nothing is asked: Codex refuses what would ask, and
+assistant/guard.py refuses what assistant/settings.json has Claude Code ask for,
+and a submission without --dry-run. The two clients still differ in how they
+gate commands: Claude Code asks for any command its rules do not allow, Codex
+runs it in its sandbox. The run's transcript is Codex's own record of the
+session (its rollout file), which leaves out the calls Codex refused; the guard
+notes every call it sees in calls.jsonl, and actions.md is made from both, each
+shell command and each file a patch changes as a call of its own ("Bash",
+"apply_patch"), as grade_cases.py reads them. The Slurm stand-ins note their
+calls in a folder of TMPDIR, which Codex's sandbox lets commands write, and the
+log is copied into the run's folder. Codex retries a server it cannot reach for
+ever; a turn that only reconnects is stopped. There is no cost (a ChatGPT
+account) and no turn limit.
+
 Disposable, like the rest of scripts/.
 """
 
@@ -68,8 +93,11 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import tomllib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -85,7 +113,16 @@ UNREACHABLE = ("couldn't reach Anthropic", "Can't reach the API server")
 # What a run inherits from this shell: enough for the client to find its login
 # and the tools, and nothing of a Claude Code session this may be run from.
 KEPT = ("HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM",
-        "TMPDIR")
+        "TMPDIR", "CRYOET_ASSISTANT_CODEX_HOME")
+# The effort a run asks for unless --effort says (see above).
+EFFORT = {"claude": "medium", "codex": "high"}
+# Codex 0.167.2 retries a server it cannot reach for ever, with this error event
+# about every few seconds (measured against a closed port); after this many in a
+# row the turn is stopped.
+RECONNECTING = "waiting for network"
+RECONNECTS = 10
+# What scripts/assistant says when the assistant's Codex home has no sign-in.
+SIGNED_OUT = "cannot confirm the assistant's Codex sign-in"
 _CASE_HEADING = re.compile(r"^### (?P<id>E\d+)\. (?P<title>.+)$", re.MULTILINE)
 
 # Stand-ins, first on a run's PATH. Each notes its call; squeue lists the case's
@@ -466,14 +503,281 @@ def make_stubs(run_dir: Path, case: Case) -> None:
 def command_for(sandbox: Path, prompt: str, args: argparse.Namespace,
                 resume: str | None = None) -> list[str]:
     """The launcher, headless, with this prompt; a follow-up resumes the session."""
-    command = [str(sandbox / "scripts" / "assistant"), "-p", prompt]
+    launcher = str(sandbox / "scripts" / "assistant")
+    if args.codex:
+        # The prompt last: for Codex the launcher takes it as an argument of its own.
+        command = [launcher, "--codex", "-p", "--json", "--permission-mode", "acceptEdits"]
+        if args.effort:
+            command += ["--effort", args.effort]
+        if args.model:
+            command += ["--model", args.model]
+        if resume:
+            command += ["--resume", resume]
+        return command + [prompt]
+    command = [launcher, "-p", prompt]
     if resume:
         command += ["--resume", resume]
     command += ["--output-format", "stream-json", "--verbose",
                 "--permission-mode", "acceptEdits", "--max-turns", str(args.max_turns)]
+    if args.effort:
+        command += ["--effort", args.effort]
     if args.model:
         command += ["--model", args.model]
     return command
+
+
+def codex_home() -> Path:
+    """The assistant's Codex home, as scripts/assistant chooses it."""
+    named = os.environ.get("CRYOET_ASSISTANT_CODEX_HOME")
+    return Path(named) if named else Path.home() / ".cryoet-assistant" / "codex"
+
+
+def run_codex_turn(command: list[str], sandbox: Path, env: dict[str, str], events: Any,
+                   stderr: Any, timeout: int) -> tuple[int | str, bool]:
+    """One headless Codex turn, its events added to `events` as they come: its exit
+    code, or why it was stopped, and whether it was stopped for reconnecting. The
+    process group goes with it: Codex starts helpers of its own."""
+    process = subprocess.Popen(command, cwd=sandbox, env=env, stdout=subprocess.PIPE,
+                               stderr=stderr, stdin=subprocess.DEVNULL, text=True,
+                               start_new_session=True)
+    in_a_row = 0
+    cut_off = threading.Event()
+
+    def stop() -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def read() -> None:
+        nonlocal in_a_row
+        assert process.stdout is not None
+        for line in process.stdout:
+            events.write(line)
+            events.flush()
+            in_a_row = in_a_row + 1 if RECONNECTING in line else 0
+            if in_a_row >= RECONNECTS and not cut_off.is_set():
+                cut_off.set()
+                stop()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        code: int | str = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop()
+        process.wait()
+        code = f"stopped after {timeout} s"
+    reader.join(timeout=30)
+    if cut_off.is_set():
+        code = f"stopped after {RECONNECTS} reconnects in a row"
+    return code, cut_off.is_set()
+
+
+def _thread_id(events: Path) -> str | None:
+    """The session the last turn ran in, from its thread.started event."""
+    found = None
+    for line in events.read_text(errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "thread.started":
+            found = event.get("thread_id") or found
+    return found
+
+
+def _jsonl(path: Path) -> list[Any]:
+    found = []
+    if path.is_file():
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                found.append(json.loads(line))
+            except ValueError:
+                continue
+    return found
+
+
+_PATCH_SECTION = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+?)[ \t\r]*$", re.MULTILINE)
+
+
+def _patch_files(patch: Any) -> list[tuple[str, str, list[str]]]:
+    """Each file of a Codex patch, as written: (path, kind, its lines)."""
+    if not isinstance(patch, str):
+        return []
+    sections = list(_PATCH_SECTION.finditer(patch))
+    files = []
+    for index, match in enumerate(sections):
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(patch)
+        body = [line for line in patch[match.end():end].splitlines()
+                if line and not line.startswith("*** End Patch")]
+        files.append((match[2], match[1].lower(), body))
+    return files
+
+
+def _change_lines(path: str, kind: str, lines: list[str]) -> tuple[str, list[str]]:
+    """What a patch does to one file, as describe_call shows it: a new file's text
+    (in its language's fence), a diff, or that the file goes."""
+    if kind == "delete":
+        return "", ["(the file is deleted)"]
+    if kind == "add":
+        if len(lines) > _WRITTEN_LINES:
+            lines = lines[:_WRITTEN_LINES] + [f"… {len(lines) - _WRITTEN_LINES} lines more"]
+        return Path(path).suffix.lstrip("."), lines
+    return "diff", lines
+
+
+def read_rollout(path: Path, call_log: Path, sandbox: Path) -> dict[str, Any]:
+    """What a Codex run did, in read_transcript's shape: its model and client, each
+    turn's answer, and every call with its outcome and its turn. Codex's record
+    (its rollout file) holds the commands that ran and the patches applied, by
+    the id the guard's call log has them under; a call in the log with nothing
+    in the record was refused, by the guard (the log says why) or by Codex (its
+    rules, its sandbox or an approval nobody gave: the code cell's error says)."""
+    meta: dict[str, Any] = {}
+    context: dict[str, Any] = {}
+    turn_of: dict[str, int] = {}
+    answers: dict[int, str] = {}
+    last_message: dict[int, str] = {}
+    items: dict[str, tuple[dict[str, Any], int]] = {}
+    order: list[str] = []
+    errors: list[str] = []
+    requests = 0
+    largest = 0
+    tokens = {"input": 0, "cached_input": 0, "output": 0, "reasoning_output": 0}
+    for line in _jsonl(path):
+        if not isinstance(line, dict):
+            continue
+        kind, payload = line.get("type"), line.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        if kind == "session_meta" and not meta:
+            meta = payload
+        elif kind == "turn_context" and not context:
+            context = payload
+        elif kind == "token_usage_record":
+            usage = payload.get("usage") or {}
+            requests += 1
+            largest = max(largest, usage.get("input_tokens") or 0)
+            for key in tokens:
+                tokens[key] += usage.get(f"{key}_tokens") or 0
+        elif kind == "response_item" and payload.get("type", "").endswith("_output"):
+            output = payload.get("output")
+            text = output if isinstance(output, str) else " ".join(
+                str(part.get("text", "")) for part in output or [] if isinstance(part, dict))
+            if "Script error:" in text and "PreToolUse hook" not in text:
+                errors.append(text.split("Script error:", 1)[1].strip().splitlines()[0])
+        elif kind == "event_msg":
+            event = payload.get("type")
+            turn = turn_of.get(payload.get("turn_id"), max(turn_of.values(), default=1))
+            if event == "task_started":
+                turn_of[payload.get("turn_id")] = len(turn_of) + 1
+            elif event == "task_complete":
+                answers[turn] = payload.get("last_agent_message") or ""
+            elif event == "item_completed" and isinstance(payload.get("item"), dict):
+                item = payload["item"]
+                if item.get("type") == "AgentMessage":
+                    last_message[turn] = " ".join(
+                        str(part.get("text", "")) for part in item.get("content") or []
+                        if isinstance(part, dict))
+                elif item.get("id") and item.get("type") not in ("UserMessage", "Reasoning"):
+                    items[item["id"]] = (item, turn)
+                    order.append(item["id"])
+
+    def shown(where: str) -> str:
+        found = Path(where)
+        return str(found.relative_to(sandbox)) if found.is_relative_to(sandbox) else where
+
+    def applied(item: dict[str, Any], turn: int) -> list[dict[str, Any]]:
+        calls = []
+        for where, change in (item.get("changes") or {}).items():
+            change = change if isinstance(change, dict) else {}
+            kind = str(change.get("type") or "update")
+            body = (str(change.get("content") or "").splitlines() if kind == "add"
+                    else str(change.get("unified_diff") or "").splitlines())
+            failed = item.get("status") != "completed"
+            calls.append({"tool": "apply_patch", "input": {"file_path": shown(where)},
+                          "output": (str(item.get("stderr") or "").strip() or "not applied")
+                          if failed else "applied",
+                          "error": failed, "turn": turn,
+                          "change": _change_lines(where, kind, body)})
+        return calls
+
+    def ran(item: dict[str, Any], turn: int, command: str | None = None) -> dict[str, Any]:
+        words = item.get("command")
+        if command is None:
+            command = words[-1] if isinstance(words, list) and words else str(words or "")
+        exit_code = item.get("exit_code")
+        return {"tool": "Bash", "input": {"command": command},
+                "output": str(item.get("aggregated_output") or ""),
+                "error": item.get("status") != "completed" or exit_code not in (0, None),
+                "turn": turn}
+
+    calls: list[dict[str, Any]] = []
+    denials: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in _jsonl(call_log):
+        if not isinstance(entry, dict):
+            continue
+        given = entry.get("input") if isinstance(entry.get("input"), dict) else {}
+        found = items.get(entry.get("tool_use_id") or "")
+        turn = turn_of.get(entry.get("turn_id"), found[1] if found else 1)
+        if found:
+            seen.add(found[0]["id"])
+            why = ""
+        else:  # refused: the guard's message, or the next error a code cell reported
+            why = (f"Blocked by assistant/guard.py: {entry['blocked']}" if entry.get("blocked")
+                   else (errors.pop(0) if errors else "Codex did not run it"))
+        if entry.get("tool") == "Bash":
+            command = given.get("command")
+            command = (" ".join(str(word) for word in command) if isinstance(command, list)
+                       else str(command or ""))
+            if found and found[0].get("type") == "FileChange":
+                calls += applied(*found)  # `apply_patch <<EOF` from the shell
+            elif found:
+                calls.append(ran(found[0], turn, command))
+            else:
+                calls.append({"tool": "Bash", "input": {"command": command}, "output": why,
+                              "error": True, "turn": turn})
+                denials.append({"tool_name": "Bash", "tool_input": {"command": command}})
+        elif entry.get("tool") == "apply_patch":
+            if found:
+                calls += applied(*found)
+                continue
+            for where, kind, body in _patch_files(given.get("command")):
+                if kind == "add":  # a new file's lines, each written with a +
+                    body = [line[1:] if line.startswith("+") else line for line in body]
+                calls.append({"tool": "apply_patch", "input": {"file_path": where},
+                              "output": why, "error": True, "turn": turn,
+                              "change": _change_lines(where, kind, body)})
+                denials.append({"tool_name": "apply_patch", "tool_input": {"file_path": where}})
+    # What ran without the guard seeing it, which should not happen, or another tool.
+    for key in order:
+        if key in seen:
+            continue
+        item, turn = items[key]
+        if item.get("type") == "CommandExecution":
+            calls.append({**ran(item, turn), "unseen": True})
+        elif item.get("type") == "FileChange":
+            calls += [{**call, "unseen": True} for call in applied(item, turn)]
+        else:
+            calls.append({"tool": str(item.get("type")), "input": {
+                key: value for key, value in item.items() if key not in ("type", "id")},
+                "output": "", "turn": turn})
+    turns = sorted(set(turn_of.values()) | set(answers) | set(last_message))
+    results = [{"_turn": turn, "result": answers.get(turn, last_message.get(turn)),
+                "session_id": meta.get("id"), "is_error": turn not in answers}
+               for turn in turns]
+    sandbox_policy = context.get("sandbox_policy") or {}
+    return {
+        "init": {"model": context.get("model"), "client": meta.get("cli_version"),
+                 "effort": context.get("effort"),
+                 "permission_mode": (f"sandbox {sandbox_policy.get('type', '?')}, approvals "
+                                     f"{context.get('approval_policy', '?')}") if context else None},
+        "result": results[-1] if results else {}, "results": results, "calls": calls,
+        "denials": denials, "requests": requests, "largest_context": largest or None,
+        "tokens": tokens,
+    }
 
 
 def read_transcript(path: Path) -> dict[str, Any]:
@@ -547,6 +851,8 @@ def _change(call: dict[str, Any]) -> tuple[str, list[str]]:
     language, the lines). A person sees this when asked to approve, and reads it in
     the session afterwards, but the tool's reply only says the file was updated."""
     given = call["input"]
+    if "change" in call:  # a Codex patch's file, read by read_rollout
+        return call["change"]
     if call["tool"] == "Write" and "content" in given:
         lines = str(given["content"]).splitlines()
         if len(lines) > _WRITTEN_LINES:
@@ -578,6 +884,8 @@ def describe_call(call: dict[str, Any], sandbox: Path | None = None) -> str:
                      or given.get("skill") or json.dumps(given)[:200]))
     head = f"{call['tool']}: `{what}`"
     lines = [short(line)[:200] for line in (call.get("output") or "").strip().splitlines()]
+    if call.get("unseen"):  # after the command's closing `, where grade_cases.py ends it
+        lines.insert(0, "(the guard did not see this call)")
     language, change = _change(call)
     written = []
     if change:
@@ -644,12 +952,13 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         "host": platform.node(),
         # Another server than Anthropic's and its window, or None; never its token.
         "base_url": args.base_url, "context_tokens": args.context_tokens,
+        "client_name": "Codex" if args.codex else "Claude Code", "effort": args.effort,
         "user_settings_sha256": _sha256(Path.home() / ".claude" / "settings.json"),
         "user_claude_md": (Path.home() / ".claude" / "CLAUDE.md").is_file(),
-        # The client reads every CLAUDE.md from the run's folder up, these included.
-        "claude_md_above": [str(folder / name) for folder in sandbox.parents
-                            for name in ("CLAUDE.md", "CLAUDE.local.md")
-                            if (folder / name).is_file()],
+        # Claude Code reads every CLAUDE.md from the run's folder up, these included.
+        "claude_md_above": [] if args.codex else [
+            str(folder / name) for folder in sandbox.parents
+            for name in ("CLAUDE.md", "CLAUDE.local.md") if (folder / name).is_file()],
     }
     if args.dry_run:
         print(f"# {_shown(run_dir)}\n  cd {sandbox}")
@@ -659,6 +968,8 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         record["dry_run"] = True
         (run_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
         return record
+    if args.codex:
+        return run_codex(case, number, prompts, run_dir, sandbox, env, args, record)
 
     # The client's projects, with their memories, before the run: the run's own is new.
     projects = Path.home() / ".claude" / "projects"
@@ -708,6 +1019,78 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
                         or any(text in str(result.get("result") or "") for result in results)
                         for text in UNREACHABLE),
     )
+    return write_run(case, number, prompts, run_dir, sandbox, seen, exit_codes, slurm, record)
+
+
+def run_codex(case: Case, number: int, prompts: list[str], run_dir: Path, sandbox: Path,
+              env: dict[str, str], args: argparse.Namespace,
+              record: dict[str, Any]) -> dict[str, Any]:
+    """The run in Codex: each prompt a headless turn, a follow-up resuming the
+    session; then Codex's record of it, read with the guard's call log."""
+    home = codex_home()
+    # Codex's sandbox lets commands write in the run's copy and in TMPDIR, not in
+    # the run's folder, where the Slurm stand-ins would note a submission.
+    slurm_dir = Path(tempfile.mkdtemp(prefix="cryoet-eval-slurm-"))
+    env["SLURM_CALLS"] = str(slurm_dir / "slurm_calls.log")
+    shutil.copy(run_dir / "slurm_calls.log", env["SLURM_CALLS"])
+    env["CRYOET_ASSISTANT_CALL_LOG"] = str(run_dir / "calls.jsonl")
+    (run_dir / "calls.jsonl").touch()
+    started = datetime.now(UTC)
+    events = run_dir / "events.jsonl"
+    exit_codes: list[int | str] = []
+    reconnecting = False
+    session = None
+    try:
+        with open(events, "w") as stdout, open(run_dir / "stderr.log", "w") as stderr:
+            for index, prompt in enumerate(prompts):
+                if index and (session is None or exit_codes[-1] != 0):
+                    break
+                code, reconnecting = run_codex_turn(
+                    command_for(sandbox, prompt, args, resume=session), sandbox, env,
+                    stdout, stderr, args.timeout)
+                exit_codes.append(code)
+                session = _thread_id(events)
+    finally:
+        shutil.copy(env["SLURM_CALLS"], run_dir / "slurm_calls.log")
+        shutil.rmtree(slurm_dir, ignore_errors=True)
+    rollouts = sorted(home.glob(f"sessions/**/rollout-*-{session}.jsonl")) if session else []
+    transcript = run_dir / "transcript.jsonl"
+    if rollouts:
+        shutil.copy(rollouts[-1], transcript)
+    seen = read_rollout(transcript, run_dir / "calls.jsonl", sandbox)
+    init = seen["init"]
+    stderr_text = (run_dir / "stderr.log").read_text(errors="replace")
+    slurm = (run_dir / "slurm_calls.log").read_text().splitlines()
+    record.update(
+        started=started.isoformat(timespec="seconds"),
+        seconds=round((datetime.now(UTC) - started).total_seconds()),
+        exit_code=next((code for code in exit_codes if code != 0), 0), exit_codes=exit_codes,
+        prompts_sent=len(exit_codes), model=init.get("model"), client=init.get("client"),
+        client_name="Codex", effort=init.get("effort") or args.effort,
+        permission_mode=init.get("permission_mode"), session=session,
+        codex_home=str(home), transcript_found=bool(rollouts),
+        # Codex reads an AGENTS.md of its home, and the project's from the git root
+        # (the copy's) to the folder it runs in.
+        agents_md=[str(path) for path in (home / "AGENTS.md", home / "AGENTS.override.md",
+                                          sandbox / "AGENTS.md", sandbox / "AGENTS.override.md")
+                   if path.is_file()],
+        plugins=[], memory=None, memory_from_before=False,
+        cost_usd=None, turn_costs_usd=[], tokens=seen["tokens"],
+        turns=seen["requests"] or None, largest_context=seen["largest_context"],
+        is_error=any(result.get("is_error") for result in seen["results"])
+        if seen["results"] else None,
+        permission_denials=seen["denials"], slurm_calls=slurm, calls=len(seen["calls"]),
+        untrusted=False, max_turns_reached=False, unreachable=reconnecting,
+        signed_out=SIGNED_OUT in stderr_text,
+    )
+    return write_run(case, number, prompts, run_dir, sandbox, seen, exit_codes, slurm, record)
+
+
+def write_run(case: Case, number: int, prompts: list[str], run_dir: Path, sandbox: Path,
+              seen: dict[str, Any], exit_codes: list[int | str], slurm: list[str],
+              record: dict[str, Any]) -> dict[str, Any]:
+    """The run's record, its answer and what it did, for a person to grade."""
+    results = seen["results"]
     (run_dir / "record.json").write_text(json.dumps(record, indent=2) + "\n")
     answered = {result["_turn"]: result.get("result") for result in results}
     numbered = list(enumerate(seen["calls"], 1))
@@ -741,9 +1124,11 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
     first = next((record for record in records if record.get("model")), {})
     served = (f" served at {first['base_url']} with a {first['context_tokens']:,}-token window"
               if first.get("base_url") else "")
+    effort = f" at {first['effort']} effort" if first.get("effort") else ""
     lines = [
         f"# Evaluation run {out.name}", "",
-        f"Model {first.get('model', '?')}{served}, Claude Code {first.get('client', '?')}, "
+        f"Model {first.get('model', '?')}{effort}{served}, "
+        f"{first.get('client_name', 'Claude Code')} {first.get('client', '?')}, "
         f"commit {(code['commit'] or 'unknown')[:12]}"
         + (f" with {len(code['modified'])} tracked files changed" if code["modified"] else "")
         + f", on {', '.join(sorted({str(record.get('host')) for record in records})) or '?'}.",
@@ -777,7 +1162,17 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
             if record.get("unreachable"):
                 flags.append("the client could not reach its server; see stderr.log"
                              if record.get("base_url")
+                             else "Codex could not reach OpenAI; run it again"
+                             if record.get("client_name") == "Codex"
                              else "the client could not reach Anthropic; run it again")
+            if record.get("signed_out"):
+                flags.append("the assistant's Codex is not signed in "
+                             "(scripts/assistant --codex --login); run it again")
+            if record.get("agents_md"):
+                flags.append("Codex read an AGENTS.md; see record.json")
+            if (record.get("client_name") == "Codex" and not record.get("dry_run")
+                    and not record.get("transcript_found")):
+                flags.append("Codex's record of the session was not found; see record.json")
             window = record.get("context_tokens")
             if window and (record.get("largest_context") or 0) >= 0.95 * window:
                 flags.append(f"its context reached {record['largest_context']:,} of the server's "
@@ -816,8 +1211,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="another server that speaks the Anthropic API, such as Ollama's")
     parser.add_argument("--context-tokens", type=int, default=None,
                         help="the window the --base-url server was started with")
-    parser.add_argument("--max-turns", type=int, default=40)
-    parser.add_argument("--timeout", type=int, default=1200, help="seconds a run may take")
+    parser.add_argument("--codex", action="store_true",
+                        help="run the assistant in OpenAI's Codex instead of Claude Code")
+    parser.add_argument("--effort", default=None,
+                        help="how much the model reasons (medium in Claude Code, high in "
+                             "Codex; none passed with --base-url)")
+    parser.add_argument("--max-turns", type=int, default=40, help="Claude Code's only")
+    parser.add_argument("--timeout", type=int, default=1200,
+                        help="seconds each message's turn may take")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the sandboxes and show the commands; run nothing")
     args = parser.parse_args(argv)
@@ -826,6 +1227,10 @@ def main(argv: list[str] | None = None) -> int:
                          "--context-tokens, the window it was started with")
     if args.context_tokens and not args.base_url:
         raise SystemExit("--context-tokens is the window of a --base-url server")
+    if args.codex and args.base_url:
+        raise SystemExit("--base-url is for Claude Code; Codex runs OpenAI's models")
+    if args.effort is None and not args.base_url:
+        args.effort = EFFORT["codex" if args.codex else "claude"]
 
     built = built_cases()
     if args.list:
@@ -837,8 +1242,9 @@ def main(argv: list[str] | None = None) -> int:
     if unknown or not wanted:
         raise SystemExit(f"no case folder for {', '.join(unknown)}" if unknown
                          else "name the cases, or give --all or --list")
-    if shutil.which("claude") is None and not args.dry_run:
-        raise SystemExit("Claude Code (claude) is not on PATH")
+    program, name = ("codex", "OpenAI's Codex") if args.codex else ("claude", "Claude Code")
+    if shutil.which(program) is None and not args.dry_run:
+        raise SystemExit(f"{name} ({program}) is not on PATH")
 
     out = RUNS / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
@@ -857,11 +1263,18 @@ def main(argv: list[str] | None = None) -> int:
         sheet.write_text(grading_sheet([built[case_id] for case_id in wanted], records, out, code))
         # Offline, every run after fails the same way: on 3 November 2026 the Mac
         # slept and 21 runs did, over three hours.
+        if len(records) >= 2 and all(record.get("signed_out") for record in records[-2:]):
+            print(f"stopped: the assistant's Codex is not signed in, and "
+                  f"{len(plan) - len(records)} runs were not made; sign in with "
+                  "scripts/assistant --codex --login and run them again", file=sys.stderr)
+            print(f"{len(records)} runs; see {_shown(sheet)}")
+            return 1
         if len(records) >= 2 and all(record.get("unreachable") for record in records[-2:]):
             where, advice = ((f"the server at {args.base_url}", "see its log")
                              if args.base_url else
-                             ("Anthropic", "run them again once this machine is online and "
-                                           "awake (caffeinate -i on a Mac)"))
+                             ("OpenAI" if args.codex else "Anthropic",
+                              "run them again once this machine is online and "
+                              "awake (caffeinate -i on a Mac)"))
             print(f"stopped: two runs in a row could not reach {where}, and "
                   f"{len(plan) - len(records)} were not made; {advice}", file=sys.stderr)
             print(f"{len(records)} runs; see {_shown(sheet)}")

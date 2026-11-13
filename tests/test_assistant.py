@@ -651,6 +651,88 @@ def test_the_guard_leaves_claude_codes_edits_to_its_rules():
     assert _guard(tool="Edit", tool_input={"file_path": "src/x.py"}, cwd=ROOT).returncode == 0
 
 
+HEADLESS = {"CRYOET_ASSISTANT_HEADLESS": "1"}
+
+
+def _asked_edits() -> list[str]:
+    ask = json.loads((ASSISTANT / "settings.json").read_text())["permissions"]["ask"]
+    return [rule[5:-1] for rule in ask if rule.startswith("Edit(")]
+
+
+def test_a_headless_codex_patch_of_a_file_settings_asks_for_is_refused():
+    # Claude Code refuses an ask in a headless run; Codex's workspace-write would not.
+    assert _asked_edits() == ["configs/lanes/**"]
+    patch = _patch("*** Update File: configs/lanes/ryr1-bin8.toml", "@@", "-a = 1", "+a = 2")
+    for result in (
+        _guard(tool="apply_patch", tool_input={"command": patch}, cwd=ROOT, env=HEADLESS),
+        _guard(_shell_patch(patch), cwd=ROOT, env=HEADLESS),
+    ):
+        assert result.returncode == 2, result.stderr
+        assert "the person has not approved this edit of configs/lanes/ryr1-bin8.toml" in (
+            result.stderr
+        ) and "asks before Edit(configs/lanes/**)" in result.stderr
+    # Elsewhere a headless patch goes through, and in a session every patch asks.
+    other = _patch("*** Add File: outputs/ryr1/ryr1-161.toml", "+[lane]")
+    assert _guard(tool="apply_patch", tool_input={"command": other}, cwd=ROOT,
+                  env=HEADLESS).returncode == 0
+    assert _guard(tool="apply_patch", tool_input={"command": patch}, cwd=ROOT).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 scripts/submit_lanes.py configs/lanes/ryr1-bin8.toml --reason 'asked'",
+        "python3 -u scripts/submit_lanes.py configs/lanes/ryr1-bin8.toml",
+        "cd /x && python scripts/submit_recipe.py mra configs/lanes/a.toml --reason r",
+        "env OVERWRITE=1 python3 scripts/export_relion.py --run r --class 1",
+        "bash -c 'python3 scripts/submit_lanes.py a.toml'",
+        "python3 scripts/submit_lanes.py --dry a.toml",
+        "python3 scripts/submit_lanes.py 'a.toml",  # a line the guard cannot read
+    ],
+)
+def test_a_headless_codex_submission_without_a_dry_run_is_refused(command):
+    result = _guard(command, cwd=ROOT, env=HEADLESS)
+    assert result.returncode == 2 and "the person has not approved running" in result.stderr
+    # In a session the sandbox makes the person approve it.
+    assert _guard(command, cwd=ROOT).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 scripts/submit_lanes.py --dry-run configs/lanes/ryr1-bin8.toml",
+        "python3 scripts/submit_lanes.py configs/lanes/ryr1-bin8.toml --dry-run",
+        "python3 scripts/submit_recipe.py --list",
+        "python3 scripts/export_relion.py --dry-run --run r --class 1",
+        "python3 scripts/show_project.py ryr1",
+        "grep -n submit_lanes.py docs/agent/playbook/cluster.md",
+    ],
+)
+def test_a_headless_codex_dry_run_or_read_goes_through(command):
+    assert _guard(command, cwd=ROOT, env=HEADLESS).returncode == 0
+
+
+def test_the_guard_notes_every_call_it_sees_when_asked(tmp_path):
+    log = tmp_path / "calls.jsonl"
+    env = {"CRYOET_ASSISTANT_CALL_LOG": str(log)}
+    call = {"tool_use_id": "exec-1", "turn_id": "turn-1"}
+    for command, code in (("squeue -u me", 0), ("sbatch x.sh", 2)):
+        result = subprocess.run(
+            [sys.executable, str(ASSISTANT / "guard.py")],
+            input=json.dumps({**call, "tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True, text=True, env={**os.environ, **env},
+        )
+        assert result.returncode == code
+    first, second = (json.loads(line) for line in log.read_text().splitlines())
+    assert first == {"tool_use_id": "exec-1", "turn_id": "turn-1", "tool": "Bash",
+                     "input": {"command": "squeue -u me"}, "blocked": None}
+    assert second["blocked"].startswith("`sbatch` would start a Slurm job")
+    # A log that cannot be written changes nothing about the call.
+    env["CRYOET_ASSISTANT_CALL_LOG"] = str(tmp_path / "no" / "such" / "folder" / "calls.jsonl")
+    assert _guard("sbatch x.sh", env=env).returncode == 2
+    assert _guard("squeue -u me", env=env).returncode == 0
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -834,6 +916,7 @@ fi
     echo "CRYOET_ASSISTANT=${CRYOET_ASSISTANT:-}"
     echo "CRYOET_ASSISTANT_MODEL=${CRYOET_ASSISTANT_MODEL:-}"
     echo "CRYOET_ASSISTANT_REPO=${CRYOET_ASSISTANT_REPO:-}"
+    echo "CRYOET_ASSISTANT_HEADLESS=${CRYOET_ASSISTANT_HEADLESS:-}"
     echo "CRYOET_LIBRARY_ROOT=${CRYOET_LIBRARY_ROOT:-}"
     echo "CRYOET_LIBRARY_SNAPSHOT=${CRYOET_LIBRARY_SNAPSHOT:-}"
     for arg in "$@"; do printf 'arg=%s\\0' "$arg"; done
@@ -899,6 +982,7 @@ def test_the_launcher_starts_codex_with_the_assistants_setup(codex, tmp_path):
         "CRYOET_ASSISTANT": "cryoet-assistant; codex 9.9.9",
         "CRYOET_ASSISTANT_MODEL": "gpt-6.1-sol",
         "CRYOET_ASSISTANT_REPO": str(ROOT),
+        "CRYOET_ASSISTANT_HEADLESS": "",
         "CRYOET_LIBRARY_ROOT": "",
         "CRYOET_LIBRARY_SNAPSHOT": "",
     }
@@ -947,6 +1031,10 @@ def test_the_codex_settings_hold_the_gates():
     assert config["approval_policy"] == "on-request"
     # The person approves, not a reviewing model.
     assert config["approvals_reviewer"] == "user"
+    # The level that matches the assistant in Claude Code, not the model's own low.
+    assert config["model_reasoning_effort"] == "high"
+    # Commands get the PATH the session was started with, stand-ins first.
+    assert config["allow_login_shell"] is False
     assert config["web_search"] == "disabled"
     assert config["cli_auth_credentials_store"] == "file"
     assert config["features"] == {
@@ -1007,7 +1095,15 @@ def test_the_client_comes_from_the_variable_and_an_option_wins(codex, monkeypatc
         ["--codex", "-C", "/tmp"],
         ["--codex", "--config", "approval_policy='never'"],
         ["--codex", "--enable", "apps"],
-        ["--codex", "-p", "hello"],
+        ["--codex", "--json", "hello"],
+        ["--codex", "--permission-mode", "acceptEdits", "hello"],
+        ["--codex", "-p"],
+        ["--codex", "-p", "one", "two"],
+        ["--codex", "-p", "--no-alt-screen", "hello"],
+        ["--codex", "-p", "--permission-mode", "bypassPermissions", "hello"],
+        ["--codex", "-p", "--permission-mode=default", "hello"],
+        ["--codex", "--effort", "x y", "hello"],
+        ["--codex", "--login", "-p", "hello"],
         ["--codex", "--model", "claude-opus-5-5"],
         ["--codex", "one", "two"],
         ["--codex", "--device-auth"],
@@ -1026,6 +1122,44 @@ def test_options_that_would_undo_the_codex_setup_are_refused(codex, args):
     result = _launch(*args, cwd=ROOT)
     assert result.returncode == 2 and "scripts/assistant:" in result.stderr
     assert not codex["calls"].exists()
+
+
+def test_a_headless_codex_run_is_codex_exec_with_edits_accepted(codex, tmp_path):
+    # As scripts/run_cases.py starts a follow-up: resuming the session it made.
+    result = _launch(
+        "--codex", "-p", "--json", "--permission-mode", "acceptEdits", "--effort", "xhigh",
+        "--resume", "0199-session", "and now?", cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    fields, args = _noted(codex["calls"])
+    assert fields["cwd"] == str(ROOT) and fields["CRYOET_ASSISTANT_HEADLESS"] == "1"
+    # `codex exec [options] resume ID PROMPT`: resume takes neither -s nor -C.
+    assert args[0] == "exec" and args[-3:] == ["resume", "0199-session", "and now?"]
+    options = args[1 : args.index("resume")]
+    assert _option(options, "-s") == "workspace-write"
+    assert _option(options, "-C") == str(ROOT) and _option(options, "-m") == "gpt-6.1-sol"
+    assert "--json" in options and "--dangerously-bypass-hook-trust" in options
+    # exec has no daemon and no approvals: it asks nobody.
+    assert "--no-daemon" not in options and "-a" not in options
+    assert 'model_reasoning_effort="xhigh"' in options
+    assert _instructions(options).endswith(_text(CODEX_DIR / "instructions.md"))
+
+
+def test_a_headless_codex_run_without_accepted_edits_stays_read_only(codex):
+    assert _launch("--codex", "-p", "where do we stand?", cwd=ROOT).returncode == 0
+    _, args = _noted(codex["calls"])
+    assert args[0] == "exec" and _option(args, "-s") == "read-only"
+    assert "--json" not in args and "resume" not in args and args[-1] == "where do we stand?"
+    assert not any(arg.startswith("model_reasoning_effort=") for arg in args)
+
+
+def test_a_codex_session_is_never_headless_whatever_the_shell_says(codex, monkeypatch):
+    # The guard refuses more in a headless run; a session asks the person instead.
+    monkeypatch.setenv("CRYOET_ASSISTANT_HEADLESS", "1")
+    assert _launch("--codex", "--effort", "medium", cwd=ROOT).returncode == 0
+    fields, args = _noted(codex["calls"])
+    assert fields["CRYOET_ASSISTANT_HEADLESS"] == ""
+    assert args[0] == "--no-daemon" and 'model_reasoning_effort="medium"' in args
 
 
 def test_an_unknown_client_is_refused(codex, monkeypatch):

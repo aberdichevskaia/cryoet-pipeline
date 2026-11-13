@@ -24,6 +24,8 @@ scripts/assistant
 | `scripts/assistant --print-command` | shows what would run, and runs nothing |
 | `scripts/assistant -p "…" --permission-mode acceptEdits` | a headless run, as `scripts/run_cases.py` makes them: edits go through as a person who approves them would let them; only with `-p` |
 | `scripts/assistant --codex` | starts the assistant in Codex instead; `-c`, `--model` and `--print-command` work the same |
+| `scripts/assistant --codex --effort medium` | how much the model reasons; the assistant's Codex settings say high |
+| `scripts/assistant --codex -p "…" --permission-mode acceptEdits --json` | a headless run in Codex (`codex exec`), as `scripts/run_cases.py --codex` makes them: patches go through inside the repository, nothing is asked, and the guard refuses what a person would approve first |
 | `scripts/assistant --codex --login` | signs the assistant's Codex in, once; over SSH or on Linux without a display, uses a device code entered in your own computer's browser |
 | `scripts/assistant --codex --login --browser-auth` | browser login, locally or through an SSH tunnel (below) |
 
@@ -281,9 +283,8 @@ Slurm. Batches have run on the Mac since 30 October 2026. Their records are in
   without every line naming their case's answer, which they have done since
   4 November.
 - **Five cases have no evidence yet:** E06, E07, E09, E10 and E15.
-- **Codex has no headless runs.** `scripts/run_cases.py` drives Claude Code
-  only, so the cases have not run in Codex, and `--codex -p` is refused until
-  they can.
+- **The cases have not run in Codex.** `scripts/run_cases.py --codex` drives it
+  headless since 13 November 2026, checked against a stand-in model only.
 - **No run against an open-weight model.** `scripts/run_cases.py --base-url`
   and `scripts/open_model_cases.sbatch` are written, and nothing has run on max.
 - **Stricter loading needs a newer Claude Code.** Claude Code 2.1.248 and later

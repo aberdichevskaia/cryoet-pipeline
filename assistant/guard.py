@@ -33,6 +33,19 @@ line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c` (or -lc):
   itself; Codex has no rules for files, so they are read from there. A patch
   whose files cannot be read is refused.
 
+In a headless Codex run (CRYOET_ASSISTANT_HEADLESS=1, which `scripts/assistant
+--codex -p` sets), nobody is there to ask, so it also refuses what a person
+would have to approve first: a patch of a file the Edit rules of
+assistant/settings.json ask for, and submit_lanes.py, submit_recipe.py or
+export_relion.py without --dry-run (submit_recipe.py --list only lists). Claude
+Code refuses an ask in a headless run itself; in a Codex session the read-only
+sandbox makes the person approve every patch and every submission.
+
+With CRYOET_ASSISTANT_CALL_LOG set, it adds a line for every call it sees to that
+file: the call's id, its turn, the tool, its input, and the message it blocked
+the call with, if it did. scripts/run_cases.py reads it for a Codex run, whose
+own record leaves out the calls Codex refused.
+
 Like the permission rules, this is a second layer and not a sandbox: a command
 that hides the call (a Python one-liner that runs sbatch, say) gets past it.
 Such a command is not on the session's allow list, so the person is asked for
@@ -122,6 +135,13 @@ REPOSITORY = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__fil
 # The client rules that Claude Code reads; the guard reads their Edit rules for
 # Codex's patches.
 SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+# A run that asks nobody: `scripts/assistant --codex -p`.
+HEADLESS = "CRYOET_ASSISTANT_HEADLESS"
+# Where to note every call, for scripts/run_cases.py.
+CALL_LOG = "CRYOET_ASSISTANT_CALL_LOG"
+# The scripts that submit, or export with the journal, unless given --dry-run.
+SUBMITTERS = {"submit_lanes.py", "submit_recipe.py", "export_relion.py"}
+DRY_RUN = "--dry-run"
 
 
 def tokens(command):
@@ -382,19 +402,24 @@ def patch_paths(patch):
     return [path for path in _PATCH_FILE.findall(patch) if path]
 
 
-def denied_edits():
-    """The Edit rules assistant/settings.json denies, as written inside Edit(...),
-    or None when the file cannot be read."""
+def edit_rules(kind):
+    """The Edit rules assistant/settings.json lists under kind ("deny" or "ask"),
+    as written inside Edit(...), or None when the file cannot be read."""
     try:
         with open(SETTINGS) as handle:
-            deny = json.load(handle)["permissions"]["deny"]
+            listed = json.load(handle)["permissions"][kind]
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return [
         rule[len("Edit("):-1]
-        for rule in deny
+        for rule in listed
         if rule.startswith("Edit(") and rule.endswith(")")
     ]
+
+
+def denied_edits():
+    """The Edit rules assistant/settings.json denies, or None."""
+    return edit_rules("deny")
 
 
 def _match(pattern, parts):
@@ -456,20 +481,59 @@ def patch_problem(patch, cwd, environ):
             "let it through."
         )
     rules = denied_edits()
-    if rules is None:
+    asked = edit_rules("ask") if environ.get(HEADLESS) == "1" else []
+    if rules is None or asked is None:
         return "assistant/settings.json cannot be read, so the guard cannot check this patch."
     roots = library_roots(environ)
-    for path in paths:
-        resolved = os.path.realpath(os.path.join(cwd, os.path.expanduser(path)))
-        if inside(resolved, roots):
+    resolved = [os.path.realpath(os.path.join(cwd, os.path.expanduser(path))) for path in paths]
+    for path, where in zip(paths, resolved):
+        if inside(where, roots):
             return library_file_message(path)
-        rule = next((one for one in rules if rule_matches(one, resolved)), None)
+        rule = next((one for one in rules if rule_matches(one, where)), None)
         if rule is not None:
             return (
                 f"{path} is not the assistant's to change: assistant/settings.json denies "
                 f"Edit({rule})."
             )
+    for path, where in zip(paths, resolved):
+        rule = next((one for one in asked if rule_matches(one, where)), None)
+        if rule is not None:
+            return (
+                f"the person has not approved this edit of {path} (assistant/settings.json "
+                f"asks before Edit({rule}))."
+            )
     return None
+
+
+def submission_problem(command, environ):
+    """In a run that asks nobody: a submitting script run without --dry-run, which
+    the person approves first. submit_recipe.py --list only lists."""
+    if environ.get(HEADLESS) != "1":
+        return None
+    commands = commands_in(command)
+    if commands is None:
+        found = re.search(r"\b(?:submit_lanes|submit_recipe|export_relion)\.py\b", command)
+        if found and DRY_RUN not in command.split():
+            return submission_message(found.group(0))
+        return None
+    for name, rest in commands:
+        script, arguments = name, rest
+        if name.startswith("python"):
+            at = next((k for k, one in enumerate(rest) if not one.startswith("-")), None)
+            if at is None:
+                continue
+            script, arguments = rest[at], rest[at + 1:]
+        base = os.path.basename(script)
+        if base not in SUBMITTERS or DRY_RUN in arguments:
+            continue
+        if base == "submit_recipe.py" and "--list" in arguments:
+            continue
+        return submission_message(base)
+    return None
+
+
+def submission_message(name):
+    return f"the person has not approved running {name} without --dry-run, which submits."
 
 
 def shell_patch_problem(command, cwd, environ):
@@ -588,23 +652,44 @@ def main():
     tool = call.get("tool_name")
     tool_input = call.get("tool_input") or {}
     cwd = call.get("cwd") or os.getcwd()
+    found = None
     if tool == "Bash":
         command = tool_input.get("command") or ""
         if isinstance(command, list):
             command = " ".join(shlex.quote(str(word)) for word in command)
         found = (problem(command) or builder_problem(command) or runner_problem(command)
                  or library_problem(command, cwd, os.environ)
-                 or shell_patch_problem(command, cwd, os.environ))
+                 or shell_patch_problem(command, cwd, os.environ)
+                 or submission_problem(command, os.environ))
     elif tool in FILE_TOOLS:
         found = file_problem(tool_input, cwd, os.environ)
     elif tool == PATCH_TOOL:
         found = patch_problem(tool_input.get("command"), cwd, os.environ)
-    else:
-        return 0
+    note_call(call, found)
     if found:
         print(f"Blocked by assistant/guard.py: {found}", file=sys.stderr)
         return 2
     return 0
+
+
+def note_call(call, found):
+    """The call, and what blocked it, added to CRYOET_ASSISTANT_CALL_LOG if set. A
+    log that cannot be written changes nothing about the call."""
+    path = os.environ.get(CALL_LOG)
+    if not path:
+        return
+    entry = {
+        "tool_use_id": call.get("tool_use_id"),
+        "turn_id": call.get("turn_id"),
+        "tool": call.get("tool_name"),
+        "input": call.get("tool_input"),
+        "blocked": found or None,
+    }
+    try:
+        with open(path, "a") as handle:
+            handle.write(json.dumps(entry) + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
 
 
 if __name__ == "__main__":

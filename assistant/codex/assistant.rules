@@ -57,7 +57,7 @@ prefix_rule(
 prefix_rule(
     pattern = [["squeue", "sacct", "sinfo", "ls"]],
     decision = "allow",
-    match = ["squeue -u anna", "sacct -j 3670792 -o JobID,State", "sinfo"],
+    match = ["squeue -u anna", "sacct -j 1234567 -o JobID,State", "sinfo"],
 )
 # Readers that write nothing, so that `show_project.py ... | head` runs as the
 # script alone would.
