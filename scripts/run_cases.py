@@ -10,6 +10,9 @@ own, and lay out what every run did for a person to grade.
     python3 scripts/run_cases.py --all --model glm-5.3 --base-url http://127.0.0.1:11434 \
         --context-tokens 131072                      an open-weight model in Claude's place
     python3 scripts/run_cases.py --all --codex       the assistant in OpenAI's Codex
+    python3 scripts/run_cases.py --rewrite outputs/eval-runs/<batch>
+                                                     a Codex batch's answers and actions
+                                                     written again, as read now
 
 A case is a folder docs/agent/cases/<id>/ (see the README there): case.toml with
 the request and the grading lines, tree/ with the files its evidence consists
@@ -615,6 +618,20 @@ def _patch_files(patch: Any) -> list[tuple[str, str, list[str]]]:
     return files
 
 
+def _chunks(text: str) -> list[dict[str, Any]]:
+    """The results a code cell's commands gave, in order: Codex prints each as a
+    JSON object that starts with "chunk_id"."""
+    found, at, decoder = [], 0, json.JSONDecoder()
+    while (at := text.find('{"chunk_id"', at)) >= 0:
+        try:
+            chunk, at = decoder.raw_decode(text, at)
+        except ValueError:
+            at += 1
+            continue
+        found.append(chunk)
+    return found
+
+
 def _change_lines(path: str, kind: str, lines: list[str]) -> tuple[str, list[str]]:
     """What a patch does to one file, as describe_call shows it: a new file's text
     (in its language's fence), a diff, or that the file goes."""
@@ -641,7 +658,9 @@ def read_rollout(path: Path, call_log: Path, sandbox: Path) -> dict[str, Any]:
     last_message: dict[int, str] = {}
     items: dict[str, tuple[dict[str, Any], int]] = {}
     order: list[str] = []
-    errors: list[str] = []
+    # The model's code cells (and plain tool calls), in order: what each ran, and
+    # what came back, where a command's result is even when Codex kept no item of it.
+    cells: dict[str, dict[str, str]] = {}
     requests = 0
     largest = 0
     tokens = {"input": 0, "cached_input": 0, "output": 0, "reasoning_output": 0}
@@ -661,12 +680,14 @@ def read_rollout(path: Path, call_log: Path, sandbox: Path) -> dict[str, Any]:
             largest = max(largest, usage.get("input_tokens") or 0)
             for key in tokens:
                 tokens[key] += usage.get(f"{key}_tokens") or 0
-        elif kind == "response_item" and payload.get("type", "").endswith("_output"):
-            output = payload.get("output")
-            text = output if isinstance(output, str) else " ".join(
-                str(part.get("text", "")) for part in output or [] if isinstance(part, dict))
-            if "Script error:" in text and "PreToolUse hook" not in text:
-                errors.append(text.split("Script error:", 1)[1].strip().splitlines()[0])
+        elif kind == "response_item" and payload.get("call_id"):
+            cell = cells.setdefault(str(payload["call_id"]), {"input": "", "output": ""})
+            if payload.get("type", "").endswith("_output"):
+                output = payload.get("output")
+                cell["output"] = output if isinstance(output, str) else "".join(
+                    str(part.get("text", "")) for part in output or [] if isinstance(part, dict))
+            else:
+                cell["input"] = str(payload.get("input") or payload.get("arguments") or "")
         elif kind == "event_msg":
             event = payload.get("type")
             turn = turn_of.get(payload.get("turn_id"), max(turn_of.values(), default=1))
@@ -703,42 +724,86 @@ def read_rollout(path: Path, call_log: Path, sandbox: Path) -> dict[str, Any]:
                           "change": _change_lines(where, kind, body)})
         return calls
 
+    def result(output: str, exit_code: Any) -> str:
+        # As Claude Code shows a command that failed: its exit code first.
+        return f"Exit code {exit_code}\n{output}" if exit_code not in (0, None) else output
+
     def ran(item: dict[str, Any], turn: int, command: str | None = None) -> dict[str, Any]:
         words = item.get("command")
         if command is None:
             command = words[-1] if isinstance(words, list) and words else str(words or "")
         exit_code = item.get("exit_code")
         return {"tool": "Bash", "input": {"command": command},
-                "output": str(item.get("aggregated_output") or ""),
+                "output": result(str(item.get("aggregated_output") or ""), exit_code),
                 "error": item.get("status") != "completed" or exit_code not in (0, None),
                 "turn": turn}
+
+    def text_of(entry: dict[str, Any]) -> str:
+        given = entry.get("input") if isinstance(entry.get("input"), dict) else {}
+        command = given.get("command")
+        return (" ".join(str(word) for word in command) if isinstance(command, list)
+                else str(command or ""))
+
+    # Each logged call's code cell: the first one, from the last call's on, whose
+    # code holds the command or patch, as written or as a JSON string.
+    entries = [entry for entry in _jsonl(call_log) if isinstance(entry, dict)]
+    keys, at = list(cells), 0
+    cell_of: list[str | None] = []
+    for entry in entries:
+        text = text_of(entry)
+        forms = [text, json.dumps(text)[1:-1]] if text else []
+        found_at = next((k for k in range(at, len(keys))
+                         if any(form in cells[keys[k]]["input"] for form in forms)), None)
+        at = found_at if found_at is not None else at
+        cell_of.append(keys[found_at] if found_at is not None else None)
+
+    def unrecorded(index: int) -> tuple[str, Any] | None:
+        """What a command Codex kept no item of printed, from its cell's results,
+        or None: a cell's commands give their results in order, the guard's
+        refusals aside."""
+        cell = cell_of[index]
+        if cell is None:
+            return None
+        mine = [k for k, one in enumerate(entries) if cell_of[k] == cell
+                and one.get("tool") == "Bash" and not one.get("blocked")]
+        chunks = _chunks(cells[cell]["output"])
+        if index not in mine or mine.index(index) >= len(chunks):
+            return None
+        chunk = chunks[mine.index(index)]
+        return str(chunk.get("output") or ""), chunk.get("exit_code")
+
+    def refusal(index: int) -> str:
+        """Why a call did not run: the guard's message, or what its cell said."""
+        if entries[index].get("blocked"):
+            return f"Blocked by assistant/guard.py: {entries[index]['blocked']}"
+        said = cells.get(cell_of[index] or "", {}).get("output", "")
+        if "Script error:" in said:
+            return said.split("Script error:", 1)[1].strip().splitlines()[0]
+        return "it was not run"
 
     calls: list[dict[str, Any]] = []
     denials: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for entry in _jsonl(call_log):
-        if not isinstance(entry, dict):
-            continue
+    for index, entry in enumerate(entries):
         given = entry.get("input") if isinstance(entry.get("input"), dict) else {}
         found = items.get(entry.get("tool_use_id") or "")
         turn = turn_of.get(entry.get("turn_id"), found[1] if found else 1)
         if found:
             seen.add(found[0]["id"])
-            why = ""
-        else:  # refused: the guard's message, or the next error a code cell reported
-            why = (f"Blocked by assistant/guard.py: {entry['blocked']}" if entry.get("blocked")
-                   else (errors.pop(0) if errors else "Codex did not run it"))
         if entry.get("tool") == "Bash":
-            command = given.get("command")
-            command = (" ".join(str(word) for word in command) if isinstance(command, list)
-                       else str(command or ""))
+            command = text_of(entry)
+            printed = None if found or entry.get("blocked") else unrecorded(index)
             if found and found[0].get("type") == "FileChange":
                 calls += applied(*found)  # `apply_patch <<EOF` from the shell
             elif found:
                 calls.append(ran(found[0], turn, command))
+            elif printed is not None:  # it ran, and Codex kept no item of it
+                calls.append({"tool": "Bash", "input": {"command": command},
+                              "output": result(*printed), "turn": turn,
+                              "error": printed[1] not in (0, None)})
             else:
-                calls.append({"tool": "Bash", "input": {"command": command}, "output": why,
-                              "error": True, "turn": turn})
+                calls.append({"tool": "Bash", "input": {"command": command},
+                              "output": refusal(index), "error": True, "turn": turn})
                 denials.append({"tool_name": "Bash", "tool_input": {"command": command}})
         elif entry.get("tool") == "apply_patch":
             if found:
@@ -748,7 +813,7 @@ def read_rollout(path: Path, call_log: Path, sandbox: Path) -> dict[str, Any]:
                 if kind == "add":  # a new file's lines, each written with a +
                     body = [line[1:] if line.startswith("+") else line for line in body]
                 calls.append({"tool": "apply_patch", "input": {"file_path": where},
-                              "output": why, "error": True, "turn": turn,
+                              "output": refusal(index), "error": True, "turn": turn,
                               "change": _change_lines(where, kind, body)})
                 denials.append({"tool_name": "apply_patch", "tool_input": {"file_path": where}})
     # What ran without the guard seeing it, which should not happen, or another tool.
@@ -1086,6 +1151,32 @@ def run_codex(case: Case, number: int, prompts: list[str], run_dir: Path, sandbo
     return write_run(case, number, prompts, run_dir, sandbox, seen, exit_codes, slurm, record)
 
 
+def rewrite(batch: Path) -> int:
+    """A Codex batch's answers, actions and records written again from its
+    transcripts and the guard's call logs, as this runner reads them now, and its
+    grading.md; the runs of other clients as they are."""
+    built = built_cases()
+    records = json.loads((batch / "runs.json").read_text())
+    for record in records:
+        if record.get("client_name") != "Codex" or record.get("dry_run"):
+            continue
+        run_dir = batch / f"{record['case']}{'-held-out' if record['held_out'] else ''}-{record['run']}"
+        sandbox = run_dir / "sandbox"
+        seen = read_rollout(run_dir / "transcript.jsonl", run_dir / "calls.jsonl", sandbox)
+        record.update(
+            permission_denials=seen["denials"], calls=len(seen["calls"]), tokens=seen["tokens"],
+            turns=seen["requests"] or None, largest_context=seen["largest_context"],
+            is_error=any(result.get("is_error") for result in seen["results"])
+            if seen["results"] else None)
+        write_run(built[record["case"]], record["run"], [record["request"], *record["follow_up"]],
+                  run_dir, sandbox, seen, record["exit_codes"], record["slurm_calls"], record)
+    (batch / "runs.json").write_text(json.dumps(records, indent=2) + "\n")
+    cases = [built[case] for case in dict.fromkeys(record["case"] for record in records)]
+    (batch / "grading.md").write_text(grading_sheet(cases, records, batch, records[0]["code"]))
+    print(f"{len(records)} runs written again; see {_shown(batch / 'grading.md')}")
+    return 0
+
+
 def write_run(case: Case, number: int, prompts: list[str], run_dir: Path, sandbox: Path,
               seen: dict[str, Any], exit_codes: list[int | str], slurm: list[str],
               record: dict[str, Any]) -> dict[str, Any]:
@@ -1221,7 +1312,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds each message's turn may take")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the sandboxes and show the commands; run nothing")
+    parser.add_argument("--rewrite", type=Path, metavar="BATCH",
+                        help="write a Codex batch's answers and actions again from its "
+                             "transcripts, as this runner reads them now; run nothing")
     args = parser.parse_args(argv)
+    if args.rewrite:
+        return rewrite(args.rewrite)
     if args.base_url and not (args.model and args.context_tokens):
         raise SystemExit("--base-url needs --model, the model the server serves, and "
                          "--context-tokens, the window it was started with")

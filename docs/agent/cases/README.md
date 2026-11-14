@@ -146,6 +146,13 @@ What differs from a Claude Code run:
   reach OpenAI, or that found the assistant's Codex signed out, stop the batch;
 - there is no cost (a ChatGPT account) and no turn limit, only `--timeout`.
 
+A command that failed shows its exit code first, as Claude Code shows it. Codex
+sometimes keeps no record of a command its code cell ran (E12, 13 November 2026);
+its result is then read from the cell's own output, and only a call nothing shows
+ran counts as refused. `python3 scripts/run_cases.py --rewrite outputs/eval-runs/<batch>`
+writes a Codex batch's `answer.md`, `actions.md` and records again from its
+transcripts and call logs, when the runner reads them better than when it ran.
+
 ## An open-weight model in Claude's place
 
 `--base-url` points the client at another server that speaks the Anthropic API,

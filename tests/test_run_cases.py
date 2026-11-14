@@ -734,8 +734,36 @@ def _jsonl_text(lines: list) -> str:
     return "".join(json.dumps(line) + "\n" for line in lines)
 
 
+def _cell_call(call_id: str, code: str) -> dict:
+    return {"type": "response_item", "payload": {"type": "custom_tool_call", "call_id": call_id,
+                                                 "name": "exec", "input": code}}
+
+
+def _cell_output(call_id: str, *parts: str) -> dict:
+    return {"type": "response_item", "payload": {
+        "type": "custom_tool_call_output", "call_id": call_id,
+        "output": [{"type": "input_text", "text": part} for part in parts]}}
+
+
+def _chunk(exit_code: int, output: str) -> str:
+    return json.dumps({"chunk_id": "c", "exit_code": exit_code, "output": output})
+
+
+def _item(turn: str, **item) -> dict:
+    return {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": turn,
+                                             "item": item}}
+
+
+def _exec(*commands: str) -> str:
+    return "\n".join(f"text(await tools.exec_command({{cmd: {json.dumps(command)}}}));"
+                     for command in commands)
+
+
 def test_codex_s_record_and_the_guard_s_log_make_every_call(tmp_path):
     sandbox = tmp_path / "sandbox"
+    update = "*** Begin Patch\n*** Update File: configs/a.toml\n@@\n-x = 1\n+x = 2\n*** End Patch\n"
+    add = ("*** Begin Patch\n*** Add File: configs/lanes/new.toml\n+[lane]\n+name = \"+x\"\n"
+           "*** End Patch\n")
     rollout = [
         {"type": "session_meta", "payload": {"id": "th-1", "cli_version": "0.167.2"}},
         {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}},
@@ -745,43 +773,56 @@ def test_codex_s_record_and_the_guard_s_log_make_every_call(tmp_path):
         {"type": "token_usage_record", "payload": {"usage": {
             "input_tokens": 1000, "cached_input_tokens": 800, "output_tokens": 50,
             "reasoning_output_tokens": 20}}},
-        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1", "item": {
-            "type": "CommandExecution", "id": "e1", "command": ["/bin/bash", "-c", "squeue -u me"],
-            "aggregated_output": "JOBID NAME\n", "exit_code": 0, "status": "completed"}}},
-        # What Codex told the model of the call its rules refused.
-        {"type": "response_item", "payload": {"type": "custom_tool_call_output", "output": [
-            {"type": "input_text", "text": "Script failed\n"},
-            {"type": "input_text", "text": "Script error:\nexec_command failed: Rejected(approval "
-                                           "required by policy)\n"}]}},
-        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t1", "item": {
-            "type": "FileChange", "id": "e4", "status": "completed", "changes": {
-                str(sandbox / "configs" / "a.toml"): {
-                    "type": "update", "unified_diff": "@@ -1 +1 @@\n-x = 1\n+x = 2\n"}}}}},
+        _cell_call("c1", _exec("squeue -u me", "grep -n x y.txt")),
+        _item("t1", type="CommandExecution", id="e1", command=["/bin/bash", "-c", "squeue -u me"],
+              aggregated_output="JOBID NAME\n", exit_code=0, status="completed"),
+        _item("t1", type="CommandExecution", id="e7", command=["/bin/bash", "-c", "grep -n x y.txt"],
+              aggregated_output="", exit_code=1, status="completed"),
+        _cell_output("c1", "Script completed\n", _chunk(0, "JOBID NAME\n"), _chunk(1, "")),
+        # Codex's rules refused this one: the cell says so.
+        _cell_call("c2", _exec("scancel 4000001")),
+        _cell_output("c2", "Script failed\n", "Script error:\nexec_command failed: "
+                                              "Rejected(approval required by policy)\n"),
+        _cell_call("c3", _exec("sbatch x.sh")),
+        _cell_output("c3", "Script failed\n", "Script error:\nCommand blocked by PreToolUse hook"),
+        _cell_call("c4", f"await tools.apply_patch({json.dumps(update)});"),
+        _item("t1", type="FileChange", id="e4", status="completed", changes={
+            str(sandbox / "configs" / "a.toml"): {
+                "type": "update", "unified_diff": "@@ -1 +1 @@\n-x = 1\n+x = 2\n"}}),
+        _cell_output("c4", "Script completed\n"),
+        _cell_call("c5", f"await tools.apply_patch({json.dumps(add)});"),
+        _cell_output("c5", "Script failed\n", "Script error:\nCommand blocked by PreToolUse hook"),
         {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "t1",
                                           "last_agent_message": "First answer."}},
         {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t2"}},
         {"type": "token_usage_record", "payload": {"usage": {
             "input_tokens": 3000, "cached_input_tokens": 2000, "output_tokens": 10}}},
-        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t2", "item": {
-            "type": "CommandExecution", "id": "e9", "command": ["/bin/bash", "-c", "rm -r outputs"],
-            "aggregated_output": "", "exit_code": 0, "status": "completed"}}},
-        {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "t2", "item": {
-            "type": "AgentMessage", "id": "m2", "content": [{"type": "Text", "text": "Cut off."}]}}},
+        # Two commands in one cell: Codex kept an item of the first only (E12, 13 Nov).
+        _cell_call("c6", _exec("ls a", "rg -n 'x|y' notes.md")),
+        _item("t2", type="CommandExecution", id="e8", command=["/bin/bash", "-c", "ls a"],
+              aggregated_output="a\n", exit_code=0, status="completed"),
+        _cell_output("c6", "Script completed\n", _chunk(0, "a\n"), _chunk(2, "rg: notes.md: No such file")),
+        _item("t2", type="CommandExecution", id="e9", command=["/bin/bash", "-c", "rm -r outputs"],
+              aggregated_output="", exit_code=0, status="completed"),
+        _item("t2", type="AgentMessage", id="m2", content=[{"type": "Text", "text": "Cut off."}]),
     ]
     log = [
         {"tool_use_id": "e1", "turn_id": "t1", "tool": "Bash",
          "input": {"command": "squeue -u me"}, "blocked": None},
+        {"tool_use_id": "e7", "turn_id": "t1", "tool": "Bash",
+         "input": {"command": "grep -n x y.txt"}, "blocked": None},
         {"tool_use_id": "e2", "turn_id": "t1", "tool": "Bash",
          "input": {"command": "scancel 4000001"}, "blocked": None},
         {"tool_use_id": "e3", "turn_id": "t1", "tool": "Bash",
          "input": {"command": "sbatch x.sh"}, "blocked": "`sbatch` would start a Slurm job."},
-        {"tool_use_id": "e4", "turn_id": "t1", "tool": "apply_patch", "input": {
-            "command": "*** Begin Patch\n*** Update File: configs/a.toml\n@@\n-x = 1\n+x = 2\n"
-                       "*** End Patch\n"}, "blocked": None},
-        {"tool_use_id": "e5", "turn_id": "t1", "tool": "apply_patch", "input": {
-            "command": "*** Begin Patch\n*** Add File: configs/lanes/new.toml\n+[lane]\n"
-                       "+name = \"+x\"\n*** End Patch\n"},
+        {"tool_use_id": "e4", "turn_id": "t1", "tool": "apply_patch",
+         "input": {"command": update}, "blocked": None},
+        {"tool_use_id": "e5", "turn_id": "t1", "tool": "apply_patch", "input": {"command": add},
          "blocked": "the person has not approved this edit of configs/lanes/new.toml."},
+        {"tool_use_id": "e8", "turn_id": "t2", "tool": "Bash",
+         "input": {"command": "ls a"}, "blocked": None},
+        {"tool_use_id": "e10", "turn_id": "t2", "tool": "Bash",
+         "input": {"command": "rg -n 'x|y' notes.md"}, "blocked": None},
     ]
     (tmp_path / "rollout.jsonl").write_text(_jsonl_text(rollout))
     (tmp_path / "calls.jsonl").write_text(_jsonl_text(log))
@@ -799,18 +840,25 @@ def test_codex_s_record_and_the_guard_s_log_make_every_call(tmp_path):
     assert [(call["tool"], call["input"].get("command") or call["input"]["file_path"],
              call["error"], call["turn"]) for call in calls] == [
         ("Bash", "squeue -u me", False, 1),
+        ("Bash", "grep -n x y.txt", True, 1),
         ("Bash", "scancel 4000001", True, 1),
         ("Bash", "sbatch x.sh", True, 1),
         ("apply_patch", "configs/a.toml", False, 1),
         ("apply_patch", "configs/lanes/new.toml", True, 1),
+        ("Bash", "ls a", False, 2),
+        ("Bash", "rg -n 'x|y' notes.md", True, 2),
         ("Bash", "rm -r outputs", False, 2),
     ]
-    assert "Rejected(approval required by policy)" in calls[1]["output"]
-    assert calls[2]["output"] == "Blocked by assistant/guard.py: `sbatch` would start a Slurm job."
-    assert calls[3]["change"] == ("diff", ["@@ -1 +1 @@", "-x = 1", "+x = 2"])
+    # A failed command shows its exit code first, as Claude Code shows it.
+    assert calls[1]["output"] == "Exit code 1\n"
+    assert calls[2]["output"] == "exec_command failed: Rejected(approval required by policy)"
+    assert calls[3]["output"] == "Blocked by assistant/guard.py: `sbatch` would start a Slurm job."
+    assert calls[4]["change"] == ("diff", ["@@ -1 +1 @@", "-x = 1", "+x = 2"])
     # A new file's text without the + of each line, a + of its own kept.
-    assert calls[4]["change"] == ("toml", ["[lane]", 'name = "+x"'])
-    assert calls[5].get("unseen") and not calls[0].get("unseen")
+    assert calls[5]["change"] == ("toml", ["[lane]", 'name = "+x"'])
+    # It ran, though Codex kept no item of it: its result is its cell's second.
+    assert calls[7]["output"] == "Exit code 2\nrg: notes.md: No such file"
+    assert calls[8].get("unseen") and not calls[0].get("unseen")
     assert seen["denials"] == [
         {"tool_name": "Bash", "tool_input": {"command": "scancel 4000001"}},
         {"tool_name": "Bash", "tool_input": {"command": "sbatch x.sh"}},
@@ -819,13 +867,30 @@ def test_codex_s_record_and_the_guard_s_log_make_every_call(tmp_path):
     # grade_cases.py reads them as it reads Claude Code's: denied calls, a patch a write.
     text = "\n".join(f"{n}. {run_cases.describe_call(call, sandbox)}"
                      for n, call in enumerate(calls, 1))
-    assert "6. Bash: `rm -r outputs` → (the guard did not see this call)" in text
+    assert "9. Bash: `rm -r outputs` → (the guard did not see this call)" in text
     read = grade_cases.read_calls(text, sandbox, seen["denials"])
-    assert [(call.tool, call.command, call.denied) for call in read] == [
-        ("Bash", "squeue -u me", False), ("Bash", "scancel 4000001", True),
-        ("Bash", "sbatch x.sh", True), ("apply_patch", "configs/a.toml", False),
-        ("apply_patch", "configs/lanes/new.toml", True), ("Bash", "rm -r outputs", False)]
+    assert [(call.tool, call.denied) for call in read] == [
+        ("Bash", False), ("Bash", False), ("Bash", True), ("Bash", True), ("apply_patch", False),
+        ("apply_patch", True), ("Bash", False), ("Bash", False), ("Bash", False)]
+    assert read[5].command == "configs/lanes/new.toml"
     assert "apply_patch" in grade_cases._WRITE_TOOLS
+
+
+def test_a_cells_results_are_read_in_order():
+    assert run_cases._chunks('x {"chunk_id": "a", "exit_code": 0, "output": "}{"} '
+                             '{"chunk_id": broken} {"chunk_id": "b", "output": "y"}') == [
+        {"chunk_id": "a", "exit_code": 0, "output": "}{"}, {"chunk_id": "b", "output": "y"}]
+
+
+def test_a_call_nothing_shows_ran_is_a_refusal(tmp_path):
+    # Logged by the guard, with no item, no cell and no result: not run.
+    (tmp_path / "rollout.jsonl").write_text("")
+    (tmp_path / "calls.jsonl").write_text(_jsonl_text([
+        {"tool_use_id": "e1", "turn_id": "t1", "tool": "Bash", "input": {"command": "sinfo"},
+         "blocked": None}]))
+    seen = run_cases.read_rollout(tmp_path / "rollout.jsonl", tmp_path / "calls.jsonl", tmp_path)
+    assert [(call["output"], call["error"]) for call in seen["calls"]] == [("it was not run", True)]
+    assert seen["denials"] == [{"tool_name": "Bash", "tool_input": {"command": "sinfo"}}]
 
 
 REAL_CODEX = shutil.which("codex")
@@ -967,6 +1032,10 @@ def test_a_codex_run_goes_through_the_launcher_the_guard_and_the_stand_ins(tmp_p
     assert "Model gpt-6.1-sol at high effort, Codex " in sheet and "Slurm called once" in sheet
     run = grade_cases.read_run(run_dir, "E11")
     assert ("outputs/eval-check.md", "actions.md call 3") in grade_cases.writes(run)
+    # Written again from the transcript and the call log, the run reads the same.
+    before = {name: (run_dir / name).read_text() for name in ("answer.md", "actions.md")}
+    assert run_cases.main(["--rewrite", str(run_dir.parent)]) == 0
+    assert {name: (run_dir / name).read_text() for name in before} == before
 
 
 def test_a_codex_turn_that_only_reconnects_is_stopped(tmp_path):
