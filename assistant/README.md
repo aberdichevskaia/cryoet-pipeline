@@ -205,7 +205,12 @@ what the guard must stop. No session with a real model has run yet.
   and `AGENTS.md` stay out, and the assistant's settings stay out of your own
   Codex. At every start the launcher copies `codex/config.toml`, `hooks.json`
   and `assistant.rules` into it. It also links `skills/cryoet` to this clone's
-  skills, which Codex lists as `cryoet:lane-config` and so on. Sign in once with
+  skills, which Codex lists as `cryoet:lane-config` and so on. Every other file
+  in its `rules/` is removed: Codex saves a "Yes, and don't ask again for
+  commands that start with …" answer there as `rules/default.rules` (seen on 14
+  November 2026), and it would otherwise allow that command, a submission say,
+  in every later session without asking. It holds for the session it was given
+  in. Sign in once with
   `--login`, using the cluster instructions above. The login is stored in this
   home's `auth.json`, independently of a desktop keyring.
 - **The clone is never trusted.** At every start the launcher marks it

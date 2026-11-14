@@ -1023,6 +1023,23 @@ def test_the_launcher_writes_the_assistants_codex_home(codex):
     assert (home / "hooks.json").read_text() == (CODEX_DIR / "hooks.json").read_text()
 
 
+def test_a_dont_ask_again_answer_does_not_outlive_its_session(codex):
+    assert _launch("--codex", cwd=ROOT).returncode == 0
+    rules = codex["home"] / "rules"
+    # What Codex 0.167.2 saved for "Yes, and don't ask again for commands that
+    # start with ..." on 14 November 2026, and anything else left there.
+    (rules / "default.rules").write_text(
+        'prefix_rule(pattern=["python3", "scripts/submit_lanes.py"], decision="allow")\n'
+    )
+    (rules / "other.rules").write_text("")
+    (rules / ".hidden.rules").write_text("")
+    (rules / "nested").mkdir()
+    (rules / "nested" / "x.rules").write_text("")
+    assert _launch("--codex", cwd=ROOT).returncode == 0
+    assert sorted(path.name for path in rules.iterdir()) == ["assistant.rules"]
+    assert (rules / "assistant.rules").read_text() == (CODEX_DIR / "assistant.rules").read_text()
+
+
 def test_the_codex_settings_hold_the_gates():
     import tomllib
 

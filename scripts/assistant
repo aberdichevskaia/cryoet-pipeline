@@ -67,7 +67,11 @@
 #                           applies), hooks.json, and assistant.rules as
 #                           rules/assistant.rules, and links skills/cryoet to
 #                           assistant/plugin/skills: the clone started last is
-#                           the one whose skills a session reads
+#                           the one whose skills a session reads. Every other
+#                           file in rules/ goes: Codex saves a "don't ask again"
+#                           answer there (rules/default.rules, 14 November
+#                           2026), and it lasts only for the session it was
+#                           given in
 #                           Credentials use auth.json in this private directory,
 #                           so a login node needs no desktop keyring
 #   CRYOET_ASSISTANT_REPO   where hooks.json finds assistant/guard.py, which runs
@@ -527,7 +531,7 @@ fi
 
 if ((print_only)); then
     printf '# into %q: assistant/codex/config.toml, hooks.json and assistant.rules,' "$home"
-    printf ' and skills/cryoet -> assistant/plugin/skills\n'
+    printf ' and skills/cryoet -> assistant/plugin/skills; every other rules/ file removed\n'
     printf 'CODEX_HOME=%q\nCRYOET_ASSISTANT_REPO=%q\n' "$home" "$REPO"
     printf 'CRYOET_ASSISTANT=%q\nCRYOET_ASSISTANT_MODEL=%q\n' \
         "$CRYOET_ASSISTANT" "$CRYOET_ASSISTANT_MODEL"
@@ -577,6 +581,10 @@ chmod 700 "$home"
 mv -f "$home/config.toml.$$" "$home/config.toml"
 cp "$REPO/assistant/codex/hooks.json" "$home/hooks.json.$$"
 mv -f "$home/hooks.json.$$" "$home/hooks.json"
+# A "don't ask again" answer is saved as a rule (rules/default.rules), which
+# would allow the command in every later session without asking: a submission,
+# say. It holds for the session it was given in, not after.
+find "$home/rules" -mindepth 1 -maxdepth 1 ! -name assistant.rules -exec rm -rf {} +
 cp "$REPO/assistant/codex/assistant.rules" "$home/rules/assistant.rules.$$"
 mv -f "$home/rules/assistant.rules.$$" "$home/rules/assistant.rules"
 ln -sfn "$REPO/assistant/plugin/skills" "$home/skills/cryoet"
