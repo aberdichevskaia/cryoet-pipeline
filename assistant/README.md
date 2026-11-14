@@ -208,6 +208,13 @@ what the guard must stop. No session with a real model has run yet.
   skills, which Codex lists as `cryoet:lane-config` and so on. Sign in once with
   `--login`, using the cluster instructions above. The login is stored in this
   home's `auth.json`, independently of a desktop keyring.
+- **The clone is never trusted.** At every start the launcher marks it
+  untrusted, so that a `.codex/` of its own, with rules that could allow more,
+  never applies. Codex then opens on a "Folder access" screen at every start:
+  choose "1. Open restricted" (Enter). The assistant's settings, hook and rules
+  come from its Codex home, not from the folder, and its skills load (seen on
+  the Mac on 14 November 2026). "Trust and continue", if it is ever offered,
+  is not the answer.
 - **The guard runs before every shell command and every patch.** That includes
   the calls GPT-6.1 makes from inside its JavaScript tool, and a patch given to
   the shell as `apply_patch <<'EOF'`, which Codex applies too. A command blocked
@@ -248,7 +255,7 @@ what the guard must stop. No session with a real model has run yet.
 
 Not checked yet, and only a real session can show it: how the terminal UI asks
 for a patch or an escalation, signing in to the separate home with a workspace
-account, and whether the project's trust question still appears. On max: whether
+account, and whether the guard and the rules act in a restricted session. On max: whether
 Codex's sandbox (bubblewrap) runs on a login node, and whether the Slurm queries
 and dry runs run there through the allow rules.
 
