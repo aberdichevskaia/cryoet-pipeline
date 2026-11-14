@@ -232,7 +232,11 @@ what the guard must stop. No session with a real model has run yet.
     [codex/instructions.md](codex/instructions.md) tells the model so, and the
     tests check the rules against `settings.json`.
 - **Nothing else acts.** Web search, apps (ChatGPT's connectors), browser and
-  computer use, and Codex's own skills are off. `--strict-config` stops the
+  computer use, Codex's own skills and plugins are off. A ChatGPT sign-in
+  installs the account's plugins (templates, Sites, Visualize, pets and others)
+  into the assistant's Codex home, but their skills are not offered: each needs
+  an app, and which ones arrive depends on whose account signed in.
+  `--strict-config` stops the
   start if this Codex does not know one of these settings. `--no-daemon` gives
   the session's commands the launcher's variables, rather than those of a
   background server started earlier.

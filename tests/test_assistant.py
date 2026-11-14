@@ -1043,6 +1043,9 @@ def test_the_codex_settings_hold_the_gates():
         "browser_use": False,
         "browser_use_external": False,
         "computer_use": False,
+        # The signed-in account's plugins bring skills that are not the pipeline's.
+        "plugins": False,
+        "remote_plugin": False,
     }
     hooks = json.loads((CODEX_DIR / "hooks.json").read_text())["hooks"]
     assert set(hooks) == {"PreToolUse"}

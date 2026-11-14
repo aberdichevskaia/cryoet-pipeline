@@ -44,6 +44,15 @@ apps = false
 browser_use = false
 browser_use_external = false
 computer_use = false
+# No plugins. Signing in with ChatGPT installs the account's curated plugins
+# (templates, Sites, Visualize, pets, plugin management, GitHub) into this
+# home, and their skills are offered next to the pipeline's. Each needs an app,
+# which is off above, so none can work here, and which set arrives depends on
+# whose account signed in. Measured 14 November 2026 with codex exec: as
+# configured before, 5 pipeline skills and 7 plugin skills; with these two off,
+# the 5 alone.
+plugins = false
+remote_plugin = false
 
 [skills.bundled]
 # Codex's own skills (images, installing skills) are not the pipeline's.
