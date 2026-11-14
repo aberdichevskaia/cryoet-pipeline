@@ -19,8 +19,8 @@ their membranes, and an MRA classification of the picks: a few class averages
 and a noise class that collects the false picks. A resolution is not part of the
 pipeline's own steps: step 12 hands a class to RELION 5 for one.
 
-There is a second tutorial for the same data with the assistant:
-[ryr1-with-assistant.md](ryr1-with-assistant.md).
+There is a second tutorial for the same data with the terminal assistant, in
+Claude Code or in Codex: [ryr1-with-assistant.md](ryr1-with-assistant.md).
 
 > **Status, 10 November 2026.** Every step up to the particles has run on these
 > data on max. The MRA as a stage of a lane is new, built on 10 November 2026,
@@ -90,12 +90,14 @@ cd cryoet-pipeline
 
 **The pipeline's environment.** On max, environments are made with micromamba.
 The `gpu` extra brings PyTorch, which the MRA runs on; `viz` brings matplotlib,
-which the reports need.
+which the reports need; `library` brings pypdf, which reads AreTomo2's manual
+for the reference library, and without which the check at the end of this step
+names that manual as a problem.
 
 ```bash
 micromamba create -n cryoet-pipeline -c conda-forge python=3.13
 micromamba activate cryoet-pipeline
-python -m pip install -e ".[io,viz,gpu]"
+python -m pip install -e ".[io,viz,gpu,library]"
 ```
 
 If pip stops on a broken download (`error: incomplete-download` or another
@@ -105,7 +107,7 @@ pip resumes a broken download itself, which matters most for PyTorch and its
 CUDA libraries, the largest downloads here:
 
 ```bash
-python -m pip install --resume-retries 10 -e ".[io,viz,gpu]"
+python -m pip install --resume-retries 10 -e ".[io,viz,gpu,library]"
 ```
 
 Check that PyTorch is a CUDA build. The second number must be a CUDA version,

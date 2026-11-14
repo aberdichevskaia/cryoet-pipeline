@@ -8,15 +8,23 @@ Here the pipeline's terminal assistant reads the data, writes the lane files,
 checks them and submits them; you answer its questions, read what it shows you,
 and say yes or no.
 
-The assistant is Claude Code, started by `scripts/assistant` with the
-pipeline's own instructions, skills and permission rules
-([assistant/README.md](../../assistant/README.md)). What it may do:
+The assistant runs in one of two clients. Both are started by
+`scripts/assistant`, with the pipeline's own instructions, skills, guard and
+permission rules ([assistant/README.md](../../assistant/README.md)):
+
+- **Claude Code**, Anthropic's, for a Claude account: `scripts/assistant`;
+- **Codex**, OpenAI's, for a ChatGPT account: `scripts/assistant --codex`.
+
+Use the one your account is for. The steps are the same in both, and where the
+two differ, this tutorial says so. On the pipeline's 13 evaluation cases,
+graded blind on 14 November 2026, they did about equally well. What the
+assistant may do, in either:
 
 | It | without asking | after your explicit yes | never |
 |---|---|---|---|
 | read files, QC, logs, `squeue`, `sacct` | ✓ | | |
 | read a data folder (`show_folder.py`), dry runs | ✓ | | |
-| write a lane file | | ✓ (Claude Code asks you to approve the file) | |
+| write a lane file | | ✓ (the client shows you the file and asks) | |
 | submit, with `--overwrite`, cancel a job | | ✓ each its own yes | |
 | export a class of an MRA run to RELION 5 | | ✓ | |
 | run RELION, `relion_commands.sh` or `mpirun` (you run them, in a job) | | | ✓ |
@@ -26,10 +34,11 @@ The submission scripts hold it to its yes themselves: a submission from the
 assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
-> **Status, 10 November 2026.** Every pipeline step up to the particles has run
-> on these data on max, and the assistant has run on max's login nodes. The MRA
-> as a stage of a lane is new (10 November 2026) and has not run on max yet.
-> Tell Anna what happened.
+> **Status, 14 November 2026.** Every pipeline step up to the particles has run
+> on these data on max. The assistant has run on max's login nodes in Claude
+> Code since 5 November, and in Codex on 14 November, where Codex's sandbox
+> works. The MRA as a stage of a lane is new (10 November 2026) and has not run
+> on max yet. Tell Anna what happened.
 
 ## What you need
 
@@ -41,15 +50,27 @@ minutes, with the reason you gave, and the project's journal records it.
   the tomograms.
 - **A terminal on a login node.** You, and the assistant, run everything there.
   The heavy work runs in Slurm jobs, which the pipeline's scripts submit.
-- **A Claude subscription that includes Claude Code**: Pro, Max, Team or
-  Enterprise.
-- **Terms that exclude training on your data.** A Team or Enterprise seat has
-  them by default. On a personal Pro or Max plan, turn off the setting that
-  lets Anthropic use your chats to improve its models (claude.ai → Settings →
-  Privacy) before the first session.
+- **An account for one of the two clients.**
+  - Claude Code: a Claude subscription that includes it, that is Pro, Max,
+    Team or Enterprise.
+  - Codex: a ChatGPT plan; Codex is part of every plan, from Free to
+    Enterprise. Signing in from max uses a device code, which must be enabled
+    in ChatGPT's security settings, or by your workspace's admin. Step 2 says
+    what to do if it is not.
+- **Terms that exclude training on your data.** Set them before the first
+  session.
+  - Claude: a Team or Enterprise seat has them by default. On a personal Pro
+    or Max plan, turn off the setting that lets Anthropic use your chats to
+    improve its models (claude.ai → Settings → Privacy).
+  - ChatGPT: a Business, Enterprise or Edu workspace has them by default. On a
+    personal plan, turn off **Improve the model for everyone** (ChatGPT →
+    Settings → Data controls). Codex has a separate setting, **Include
+    environments**, in Codex's settings, which that one does not change: turn
+    it off too.
 - **To know what leaves the cluster.** In a session, the text the assistant
-  reads goes to Anthropic: log excerpts, file paths, lane files, QC records,
-  and any picture it opens. The frames and the tomograms do not.
+  reads goes to Anthropic, or to OpenAI in Codex: log excerpts, file paths,
+  lane files, QC records, and any picture it opens. The frames and the
+  tomograms do not.
 - **About an hour for the setup**, then waiting for the queue. While the jobs
   run, the session can be closed.
 
@@ -70,10 +91,12 @@ created once, with the series it will ever hold. Series 161 will be processed
 apart from the other four (step 6 below), so all five must be in the project
 from the start.
 
-## 2. Install Claude Code and sign in (once)
+## 2. Install the client and sign in (once)
 
-If `claude --version` already prints a version on the login node, skip to the
-sign-in. Otherwise install it into your home folder:
+Install the client your account is for, Claude Code or Codex.
+
+**Claude Code.** If `claude --version` already prints a version on the login
+node, skip to the sign-in. Otherwise install it into your home folder:
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
@@ -91,6 +114,42 @@ your Claude account, and paste the code it gives you back into the terminal.
 Type `/exit` to leave. From now on, start Claude Code only through the
 launcher below: it is what gives it the pipeline's rules.
 
+**Codex.** If `codex --version` already prints a version on the login node,
+skip to the sign-in. Otherwise install it into your home folder with OpenAI's
+installer:
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+Open a new terminal if `codex --version` does not find it afterwards. Then
+sign in once, through the launcher, from your clone:
+
+```bash
+cd "$CRYOET_WORK/cryoet-pipeline"
+scripts/assistant --codex --login
+```
+
+The assistant's Codex keeps its own sign-in and settings in
+`~/.cryoet-assistant/codex`, apart from any Codex of your own, so sign in this
+way and not with `codex login`. Over SSH the launcher asks for a device code:
+open the link it prints in a browser on your computer, sign in with your
+ChatGPT account (your workspace's, if you have one), and enter the one-time
+code it shows. If device code login is not enabled for you, the sign-in fails
+and the launcher names the other way, a browser login through an SSH tunnel;
+[assistant/README.md](../../assistant/README.md#signing-in-to-codex-on-a-cluster)
+says how. Treat `~/.cryoet-assistant/codex/auth.json` like a password.
+
+If Codex is the only client you will use, this line in `~/.bashrc` makes
+`scripts/assistant` start Codex without `--codex`:
+
+```bash
+export CRYOET_ASSISTANT_BACKEND=codex
+```
+
+From now on, start Codex for the pipeline only through the launcher: it is
+what gives it the pipeline's rules.
+
 ## 3. Start the assistant
 
 On a login node, from the root of your clone, with the environment active (the
@@ -103,16 +162,30 @@ micromamba activate cryoet-pipeline
 scripts/assistant
 ```
 
+For Codex, the last line is `scripts/assistant --codex`.
+
 The launcher prints the reference library it gives the session
 (`library snapshot …, read-only`): manuals of IMOD, pytom-match-pick and the
-other tools, at the versions installed on max. If Claude Code asks whether you
-trust the folder, it is your clone: yes.
+other tools, at the versions installed on max.
 
-- `scripts/assistant -c` continues your last session, after a lost connection
-  or the next day. The jobs do not depend on the session: they run whether it
-  is open or not.
-- `scripts/assistant --model claude-sonnet-5-5` starts a cheaper model. The
-  default is `claude-opus-5-5`. Give a full model ID, and to change the model
+- **Claude Code** may ask whether you trust the folder. It is your clone: yes.
+- **Codex** opens on a **Folder access** screen at every start: choose
+  **1. Open restricted** (Enter). The launcher marks the clone untrusted on
+  purpose, so that no settings inside the clone apply; the assistant's own
+  rules and guard come from its Codex home and act all the same. If you are
+  ever offered to trust the folder, do not. If Codex warns about
+  `--dangerously-bypass-hook-trust`, that is expected: it is how the launcher
+  makes sure the guard runs.
+
+Then:
+
+- `scripts/assistant -c` (or `scripts/assistant --codex -c`) continues your
+  last session, after a lost connection or the next day. The jobs do not
+  depend on the session: they run whether it is open or not.
+- The model. In Claude Code the default is `claude-opus-5-5`, and
+  `scripts/assistant --model claude-sonnet-5-5` starts a cheaper one. In Codex
+  it is `gpt-6.1-sol`, reasoning at `high`; `scripts/assistant --codex --effort
+  medium` makes it reason less. Give a full model ID, and to change the model
   start a new session rather than using `/model`, so that the journal names the
   right one.
 - Write to it in English or in Russian; it answers in the language you use.
@@ -160,8 +233,10 @@ What it does, following its `lane-config` skill:
    a first-fit defocus range of 1-8 µm. The frames' super-resolution binning,
    `[motion] ftbin = 2`, it sets itself from the frame size.
 4. **Writes the lane** into `configs/lanes/`, with the source of every value in
-   a comment (you, a header, a rule, or a guess, labelled as one). Claude Code
-   shows you the file and asks before writing it. Read it.
+   a comment (you, a header, a rule, or a guess, labelled as one). The client
+   shows you the file and asks before writing it. Read it, then approve it
+   once; in Codex the question is *Would you like to make the following
+   edits?*, and the answer **Yes, proceed**.
 5. **Checks it** with `run_series.py --list-steps`, which refuses any key the
    pipeline does not read.
 
@@ -181,6 +256,13 @@ It asks whether to submit. Answer with a clear yes. It then runs the same
 command without `--dry-run` and with `--reason`, and reports the job IDs. If
 anything changed between the dry run and your yes, it has to run the dry run
 again and ask again; the script refuses otherwise.
+
+In Codex there is one more question. A submission runs outside Codex's
+sandbox, so Codex shows the command and asks *Would you like to run the
+following command?* Check that it is the dry run's command without
+`--dry-run`, with `--reason`, and answer **Yes, proceed**. Never the answer
+that says *don't ask again*: it would let every command that starts the same
+way run without asking, for the rest of the session.
 
 ## 6. Series 161
 
@@ -225,7 +307,8 @@ When the `gpu` jobs have finished, ask it for the project's report:
 > Write the report for ryr1-tutorial.
 
 `cryoet report` is not on its list of commands that run without asking, so
-Claude Code asks you to approve it; it only reads the project and writes a PDF,
+the client asks you before running it (Codex, to run it outside its sandbox,
+which writes nothing); it only reads the project and writes a PDF,
 `outputs/ryr1-tutorial/reports/report-bin8.pdf`. Or run it yourself, in another
 terminal, as in
 [step 9 of the other tutorial](ryr1-without-assistant.md#9-look-at-the-results-before-the-mra),
@@ -332,17 +415,21 @@ export's folder; the assistant can read it for you.
   cannot call `sbatch`, and it will not write a batch script for an experiment
   the recipes do not cover: it stops and asks a person instead.
 - **Do not get round its rules.** In particular, do not run a submission,
-  `scancel` or `--overwrite` with Claude Code's `!` prefix: `!` runs a command
-  outside the rules and the guard. Run such a command in your own terminal, or
-  through the assistant with its dry run and your yes.
+  `scancel` or `--overwrite` with the `!` prefix, which both clients have: in
+  Claude Code `!` runs a command outside the rules and the guard, and in Codex
+  that has not been checked. Run such a command in your own terminal, or
+  through the assistant with its dry run and your yes. In Codex, do not answer
+  a question with *Yes, and don't ask again …*: the launcher removes that
+  answer at the next start, but until then it lets every command that starts
+  the same way run without asking.
 - **It does not change the pipeline.** If it suspects a bug, it says so with its
   evidence, for a person to fix.
 - **Downloads are yours.** For an EMPIAR entry it writes and checks the layout
   and gives you the `cryoet download-empiar` command, which can run for hours,
   to run in your own shell.
 - **Every submission and every export it makes is in the journal**,
-  `outputs/ryr1-tutorial/journal.jsonl`, with the model and your reason; a
-  submission also with the lane file's text.
+  `outputs/ryr1-tutorial/journal.jsonl`, with the client, the model and your
+  reason; a submission also with the lane file's text.
 - **When something refuses**, the table at the end of the
   [other tutorial](ryr1-without-assistant.md#when-something-refuses) says what
   it means; the assistant shows you the refusal and explains it.
