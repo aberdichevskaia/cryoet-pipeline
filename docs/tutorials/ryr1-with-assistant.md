@@ -58,7 +58,8 @@ minutes, with the reason you gave, and the project's journal records it.
 Do steps 1, 2 and 4 of the other tutorial, then come back:
 
 1. [Clone and install](ryr1-without-assistant.md#1-clone-and-install-once),
-   including the two `.bashrc` lines and the `build_library.py` check;
+   including the `.bashrc` lines that name your folder on `/fast` and the
+   `build_library.py` check;
 2. [Copy the data](ryr1-without-assistant.md#2-copy-the-data) to
    `data/ryr1/frames`;
 4. [Create the project, with all five series](ryr1-without-assistant.md#4-create-the-project-with-all-five-series),
@@ -97,7 +98,7 @@ assistant runs the pipeline's scripts in this shell, and your jobs take this
 shell's tool variables):
 
 ```bash
-cd /fast/AG_Kudryashev/$USER/cryoet-pipeline
+cd "$CRYOET_WORK/cryoet-pipeline"
 micromamba activate cryoet-pipeline
 scripts/assistant
 ```
@@ -276,9 +277,10 @@ shows you what it printed:
 
 - the class's particles after the run's last finished iteration;
 - the duplicates it leaves out;
-- the two halves. They are dealt within each series, with neighbours closer
-  than a box kept together, so they can come out unequal (782 and 404 for a
-  RyR1 class on 10 November 2026);
+- the two halves. Neighbours closer than a box stay in one half and the halves
+  are balanced over the whole class, so they come out nearly equal unless one
+  group of neighbours holds a large part of the class; the dry run names the
+  largest group;
 - a note per series. For these frames, which have no mdocs, the notes say that
   the acquisition order comes from the tilt order, here the angle order, and
   that there is no dose.
@@ -311,7 +313,7 @@ Then run that line, with max's GPU options in place of
 `<GPU partition and --gres>`:
 
 ```bash
-sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
+sbatch --nodes=1 --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 \
     --partition=gpu --gres=gpu:a40:2 \
     --chdir=<the folder it gave you> --wrap "./relion_commands.sh"
 ```

@@ -35,8 +35,13 @@ through the same reader (MRC or Dynamo's EM). Each particle's tomogram is its pa
 the registry. A particle whose centre (box corner + N/2 + the MRA shift) came within
 `--min-distance` (a quarter of the box) of a better-scoring one of its series is a
 duplicate and left out. Halves: particles of a series within a box of each other are
-linked and a linked group goes to one half, so no half holds the other's density;
-groups are dealt with `--seed` to the smaller half of their series.
+linked and a linked group goes to one half, so no half holds the other's density.
+The groups of all series, shuffled with `--seed`, are dealt largest first, each to
+the half with fewer particles so far (a tie by the seed), and the dry run names the
+largest group: halves can differ by no more than what one group forces. Until 11
+November 2026 they were dealt series by series, and RyR1's class 1 came out 782
+against 404: a series that is mostly one group keeps its excess, and the excesses
+add up.
 
 The dry run prints those numbers and every series' stack (views, binning, size)
 and writes nothing; the person confirms the numbers. Then:
@@ -62,7 +67,9 @@ RELION's first round extracts at the MRA's pixel and box, so the reference fits 
 is (relion_refine refuses a reference of another size); finer pixels are later rounds.
 `--relion-check` has RELION reconstruct the exported class and compares it with the
 exported reference. The export ends by printing the `sbatch` line that runs
-relion_commands.sh with `--chdir` set to its folder (the README holds it too): on
+relion_commands.sh on one node with `--chdir` set to its folder (the README holds
+it too; `--nodes=1`, since `--gres` counts GPUs per node and mpirun's ranks would
+follow tasks Slurm spread over several): on
 10 November 2026 a RELION job sent with a guessed folder, before any export,
 failed at once with exit 127 (job 3914512).
 
@@ -233,16 +240,27 @@ alignment solved without one; not decided.
   angle back by the alignment's rotation. Not checked against a fit on raw images.
 - **Dose.** rlnMicrographPreExposure counts every acquired view in acquisition
   order, the left-out ones too. Some mdocs give no dose (10164: ExposureDose 0),
-  so the lane has to give one.
+  so the lane has to give one. Without an mdoc the order falls back on the z
+  values; for RyR1's frames that is the angle order, and a dose given there would
+  weight the wrong views if they were taken dose-symmetrically, so RyR1 is
+  exported without one.
 - **Beads** are not looked for: a class with gold beads in it exports them. MRA
   usually puts them in a class of their own; the fiducial model would say where
   they are on bead-aligned series.
 - **Runs in export folders** are read through their manifest (unit-tested on a
-  synthetic Dynamo project); no export of one has been checked by RELION yet.
+  synthetic Dynamo project, and RyR1's class below was one); no export of one has
+  been checked by RELION yet.
 - **CTF from a CTF model** is unit-tested only: the local TS_01 project has no
   CTF model, so no RELION run has read a fitted defocus from this export yet.
-- **A real class.** The step has run on a class of picks with random orientations
-  (below), not on a particle: RyR1 or Gag on max is the first real one.
+- **A real class.** RyR1's class 1 of `mra_pad_ssn_g2atan_port` (iteration 5) was
+  exported on max on 10 November 2026 with `--stack-binning 2`: 1,235 particles, 49
+  duplicates left out, 1,186 exported from 5 series of 24 to 26 views, RELION at
+  `--bin 4` for 13.44 A. Its halves came out 782 and 404 (53 groups of neighbours,
+  dealt series by series), the reason the halves are now dealt over the class; that
+  export is to be written again. Every series noted no dose, the order from z
+  values, and a CTF model fitted on another final stack of the series. RELION has
+  not run on it yet; at 13.44 A its Refine3D cannot pass Nyquist, 27 A: a check of
+  the export before finer rounds.
 - **RELION at MDC.** Found 10 November 2026: Environment Modules (no `module
   spider`) list `relion/v5/gpu/sm86-cu11.7` (an A40 build; the group's
   `/fast/AG_Kudryashev/software/relion-5.0.1`), `relion/v4/gpu/sm86-cu11.7` and

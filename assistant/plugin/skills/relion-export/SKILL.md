@@ -45,7 +45,10 @@ Add only what the person asks for, to the dry run and the export alike:
 Show the person what it printed, in a few lines:
 
 - the class's particles, the decoys left out (decoys in a class mean it holds noise
-  too), the duplicates left out, the two halves;
+  too), the duplicates left out, the two halves. Neighbours closer than a box stay in
+  one half and the halves are balanced over the class, so they differ only when one
+  group of neighbours is too large to balance: say so, with the largest group the
+  dry run names;
 - each series: views, the tilt images' binning, the stack's size in GB, and its
   notes. A note "no dose" means RELION would weight no tilt by dose: ask the person
   for the dose per tilt and dry-run again with `--dose-per-tilt`. The other notes

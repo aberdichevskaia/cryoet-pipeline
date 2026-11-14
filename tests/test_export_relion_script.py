@@ -233,7 +233,42 @@ def test_the_submission_hint_names_the_export_folder(tmp_path) -> None:
     folder = tmp_path / "relion" / "run2-class1"
     hint = _script().submit_hint(folder)
     assert f"--chdir={folder.resolve()}" in hint
-    assert "--ntasks=3" in hint and '--wrap "./relion_commands.sh"' in hint
+    assert "--nodes=1 --ntasks=3" in hint and '--wrap "./relion_commands.sh"' in hint
+
+
+def test_the_dry_run_names_the_halves_and_the_largest_group(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    chosen = SimpleNamespace(
+        channel=1,
+        run=tmp_path / "run2",
+        iteration=5,
+        members=[None] * 6,
+        decoys_left_out=0,
+        not_agreed=0,
+        agreed_with=None,
+        box=52,
+        pixel_angstrom=13.44,
+        source="plan.json",
+    )
+    plan = SimpleNamespace(
+        chosen=chosen,
+        duplicates=[],
+        min_distance=13.0,
+        halves={1: 1, 2: 2, 3: 1, 4: 2, 5: 2, 6: 1},
+        linked_sizes=(3, 2),
+        kept=[1, 2, 3, 4, 5, 6],
+        seed=0,
+        series=[],
+        out=tmp_path / "out",
+    )
+    text = "\n".join(_script().describe(plan))
+    assert (
+        "exported: 6; half 1 3, half 2 3 (2 groups of neighbours within a box kept "
+        "together, the largest 3; seed 0)"
+    ) in text
+    plan.linked_sizes = ()
+    assert "(no neighbours within a box; seed 0)" in "\n".join(_script().describe(plan))
 
 
 def test_the_diameter_comes_from_the_plan_or_half_the_box(tmp_path) -> None:

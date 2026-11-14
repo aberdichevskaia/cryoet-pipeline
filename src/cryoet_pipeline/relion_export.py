@@ -1192,21 +1192,23 @@ def assign_halves(
     series: Mapping[int, str],
     link_distance: float,
     seed: int,
-) -> tuple[dict[int, int], int]:
+) -> tuple[dict[int, int], list[int]]:
     """rlnRandomSubset for each particle, groups of neighbours kept together.
 
     Particles of one series whose centres lie within `link_distance` of each other
     (a box: their boxes overlap) are linked, and a linked group goes to one half, so
-    no half holds the other's density. Within each series the groups are shuffled
-    with `seed` and each goes to the half with fewer particles so far. Returns the
-    halves and how many groups held more than one particle.
+    no half holds the other's density. The halves are balanced over the whole class:
+    the groups of every series, shuffled with `seed`, are dealt largest first, each
+    to the half with fewer particles so far, a tie by the seed. Dealt series by
+    series instead, a series that is mostly one group keeps that group's excess and
+    the excesses add up: RyR1's class 1 at MDC came out 782 against 404 (10 November
+    2026). Returns the halves and the sizes of the groups that held more than one
+    particle, largest first.
     """
 
     from scipy.spatial import cKDTree
 
-    rng = np.random.default_rng(seed)
-    halves: dict[int, int] = {}
-    linked_groups = 0
+    groups: list[list[int]] = []
     by_series: dict[str, list[int]] = {}
     for tag in centres:
         by_series.setdefault(series[tag], []).append(tag)
@@ -1214,15 +1216,21 @@ def assign_halves(
         tags = sorted(by_series[name])
         points = np.array([centres[tag] for tag in tags], dtype=float)
         pairs = cKDTree(points).query_pairs(r=link_distance)
-        ordered = [[tags[index] for index in group] for group in _linked(len(tags), pairs)]
-        linked_groups += sum(1 for group in ordered if len(group) > 1)
-        counts = {1: 0, 2: 0}
-        for group in (ordered[index] for index in rng.permutation(len(ordered))):
-            half = 1 if counts[1] <= counts[2] else 2
-            for tag in group:
-                halves[tag] = half
-            counts[half] += len(group)
-    return halves, linked_groups
+        groups += [[tags[index] for index in group] for group in _linked(len(tags), pairs)]
+    rng = np.random.default_rng(seed)
+    # sorted() is stable: groups of one size stay in the seed's order.
+    dealt = sorted((groups[index] for index in rng.permutation(len(groups))), key=len, reverse=True)
+    halves: dict[int, int] = {}
+    counts = {1: 0, 2: 0}
+    for group in dealt:
+        if counts[1] == counts[2]:
+            half = int(rng.integers(1, 3))
+        else:
+            half = 1 if counts[1] < counts[2] else 2
+        for tag in group:
+            halves[tag] = half
+        counts[half] += len(group)
+    return halves, [len(group) for group in dealt if len(group) > 1]
 
 
 def _linked(count: int, pairs: Iterable[tuple[int, int]]) -> list[list[int]]:

@@ -29,22 +29,61 @@ There is a second tutorial for the same data with the assistant:
 
 ## What you need
 
-- An account on max, and a folder on `/fast` with room for the data and the
-  outputs. Measure the frames with `du -sh` before copying them (step 2); the
-  outputs at bin8 add about 30 GB of motion-corrected sums and stacks plus the
-  tomograms.
+- An account on max, and a folder on `/fast` with room for the environments
+  (step 1), the data and the outputs. Measure the frames with `du -sh` before
+  copying them (step 2); the outputs at bin8 add about 30 GB of
+  motion-corrected sums and stacks plus the tomograms.
 - A terminal on a login node. Every command below runs there. The heavy work
   runs in Slurm jobs, which the pipeline's scripts submit for you.
 - About an hour of your time for the setup, then waiting for the queue.
 
 ## 1. Clone and install (once)
 
-Clone into your folder on `/fast`, not into your home, since the outputs are
-written inside the clone. Below, `/fast/AG_Kudryashev/$USER` stands for that
-folder; use yours.
+**Your folder, first.** Your home on max is almost always too small for what
+this tutorial installs: two environments, one with PyTorch and its CUDA
+libraries, and the downloads pip and micromamba keep. Choose one folder of
+yours on `/fast` with room, and name it once in `~/.bashrc`; the environments,
+the downloads and the clone with its outputs all go there. Add these lines at
+the end of `~/.bashrc`, with your folder in place of `<your folder>`:
 
 ```bash
-cd /fast/AG_Kudryashev/$USER
+export CRYOET_WORK=/fast/AG_Kudryashev/<your folder>
+export MAMBA_ROOT_PREFIX=$CRYOET_WORK/micromamba
+export PIP_CACHE_DIR=$CRYOET_WORK/cache/pip
+export ENV_MANAGER=micromamba
+source /fast/AG_Kudryashev/software/cryoet-tools.sh
+export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
+```
+
+- `CRYOET_WORK` is your folder; the commands below use it.
+- `MAMBA_ROOT_PREFIX` is where micromamba makes environments and keeps its
+  downloads. micromamba's own block in `~/.bashrc` sets it to your home, so
+  these lines must come after that block. Environments you made before stay
+  where they were, and `micromamba activate <their path>` still reaches them.
+- `PIP_CACHE_DIR` is where pip keeps what it downloads.
+- `ENV_MANAGER` makes the jobs activate the environment with micromamba. Some
+  of max's nodes have a system conda, which a job would otherwise try first and
+  fail with.
+- The group's tools (IMOD, MotionCor3, CTFFIND 5, MemBrain-seg) are installed
+  once for everyone, and `/fast/AG_Kudryashev/software/cryoet-tools.sh` names
+  them.
+- `PYTOMO_MP_DIR` is pytom-match-pick, in the environment made below.
+
+Keep them outside any check for the host name: jobs take these variables from
+the shell you submit from, and that shell is on a login node. Open a new
+terminal so that they take effect, and check:
+
+```bash
+echo "$MAMBA_ROOT_PREFIX"
+```
+
+It must print your folder followed by `/micromamba`. If it prints a folder in
+your home, micromamba's block comes after these lines: move them below it.
+
+Then clone into your folder:
+
+```bash
+cd "$CRYOET_WORK"
 git clone https://github.com/aberdichevskaia/cryoet-pipeline.git
 cd cryoet-pipeline
 ```
@@ -85,36 +124,22 @@ micromamba create -n pytom_tm -c conda-forge python=3.12 cupy "cuda-version=12.*
 micromamba run -n pytom_tm python -m pip install "pytom-match-pick[plotting]==0.14.0"
 ```
 
-**The group's tools** (IMOD, MotionCor3, CTFFIND 5, MemBrain-seg) are installed
-once for everyone, and `/fast/AG_Kudryashev/software/cryoet-tools.sh` names
-them. Add these two lines to your `~/.bashrc`, outside any check for the host
-name, because jobs take these variables from the shell you submit from, and
-that shell is on a login node:
+**Check what your shell finds.** This writes nothing:
 
 ```bash
-source /fast/AG_Kudryashev/software/cryoet-tools.sh
-export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
-```
-
-Open a new terminal so that they take effect, then check what your shell
-finds. This writes nothing:
-
-```bash
-cd /fast/AG_Kudryashev/$USER/cryoet-pipeline
-micromamba activate cryoet-pipeline
 python3 scripts/build_library.py --site mdc --dry-run \
     --config docs/tutorials/ryr1/ryr1-tutorial.toml
 ```
 
 Every tool should show a version, pytom-match-pick 0.14.0 among them, and the
 last lines should say `Problems: none`. If a tool is missing, its variable is
-not set in this shell: check the two `.bashrc` lines.
+not set in this shell: check the `.bashrc` lines at the top of this step.
 
 **Every time you come back**, start the same way: a login node, the clone's
 root, the environment active.
 
 ```bash
-cd /fast/AG_Kudryashev/$USER/cryoet-pipeline
+cd "$CRYOET_WORK/cryoet-pipeline"
 micromamba activate cryoet-pipeline
 ```
 
@@ -489,7 +514,7 @@ export's folder.
 
 | It says | What it means |
 |---|---|
-| `$MOTIONCOR3 is not set` (or another `$…`) | the shell lacks the group's tools: the two `.bashrc` lines, then a new terminal |
+| `$MOTIONCOR3 is not set` (or another `$…`) | the shell lacks the group's tools: the `.bashrc` lines of step 1, then a new terminal |
 | `… already exists but has no manifest for …` | the project was created without that series (step 4 was skipped); use a new project |
 | a series is busy, naming a job | one of your jobs works on that series; wait until it has ended |
 | `OVERWRITE is set in the environment` | `unset OVERWRITE`; give `--overwrite` to the one submission that needs it |

@@ -84,7 +84,8 @@ from cryoet_pipeline.runs import RunInput, files_fingerprint, writing
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import submit_lanes  # noqa: E402  (the journal and the dry-run gate of submissions)
 
-STEP, STEP_VERSION, BACKEND, BACKEND_VERSION = "export-relion", 1, "relion5", 1
+# Step version 2 (11 November 2026): halves balanced over the whole class.
+STEP, STEP_VERSION, BACKEND, BACKEND_VERSION = "export-relion", 2, "relion5", 1
 JOURNAL_ACTION = "export-relion"
 """What the project's journal calls this script's dry runs and exports."""
 """Declared: raised by hand when a change moves what the export writes."""
@@ -113,7 +114,7 @@ class ExportPlan:
     kept: list[int]
     duplicates: list[tuple[int, int]]
     halves: dict[int, int]
-    linked_groups: int
+    linked_sizes: tuple[int, ...]  # groups of neighbours kept in one half, largest first
     centres: dict[int, np.ndarray]
     series: list[SeriesPlan]
     min_distance: float
@@ -201,7 +202,7 @@ def make_plan(args: argparse.Namespace) -> ExportPlan:
         kept=kept,
         duplicates=duplicates,
         halves=halves,
-        linked_groups=linked,
+        linked_sizes=tuple(linked),
         centres=centres,
         series=plans,
         min_distance=min_distance,
@@ -225,10 +226,16 @@ def describe(plan: ExportPlan) -> list[str]:
         f"{plan.min_distance:g} voxels of a better-scoring particle)"
     )
     halves = Counter(plan.halves.values())
+    linked = plan.linked_sizes
+    together = (
+        f"{len(linked):,} groups of neighbours within a box kept together, the largest "
+        f"{linked[0]:,}"
+        if linked
+        else "no neighbours within a box"
+    )
     lines.append(
         f"  exported: {len(plan.kept):,}; half 1 {halves[1]:,}, half 2 {halves[2]:,} "
-        f"({plan.linked_groups:,} groups of neighbours within a box kept together, "
-        f"seed {plan.seed})"
+        f"({together}; seed {plan.seed})"
     )
     lines.append(
         f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the MRA's; "
@@ -399,10 +406,12 @@ def submit_hint(out: Path) -> str:
     """The line that runs an export's commands in a Slurm job, with the folder filled
     in: a person who has to guess the folder submits from the wrong one (MDC, job
     3914512, 10 November 2026: a folder with no export, exit 127). The GPU options are
-    the site's: at MDC --partition=gpu --gres=gpu:a40:2."""
+    the site's: at MDC --partition=gpu --gres=gpu:a40:2. One node: --gres counts GPUs
+    per node, and mpirun's ranks would follow tasks Slurm spread over several."""
 
     return (
-        "sbatch --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 <GPU partition and --gres> "
+        "sbatch --nodes=1 --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 "
+        "<GPU partition and --gres> "
         f'--chdir={Path(out).resolve()} --wrap "./relion_commands.sh"'
     )
 

@@ -558,7 +558,7 @@ def test_duplicates_leave_out_the_worse_of_two_close_particles() -> None:
     assert kept == [2] and sorted(dropped) == [(1, 2), (3, 2)]
 
 
-def test_halves_keep_neighbours_together_and_balance_each_series() -> None:
+def test_halves_keep_neighbours_together_and_balance_the_class() -> None:
     rng = np.random.default_rng(1)
     centres, series = {}, {}
     tag = 0
@@ -568,18 +568,53 @@ def test_halves_keep_neighbours_together_and_balance_each_series() -> None:
             centres[tag] = rng.uniform(0, 1000, size=3) * np.array([10.0, 10, 1])
             series[tag] = name
     group = []
-    for offset in range(3):  # three neighbours within a box
+    for offset in range(3):  # three neighbours, each within a box of the next only
         tag += 1
-        centres[tag] = np.array([5.0 + 20 * offset, 5.0, 5.0])
+        centres[tag] = np.array([5.0 + 40 * offset, 5.0, 5.0])
         series[tag] = "a"
         group.append(tag)
     halves, linked = assign_halves(centres, series, link_distance=48.0, seed=3)
-    assert linked == 1
+    assert linked == [3]
     assert len({halves[member] for member in group}) == 1
-    for name in ("a", "b"):
-        counts = Counter(halves[t] for t in halves if series[t] == name)
-        assert abs(counts[1] - counts[2]) <= 3
+    counts = Counter(halves.values())
+    assert abs(counts[1] - counts[2]) <= 1
     assert assign_halves(centres, series, 48.0, seed=3) == (halves, linked)
+    assert assign_halves(centres, series, 48.0, seed=4)[0] != halves
+
+
+def test_halves_balance_the_class_when_one_array_fills_each_series() -> None:
+    # RyR1's class 1 at MDC (10 November 2026), dealt series by series, came out 782
+    # against 404. Here 1,186 particles in five series, each mostly one array of
+    # neighbours 22 voxels apart, linked at a box of 52; the rest lie 100 apart.
+    centres, series, arrays = {}, {}, []
+    tag = 0
+    for name, array, lone in (
+        ("039", 200, 77),
+        ("096", 140, 49),
+        ("097", 190, 75),
+        ("125", 210, 70),
+        ("161", 120, 55),
+    ):
+        members = []
+        for index in range(array):
+            tag += 1
+            centres[tag] = np.array([30.0 + 22 * (index % 20), 30.0 + 22 * (index // 20), 100])
+            series[tag] = name
+            members.append(tag)
+        arrays.append(members)
+        for index in range(lone):
+            tag += 1
+            centres[tag] = np.array([1000.0 + 100 * index, 1000.0, 100.0])
+            series[tag] = name
+    largest_in = set()
+    for seed in range(10):
+        halves, linked = assign_halves(centres, series, link_distance=52.0, seed=seed)
+        counts = Counter(halves.values())
+        assert abs(counts[1] - counts[2]) <= 1, (seed, counts)
+        assert linked == [210, 200, 190, 140, 120]
+        assert all(len({halves[member] for member in members}) == 1 for members in arrays)
+        largest_in.add(halves[arrays[3][0]])
+    assert largest_in == {1, 2}  # which half takes the largest array is the seed's
 
 
 def test_optimisation_set_names_the_particles_and_tomograms() -> None:
