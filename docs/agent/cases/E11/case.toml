@@ -30,7 +30,7 @@ all = ['^\s*-\s*defocus_search_windo_angstrom', '^\s*\+\s*defocus_search_window_
 box = "it runs the dry run again on the corrected copy"
 in = "commands"
 ordered = true
-all = ['^(Edit|Write|MultiEdit): .*ctf-wide-window\.toml|^Bash: .*sed -i.*ctf-wide-window\.toml', '^Bash: .*submit_lanes\.py(?=.*ctf-wide-window\.toml)(?=.*--dry-run)']
+all = ['^(Edit|Write|MultiEdit|apply_patch): .*ctf-wide-window\.toml|^Bash: .*sed -i.*ctf-wide-window\.toml', '^Bash: .*submit_lanes\.py(?=.*ctf-wide-window\.toml)(?=.*--dry-run)']
 
 [[check]]
 box = "did not: change other parameters"
