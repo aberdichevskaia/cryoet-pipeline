@@ -57,7 +57,7 @@ Two more sources, where needed:
 - `python3 scripts/show_series.py --project <project> --series <TS>`: what one
   series has, and its QC documents;
 - `sacct -j <job id> -o JobID,State,ExitCode,Elapsed,MaxRSS,ReqMem,Timelimit`,
-  and `squeue -u $USER`: what Slurm knows, such as a time limit, memory, or a
+  and `squeue --me`: what Slurm knows, such as a time limit, memory, or a
   node failure.
 
 ## 4. Name the cause
