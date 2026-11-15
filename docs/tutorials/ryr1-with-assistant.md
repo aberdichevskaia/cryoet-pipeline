@@ -150,6 +150,32 @@ export CRYOET_ASSISTANT_BACKEND=codex
 From now on, start Codex for the pipeline only through the launcher: it is
 what gives it the pipeline's rules.
 
+**Only if your home is really short of space.** The clients keep their
+programs and sessions in your home: roughly half a gigabyte for Claude Code
+and a gigabyte for Codex, plus the sessions. A couple of gigabytes free is
+enough. If you do not have that, Codex can live in your folder on `/fast`
+instead. This has not been tried on max yet: tell Anna how it went.
+
+- Install it with this command instead of the one above. Its program goes to
+  your folder, and only a link stays in `~/.local/bin`:
+
+  ```bash
+  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_HOME="$CRYOET_WORK/codex" sh
+  ```
+
+  Give `CODEX_HOME` to this command only, not in `~/.bashrc`, where it would
+  move any Codex of your own as well.
+- Before you sign in, add this line to `~/.bashrc` and open a new terminal.
+  The assistant's sign-in and sessions then live in your folder, which the
+  launcher keeps readable by you alone. Keep the line: a start without it
+  looks for the sign-in in your home.
+
+  ```bash
+  export CRYOET_ASSISTANT_CODEX_HOME=$CRYOET_WORK/cryoet-assistant/codex
+  ```
+
+For Claude Code, this tutorial has no such way yet.
+
 ## 3. Start the assistant
 
 On a login node, from the root of your clone, with the environment active (the
