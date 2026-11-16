@@ -34,6 +34,7 @@ puts the paint on the voxels this offset predicts.
 
 from __future__ import annotations
 
+import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,9 @@ IMOD_XY_VOXEL_CENTRE_OFFSET = 0.5
 
 See the module docstring: IMOD's Z is a section index and its X and Y are not.
 """
+
+EXPORT_RECORD = "export.json"
+"""Beside the model: which picks and tomogram it was written from."""
 
 _DEFAULT_SPHERE_RADIUS_PX = 5
 """What a pick is drawn as when nothing in the registry says how big it is.
@@ -276,6 +280,16 @@ def write_picks_visualization(
         raise RuntimeError(
             f"point2model exited 0 but wrote no model at {model_path}; see {log_path}"
         )
+    # What was exported, so that an edit of the model coming back (import-picks
+    # --derived-from) can be checked against the picks it names.
+    (directory / EXPORT_RECORD).write_text(json.dumps({
+        "picks_id": picks.id,
+        "tomogram_id": tomogram.id,
+        "model": model_path.name,
+        "tomogram_mrc": tomogram_path.name,
+        "orientation": "pipeline",
+        "model_xy_offset_px": IMOD_XY_VOXEL_CENTRE_OFFSET,
+    }, indent=2) + "\n")
 
     return PicksVisualization(
         directory=directory,

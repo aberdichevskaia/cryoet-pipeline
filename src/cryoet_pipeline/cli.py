@@ -167,7 +167,7 @@ from cryoet_pipeline.pick_selection import (
     thresholds_from_json,
     write_thresholds_template,
 )
-from cryoet_pipeline.picks_import import import_picks
+from cryoet_pipeline.picks_import import import_edited_picks, import_picks
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
@@ -397,16 +397,6 @@ def import_tomogram_command(
 @app.command("import-picks")
 def import_picks_command(
     picks: Annotated[Path, typer.Option(help="The picks file made outside this pipeline.")],
-    format_name: Annotated[
-        str,
-        typer.Option(
-            "--format",
-            help="What the file is: pytom-star (rlnCoordinateX/Y/Z in voxels of the volume "
-            "picked), relion5-star (RELION 5's centred angstroms), csv (columns named "
-            "with --csv-columns), or imod-model (a model made on the volume, in 3dmod or "
-            "by an IMOD program; read with IMOD's model2point).",
-        ),
-    ],
     tilt_series_id: Annotated[str, typer.Option(help="The series the picks are in.")],
     out: Annotated[Path, typer.Option(help="Project directory.")],
     particle_diameter: Annotated[
@@ -414,6 +404,23 @@ def import_picks_command(
         typer.Option(min=0.0, help="The particle's diameter in angstrom, for the check that "
                      "the picks land on particles."),
     ],
+    format_name: Annotated[
+        str | None,
+        typer.Option(
+            "--format",
+            help="What the file is: pytom-star (rlnCoordinateX/Y/Z in voxels of the volume "
+            "picked), relion5-star (RELION 5's centred angstroms), csv (columns named "
+            "with --csv-columns), or imod-model (a model made on the volume, in 3dmod or "
+            "by an IMOD program; read with IMOD's model2point). Not given with "
+            "--derived-from, whose export decides it.",
+        ),
+    ] = None,
+    derived_from: Annotated[
+        str | None,
+        typer.Option(help="The project's picks this file is an edit of: the 3dmod model "
+                     "visualize-picks exported, after a person kept, moved, added or "
+                     "deleted points. Imported as attested picks, with nothing to declare."),
+    ] = None,
     tomogram_id: Annotated[
         str | None,
         typer.Option(help="The registered tomogram the coordinates refer to."),
@@ -483,26 +490,61 @@ def import_picks_command(
     """
 
     try:
-        result = import_picks(
-            picks_path=picks,
-            format_name=format_name,
-            tilt_series_id=tilt_series_id,
-            out=out,
-            particle_diameter_angstrom=particle_diameter,
-            tomogram_id=tomogram_id,
-            tomogram_variant=tomogram_variant,
-            picked_in=picked_in,
-            template_box_px=template_box_px,
-            csv_columns=[name.strip() for name in csv_columns.split(",")] if csv_columns else None,
-            coordinate_units=coordinate_units,
-            coordinate_origin=coordinate_origin,
-            relion_tomo_name=relion_tomo_name,
-            relion_tilt_series_pixel=relion_tilt_series_pixel_size,
-            relion_tomograms_star=relion_tomograms_star,
-            imod_object=imod_object,
-            variant=variant,
-            overrule_picks_check=overrule_picks_check,
-        )
+        if derived_from is not None:
+            declared = {
+                "--format": format_name not in (None, "imod-model"),
+                "--tomogram-id": tomogram_id is not None,
+                "--tomogram-variant": tomogram_variant is not None,
+                "--picked-in": picked_in is not None,
+                "--csv-columns": csv_columns is not None,
+                "--coordinate-units": coordinate_units is not None,
+                "--coordinate-origin": coordinate_origin is not None,
+                "--relion-tomo-name": relion_tomo_name is not None,
+                "--relion-tomograms-star": relion_tomograms_star is not None,
+                "--relion-tilt-series-pixel-size": relion_tilt_series_pixel_size is not None,
+            }
+            given = [name for name, present in declared.items() if present]
+            if given:
+                raise ImportRefused(
+                    f"an edit's format, orientation and tomogram are its export's; "
+                    f"{', '.join(given)} cannot be given with --derived-from"
+                )
+            result = import_edited_picks(
+                picks_path=picks,
+                derived_from=derived_from,
+                tilt_series_id=tilt_series_id,
+                out=out,
+                particle_diameter_angstrom=particle_diameter,
+                imod_object=imod_object,
+                template_box_px=template_box_px,
+                variant=variant,
+                overrule_picks_check=overrule_picks_check,
+            )
+        elif format_name is None:
+            raise ImportRefused("give --format, or --derived-from for an edit of exported picks")
+        else:
+            result = import_picks(
+                picks_path=picks,
+                format_name=format_name,
+                tilt_series_id=tilt_series_id,
+                out=out,
+                particle_diameter_angstrom=particle_diameter,
+                tomogram_id=tomogram_id,
+                tomogram_variant=tomogram_variant,
+                picked_in=picked_in,
+                template_box_px=template_box_px,
+                csv_columns=(
+                    [name.strip() for name in csv_columns.split(",")] if csv_columns else None
+                ),
+                coordinate_units=coordinate_units,
+                coordinate_origin=coordinate_origin,
+                relion_tomo_name=relion_tomo_name,
+                relion_tilt_series_pixel=relion_tilt_series_pixel_size,
+                relion_tomograms_star=relion_tomograms_star,
+                imod_object=imod_object,
+                variant=variant,
+                overrule_picks_check=overrule_picks_check,
+            )
     except ImportRefused as exc:
         raise typer.BadParameter(str(exc)) from exc
     if result.already_imported:
@@ -511,6 +553,11 @@ def import_picks_command(
         typer.echo(f"wrote {result.folder}")
     typer.echo(f"picks {result.picks.id}: {result.picks.parameters['count']} in "
                f"{result.picks.parameters['input_tomogram_id']}")
+    if derived_from is not None:
+        parameters = result.picks.parameters
+        typer.echo(f"edit of {derived_from}: {parameters['edit_kept']} kept, "
+                   f"{parameters['edit_moved']} moved, {parameters['edit_added']} added, "
+                   f"{parameters['edit_removed']} removed")
     typer.echo(f"picks check: {result.check['verdict']}: {result.check['reason']}")
     for warning in result.warnings:
         typer.echo(f"warning: {warning}")

@@ -23,7 +23,7 @@ from cryoet_pipeline import cli
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.models import ArtifactKind, Provenance
 from cryoet_pipeline.particles import read_star_blocks
-from cryoet_pipeline.picks_import import import_picks, relion_geometry
+from cryoet_pipeline.picks_import import import_edited_picks, import_picks, relion_geometry
 from cryoet_pipeline.relion_export import TomogramPlacement, standard_frame_matrix
 from cryoet_pipeline.rotations import matrix_to_relion_euler, relion_euler_to_matrix
 from cryoet_pipeline.runs import read_record
@@ -407,3 +407,134 @@ def test_a_model_with_several_objects_needs_the_picks_object_named(
     result = import_picks(imod_object=1, **arguments)
     positions, _ = _imported(result.picks.path)
     np.testing.assert_allclose(positions, centres, atol=0.006)
+
+
+def test_an_edit_is_matched_to_its_export_pick_by_pick() -> None:
+    from cryoet_pipeline.picks_import import match_edit
+
+    exported = np.array([[10.0, 10, 10], [30, 30, 10], [50, 50, 10], [70, 70, 10]])
+    edited = np.array([[10.0, 10, 10], [31.5, 30, 10], [90, 20, 10], [70.01, 70, 10]])
+
+    match = match_edit(exported, edited, move_radius_px=4.0)
+
+    assert match.kept == [(0, 0), (3, 3)]
+    assert [(i, j) for i, j, _ in match.moved] == [(1, 1)]
+    assert match.moved[0][2] == pytest.approx(1.5)
+    assert match.added == [2]
+    assert match.removed == [2]
+
+
+def _exported_picks(tmp_path: Path, project: Path, scene: dict[str, Any]) -> tuple[str, Path]:
+    """pytom-like picks of the scene (paste points, box 16), exported by visualize-picks."""
+
+    from cryoet_pipeline.bypass_external_inputs import import_external_picks_for_extraction
+
+    star = _pytom_star(tmp_path / "pytom.star", scene["centres"] + 0.5, scene["angles"])
+    registry_path = project / "artifacts.json"
+    registry = ArtifactRegistry.load(registry_path)
+    tomogram = registry.get("TS_01:tomogram:imported")
+    picks = import_external_picks_for_extraction(star_path=star, tomogram=tomogram,
+                                                 tilt_series_id="TS_01", template_box_px=16)
+    registry.add(picks)
+    registry.commit(registry_path)
+    program = _imod("point2model")
+    assert program is not None
+    outcome = CliRunner().invoke(cli.app, [
+        "visualize-picks", "--manifest", str(project / "manifests" / "TS_01.json"),
+        "--registry", str(registry_path), "--out", str(project), "--sphere-radius-px", "4",
+        "--imod-dir", str(Path(program).parent.parent),
+    ])
+    assert outcome.exit_code == 0, outcome.output
+    return picks.id, project / "picks_view" / "TS_01"
+
+
+def _edit_model(export: Path, scene: dict[str, Any]) -> tuple[Path, np.ndarray, np.ndarray]:
+    """As a person would in 3dmod: delete five, move five, add three, save."""
+
+    import os
+    import subprocess
+
+    program = _imod("model2point")
+    assert program is not None
+    imod_dir = str(Path(program).parent.parent)
+    points_path = export / "exported.txt"
+    subprocess.run([program, "-float", "-input", str(export / "TS_01_picks.mod"), "-output",
+                    str(points_path)], check=True, capture_output=True,
+                   env={**os.environ, "IMOD_DIR": imod_dir})
+    points = np.loadtxt(points_path, ndmin=2)[:, :3]
+    shift = np.array([2.0, -1.0, 1.0])
+    moved = points[5:10] + shift
+    centres = scene["centres"]
+    added = []
+    rng = np.random.default_rng(11)
+    while len(added) < 3:
+        candidate = rng.uniform([20, 20, 20], [SHAPE[2] - 20, SHAPE[1] - 20, SHAPE[0] - 20])
+        if np.min(np.linalg.norm(centres - candidate, axis=1)) > 8:
+            added.append(candidate)
+    added_model = np.array(added) + [0.5, 0.5, 0.0]
+    edited = np.vstack([points[10:], moved, added_model])
+    path = _imod_model(export / "TS_01_picks_edited.mod",
+                       [f"{x:.3f} {y:.3f} {z:.3f}" for x, y, z in edited])
+    return path, moved - [0.5, 0.5, 0.0], np.array(added)
+
+
+@needs_imod
+def test_a_3dmod_edit_of_exported_picks_comes_back_attested(
+    tmp_path: Path, project: Path, scene: dict[str, Any]
+) -> None:
+    picks_id, export = _exported_picks(tmp_path, project, scene)
+    assert json.loads((export / "export.json").read_text())["picks_id"] == picks_id
+    edited_model, moved, added = _edit_model(export, scene)
+
+    result = import_edited_picks(picks_path=edited_model, derived_from=picks_id,
+                                 tilt_series_id="TS_01", out=project,
+                                 particle_diameter_angstrom=DIAMETER)
+
+    parameters = result.picks.parameters
+    assert (parameters["edit_kept"], parameters["edit_moved"], parameters["edit_added"],
+            parameters["edit_removed"]) == (len(scene["centres"]) - 10, 5, 3, 5)
+    positions, angles = _imported(result.picks.path)
+    # Kept picks go back to their centres, a pytom pick being half a voxel off for an
+    # even box; moved and added ones are where the person put them.
+    np.testing.assert_allclose(positions[:5], moved, atol=0.006)
+    np.testing.assert_allclose(positions[5:-3], scene["centres"][10:], atol=0.006)
+    np.testing.assert_allclose(positions[-3:], added, atol=0.006)
+    _same_rotations(angles[:5], scene["angles"][5:10])
+    assert not angles[-3:].any()
+    assert parameters["angles"] == "partial"
+    assert result.picks.provenance is Provenance.ATTESTED
+    assert result.picks.parent_ids == [picks_id]
+    assert parameters["input_tomogram_id"] == "TS_01:tomogram:imported"
+    assert result.check["verdict"] == "lands"
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    upstream = [artifact.id for artifact in registry.not_derived_lineage(result.picks.id)]
+    assert upstream[0] == result.picks.id and "TS_01:tomogram:imported" in upstream
+
+
+@needs_imod
+def test_an_edit_names_the_picks_it_was_exported_from(
+    tmp_path: Path, project: Path, scene: dict[str, Any]
+) -> None:
+    picks_id, export = _exported_picks(tmp_path, project, scene)
+    edited_model, _, _ = _edit_model(export, scene)
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    other = registry.get(picks_id).model_copy(update={"id": "TS_01:picks:other"})
+    registry.add(other)
+    registry.commit(project / "artifacts.json")
+
+    with pytest.raises(ImportRefused, match="was exported from"):
+        import_edited_picks(picks_path=edited_model, derived_from="TS_01:picks:other",
+                            tilt_series_id="TS_01", out=project,
+                            particle_diameter_angstrom=DIAMETER)
+    outcome = CliRunner().invoke(cli.app, [
+        "import-picks", "--picks", str(edited_model), "--derived-from", picks_id,
+        "--picked-in", "imod-standard", "--tilt-series-id", "TS_01", "--out", str(project),
+        "--particle-diameter", str(DIAMETER),
+    ])
+    assert outcome.exit_code != 0
+    assert "--picked-in cannot be given with --derived-from" in outcome.output
+    star = tmp_path / "artiax.star"
+    star.write_text("data_\n")
+    with pytest.raises(ImportRefused, match="ArtiaX"):
+        import_edited_picks(picks_path=star, derived_from=picks_id, tilt_series_id="TS_01",
+                            out=project, particle_diameter_angstrom=DIAMETER)

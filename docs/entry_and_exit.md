@@ -345,7 +345,9 @@ one person to the next the answers change, not the questions. So:
    of a project artifact that was exported, such as picks after cleaning in ArtiaX
    or 3dmod. Its orientation and format are the export's, so nothing is declared. Its provenance is
    `attested`, its parent is the exported artifact, and its QC says what changed:
-   kept, moved, added. The database design's manual steps start here.
+   kept, moved, added. The database design's manual steps start here. Built 16
+   November for 3dmod edits of `visualize-picks`' model (Status below). ArtiaX's
+   saved STAR is not measured yet, and is refused.
 
 10. **The bypass retires into the imports.** `--tomogram-mrc` and `--picks-star` go
     once `import-tomogram` and `import-picks` exist. Registries holding their
@@ -467,8 +469,9 @@ unchanged.
    of the gold beads in one of our tomograms, before either is offered. The
    bypass flags go. Built 16 November, uncommitted (Status below):
    - pytom's STAR, RELION 5's STAR, CSV and IMOD models, with the check;
-   - not yet: Dynamo's table, still refused until measured, and
-     `--derived-from`.
+   - `--derived-from` for 3dmod edits;
+   - not yet: Dynamo's table, still refused until measured, and edits saved by
+     ArtiaX.
 
    The bypass flags stay for now. Three ground-truth tools of the benchmark
    (`run_centered_gt_pair.py`, `run_voxel_gt_control.py`,
@@ -656,9 +659,7 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   Both were replaced.
 - **Not built.**
   - The measurement for Dynamo's table.
-  - `--derived-from`. A 3dmod edit comes back as an IMOD model, which can now be
-    read; what is left is the edit's lineage and its kept, moved and added
-    counts.
+  - `--derived-from` for edits saved by ArtiaX.
   - The control with shuffled poses.
   - The MRA reading `angles: none`.
   - Moving the benchmark off the bypass flags.
@@ -690,4 +691,37 @@ on the Mac).
 - **Reading a model.** `import-picks --format imod-model` reads it with IMOD's
   `model2point` and asks `--imod-object` when the model has several objects.
   The points are the volume's voxels in that volume's orientation (`--picked-in`).
+
+**Edits of exported picks, built 16 November** (`import-picks --derived-from`).
+
+- **What it reads.** `visualize-picks` exports a series' picks for 3dmod: the
+  canonical tomogram as MRC and every pick as a point of one object, at
+  `(x + 0.5, y + 0.5, z)`. It now writes `export.json` beside them, naming the
+  picks and the tomogram. A person deletes, moves and adds points in 3dmod and
+  saves the model. `import-picks --derived-from <picks> --picks <model>` reads it
+  back. The format, orientation and tomogram are the export's, so none of them is
+  asked, and naming one is refused. When the export record lies beside the model,
+  it has to name the same picks.
+- **How a pick is counted.** Points are paired one to one with the exported picks,
+  the nearest pairs first:
+  - kept: within 0.02 voxel;
+  - moved: within the particle's radius;
+  - removed: an exported pick with no point near;
+  - added: a point with no pick near.
+- **What is written.** Kept picks go back to their particles' centres as the
+  exported ones would: a pytom pick sits half a voxel above its centre for an
+  even template box. A moved or added point is taken as the centre the person
+  put it at. Kept and moved picks keep their poses and scores; added ones have
+  none, and the set says `angles: partial`. The picks are registered as
+  `attested`, with the exported picks as parent and the counts as parameters.
+  The QC also lists the removed rows and how far each moved pick went. The check
+  against random positions runs as for any import.
+- **Tested** with IMOD's own tools on the synthetic tomogram
+  (`tests/test_picks_import.py`):
+  - `visualize-picks` exports pytom-like picks;
+  - the model is edited as in 3dmod (five deleted, five moved by (2, −1, 1),
+    three added) and saved with `point2model`;
+  - the import counts them right, puts each where it belongs to 0.006 voxel, and
+    the lineage reaches the imported tomogram.
+- **Refused:** an edit saved by ArtiaX (a STAR file), which is not measured.
 

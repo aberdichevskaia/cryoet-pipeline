@@ -56,6 +56,7 @@ from cryoet_pipeline.backends.alignment import (
     run_command,
 )
 from cryoet_pipeline.backends.protocols import _VARIANT_PATTERN, BackendContext
+from cryoet_pipeline.backends.subtomogram import pick_centre_offset
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -65,6 +66,7 @@ from cryoet_pipeline.models import (
 )
 from cryoet_pipeline.particles import pick_center_offset_px, read_star_blocks
 from cryoet_pipeline.picks_check import PicksCheck, check_picks
+from cryoet_pipeline.picks_visualization import EXPORT_RECORD
 from cryoet_pipeline.rotations import matrix_to_relion_euler, relion_euler_to_matrix
 from cryoet_pipeline.run_lock import run_lock
 from cryoet_pipeline.runs import (
@@ -563,9 +565,51 @@ def import_picks(
                             "coordinate_origin": coordinate_origin})
     positions, angles = to_canonical(source, transform, depth)
     mirrored = format_name == "relion5-star" or float(np.linalg.det(_LINEAR[transform])) < 0
+    return _check_write_register(
+        registry=registry, registry_path=registry_path, tomogram=tomogram,
+        tilt_series_id=tilt_series_id, out=out, positions=positions, angles=angles,
+        scores=source.scores, content=content, inputs=inputs,
+        particle_diameter_angstrom=particle_diameter_angstrom,
+        overrule_picks_check=overrule_picks_check, variant=variant, edit=None,
+        source_path=picks_path, format_name=format_name, mirrored=mirrored,
+    )
+
+
+@dataclass(frozen=True)
+class _Edit:
+    """What makes picks an attested edit rather than an import."""
+
+    derived_from: Artifact
+    counts: dict[str, int]
+    angles_mark: str
+    qc: dict[str, Any]
+
+
+def _check_write_register(
+    *,
+    registry: ArtifactRegistry,
+    registry_path: Path,
+    tomogram: Artifact,
+    tilt_series_id: str,
+    out: Path,
+    positions: np.ndarray,
+    angles: np.ndarray | None,
+    scores: np.ndarray | None,
+    content: dict[str, Any],
+    inputs: list[RunInput],
+    particle_diameter_angstrom: float,
+    overrule_picks_check: bool,
+    variant: str | None,
+    edit: _Edit | None,
+    source_path: Path,
+    format_name: str,
+    mirrored: bool,
+) -> PicksImportResult:
+    """Check the picks, write them as a run, and register them: imported, or an edit."""
+
+    voxel = cast(float, tomogram.pixel_spacing_angstrom)
     if overrule_picks_check:
         content["picks_check_overruled"] = True
-
     # One and a half diameters: the statistic is read inside the box's sphere.
     box = min(96, max(16, 2 * math.ceil(0.75 * particle_diameter_angstrom / voxel)))
     tomogram_array = cast(Any, zarr.open(tomogram.path, mode="r"))
@@ -574,8 +618,13 @@ def import_picks(
 
     run_fingerprint = fingerprint(STEP, STEP_VERSION, BACKEND, BACKEND_VERSION, content, inputs)
     label = f"_{variant}" if variant else ""
-    folder = out / "imports" / tilt_series_id / f"picks{label}"
-    artifact_id = f"{tilt_series_id}:picks:imported" + (f":{variant}" if variant else "")
+    stem = "picks_edited" if edit is not None else "picks"
+    folder = out / "imports" / tilt_series_id / f"{stem}{label}"
+    artifact_id = (f"{tilt_series_id}:picks:{'edited' if edit is not None else 'imported'}"
+                   + (f":{variant}" if variant else ""))
+    provenance = Provenance.ATTESTED if edit is not None else Provenance.IMPORTED
+    angles_mark = edit.angles_mark if edit is not None else (
+        "given" if angles is not None else "none")
     if artifact_id in registry.artifact_ids and (
         registry.get(artifact_id).parameters.get("run_fingerprint") != run_fingerprint
     ):
@@ -600,48 +649,57 @@ def import_picks(
                          backend_version=BACKEND_VERSION, content_params=content,
                          inputs=inputs) as attempt:
                 star = f"{tilt_series_id}_picks.star"
-                (attempt.folder / star).write_text(
-                    picks_star_text(positions, angles, source.scores))
-                (attempt.folder / "picks_qc.json").write_text(json.dumps({
+                (attempt.folder / star).write_text(picks_star_text(positions, angles, scores))
+                report: dict[str, Any] = {
                     "tomogram_id": tomogram.id, "format": format_name, "count": len(positions),
-                    "angles": "given" if angles is not None else "none",
+                    "angles": angles_mark,
                     "reference_mirrored": mirrored and angles is not None,
                     "check": check.record(), "warnings": warnings,
-                }, indent=2) + "\n")
-                attempt.add(ArtifactKind.PICKS, star, provenance=Provenance.IMPORTED)
-                attempt.add(ArtifactKind.QC, "picks_qc.json", provenance=Provenance.IMPORTED)
+                }
+                if edit is not None:
+                    report["edit"] = edit.qc
+                (attempt.folder / "picks_qc.json").write_text(json.dumps(report, indent=2) + "\n")
+                attempt.add(ArtifactKind.PICKS, star, provenance=provenance)
+                attempt.add(ArtifactKind.QC, "picks_qc.json", provenance=provenance)
                 attempt.metrics.update({"picks": float(len(positions)),
                                         "picks_inside": float(check.inside),
                                         "check_beaten": float(check.beaten)})
+                if edit is not None:
+                    attempt.metrics.update({key: float(value)
+                                            for key, value in edit.counts.items()})
             record = completed(folder)
             if record is None:
                 raise RuntimeError(f"{folder} has no completed run.json after the import")
 
     star_path = folder / f"{tilt_series_id}_picks.star"
+    parameters: dict[str, Any] = {
+        "backend": BACKEND,
+        "tilt_series_id": tilt_series_id,
+        "input_tomogram_id": tomogram.id,
+        "format": format_name,
+        "source_path": str(source_path.resolve()),
+        "pick_center_offset_px": 0.0,
+        "angles": angles_mark,
+        "reference_mirrored": mirrored and angles is not None,
+        "picks_check_verdict": check.verdict,
+        "count": len(positions),
+        "run_path": str(folder),
+        "run_fingerprint": record.fingerprint,
+    }
+    if edit is not None:
+        parameters.update({"derived_from": edit.derived_from.id, "edited_with": "3dmod",
+                           **{f"edit_{key}": value for key, value in edit.counts.items()}})
     picks = Artifact(
         id=artifact_id,
         variant=variant,
         kind=ArtifactKind.PICKS,
         path=star_path,
-        parent_ids=[tomogram.id],
-        parameters={
-            "backend": BACKEND,
-            "tilt_series_id": tilt_series_id,
-            "input_tomogram_id": tomogram.id,
-            "format": format_name,
-            "source_path": str(picks_path.resolve()),
-            "pick_center_offset_px": 0.0,
-            "angles": "given" if angles is not None else "none",
-            "reference_mirrored": mirrored and angles is not None,
-            "picks_check_verdict": check.verdict,
-            "count": len(positions),
-            "run_path": str(folder),
-            "run_fingerprint": record.fingerprint,
-        },
+        parent_ids=[edit.derived_from.id] if edit is not None else [tomogram.id],
+        parameters=parameters,
         storage_role=StorageRole.SOURCE,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=False,
-        provenance=Provenance.IMPORTED,
+        provenance=provenance,
         size_bytes=star_path.stat().st_size,
     )
     if artifact_id not in registry.artifact_ids:
@@ -649,6 +707,197 @@ def import_picks(
         registry.commit(registry_path)
     return PicksImportResult(folder=folder, picks=picks, check=check.record(),
                              already_imported=already, warnings=warnings)
+
+
+EDIT_KEPT_PX = 0.02
+"""A point this close to an exported pick is that pick, kept: the export writes three
+decimals and model2point prints two."""
+
+
+@dataclass(frozen=True)
+class EditMatch:
+    """Each exported pick paired with at most one point of the edit."""
+
+    kept: list[tuple[int, int]]
+    """(exported, edited) indices of picks left where they were."""
+    moved: list[tuple[int, int, float]]
+    """(exported, edited, distance in voxels) of picks a person moved."""
+    added: list[int]
+    """Edited indices with no exported pick near them."""
+    removed: list[int]
+    """Exported indices with no point of the edit near them."""
+
+
+def match_edit(exported: np.ndarray, edited: np.ndarray, *, move_radius_px: float) -> EditMatch:
+    """Pair an export's picks with the points of its edit, the nearest pairs first.
+
+    Within `EDIT_KEPT_PX` a pick is kept; within `move_radius_px` it was moved; a pick
+    with no point that near was removed, and a point with no pick that near added.
+    """
+
+    exported = np.asarray(exported, dtype=float).reshape(-1, 3)
+    edited = np.asarray(edited, dtype=float).reshape(-1, 3)
+    candidates: list[tuple[float, int, int]] = []
+    for start in range(0, len(exported), 512):
+        block = exported[start:start + 512]
+        distances = np.linalg.norm(block[:, None, :] - edited[None, :, :], axis=2)
+        rows, columns = np.nonzero(distances <= move_radius_px)
+        candidates += [(float(distances[r, c]), int(r) + start, int(c))
+                       for r, c in zip(rows, columns, strict=True)]
+    candidates.sort()
+    taken_exported: set[int] = set()
+    taken_edited: set[int] = set()
+    kept: list[tuple[int, int]] = []
+    moved: list[tuple[int, int, float]] = []
+    for distance, i, j in candidates:
+        if i in taken_exported or j in taken_edited:
+            continue
+        taken_exported.add(i)
+        taken_edited.add(j)
+        if distance <= EDIT_KEPT_PX:
+            kept.append((i, j))
+        else:
+            moved.append((i, j, distance))
+    return EditMatch(
+        kept=sorted(kept),
+        moved=sorted(moved),
+        added=[j for j in range(len(edited)) if j not in taken_edited],
+        removed=[i for i in range(len(exported)) if i not in taken_exported],
+    )
+
+
+def import_edited_picks(
+    *,
+    picks_path: Path,
+    derived_from: str,
+    tilt_series_id: str,
+    out: Path,
+    particle_diameter_angstrom: float,
+    imod_object: int | None = None,
+    template_box_px: int | None = None,
+    variant: str | None = None,
+    overrule_picks_check: bool = False,
+) -> PicksImportResult:
+    """Enter a person's edit of exported picks, made in 3dmod, as attested picks.
+
+    docs/entry_and_exit.md (What an import is, 9). The edit's format and
+    orientation are the export's: visualize-picks writes an IMOD model on the
+    canonical tomogram, so nothing about them is asked. Picks left in place go
+    back to their particles' centres as the exported ones would (a pytom pick
+    is half a voxel off for an even template box); a point a person moved or
+    added is taken as the centre they placed it at. Kept and moved picks keep
+    their poses and scores; added ones have none.
+    """
+
+    if variant is not None and not _VARIANT_PATTERN.fullmatch(variant):
+        raise ImportRefused(f"invalid variant {variant!r}")
+    if particle_diameter_angstrom <= 0:
+        raise ImportRefused("--particle-diameter must be positive")
+    if picks_path.suffix.lower() != ".mod":
+        raise ImportRefused(
+            f"{picks_path}: an edit comes back in its export's format, and visualize-picks "
+            "exports an IMOD model for 3dmod (<series>_picks.mod). ArtiaX's saved STAR is not "
+            "measured yet"
+        )
+    registry_path = out / "artifacts.json"
+    if not registry_path.exists():
+        raise ImportRefused(f"{out} has no registry")
+    registry = ArtifactRegistry.load(registry_path)
+    try:
+        exported = registry.get(derived_from)
+    except KeyError as exc:
+        raise ImportRefused(f"no artifact {derived_from!r} in the registry") from exc
+    if exported.kind is not ArtifactKind.PICKS or not exported.covers(tilt_series_id):
+        raise ImportRefused(f"{derived_from} is not picks of {tilt_series_id}")
+    record_path = picks_path.parent / EXPORT_RECORD
+    export_record = None
+    if record_path.is_file():
+        export_record = json.loads(record_path.read_text())
+        if export_record.get("picks_id") != derived_from:
+            raise ImportRefused(
+                f"{record_path} says this model was exported from "
+                f"{export_record.get('picks_id')!r}, not {derived_from!r}"
+            )
+    tomogram_id = exported.parameters.get("input_tomogram_id")
+    try:
+        tomogram = registry.get(str(tomogram_id))
+    except KeyError as exc:
+        raise ImportRefused(f"{derived_from} names no tomogram of the registry") from exc
+    voxel = tomogram.pixel_spacing_angstrom
+    if voxel is None or tomogram.shape is None:
+        raise ImportRefused(f"{tomogram.id} records no voxel size or shape")
+    try:
+        offset = pick_centre_offset(exported, template_box_px)
+    except ValueError as exc:
+        raise ImportRefused(f"{derived_from}: {exc}") from exc
+
+    names = ("rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ")
+    columns, rows = _star_table(exported.path, names)
+    coordinates = np.column_stack(
+        [_numbers(rows, columns.index(n), n, exported.path) for n in names])
+    angle_names = ("rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi")
+    exported_angles = None
+    if all(name in columns for name in angle_names):
+        exported_angles = np.column_stack(
+            [_numbers(rows, columns.index(n), n, exported.path) for n in angle_names])
+    exported_scores = (_numbers(rows, columns.index("rlnLCCmax"), "rlnLCCmax", exported.path)
+                       if "rlnLCCmax" in columns else None)
+    # The model's points are the export's coordinates: voxels of the canonical tomogram.
+    edited = read_imod_model(picks_path, imod_object, out).positions_xyz
+    match = match_edit(coordinates, edited, move_radius_px=particle_diameter_angstrom / 2 / voxel)
+
+    order = sorted([(i, j, "kept") for i, j in match.kept]
+                   + [(i, j, "moved") for i, j, _ in match.moved])
+    positions = np.array(
+        [coordinates[i] - offset if how == "kept" else edited[j] for i, j, how in order]
+        + [edited[j] for j in match.added]
+    ).reshape(-1, 3)
+    angles = None
+    angles_mark = "none"
+    if exported_angles is not None:
+        angles = np.vstack([exported_angles[[i for i, _, _ in order]],
+                            np.zeros((len(match.added), 3))])
+        angles_mark = "partial" if match.added else "given"
+    scores = None
+    if exported_scores is not None:
+        scores = np.concatenate([exported_scores[[i for i, _, _ in order]],
+                                 np.zeros(len(match.added))])
+    counts = {"kept": len(match.kept), "moved": len(match.moved), "added": len(match.added),
+              "removed": len(match.removed)}
+    qc = {
+        **counts,
+        "derived_from": derived_from,
+        "exported_centre_offset_px": offset,
+        "moved_px": [round(distance, 3) for _, _, distance in match.moved],
+        "removed_rows": match.removed,
+        "export_record": str(record_path) if export_record is not None else None,
+    }
+    content: dict[str, Any] = {"tilt_series_id": tilt_series_id, "format": "imod-model",
+                               "derived_from": derived_from,
+                               "particle_diameter_angstrom": particle_diameter_angstrom}
+    if imod_object is not None:
+        content["imod_object"] = imod_object
+    if template_box_px is not None:
+        content["template_box_px"] = template_box_px
+    inputs = [
+        RunInput(slot="picks", path=str(picks_path.resolve()),
+                 fingerprint=bytes_fingerprint(picks_path)),
+        RunInput(slot="exported_picks", path=str(exported.path),
+                 fingerprint=bytes_fingerprint(exported.path)),
+        RunInput(slot="tomogram", path=str(tomogram.path),
+                 fingerprint=str(tomogram.parameters.get("run_fingerprint",
+                                                          f"artifact:{tomogram.id}"))),
+    ]
+    return _check_write_register(
+        registry=registry, registry_path=registry_path, tomogram=tomogram,
+        tilt_series_id=tilt_series_id, out=out, positions=positions, angles=angles,
+        scores=scores, content=content, inputs=inputs,
+        particle_diameter_angstrom=particle_diameter_angstrom,
+        overrule_picks_check=overrule_picks_check, variant=variant,
+        edit=_Edit(derived_from=exported, counts=counts, angles_mark=angles_mark, qc=qc),
+        source_path=picks_path, format_name="imod-model",
+        mirrored=bool(exported.parameters.get("reference_mirrored", False)),
+    )
 
 
 def _judge_check(check: PicksCheck, overrule: bool) -> list[str]:
@@ -669,9 +918,12 @@ def _judge_check(check: PicksCheck, overrule: bool) -> list[str]:
 
 __all__ = [
     "FORMATS",
+    "EditMatch",
     "PicksImportResult",
     "check_format",
+    "import_edited_picks",
     "import_picks",
+    "match_edit",
     "picks_star_text",
     "read_csv",
     "read_pytom_star",

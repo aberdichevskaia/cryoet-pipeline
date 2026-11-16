@@ -2533,6 +2533,20 @@ def _validate_picks(picks: Artifact, tomogram: Artifact, manifest: TiltSeriesMan
         raise FileNotFoundError(f"picks STAR file not found: {picks.path}")
 
 
+def pick_centre_offset(picks: Artifact, template_box_px: int | None = None) -> float:
+    """How far each of these picks lies above its particle's centre, per axis.
+
+    The rule extraction uses (`_pick_centre`), for a reader outside it: an edit of
+    exported picks (import-picks --derived-from) takes the kept ones back to their
+    centres with it.
+    """
+
+    parameters = {} if template_box_px is None else {"pick_template_box_px": template_box_px}
+    context = BackendContext(output_dir=Path("."), device=DevicePreference.CPU,
+                             parameters=parameters)
+    return _pick_centre(picks, context)[1]
+
+
 def _pick_centre(picks: Artifact, context: BackendContext) -> tuple[int | None, float]:
     """The template box, when there is one, and how far each pick lies above its centre.
 
