@@ -14,10 +14,13 @@ the list says what its columns mean:
   `relion_export` (`TomogramPlacement.centred_angstrom`, `standard_frame_matrix`),
   whose particles RELION placed where the pipeline did (10 November 2026).
 - `csv`: the columns the person names, coordinates of particle centres.
+- `imod-model`: points of a model made on the volume, read by IMOD's
+  `model2point -float`. Its (X, Y, Z) is voxel (X - 0.5, Y - 0.5, Z) of the volume
+  the model was made on, in that volume's orientation: measured 16 November with
+  findbeads3d on beads of known centre in IMOD's three layouts
+  (scripts/imod_model_check.py). model2point prints two decimals.
 
-`dynamo-table` and `imod-model` are refused until measured: Dynamo's table against
-Dynamo's own cropping, IMOD models against findbeads3d's model of the gold beads in
-one of our tomograms.
+`dynamo-table` is refused until measured against Dynamo's own cropping.
 
 Coordinates taken in a volume of another orientation (`picked_in`: by default
 the one the tomogram was imported in, or `pipeline` for the project's own) are
@@ -37,6 +40,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,7 +50,12 @@ import numpy as np
 import zarr
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
-from cryoet_pipeline.backends.protocols import _VARIANT_PATTERN
+from cryoet_pipeline.backends.alignment import (
+    imod_environment,
+    resolve_imod_executable,
+    run_command,
+)
+from cryoet_pipeline.backends.protocols import _VARIANT_PATTERN, BackendContext
 from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
@@ -66,6 +75,7 @@ from cryoet_pipeline.runs import (
     fingerprint,
     writing,
 )
+from cryoet_pipeline.runtime import DevicePreference
 from cryoet_pipeline.tomogram_import import ImportRefused, Transform, orientation
 
 STEP = "import-picks"
@@ -73,12 +83,10 @@ STEP_VERSION = 1
 BACKEND = "picks-import"
 BACKEND_VERSION = 1
 
-FORMATS = ("pytom-star", "relion5-star", "csv")
+FORMATS = ("pytom-star", "relion5-star", "csv", "imod-model")
 UNMEASURED_FORMATS = {
     "dynamo-table": "Dynamo's table, measured against Dynamo's own cropping of the same "
     "positions",
-    "imod-model": "IMOD models, measured against findbeads3d's model of the gold beads in one "
-    "of the pipeline's tomograms",
     "relion3-star": "RELION 3/4's STAR, measured as RELION 5's was",
     "warp-star": "Warp's STAR, measured as RELION 5's was",
     "copick": "copick points, measured against the CZ portal's annotations",
@@ -164,6 +172,41 @@ def read_pytom_star(path: Path, template_box_px: int) -> SourcePicks:
     # The pick is pytom's paste point T // 2; the particle's centre is (T - 1) / 2.
     centres = positions - pick_center_offset_px(template_box_px)
     return SourcePicks(centres, angles, scores, "picked")
+
+
+def read_imod_model(path: Path, imod_object: int | None, out: Path) -> SourcePicks:
+    """The points of an IMOD model, as voxels of the volume it was made on."""
+
+    if not path.is_file():
+        raise FileNotFoundError(f"model file not found: {path}")
+    context = BackendContext(output_dir=out, device=DevicePreference.CPU, parameters={})
+    try:
+        model2point = resolve_imod_executable("model2point", context)
+    except FileNotFoundError as exc:
+        raise ImportRefused(f"reading an IMOD model needs IMOD's model2point: {exc}") from exc
+    with tempfile.TemporaryDirectory(prefix=".imod-model-") as folder:
+        text = Path(folder) / "points.txt"
+        result = run_command([str(model2point), "-float", "-object", "-input", str(path),
+                              "-output", str(text)], cwd=Path(folder),
+                             env=imod_environment(model2point, context))
+        if result.returncode != 0 or not text.is_file():
+            raise ImportRefused(f"model2point could not read {path}: {result.stderr.strip()}")
+        rows = [line.split() for line in text.read_text().splitlines() if line.strip()]
+    if not rows:
+        raise ImportRefused(f"{path} holds no points")
+    table = np.array([[float(value) for value in row[:5]] for row in rows])
+    objects = sorted({int(number) for number in table[:, 0]})
+    if imod_object is None and len(objects) > 1:
+        counts = ", ".join(f"{number} ({int((table[:, 0] == number).sum())} points)"
+                           for number in objects)
+        raise ImportRefused(f"{path} has objects {counts}; name the picks' one with --imod-object")
+    if imod_object is not None:
+        table = table[table[:, 0] == imod_object]
+        if not len(table):
+            raise ImportRefused(f"{path} has no points in object {imod_object}; it has {objects}")
+    # A pixel's centre is at index + 0.5 in X and Y, a section's at its index in Z.
+    positions = table[:, 2:5] - np.array([0.5, 0.5, 0.0])
+    return SourcePicks(positions, None, None, "picked")
 
 
 def read_csv(path: Path, column_names: Sequence[str]) -> SourcePicks:
@@ -429,6 +472,7 @@ def import_picks(
     relion_tomo_name: str | None = None,
     relion_tilt_series_pixel: float | None = None,
     relion_tomograms_star: Path | None = None,
+    imod_object: int | None = None,
     variant: str | None = None,
     overrule_picks_check: bool = False,
 ) -> PicksImportResult:
@@ -493,6 +537,10 @@ def import_picks(
                 )
             source = read_pytom_star(picks_path, template_box_px)
             content["template_box_px"] = template_box_px
+        elif format_name == "imod-model":
+            source = read_imod_model(picks_path, imod_object, out)
+            if imod_object is not None:
+                content["imod_object"] = imod_object
         else:
             if not csv_columns:
                 raise ImportRefused("a CSV needs --csv-columns, naming each column in order")

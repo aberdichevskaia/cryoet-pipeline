@@ -402,8 +402,9 @@ def import_picks_command(
         typer.Option(
             "--format",
             help="What the file is: pytom-star (rlnCoordinateX/Y/Z in voxels of the volume "
-            "picked), relion5-star (RELION 5's centred angstroms), or csv (columns named "
-            "with --csv-columns).",
+            "picked), relion5-star (RELION 5's centred angstroms), csv (columns named "
+            "with --csv-columns), or imod-model (a model made on the volume, in 3dmod or "
+            "by an IMOD program; read with IMOD's model2point).",
         ),
     ],
     tilt_series_id: Annotated[str, typer.Option(help="The series the picks are in.")],
@@ -459,6 +460,11 @@ def import_picks_command(
         typer.Option(min=0.0, help="relion5-star: the tilt series' pixel size in angstrom, "
                      "when no table gives it."),
     ] = None,
+    imod_object: Annotated[
+        int | None,
+        typer.Option(min=1, help="imod-model: the object that holds the picks, when the "
+                     "model has several (numbered from 1, as 3dmod numbers them)."),
+    ] = None,
     variant: Annotated[
         str | None,
         typer.Option(help="Label for these picks, to keep them beside others of the series."),
@@ -493,6 +499,7 @@ def import_picks_command(
             relion_tomo_name=relion_tomo_name,
             relion_tilt_series_pixel=relion_tilt_series_pixel_size,
             relion_tomograms_star=relion_tomograms_star,
+            imod_object=imod_object,
             variant=variant,
             overrule_picks_check=overrule_picks_check,
         )

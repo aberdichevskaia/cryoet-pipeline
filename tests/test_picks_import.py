@@ -263,7 +263,8 @@ def test_formats_not_measured_yet_are_refused_with_what_they_need(
 ) -> None:
     path = tmp_path / "picks.tbl"
     path.write_text("1 1 1\n")
-    for name, needs in (("dynamo-table", "Dynamo's own cropping"), ("imod-model", "findbeads3d")):
+    for name, needs in (("dynamo-table", "Dynamo's own cropping"),
+                        ("relion3-star", "measured as RELION 5's was")):
         with pytest.raises(ImportRefused, match=needs):
             import_picks(picks_path=path, format_name=name, tilt_series_id="TS_01",
                          out=project, particle_diameter_angstrom=DIAMETER)
@@ -335,3 +336,74 @@ def test_picks_taken_in_the_mirror_orientation_are_refused_by_the_check(
         import_picks(picks_path=star, format_name="pytom-star", tilt_series_id="TS_01",
                      out=project, particle_diameter_angstrom=DIAMETER, template_box_px=16,
                      picked_in="pipeline")
+
+
+def _imod(program: str) -> str | None:
+    import shutil
+
+    found = shutil.which(program)
+    if found:
+        return found
+    bundled = Path("/Applications/IMOD/bin") / program
+    return str(bundled) if bundled.is_file() else None
+
+
+needs_imod = pytest.mark.skipif(_imod("point2model") is None or _imod("model2point") is None,
+                                reason="IMOD's point2model and model2point are not installed")
+
+
+def _imod_model(path: Path, rows: list[str]) -> Path:
+    """A scattered-point model written by IMOD's own point2model."""
+
+    import os
+    import subprocess
+
+    points = path.with_suffix(".points")
+    points.write_text("".join(f"{row}\n" for row in rows))
+    program = _imod("point2model")
+    assert program is not None
+    imod_dir = str(Path(program).parent.parent)
+    subprocess.run([program, "-scat", "-input", str(points), "-output", str(path)], check=True,
+                   capture_output=True, env={**os.environ, "IMOD_DIR": imod_dir})
+    return path
+
+
+@needs_imod
+@pytest.mark.parametrize("picked_in", ["pipeline", "imod-standard"])
+def test_an_imod_model_gives_back_the_centres_it_was_made_on(
+    tmp_path: Path, project: Path, scene: dict[str, Any], picked_in: str
+) -> None:
+    # In IMOD's model a pixel's centre is at index + 0.5 in X and Y, a section's at
+    # its index in Z (scripts/imod_model_check.py measured it).
+    to_source, _ = PICKED[picked_in]
+    source = to_source(scene["centres"])
+    model = _imod_model(tmp_path / "picks.mod",
+                        [f"{x + 0.5} {y + 0.5} {z}" for x, y, z in source])
+
+    result = import_picks(picks_path=model, format_name="imod-model", tilt_series_id="TS_01",
+                          out=project, particle_diameter_angstrom=DIAMETER,
+                          picked_in=picked_in)
+
+    positions, _ = _imported(result.picks.path)
+    np.testing.assert_allclose(positions, scene["centres"], atol=0.006)
+    assert result.check["verdict"] == "lands"
+    assert result.picks.parameters["angles"] == "none"
+
+
+@needs_imod
+def test_a_model_with_several_objects_needs_the_picks_object_named(
+    tmp_path: Path, project: Path, scene: dict[str, Any]
+) -> None:
+    centres = scene["centres"]
+    rows = [f"1 1 {x + 0.5} {y + 0.5} {z}" for x, y, z in centres]
+    rows += [f"2 1 {x + 0.5} {y + 0.5} {z}" for x, y, z in centres[:5] + [3, 3, 0]]
+    model = _imod_model(tmp_path / "picks.mod", rows)
+    arguments: dict[str, Any] = dict(picks_path=model, format_name="imod-model",
+                                     tilt_series_id="TS_01", out=project,
+                                     particle_diameter_angstrom=DIAMETER)
+
+    with pytest.raises(ImportRefused, match="--imod-object"):
+        import_picks(**arguments)
+    result = import_picks(imod_object=1, **arguments)
+    positions, _ = _imported(result.picks.path)
+    np.testing.assert_allclose(positions, centres, atol=0.006)

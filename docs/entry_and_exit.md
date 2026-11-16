@@ -177,7 +177,7 @@ one person to the next the answers change, not the questions. So:
   | pytom's STAR | `rlnCoordinateX/Y/Z`, voxels of the tomogram picked | `rlnAngleRot/Tilt/Psi` | our own picking and extraction; an even template box's half voxel is accounted for (`pick_template_box_px`) |
   | RELION 5's STAR | `rlnCenteredCoordinate*Angst`: Å from the centre, in `imod-standard` | `rlnAngleRot/Tilt/Psi`, in `imod-standard` | our export writes it, and RELION placed the particles where we did, 10 November (`relion_particle_check.py`) |
   | Dynamo's table | position and shift, in voxels | tdrot, tilt, narot | as a particle folder, the port's MRA matches Dynamo; as positions in a tomogram, to be measured |
-  | IMOD model | `model2point`: pixels of the volume it was made on, in that volume's orientation | none | to be measured |
+  | IMOD model | `model2point`'s (X, Y, Z) is voxel (X − 0.5, Y − 0.5, Z) of the volume it was made on, in that volume's orientation | none | measured 16 November: findbeads3d on beads of known centre, in IMOD's three layouts, to 0.13 voxel (`imod_model_check.py`) |
   | CSV | the columns the person names | if named | nothing to measure; the checks below test it |
   | RELION 3/4, Warp, copick | | | not measured, refused |
 
@@ -466,9 +466,9 @@ unchanged.
    against Dynamo's own cropping, and IMOD models against `findbeads3d`'s model
    of the gold beads in one of our tomograms, before either is offered. The
    bypass flags go. Built 16 November, uncommitted (Status below):
-   - pytom's STAR, RELION 5's STAR and CSV, with the check;
-   - not yet: the two measurements, so Dynamo's table and IMOD models are still
-     refused, and `--derived-from`.
+   - pytom's STAR, RELION 5's STAR, CSV and IMOD models, with the check;
+   - not yet: Dynamo's table, still refused until measured, and
+     `--derived-from`.
 
    The bypass flags stay for now. Three ground-truth tools of the benchmark
    (`run_centered_gt_pair.py`, `run_voxel_gt_control.py`,
@@ -618,8 +618,8 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   box. Picks without angles carry zeros and `angles: none`; the MRA does not read
   that mark yet.
 - **Refused.**
-  - Formats not measured: `dynamo-table`, `imod-model`, `relion3-star`,
-    `warp-star`, `copick`, each with what measuring it needs.
+  - Formats not measured: `dynamo-table`, `relion3-star`, `warp-star`, `copick`,
+    each with what measuring it needs.
   - RELION 5 particles with nonzero `rlnOrigin*` or `rlnTomoSubtomogram*`: how
     RELION combines them was not measured here.
   - A binning that is not a whole number of the tilt series' pixels.
@@ -655,10 +655,39 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   would have refused these picks, and so did a null drawn from the whole volume.
   Both were replaced.
 - **Not built.**
-  - The measurements for Dynamo's table and IMOD models.
-  - `--derived-from`: a 3dmod edit comes back as an IMOD model, so it waits for
-    that measurement.
+  - The measurement for Dynamo's table.
+  - `--derived-from`. A 3dmod edit comes back as an IMOD model, which can now be
+    read; what is left is the edit's lineage and its kept, moved and added
+    counts.
   - The control with shuffled poses.
   - The MRA reading `angles: none`.
   - Moving the benchmark off the bypass flags.
+
+**IMOD models, measured 16 November** (`scripts/imod_model_check.py`, IMOD 5.1.12
+on the Mac).
+
+- **Known centres.** Dark beads at exact, partly fractional centres, in one
+  canonical volume written in IMOD's three layouts. findbeads3d modelled them,
+  `model2point -float` read the models, and the points went through each
+  layout's map to the canonical volume.
+  - `(X − 0.5, Y − 0.5, Z)` lands on the centres in every layout, at bead sizes 10
+    and 18.5 px. The mean is within 0.013 voxel in X, 0.13 in Y and 0.08 in Z;
+    findbeads3d's Y is the noisiest, with an sd of 0.2 to 0.3.
+  - Without the half pixel, X and Y miss by 0.5, and with it on Z as well, Z
+    misses by 0.5.
+  - `clip rotx` of tilt's layout is the canonical volume reversed in z, voxel
+    for voxel.
+- **Round trip.** `point2model` and then `model2point` give the points back.
+  `model2point -float` prints two decimals, so its points are good to 0.005
+  voxel.
+- **TS_01's own gold.** The test the plan named, findbeads3d on our tomogram's
+  beads, cannot reach a half voxel. Set against the beads' smoothed density
+  minima, findbeads3d's centres differ by −0.6 in x and by 0.4 to 0.9 on other
+  axes, depending on the layout. The beads in a reconstruction are not
+  symmetric: the missing wedge and the range is asymmetric. So the format was
+  measured on beads whose centre is known, and the real beads are reported
+  beside it as information.
+- **Reading a model.** `import-picks --format imod-model` reads it with IMOD's
+  `model2point` and asks `--imod-object` when the model has several objects.
+  The points are the volume's voxels in that volume's orientation (`--picked-in`).
 
