@@ -158,7 +158,7 @@ The programs listed here are the ones the code and the lane files call, as of
 | pytom-match-pick | Documentation of the installed version; usage text of the four `pytom_*.py` scripts | web; installation |
 | MemBrain-seg | Documentation, usage text | web; installation |
 | Dynamo | Wiki pages on tables, MRA, alignment parameters and GPU use | web, dated |
-| NVIDIA, CuPy, PyTorch | CUDA driver and toolkit compatibility, compute capabilities, GPU sharing modes; the CUDA install matrices of CuPy (which pytom-match-pick runs on) and PyTorch (which the dynamo-search port runs on) | web, dated |
+| NVIDIA, CuPy, PyTorch | For each CUDA version the site has: its release notes (the driver it needs, the GPUs it compiles for or dropped), its `nvcc` manual (`-gencode`, cubins and PTX) and its installation guide. NVIDIA's guides to driver compatibility, the compute capability tables, MIG, and installing the driver on Ubuntu and Rocky or Red Hat Linux. CuPy's installation and environment variables (CuPy is what pytom-match-pick runs on), and PyTorch's install command for each release and CUDA version (PyTorch is what the dynamo-search port runs on). Built 2026-11-16: `[web]` in `configs/library.toml` | web, by version (CUDA, CuPy); web, dated (the rest) |
 | Slurm | `man` pages of the installed version (sbatch, sacct, squeue, sinfo, scontrol); the site's own wiki pages | installation; site wiki (see [sign-in sources](#how-a-snapshot-is-built)) |
 | bash | The installed `man bash`. A Mac has bash 3.2. | installation |
 | Site card | Each tool's version, GPU types and drivers, CUDA modules, partitions | collected on the site, dated |
@@ -189,9 +189,12 @@ Decided:
 The rest is proposed.
 
 ```text
-installation   the site's own copy: an installed manual, man pages, usage text   exact version
-web, pinned    a source kept in git, at the tag or commit that matches            exact version
-web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's       retrieval date + sha256
+installation     the site's own copy: an installed manual, man pages, usage text   exact version
+web, pinned      a source kept in git, at the tag or commit that matches            exact version
+web, by version  a page filed under each version, as NVIDIA's CUDA pages and        the version this site has
+                 CuPy's are
+web, dated       a page without versions, such as NVIDIA's guides or the Dynamo     retrieval date + sha256
+                 wiki
 ```
 
 - **Runs.** The builder runs on each site, on a login node, in the pipeline's
@@ -244,6 +247,50 @@ web, dated     a page without versions, such as the Dynamo wiki or NVIDIA's     
   snapshot stays. The original goes to `raw/<tool>/<path>`, its text to
   `text/<tool>/<path>.md`, with the channel `web, pinned` and the file's address
   on GitHub. The dry run fetches nothing.
+- **Pages** (built 2026-11-16). `[web.<source>]` in `configs/library.toml`
+  names documentation pages that no installation carries: NVIDIA's on CUDA,
+  drivers, compute capabilities and MIG, CuPy's and PyTorch's on their CUDA
+  builds. Each page has a name and an address, or a list of addresses tried in
+  order. Only `docs.nvidia.com`, `developer.nvidia.com`, `docs.cupy.dev` and
+  `pytorch.org` may be named.
+  - **By version.** `versions = "cuda"` reads the pages once for each CUDA
+    version this site has, which the builder finds itself:
+    - the `nvcc` on `PATH`;
+    - the `cuda` environment modules;
+    - the CUDA the pipeline's PyTorch is built for;
+    - the CUDA pytom-match-pick's CuPy is built for.
+
+    Each version is read as major.minor.0, the release NVIDIA files its pages
+    under in `cuda/archive/`. The newest release is not in the archive yet: it
+    is only at the address without a version (13.5 on 16 November 2026). So an
+    address that names the version is kept if it still names it after any
+    redirect, and the address without one only if the page's title states the
+    version. `versions = "cupy"` reads the pages at the CuPy version of
+    pytom-match-pick's environment. `--version-of cuda=12.5` (repeatable) or
+    `--version-of cupy=14.2.0` gives a version the builder cannot find.
+  - **Dated.** A source without `versions` is read as it stands that day. Its
+    text says "as of" the build's date, and `library.json` keeps the sha256 of
+    what came.
+  - **Only the page's own text** is converted, not the site's menus and
+    footers. It is the first element that `itemprop="articleBody"`,
+    `<article>`, `<main>` or `role="main"` marks (the converter `main 1`), else
+    the whole page. The original goes to `raw/<source>[/<version>]/<name>.html`,
+    the text to `text/<source>[/<version>]/<name>.md`.
+  - **Failures.** A page the site does not have (404, 410), or none of whose
+    addresses gives the right version, is a problem and is left out, and the
+    rest is read. Any other failure to fetch stops the build.
+  - **Size.** On the Mac on 16 November 2026, two CUDA versions, CuPy and the
+    rest gave 26 pages and 0.8 MB of text in about a minute and a half.
+- **The site card's GPU.** The card runs `nvidia-smi`, which a login node does
+  not have. `--gpu-node-report <file>` puts what it printed on a GPU node into
+  the card, with the file's date:
+
+  ```bash
+  srun --partition=gpu --gres=gpu:a40:1 --time=00:05:00 nvidia-smi > gpu-node.txt
+  ```
+
+  Without one, the dry run notes that the card has no GPU. The card also lists
+  the CUDA versions found, and where each was seen.
 - **Sources behind a sign-in.**
   - If a site wiki is a git repository (a GitLab project wiki is one), the
     builder clones it with the user's own credentials and pins the commit.
@@ -539,3 +586,7 @@ Parked on 2026-11-05, while the work is at MDC.
 4. Whether MDC's cluster has a wiki of its own (Munich's: see
    [Later](#later)).
 5. Whether Claude Code's Bash sandbox runs on the login nodes.
+6. The knowledge cases for NVIDIA's, CuPy's and PyTorch's pages (2026-11-16):
+   questions whose answer is only on them, such as which driver a CUDA 13
+   build needs, whether a CUDA 13 build runs on a V100, or where CuPy takes its
+   CUDA headers from. Proposed, not written.

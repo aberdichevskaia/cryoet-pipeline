@@ -6,11 +6,18 @@
 
 docs/library.md says what the library is and why it is kept this way. This
 script builds the installation channel: what this site's own installation says,
-at the version installed here. Of the web channel it builds pinned files: files
-of a tool's GitHub repository at the commit of the version installed here, each
-checked against the sha256 configs/library.toml pins (AreTomo2's manual first).
+at the version installed here. Of the web channel it builds two kinds:
+- pinned files: files of a tool's GitHub repository at the commit of the version
+  installed here, each checked against the sha256 configs/library.toml pins
+  (AreTomo2's manual first);
+- pages ([web] in configs/library.toml): documentation no installation carries,
+  NVIDIA's on CUDA, drivers and GPUs and CuPy's and PyTorch's on their CUDA
+  builds. A page is read at each version this site has (the CUDA versions, the
+  CuPy version), which this script finds itself, or as it stands on the day,
+  dated. Only its own text is converted, not the site's menus.
 A file that cannot be fetched, or has changed, stops the build, and the last
-snapshot stays.
+snapshot stays; a page the site does not have (404) is a problem, and the rest
+is read.
 
 The sources are listed in configs/library.toml. The script finds each tool the
 way the pipeline does:
@@ -43,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html as _html
 import io
 import json
 import os
@@ -53,8 +61,10 @@ import sqlite3
 import sys
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 import zlib
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -81,7 +91,8 @@ SOURCES = ROOT / "configs" / "library.toml"
 SRC = ROOT / "src"
 SCHEMA = 1
 # A converter's number goes up whenever its output for the same input changes.
-CONVERTERS = {"html": 1, "terminal": 1, "pdf": 1, "text": 1}
+# "main" is how a web page's own text is told from the site's frame around it.
+CONVERTERS = {"html": 1, "terminal": 1, "pdf": 1, "text": 1, "main": 1}
 # Pinned files come from a GitHub repository at a commit, as its raw file.
 GITHUB = re.compile(r"^https://github\.com/(?P<owner>[\w.-]+)/(?P<name>[\w.-]+)$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
@@ -146,6 +157,30 @@ USAGE_SECONDS = 60.0
 USAGE_LIMIT = 1 << 20
 MAN_LIMIT = 8 << 20
 
+# The web channel's pages ([web] in configs/library.toml). They come from these
+# documentation sites only, one request at a time.
+WEB_HOSTS = ("docs.nvidia.com", "developer.nvidia.com", "docs.cupy.dev", "pytorch.org")
+PAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# The versions a [web.<source>] may read its pages at, each found on this site.
+FINDERS = ("cuda", "cupy")
+# CuPy's distribution, as conda-forge names it and as its PyPI wheels do.
+CUPY_DISTRIBUTIONS = ("cupy", "cupy-cuda13x", "cupy-cuda12x", "cupy-cuda11x")
+# A CUDA environment module: cuda/12.5, CUDA/12.1.1, a path before it.
+CUDA_MODULE = re.compile(r"(?:^|/)cuda/(\d+)\.(\d+)", re.IGNORECASE)
+# Where a page's own text is, tried in order; the rest is the site's menus and
+# footers. NVIDIA's versioned CUDA pages mark it as Sphinx does (articleBody),
+# its guides, CuPy's and PyTorch's put it in <article>, its GPU tables in <main>.
+MAIN_TEXT: tuple[tuple[str, Callable[[str, dict[str, str | None]], bool]], ...] = (
+    ('itemprop="articleBody"', lambda tag, attrs: attrs.get("itemprop") == "articleBody"),
+    ("<article>", lambda tag, attrs: tag == "article"),
+    ("<main>", lambda tag, attrs: tag == "main"),
+    ('role="main"', lambda tag, attrs: attrs.get("role") == "main"),
+)
+# The "#" link Sphinx puts after every heading, which would end each heading's
+# words in the text.
+HEADERLINK = re.compile(r"""<a\b[^>]*\bclass=["']headerlink["'][^>]*>.*?</a>""",
+                        re.IGNORECASE | re.DOTALL)
+
 
 @dataclass
 class Lane:
@@ -183,6 +218,13 @@ class Item:
     """A manual page's name; for a pinned file, its path in the repository."""
     pin: dict[str, Any] | None = None
     """For a pinned file: its tool's [<tool>.pinned] table."""
+    version: str = ""
+    """For a page read by version: the version, as its folder is named."""
+    version_from: str = ""
+    """Where that version was seen on this site."""
+    states: str = ""
+    """What a page's title must state to be taken for that version, when its
+    address does not name it."""
 
 
 @dataclass
@@ -196,6 +238,10 @@ class Snapshot:
     problems: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     documents: int = 0
+    versions: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
+    """The versions the web pages are read at: finder -> (version, where seen)."""
+    gpu_node: Path | None = None
+    """What nvidia-smi printed on a GPU node, given with --gpu-node-report."""
 
 
 # --- finding the tools ------------------------------------------------------
@@ -1005,6 +1051,257 @@ def collect_pinned(snapshot: Snapshot, tool: Tool, item: Item, out: Path) -> Non
     })
 
 
+# --- the web channel's pages ---------------------------------------------------------
+
+def module_names() -> list[str]:
+    """The environment modules a login shell offers (`module -t avail`)."""
+
+    result = probe(["bash", "-lc", "module -t avail 2>&1"], seconds=USAGE_SECONDS)
+    names = []
+    for line in result.output.splitlines():
+        token = line.strip()
+        if token and not token.endswith(":") and " " not in token and not token.startswith(("/", "-")):
+            names.append(re.sub(r"\(.*\)$", "", token))
+    return names
+
+
+def torch_cuda() -> str:
+    """The CUDA the pipeline's PyTorch is built for, asked of this script's own
+    Python, which is the pipeline's environment; "" for none or a CPU build."""
+
+    result = probe([sys.executable, "-I", "-c", "import torch; print(torch.version.cuda)"],
+                   seconds=180.0)
+    said = result.output.strip().splitlines()
+    return said[-1].strip() if result.ended_well and said and said[-1].strip() != "None" else ""
+
+
+def cupy_cuda(tool: Tool | None) -> str:
+    """The CUDA pytom-match-pick's CuPy is built for, asked of the Python its
+    scripts run under; "" when it cannot say. CuPy imports without a GPU."""
+
+    python = script_python(tool.path) if tool is not None and tool.path is not None else None
+    if python is None:
+        return ""
+    result = probe([python, "-I", "-c",
+                    "import cupy; print(cupy.cuda.runtime.runtimeGetVersion())"], seconds=120.0)
+    said = result.output.strip().splitlines()
+    if not result.ended_well or not said or not said[-1].strip().isdigit():
+        return ""
+    number = int(said[-1])
+    return f"{number // 1000}.{number % 1000 // 10}"
+
+
+def cuda_versions(tools: dict[str, Tool], given: list[str]) -> list[tuple[str, str]]:
+    """Every CUDA version this site has, as major.minor.0 (the release its pages
+    are filed under), with where each was seen: the toolkit on PATH, the CUDA
+    modules, and the CUDA the pipeline's PyTorch and pytom-match-pick's CuPy are
+    built for, whose drivers matter as much as a toolkit's."""
+
+    seen: dict[tuple[int, int], list[str]] = {}
+
+    def add(text: str, how: str) -> None:
+        if found := re.match(r"(\d+)\.(\d+)", text or ""):
+            seen.setdefault((int(found[1]), int(found[2])), []).append(how)
+
+    if nvcc := shutil.which("nvcc"):
+        if release := re.search(r"release (\d+\.\d+)", probe([nvcc, "--version"]).output):
+            add(release[1], "nvcc on PATH")
+    for name in module_names():
+        if found := CUDA_MODULE.search(name):
+            add(f"{found[1]}.{found[2]}", f"module {name}")
+    add(torch_cuda(), "the pipeline's PyTorch")
+    add(cupy_cuda(tools.get("pytom-match-pick")), "pytom-match-pick's CuPy")
+    for version in given:
+        add(version, "given with --version-of")
+    return [(f"{major}.{minor}.0", ", ".join(hows)) for (major, minor), hows in sorted(seen.items())]
+
+
+def cupy_versions(tools: dict[str, Tool], given: list[str]) -> list[tuple[str, str]]:
+    """The CuPy version of pytom-match-pick's environment."""
+
+    if given:
+        return [(given[-1], "given with --version-of")]
+    tool = tools.get("pytom-match-pick")
+    python = script_python(tool.path) if tool is not None and tool.path is not None else None
+    if python is None:
+        return []
+    for distribution in CUPY_DISTRIBUTIONS:
+        if (version := package_version(python, distribution).value) is not None:
+            return [(version, f"{distribution} in pytom-match-pick's environment")]
+    return []
+
+
+def find_versions(web: dict[str, Any], tools: dict[str, Tool],
+                  given: dict[str, list[str]]) -> dict[str, list[tuple[str, str]]]:
+    """The versions the [web] sources read their pages at; only the finders some
+    source names are asked."""
+
+    wanted = {section["versions"] for section in web.values() if "versions" in section}
+    finders = {"cuda": cuda_versions, "cupy": cupy_versions}
+    return {name: finders[name](tools, given.get(name, [])) for name in FINDERS if name in wanted}
+
+
+def page_states(finder: str, version: str) -> str:
+    """What a page's title states for a version: CUDA names major.minor only."""
+
+    return ".".join(version.split(".")[:2]) if finder == "cuda" else version
+
+
+def plan_web(web: dict[str, Any], versions: dict[str, list[tuple[str, str]]],
+             notes: list[str]) -> list[Item]:
+    """One item per page and version; the addresses to try, in order."""
+
+    items: list[Item] = []
+    for source, section in web.items():
+        finder = section.get("versions")
+        found = versions.get(finder, []) if finder else [("", "")]
+        if not found:
+            notes.append(f"{source}: no {finder} version found on this host, so its pages are "
+                         f"left out; --version-of {finder}=VERSION reads them at a version")
+            continue
+        for version, how in found:
+            for name, addresses in section["pages"].items():
+                candidates = [addresses] if isinstance(addresses, str) else list(addresses)
+                urls = tuple(url.replace("{version}", version) for url in candidates)
+                items.append(Item(source, "page", name, urls, version=version, version_from=how,
+                                  states=page_states(finder, version) if finder else ""))
+    return items
+
+
+def fetch_page(url: str) -> tuple[bytes, str] | None:
+    """A page, and the address it came from after any redirect; None when the
+    site has no such page (404, 410). Any other failure stops the build."""
+
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=FETCH_SECONDS) as response:
+            data: bytes = response.read(FETCH_LIMIT + 1)
+            final = response.geturl()
+    except urllib.error.HTTPError as error:
+        if error.code in (404, 410):
+            return None
+        raise SystemExit(f"could not fetch {url}: {error}; nothing was built") from None
+    except (urllib.error.URLError, OSError) as error:
+        raise SystemExit(f"could not fetch {url}: {error}; nothing was built") from None
+    if len(data) > FETCH_LIMIT:
+        raise SystemExit(f"{url} is larger than {FETCH_LIMIT} bytes; nothing was built")
+    return data, final
+
+
+def page_title(html: str) -> str:
+    found = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    return _collapse(_html.unescape(found.group(1))).replace("\n", " ") if found else ""
+
+
+def is_that_version(item: Item, url: str, final: str, html: str) -> bool:
+    """Whether a page is the one for the item's version. An address that names
+    the version must still name it after any redirect; any other must state it
+    in its title (NVIDIA's newest CUDA is at an address without a version)."""
+
+    if not item.version:
+        return True
+    if item.version in url:
+        return item.version in final
+    return re.search(rf"(?<![\d.]){re.escape(item.states)}(?![\d])", page_title(html)) is not None
+
+
+class _Element(HTMLParser):
+    """Where the first element a test picks begins and ends in a page."""
+
+    def __init__(self, test: Callable[[str, dict[str, str | None]], bool]) -> None:
+        super().__init__(convert_charrefs=True)
+        self.test = test
+        self.tag: str | None = None
+        self.depth = 0
+        self.start: tuple[int, int] | None = None
+        self.end: tuple[int, int] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self.end is not None:
+            return
+        if self.tag is None:
+            if self.test(tag, dict(attrs)):
+                self.tag, self.depth, self.start = tag, 1, self.getpos()
+        elif tag == self.tag:
+            self.depth += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        """A tag closed as it opens, <div/>, holds nothing and leaves the depth."""
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.tag is not None and self.end is None and tag == self.tag:
+            self.depth -= 1
+            if self.depth == 0:
+                self.end = self.getpos()
+
+
+def main_text(html: str) -> tuple[str, str]:
+    """A page's own text as HTML, and what found it: the first element of
+    MAIN_TEXT, or the whole page when none is there."""
+
+    starts = [0]
+    for line in html.split("\n"):
+        starts.append(starts[-1] + len(line) + 1)
+    for label, test in MAIN_TEXT:
+        element = _Element(test)
+        element.feed(html)
+        element.close()
+        if element.start is not None:
+            begin = starts[element.start[0] - 1] + element.start[1]
+            end = (starts[element.end[0] - 1] + element.end[1] if element.end is not None
+                   else len(html))
+            return html[begin:end], label
+    return html, "the whole page"
+
+
+def collect_page(snapshot: Snapshot, item: Item, out: Path) -> None:
+    """A documentation page: the first of its addresses that answers with the
+    right version, kept as it came, its own text converted to markdown."""
+
+    found = None
+    for url in item.command:
+        fetched = fetch_page(url)
+        if fetched is None:
+            continue
+        data, final = fetched
+        html = data.decode("utf-8", errors="replace")
+        if is_that_version(item, url, final, html):
+            found = url, final, data, html
+            break
+    label = f"{item.tool} {item.version} {item.name}".replace("  ", " ")
+    if found is None:
+        what = f"states {item.states}" if item.version else "answers"
+        snapshot.problems.append(f"{label}: no page {what} at {' or '.join(item.command)}; "
+                                 "it is left out")
+        return
+    url, final, data, html = found
+    folder = f"{item.tool}/{item.version}" if item.version else item.tool
+    raw = f"raw/{folder}/{item.name}.html"
+    write(out / raw, data)
+    part, how = main_text(html)
+    markdown = html_to_markdown(HEADERLINK.sub("", part))
+    title = page_title(html)
+    if title and not markdown.startswith("# "):
+        markdown = f"# {title}\n\n{markdown}"
+    channel = "web, by version" if item.version else "web, dated"
+    text_path = f"text/{folder}/{item.name}.md"
+    write(out / text_path,
+          front_matter({"tool": item.tool,
+                        "version": item.version or f"as of {snapshot.built[:10]}",
+                        "channel": channel, "source": final, "document": final,
+                        "fetched": snapshot.built})
+          + markdown)
+    snapshot.documents += 1
+    snapshot.records.append({
+        "tool": item.tool, "kind": "page", "channel": channel, "name": item.name,
+        "version": item.version or None, "version_from": item.version_from or None,
+        "url": url, "final_url": final, "fetched": snapshot.built, "raw": raw,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "converter": f"html {CONVERTERS['html']}, main {CONVERTERS['main']} ({how})",
+        "text": text_path,
+    })
+
+
 def collect_site(snapshot: Snapshot, out: Path, env: dict[str, str]) -> None:
     lines = [
         f"# Site card: {snapshot.site}", "",
@@ -1037,6 +1334,21 @@ def collect_site(snapshot: Snapshot, out: Path, env: dict[str, str]) -> None:
             record.update(exit_code=result.exit_code, stopped=result.stopped, raw=raw,
                           sha256=sha256_file(out / raw))
         snapshot.records.append({"kind": "site", **record})
+    for finder, found in snapshot.versions.items():
+        lines += ["", f"## {finder} versions on this site", ""]
+        lines += [f"- {version}: {how}" for version, how in found] or ["None found."]
+    if snapshot.gpu_node is not None:
+        given = snapshot.gpu_node
+        raw = "raw/site/gpu-node.txt"
+        copy(given, out / raw)
+        written = datetime.fromtimestamp(given.stat().st_mtime).astimezone().isoformat(
+            timespec="seconds")
+        lines += ["", "## A GPU node", "",
+                  f"What `nvidia-smi` printed there, given with --gpu-node-report: {given}, "
+                  f"written {written}.", "",
+                  _fenced(terminal_text(given.read_text(errors="replace")) or "(nothing)")]
+        snapshot.records.append({"kind": "site", "name": "gpu node", "given": str(given),
+                                 "written": written, "raw": raw, "sha256": sha256_file(out / raw)})
     write(out / "site.md", "\n".join(lines) + "\n")
 
 
@@ -1074,6 +1386,9 @@ def build(root: Path, snapshot: Snapshot, items: list[Item]) -> Path:
     try:
         env = {**os.environ, **PROBE_ENV}
         for item in items:
+            if item.kind == "page":
+                collect_page(snapshot, item, partial)
+                continue
             tool = snapshot.tools[item.tool]
             if item.kind == "manual":
                 collect_manual(snapshot, tool, partial)
@@ -1088,6 +1403,8 @@ def build(root: Path, snapshot: Snapshot, items: list[Item]) -> Path:
             "schema": SCHEMA, "id": snapshot.id, "site": snapshot.site, "built": snapshot.built,
             "host": snapshot.host, "builder": builder_state(),
             "tools": [tool_record(tool) for tool in snapshot.tools.values()],
+            "versions": {finder: [{"version": version, "seen": how} for version, how in found]
+                         for finder, found in snapshot.versions.items()},
             "sources": snapshot.records, "documents": snapshot.documents,
             "problems": snapshot.problems, "notes": snapshot.notes,
         }, indent=2) + "\n")
@@ -1155,6 +1472,8 @@ def read_sources(path: Path) -> dict[str, Any]:
         raise SystemExit(f"no list of sources {path}") from None
     except tomllib.TOMLDecodeError as error:
         raise SystemExit(f"{path} is not valid TOML: {error}") from None
+    # The web channel's pages are read by read_web; the rest are tools.
+    sources.pop("web", None)
     unknown = sorted(set(sources) - set(KNOWN))
     if unknown:
         raise SystemExit(f"{path} names {', '.join(unknown)}, which this script does not know how "
@@ -1163,6 +1482,47 @@ def read_sources(path: Path) -> dict[str, Any]:
         if "pinned" in section:
             check_pin(path, name, section["pinned"])
     return sources
+
+
+def read_web(path: Path) -> dict[str, Any]:
+    """The [web] sources of the list, each checked: its pages by name, each at an
+    https address on one of WEB_HOSTS, or a list of them to try in order."""
+
+    web = tomllib.loads(path.read_text(encoding="utf-8")).get("web", {})
+    if not isinstance(web, dict):
+        raise SystemExit(f"{path} [web] must be a table of sources")
+    for source, section in web.items():
+        where = f"{path} [web.{source}]"
+        if not PAGE_NAME.match(source) or source in KNOWN:
+            raise SystemExit(f"{where}: a source's name is lower-case letters, digits and "
+                             "hyphens, and not a tool's")
+        if not isinstance(section, dict) or "pages" not in section or not set(section) <= {
+                "versions", "pages"}:
+            raise SystemExit(f"{where} needs pages, may have versions, and nothing else")
+        finder = section.get("versions")
+        if finder is not None and finder not in FINDERS:
+            raise SystemExit(f"{where}: versions must be one of {', '.join(FINDERS)}")
+        pages = section["pages"]
+        if not isinstance(pages, dict) or not pages:
+            raise SystemExit(f"{where}: pages must name each page and give its address")
+        for name, addresses in pages.items():
+            candidates = [addresses] if isinstance(addresses, str) else addresses
+            if not PAGE_NAME.match(name) or not isinstance(candidates, list) or not candidates or \
+                    not all(isinstance(url, str) for url in candidates):
+                raise SystemExit(f"{where} {name}: a page's name is lower-case letters, digits "
+                                 "and hyphens, and its address one string or a list of them")
+            for url in candidates:
+                parts = urllib.parse.urlsplit(url)
+                if parts.scheme != "https" or parts.hostname not in WEB_HOSTS:
+                    raise SystemExit(f"{where} {name}: {url} must be an https address on one of "
+                                     f"{', '.join(WEB_HOSTS)}")
+            if finder is not None and "{version}" not in candidates[0]:
+                raise SystemExit(f"{where} {name}: its first address must hold {{version}}, as "
+                                 "its pages are read by version")
+            if finder is None and any("{version}" in url for url in candidates):
+                raise SystemExit(f"{where} {name}: {{version}} in an address needs versions = "
+                                 "one of " + ", ".join(FINDERS))
+    return web
 
 
 def check_pin(path: Path, name: str, pin: Any) -> None:
@@ -1195,14 +1555,22 @@ def read_lane(path: Path) -> Lane:
     return Lane(path, cfg)
 
 
-def parse_given(pairs: list[str]) -> dict[str, str]:
+def parse_given(pairs: list[str]) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """--version-of: a tool's version, and the versions to read a [web] source's
+    pages at (cuda may be given more than once)."""
+
     given: dict[str, str] = {}
+    web: dict[str, list[str]] = {}
     for pair in pairs:
         name, _, value = pair.partition("=")
-        if not value or name not in KNOWN:
-            raise SystemExit(f"--version-of {pair!r}: give TOOL=VERSION, TOOL one of {', '.join(KNOWN)}")
-        given[name] = value
-    return given
+        if value and name in FINDERS:
+            web.setdefault(name, []).append(value)
+        elif value and name in KNOWN:
+            given[name] = value
+        else:
+            raise SystemExit(f"--version-of {pair!r}: give NAME=VERSION, NAME one of "
+                             f"{', '.join((*KNOWN, *FINDERS))}")
+    return given, web
 
 
 # --- reporting --------------------------------------------------------------------
@@ -1211,7 +1579,8 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
     where = f" in {root}" if root else ""
     print(f"Library snapshot {snapshot.id}{where}: dry run, nothing written.\n")
     print("Tools")
-    width = max(len(name) for name in [*snapshot.tools, "site card"]) + 2
+    sources = list(dict.fromkeys(item.tool for item in items if item.kind == "page"))
+    width = max(len(name) for name in [*snapshot.tools, *sources, "site card"]) + 2
     # AreTomo's version carries its name ("AreTomo2 1.1.3"), longer than a number.
     said = max([10] + [len(tool.version_text) + 2 for tool in snapshot.tools.values()
                        if tool.path is not None])
@@ -1246,7 +1615,19 @@ def print_plan(snapshot: Snapshot, root: Path | None, items: list[Item]) -> None
                 shown.append(" ".join([Path(part).name if index == 0 else part
                                        for index, part in enumerate(item.command)]))
         print(f"  {name:<{width}}" + "; ".join(shown))
-    print(f"  {'site card':<{width}}" + "; ".join(" ".join(command) for _, command in SITE_PROBES))
+    for source in sources:
+        mine = [item for item in items if item.tool == source]
+        names = list(dict.fromkeys(item.name for item in mine))
+        if mine[0].version:
+            when = ", ".join(f"{item.version} ({item.version_from})" for item in mine
+                             if item.name == names[0])
+        else:
+            when = "as they stand on the day of the build"
+        print(f"  {source:<{width}}{when}: {', '.join(names)}")
+    card = "; ".join(" ".join(command) for _, command in SITE_PROBES)
+    if snapshot.gpu_node is not None:
+        card += f"; a GPU node's nvidia-smi from {snapshot.gpu_node}"
+    print(f"  {'site card':<{width}}{card}")
     report(snapshot, tools_shown=True)
 
 
@@ -1305,8 +1686,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                         help="the library folder that holds the snapshots (default: $CRYOET_LIBRARY)")
     parser.add_argument("--config", type=Path, action="append", default=[],
                         help="a lane config whose executables to document; may be repeated")
-    parser.add_argument("--version-of", action="append", default=[], metavar="TOOL=VERSION",
-                        help="a tool's version, for one that states none")
+    parser.add_argument("--version-of", action="append", default=[], metavar="NAME=VERSION",
+                        help="a tool's version, for one that states none; or cuda=12.5 or "
+                             "cupy=14.2.0, a version to read those pages at (cuda may be repeated)")
+    parser.add_argument("--gpu-node-report", type=Path, metavar="FILE",
+                        help="what nvidia-smi printed on a GPU node, for the site card")
     parser.add_argument("--sources", type=Path, default=SOURCES, help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true",
                         help="print what was found and what would be read; write nothing")
@@ -1319,14 +1703,25 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     sources = read_sources(args.sources)
+    web = read_web(args.sources)
     lanes = [read_lane(path) for path in args.config]
-    tools = find_tools(sources, lanes, parse_given(args.version_of))
+    given, given_web = parse_given(args.version_of)
+    if args.gpu_node_report is not None and not args.gpu_node_report.is_file():
+        raise SystemExit(f"--gpu-node-report {args.gpu_node_report}: no such file")
+    tools = find_tools(sources, lanes, given)
     items = plan(sources, tools)
+    versions = find_versions(web, tools, given_web)
     snapshot = Snapshot(
         id=next_id(args.root, args.site, today()), site=args.site,
         built=datetime.now().astimezone().isoformat(timespec="seconds"),
-        host=socket.gethostname(), tools=tools,
+        host=socket.gethostname(), tools=tools, versions=versions,
+        gpu_node=args.gpu_node_report,
     )
+    items += plan_web(web, versions, snapshot.notes)
+    if args.gpu_node_report is None and shutil.which("nvidia-smi") is None:
+        snapshot.notes.append("the site card has no GPU: there is no nvidia-smi on this host. "
+                              "Give --gpu-node-report with what nvidia-smi prints on a GPU node "
+                              "(docs/library.md, \"The site card\")")
     if args.dry_run:
         print_plan(snapshot, args.root, items)
         return 0

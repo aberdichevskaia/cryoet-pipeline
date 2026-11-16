@@ -595,3 +595,271 @@ def test_a_given_version_is_kept_with_what_the_tool_said(host):
 def test_bad_arguments_are_refused(argv, host):
     with pytest.raises(SystemExit):
         bl.main([*argv, "--sources", str(host["sources"])])
+
+
+# --- the web channel's pages ---------------------------------------------------------
+
+WEB = """\
+[web.cuda]
+versions = "cuda"
+[web.cuda.pages]
+release-notes = [
+    "https://docs.nvidia.com/cuda/archive/{version}/cuda-toolkit-release-notes/index.html",
+    "https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
+]
+[web.nvidia.pages]
+gpus = "https://developer.nvidia.com/cuda/gpus"
+"""
+
+
+def page(title: str, body: str, frame: str = "<nav>Menu Home Search</nav>") -> bytes:
+    """A documentation page: the site's frame around an article."""
+    return (f"<html><head><title>{title}</title></head><body>{frame}"
+            f'<div itemprop="articleBody">{body}</div><footer>Copyright</footer></body></html>'
+            ).encode()
+
+
+def with_web(host, monkeypatch, served: dict[str, object], web: str = WEB) -> list[str]:
+    """Pages served by address: bytes, (bytes, final address), or None for 404.
+    The CUDA versions come from stand-ins; returns the addresses asked for."""
+    with host["sources"].open("a") as sources:
+        sources.write(web)
+    asked: list[str] = []
+
+    def fetch_page(url):
+        asked.append(url)
+        answer = served.get(url)
+        if answer is None:
+            return None
+        return answer if isinstance(answer, tuple) else (answer, url)
+
+    monkeypatch.setattr(bl, "fetch_page", fetch_page)
+    monkeypatch.setattr(bl, "module_names", lambda: [])
+    monkeypatch.setattr(bl, "torch_cuda", lambda: "")
+    monkeypatch.setattr(bl, "cupy_cuda", lambda tool: "")
+    return asked
+
+
+ARCHIVE = "https://docs.nvidia.com/cuda/archive/{}/cuda-toolkit-release-notes/index.html"
+CURRENT = "https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html"
+GPUS = "https://developer.nvidia.com/cuda/gpus"
+
+
+def test_pages_are_read_by_version_and_dated_and_only_their_own_text_kept(host, monkeypatch):
+    with_web(host, monkeypatch, {
+        ARCHIVE.format("12.5.0"): page(
+            "CUDA Toolkit Release Notes",
+            '<h1>Release Notes<a class="headerlink" href="#r">#</a></h1>'
+            "<table><tr><th>CTK</th><th>Driver</th></tr><tr><td>12.x</td><td>&gt;= 525</td>"
+            "</tr></table>"),
+        GPUS: b"<html><head><title>GPUs</title></head><body><nav>Menu</nav><main>"
+              b"<table><tr><th>CC</th><th>GPU</th></tr><tr><td>8.6</td><td>A40</td></tr></table>"
+              b"</main></body></html>",
+    })
+    assert run(host, "--version-of", "cuda=12.5") == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    notes = (snapshot / "text" / "cuda" / "12.5.0" / "release-notes.md").read_text()
+    assert notes.startswith('---\ntool: "cuda"\nversion: "12.5.0"\nchannel: "web, by version"\n'
+                            f'source: "{ARCHIVE.format("12.5.0")}"\n')
+    assert "# Release Notes\n" in notes and "| 12.x | >= 525 |" in notes
+    assert "Menu" not in notes and "Copyright" not in notes and "Release Notes#" not in notes
+    gpus = (snapshot / "text" / "nvidia" / "gpus.md").read_text()
+    assert 'version: "as of ' in gpus and 'channel: "web, dated"' in gpus
+    assert gpus.split("---\n", 2)[2].startswith("# GPUs\n") and "| 8.6 | A40 |" in gpus
+    record = json.loads((snapshot / "library.json").read_text())
+    assert record["versions"] == {"cuda": [{"version": "12.5.0", "seen": "given with --version-of"}]}
+    pages = {source["name"]: source for source in record["sources"] if source["kind"] == "page"}
+    assert pages["release-notes"]["version_from"] == "given with --version-of"
+    assert pages["release-notes"]["converter"] == 'html 1, main 1 (itemprop="articleBody")'
+    assert pages["gpus"]["converter"] == "html 1, main 1 (<main>)"
+    assert pages["gpus"]["version"] is None and pages["gpus"]["channel"] == "web, dated"
+    raw = (snapshot / pages["gpus"]["raw"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == pages["gpus"]["sha256"]
+    assert record["problems"] == []
+
+
+def test_the_newest_cuda_comes_from_the_address_without_a_version_if_its_title_says_so(
+        host, monkeypatch):
+    asked = with_web(host, monkeypatch, {
+        CURRENT: page("CUDA Toolkit 13.5 - Release Notes", "<p>Newest.</p>"),
+        GPUS: page("GPUs", "<p>Table.</p>"),
+    })
+    assert run(host, "--version-of", "cuda=13.5") == 0
+    assert asked[:2] == [ARCHIVE.format("13.5.0"), CURRENT]
+    record = json.loads((host["root"] / f"test-{DAY}" / "library.json").read_text())
+    (notes,) = [source for source in record["sources"] if source.get("name") == "release-notes"]
+    assert notes["url"] == CURRENT and notes["version"] == "13.5.0"
+
+
+def test_a_page_of_another_version_is_a_problem_and_the_rest_is_read(host, monkeypatch, capsys):
+    with_web(host, monkeypatch, {
+        # The address without a version holds a newer release by now.
+        CURRENT: page("CUDA Toolkit 13.6 - Release Notes", "<p>Newer.</p>"),
+        GPUS: page("GPUs", "<p>Table.</p>"),
+    })
+    assert run(host, "--version-of", "cuda=13.5") == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    assert not (snapshot / "text" / "cuda").exists()
+    assert (snapshot / "text" / "nvidia" / "gpus.md").is_file()
+    (problem,) = json.loads((snapshot / "library.json").read_text())["problems"]
+    assert problem.startswith("cuda 13.5.0 release-notes: no page states 13.5 at ")
+
+
+def test_an_archive_address_redirected_elsewhere_is_not_its_version(host, monkeypatch):
+    with_web(host, monkeypatch, {
+        ARCHIVE.format("12.5.0"): (page("Release Notes", "<p>Newest.</p>"), CURRENT),
+        CURRENT: page("CUDA Toolkit 13.5 - Release Notes", "<p>Newest.</p>"),
+        GPUS: page("GPUs", "<p>Table.</p>"),
+    })
+    assert run(host, "--version-of", "cuda=12.5") == 0
+    record = json.loads((host["root"] / f"test-{DAY}" / "library.json").read_text())
+    assert record["problems"] == [
+        f"cuda 12.5.0 release-notes: no page states 12.5 at {ARCHIVE.format('12.5.0')} or "
+        f"{CURRENT}; it is left out"]
+
+
+def test_without_a_version_found_a_sources_pages_are_left_out_with_a_note(host, monkeypatch,
+                                                                        capsys):
+    asked = with_web(host, monkeypatch, {GPUS: page("GPUs", "<p>Table.</p>")})
+    assert run(host, "--dry-run") == 0
+    printed = capsys.readouterr().out
+    assert asked == []
+    assert "nvidia            as they stand on the day of the build: gpus" in printed
+    assert ("cuda: no cuda version found on this host, so its pages are left out; "
+            "--version-of cuda=VERSION reads them at a version") in printed
+    assert "Problems: none" in printed
+
+
+def test_the_cuda_versions_are_found_where_this_site_keeps_them(host, monkeypatch, capsys):
+    with_web(host, monkeypatch, {})
+    executable(host["tmp"] / "bin" / "nvcc",
+               'echo "Cuda compilation tools, release 12.5, V12.5.82"\n')
+    monkeypatch.setattr(bl, "module_names",
+                        lambda: ["cuda/11.7", "CUDA/12.5.1", "cudnn/8.9-cuda12", "relion/v5"])
+    monkeypatch.setattr(bl, "torch_cuda", lambda: "13.2")
+    monkeypatch.setattr(bl, "cupy_cuda", lambda tool: "12.9")
+    assert run(host, "--dry-run") == 0
+    printed = capsys.readouterr().out
+    assert ("cuda              11.7.0 (module cuda/11.7), 12.5.0 (nvcc on PATH, module "
+            "CUDA/12.5.1), 12.9.0 (pytom-match-pick's CuPy), 13.2.0 (the pipeline's PyTorch): "
+            "release-notes") in printed
+
+
+def test_cupy_is_read_at_the_version_pytom_match_picks_environment_has(host, monkeypatch):
+    executable(host["tmp"] / "pytom" / "bin" / "python3", """\
+        case "$3" in
+          *"import cupy"*) echo 12090 ;;
+          *) case "$4" in pytom-match-pick) echo 0.14.0 ;; cupy) echo 14.2.0 ;; *) exit 3 ;; esac ;;
+        esac
+        """)
+    tools = bl.find_tools(bl.read_sources(host["sources"]), [], {})
+    assert bl.cupy_versions(tools, []) == [("14.2.0", "cupy in pytom-match-pick's environment")]
+    assert bl.cupy_cuda(tools["pytom-match-pick"]) == "12.9"
+    assert bl.cupy_versions(tools, ["13.6.0"]) == [("13.6.0", "given with --version-of")]
+
+
+@pytest.mark.parametrize("html, label, kept, left", [
+    # The inner div's end is not the article's: C, after it, is the page's own.
+    ('<nav>M</nav><div itemprop="articleBody"><p>A</p><div><p>B</p></div><br/><p>C</p></div>'
+     '<p>Z</p>', 'itemprop="articleBody"', ["A", "B", "C"], ["M", "Z"]),
+    ("<nav>M</nav><main><article><p>A</p></article><aside>S</aside></main>",
+     "<article>", ["A"], ["M", "S"]),
+    ('<div role="main"><p>A</p></div><footer>F</footer>', 'role="main"', ["A"], ["F"]),
+    ("<p>A</p><p>B</p>", "the whole page", ["A", "B"], []),
+    ("<nav>M</nav><article><p>A</p>", "<article>", ["A"], ["M"]),
+])
+def test_a_pages_own_text_is_told_from_the_sites_frame(html, label, kept, left):
+    part, found = bl.main_text(f"<html><body>\n{html}\n</body></html>")
+    assert found == label
+    markdown = bl.html_to_markdown(part)
+    assert all(word in markdown for word in kept) and not any(word in markdown for word in left)
+
+
+@pytest.mark.parametrize("web, said", [
+    ('[web.cuda]\nversions = "cuda"\n[web.cuda.pages]\na = "https://docs.nvidia.com/x"\n',
+     "its first address must hold {version}"),
+    ('[web.x.pages]\na = "https://docs.nvidia.com/{version}/x"\n',
+     "{version} in an address needs versions"),
+    ('[web.x.pages]\na = "http://docs.nvidia.com/x"\n', "must be an https address"),
+    ('[web.x.pages]\na = "https://example.org/x"\n', "must be an https address"),
+    ('[web.x]\nversions = "torch"\n[web.x.pages]\na = "https://pytorch.org/{version}"\n',
+     "versions must be one of cuda, cupy"),
+    ('[web.imod.pages]\na = "https://docs.nvidia.com/x"\n', "not a tool's"),
+    ('[web.x.pages]\nA_B = "https://docs.nvidia.com/x"\n', "a page's name is"),
+    ('[web.x]\nurl = "https://docs.nvidia.com/x"\n', "needs pages"),
+])
+def test_a_web_source_must_be_well_formed(tmp_path, web, said):
+    sources = tmp_path / "sources.toml"
+    sources.write_text(web)
+    with pytest.raises(SystemExit, match=re.escape(said)):
+        bl.read_web(sources)
+
+
+def test_the_web_pages_of_the_list_of_sources_are_well_formed():
+    web = bl.read_web(bl.SOURCES)
+    assert set(web) == {"cuda", "nvidia", "cupy", "pytorch"}
+    assert web["cuda"]["versions"] == "cuda" and web["cupy"]["versions"] == "cupy"
+    assert "versions" not in web["nvidia"] and "versions" not in web["pytorch"]
+    # The tools' part is read as before, without the pages.
+    assert "web" not in bl.read_sources(bl.SOURCES)
+
+
+def test_versions_are_given_to_tools_and_to_pages_apart():
+    assert bl.parse_given(["ctffind=5.0.2", "cuda=12.5", "cuda=13.2", "cupy=14.2.0"]) == (
+        {"ctffind": "5.0.2"}, {"cuda": ["12.5", "13.2"], "cupy": ["14.2.0"]})
+    with pytest.raises(SystemExit, match="NAME one of"):
+        bl.parse_given(["torch=2.15.0"])
+
+
+@pytest.fixture
+def web_server():
+    """A web server on 127.0.0.1: /page answers, /moved redirects to /page,
+    /missing is 404, /broken is 500."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            if self.path == "/moved":
+                self.send_response(301)
+                self.send_header("Location", "/page")
+                self.end_headers()
+                return
+            code = {"/page": 200, "/missing": 404}.get(self.path, 500)
+            self.send_response(code)
+            self.end_headers()
+            self.wfile.write(b"<title>Page</title>" if code == 200 else b"no")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+
+
+def test_a_page_the_site_does_not_have_is_none_and_any_other_failure_stops(web_server):
+    assert bl.fetch_page(f"{web_server}/page") == (b"<title>Page</title>", f"{web_server}/page")
+    assert bl.fetch_page(f"{web_server}/moved")[1] == f"{web_server}/page"
+    assert bl.fetch_page(f"{web_server}/missing") is None
+    with pytest.raises(SystemExit, match="could not fetch .*/broken"):
+        bl.fetch_page(f"{web_server}/broken")
+
+
+def test_a_gpu_nodes_report_goes_into_the_site_card(host, monkeypatch, capsys):
+    report = host["tmp"] / "gpu-node.txt"
+    report.write_text("| NVIDIA-SMI 610.57.04   Driver Version: 610.57.04   CUDA Version: 13.3 |\n")
+    monkeypatch.setenv("PATH", os.environ["PATH"])
+    assert run(host, "--dry-run") == 0
+    assert "the site card has no GPU: there is no nvidia-smi on this host" in capsys.readouterr().out
+    assert run(host, "--gpu-node-report", str(report)) == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    card = (snapshot / "site.md").read_text()
+    assert "## A GPU node" in card and "Driver Version: 610.57.04" in card
+    record = json.loads((snapshot / "library.json").read_text())
+    (given,) = [source for source in record["sources"] if source.get("name") == "gpu node"]
+    assert given["given"] == str(report) and (snapshot / given["raw"]).is_file()
+    assert not any("no nvidia-smi" in note for note in record["notes"])
+    with pytest.raises(SystemExit, match="no such file"):
+        run(host, "--gpu-node-report", str(host["tmp"] / "absent.txt"))

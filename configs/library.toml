@@ -2,8 +2,9 @@
 # scripts/build_library.py.
 #
 # This first part is the installation channel: what this site's own installation
-# says, at the version installed here. Web sources come later. A section names a
-# tool; scripts/build_library.py finds the tool on this host and asks it for its
+# says, at the version installed here, with the pinned files of the web channel.
+# The web channel's pages, [web], are at the end. A section names a tool;
+# scripts/build_library.py finds the tool on this host and asks it for its
 # version.
 #
 #   manual = true   the tool's installed manual (IMOD: $IMOD_DIR/html, else the
@@ -63,3 +64,87 @@ man = ["sbatch", "srun", "scancel", "squeue", "sacct", "sinfo", "scontrol"]
 
 [bash]
 man = ["bash"]
+
+# --- the web channel's pages ----------------------------------------------------
+#
+# Documentation no installation carries: NVIDIA's on CUDA, drivers and GPUs, and
+# CuPy's and PyTorch's on their CUDA builds (docs/library.md, "What goes in").
+# A [web.<source>] names its pages, each by an address, or by a list of them
+# tried in order.
+#
+#   versions = "cuda"   the pages are read once for each CUDA version this site
+#                       has: the nvcc on PATH, the cuda modules, and the CUDA the
+#                       pipeline's PyTorch and pytom-match-pick's CuPy are built
+#                       for. An address with {version} is kept if it still names
+#                       that version after any redirect; one without it, only if
+#                       the page's title states the version.
+#   versions = "cupy"   the pages are read at the CuPy version of
+#                       pytom-match-pick's environment.
+#   no versions         the pages are read as they stand on the day of the build,
+#                       and dated.
+#
+# Only a page's own text is converted, not the site's menus around it. A page
+# the site does not have (404) is a problem, and the rest is read; any other
+# failure to fetch stops the build. Addresses read on 2026-11-16.
+
+[web.cuda]
+# Each version's release notes (the driver it needs, the GPUs it compiles for or
+# no longer does), its nvcc manual (-gencode, cubins and PTX) and its
+# installation guide (the runfile's options). NVIDIA keeps each released
+# version under cuda/archive; the newest is only at the address without one.
+versions = "cuda"
+
+[web.cuda.pages]
+release-notes = [
+    "https://docs.nvidia.com/cuda/archive/{version}/cuda-toolkit-release-notes/index.html",
+    "https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html",
+]
+nvcc = [
+    "https://docs.nvidia.com/cuda/archive/{version}/cuda-compiler-driver-nvcc/index.html",
+    "https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html",
+]
+installation = [
+    "https://docs.nvidia.com/cuda/archive/{version}/cuda-installation-guide-linux/index.html",
+    "https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html",
+]
+
+[web.nvidia]
+# Which driver runs which CUDA build; each GPU's compute capability; GPUs split
+# into MIG slices; installing the driver on the Linux systems our sites and
+# workstations run.
+
+[web.nvidia.pages]
+compatibility = "https://docs.nvidia.com/deploy/cuda-compatibility/index.html"
+compatibility-minor-versions = "https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html"
+compatibility-forward = "https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html"
+compatibility-questions = "https://docs.nvidia.com/deploy/cuda-compatibility/frequently-asked-questions.html"
+gpus = "https://developer.nvidia.com/cuda/gpus"
+gpus-legacy = "https://developer.nvidia.com/cuda/gpus/legacy"
+mig-concepts = "https://docs.nvidia.com/datacenter/tesla/mig-user-guide/concepts.html"
+mig-getting-started = "https://docs.nvidia.com/datacenter/tesla/mig-user-guide/getting-started-with-mig.html"
+mig-device-names = "https://docs.nvidia.com/datacenter/tesla/mig-user-guide/mig-device-names.html"
+mig-profiles = "https://docs.nvidia.com/datacenter/tesla/mig-user-guide/supported-mig-profiles.html"
+driver-before = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/pre-installation-actions.html"
+driver-ubuntu = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/ubuntu.html"
+driver-rocky-linux = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/rocky-linux.html"
+driver-red-hat = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/red-hat-enterprise-linux.html"
+driver-assistant = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/driver-assistant.html"
+driver-kernel-modules = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/kernel-modules.html"
+driver-after = "https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/post-installation-actions.html"
+
+[web.cupy]
+# CuPy's installation (its CUDA builds and what each needs) and its environment
+# variables (CUDA_PATH, CUPY_ACCELERATORS, the kernel cache), at the version
+# pytom-match-pick's environment has.
+versions = "cupy"
+
+[web.cupy.pages]
+install = "https://docs.cupy.dev/en/v{version}/install.html"
+environment = "https://docs.cupy.dev/en/v{version}/reference/environment.html"
+
+[web.pytorch]
+# PyTorch's install command for each release and CUDA version, every release on
+# one page.
+
+[web.pytorch.pages]
+previous-versions = "https://pytorch.org/get-started/previous-versions/"
