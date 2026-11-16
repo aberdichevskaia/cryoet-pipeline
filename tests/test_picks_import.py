@@ -263,8 +263,8 @@ def test_formats_not_measured_yet_are_refused_with_what_they_need(
 ) -> None:
     path = tmp_path / "picks.tbl"
     path.write_text("1 1 1\n")
-    for name, needs in (("dynamo-table", "Dynamo's own cropping"),
-                        ("relion3-star", "measured as RELION 5's was")):
+    for name, needs in (("warp-star", "measured as RELION 5's was"),
+                        ("copick", "CZ portal")):
         with pytest.raises(ImportRefused, match=needs):
             import_picks(picks_path=path, format_name=name, tilt_series_id="TS_01",
                          out=project, particle_diameter_angstrom=DIAMETER)
@@ -538,3 +538,69 @@ def test_an_edit_names_the_picks_it_was_exported_from(
     with pytest.raises(ImportRefused, match="ArtiaX"):
         import_edited_picks(picks_path=star, derived_from=picks_id, tilt_series_id="TS_01",
                             out=project, particle_diameter_angstrom=DIAMETER)
+
+
+def _dynamo_table(path: Path, positions: np.ndarray, shifts: np.ndarray, angles: np.ndarray,
+                  tomograms: list[int] | None = None) -> Path:
+    rows = []
+    for index, (position, shift, angle) in enumerate(zip(positions, shifts, angles,
+                                                         strict=True)):
+        row: list[object] = [0.0] * 35
+        row[0], row[1], row[2] = index + 1, 1, 1
+        row[3:6] = [float(value) for value in shift]
+        row[6:9] = [float(value) for value in angle]
+        row[9] = 0.25
+        row[19] = tomograms[index] if tomograms else 1
+        row[23:26] = [float(value) for value in position]
+        row[27] = "0+1.2074e-06i"  # Dynamo writes some refined columns as complex
+        rows.append(" ".join(str(value) for value in row))
+    path.write_text("\n".join(rows) + "\n")
+    return path
+
+
+def _dynamo_angles(angles: np.ndarray) -> np.ndarray:
+    from cryoet_pipeline.backends.dynamo_search import native_to_dynamo
+
+    return np.array([native_to_dynamo(relion_euler_to_matrix(*a), np.zeros(3), 32)[0]
+                     for a in angles])
+
+
+def test_a_dynamo_table_gives_the_particles_where_dynamo_averages_them(
+    tmp_path: Path, project: Path, scene: dict[str, Any]
+) -> None:
+    # As Dynamo keeps them: a whole or semi-integer crop position, the fraction in
+    # the shift. dtcrop centres its box on the voxel holding p, and the particle is
+    # at that centre plus the shift (scripts/dynamo_table_check.py measured both).
+    rng = np.random.default_rng(4)
+    truth = scene["centres"] + rng.uniform(-0.45, 0.45, scene["centres"].shape)
+    positions = np.floor(truth) + 0.5
+    positions[::4] = np.floor(truth[::4])  # whole positions mean the same voxel
+    shifts = truth - np.floor(truth)
+    table = _dynamo_table(tmp_path / "picks.tbl", positions, shifts,
+                          _dynamo_angles(scene["angles"]))
+
+    result = import_picks(picks_path=table, format_name="dynamo-table", tilt_series_id="TS_01",
+                          out=project, particle_diameter_angstrom=DIAMETER)
+
+    imported, angles = _imported(result.picks.path)
+    np.testing.assert_allclose(imported, truth, atol=1e-5)
+    _same_rotations(angles, scene["angles"])
+    assert result.check["verdict"] == "lands"
+
+
+def test_a_dynamo_table_of_several_tomograms_needs_this_ones_number(
+    tmp_path: Path, project: Path, scene: dict[str, Any]
+) -> None:
+    centres = scene["centres"]
+    tomograms = [1 if index % 3 else 2 for index in range(len(centres))]
+    table = _dynamo_table(tmp_path / "picks.tbl", centres + 0.5, np.zeros_like(centres),
+                          np.zeros_like(centres), tomograms)
+    arguments: dict[str, Any] = dict(picks_path=table, format_name="dynamo-table",
+                                     tilt_series_id="TS_01", out=project,
+                                     particle_diameter_angstrom=DIAMETER)
+
+    with pytest.raises(ImportRefused, match="--dynamo-tomogram"):
+        import_picks(**arguments)
+    result = import_picks(dynamo_tomogram=1, **arguments)
+    imported, _ = _imported(result.picks.path)
+    np.testing.assert_allclose(imported, centres[np.array(tomograms) == 1], atol=1e-6)

@@ -411,7 +411,8 @@ def import_picks_command(
             help="What the file is: pytom-star (rlnCoordinateX/Y/Z in voxels of the volume "
             "picked), relion5-star (RELION 5's centred angstroms), csv (columns named "
             "with --csv-columns), or imod-model (a model made on the volume, in 3dmod or "
-            "by an IMOD program; read with IMOD's model2point). Not given with "
+            "by an IMOD program; read with IMOD's model2point), or dynamo-table (a "
+            "Dynamo .tbl: positions, shifts and tdrot/tilt/narot). Not given with "
             "--derived-from, whose export decides it.",
         ),
     ] = None,
@@ -471,6 +472,11 @@ def import_picks_command(
         int | None,
         typer.Option(min=1, help="imod-model: the object that holds the picks, when the "
                      "model has several (numbered from 1, as 3dmod numbers them)."),
+    ] = None,
+    dynamo_tomogram: Annotated[
+        int | None,
+        typer.Option(help="dynamo-table: the tomogram number (column 20) of this series' "
+                     "rows, when the table holds several."),
     ] = None,
     variant: Annotated[
         str | None,
@@ -542,6 +548,7 @@ def import_picks_command(
                 relion_tilt_series_pixel=relion_tilt_series_pixel_size,
                 relion_tomograms_star=relion_tomograms_star,
                 imod_object=imod_object,
+                dynamo_tomogram=dynamo_tomogram,
                 variant=variant,
                 overrule_picks_check=overrule_picks_check,
             )

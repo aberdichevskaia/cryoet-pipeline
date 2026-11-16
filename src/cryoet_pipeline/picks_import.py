@@ -20,7 +20,11 @@ the list says what its columns mean:
   findbeads3d on beads of known centre in IMOD's three layouts
   (scripts/imod_model_check.py). model2point prints two decimals.
 
-`dynamo-table` is refused until measured against Dynamo's own cropping.
+- `dynamo-table`: a row is the particle at our voxel floor(p) + shift of the
+  tomogram Dynamo read (columns 24-26 and 4-6), its pose `dynamo_to_native` of
+  tdrot, tilt, narot: measured 16 November with Dynamo 1.1.511
+  (scripts/dynamo_table_check.py). dtcrop centres its box on the voxel that
+  holds p, and Dynamo's average puts the particle at that centre plus the shift.
 
 Coordinates taken in a volume of another orientation (`picked_in`: by default
 the one the tomogram was imported in, or `pipeline` for the project's own) are
@@ -55,6 +59,7 @@ from cryoet_pipeline.backends.alignment import (
     resolve_imod_executable,
     run_command,
 )
+from cryoet_pipeline.backends.dynamo_search import dynamo_to_native
 from cryoet_pipeline.backends.protocols import _VARIANT_PATTERN, BackendContext
 from cryoet_pipeline.backends.subtomogram import pick_centre_offset
 from cryoet_pipeline.models import (
@@ -85,10 +90,8 @@ STEP_VERSION = 1
 BACKEND = "picks-import"
 BACKEND_VERSION = 1
 
-FORMATS = ("pytom-star", "relion5-star", "csv", "imod-model")
+FORMATS = ("pytom-star", "relion5-star", "csv", "imod-model", "dynamo-table")
 UNMEASURED_FORMATS = {
-    "dynamo-table": "Dynamo's table, measured against Dynamo's own cropping of the same "
-    "positions",
     "relion3-star": "RELION 3/4's STAR, measured as RELION 5's was",
     "warp-star": "Warp's STAR, measured as RELION 5's was",
     "copick": "copick points, measured against the CZ portal's annotations",
@@ -209,6 +212,54 @@ def read_imod_model(path: Path, imod_object: int | None, out: Path) -> SourcePic
     # A pixel's centre is at index + 0.5 in X and Y, a section's at its index in Z.
     positions = table[:, 2:5] - np.array([0.5, 0.5, 0.0])
     return SourcePicks(positions, None, None, "picked")
+
+
+def _dynamo_number(word: str, column: int, path: Path) -> float:
+    """A table entry as a real number; Dynamo writes some as complex (`0+1.2e-06i`)."""
+
+    try:
+        return float(word)
+    except ValueError:
+        pass
+    try:
+        value = complex(word.replace("i", "j"))
+    except ValueError as exc:
+        raise ImportRefused(f"{path}: column {column} holds {word!r}") from exc
+    if abs(value.imag) > 1e-6 * max(1.0, abs(value.real)):
+        raise ImportRefused(f"{path}: column {column} holds the complex number {word!r}")
+    return value.real
+
+
+def read_dynamo_table(path: Path, tomogram_number: int | None) -> SourcePicks:
+    """A Dynamo table's particles, as voxels of the tomogram Dynamo read them in."""
+
+    if not path.is_file():
+        raise FileNotFoundError(f"table not found: {path}")
+    rows = [line.split() for line in path.read_text().splitlines() if line.strip()]
+    if not rows:
+        raise ImportRefused(f"{path} holds no rows")
+    if min(len(row) for row in rows) < 26:
+        raise ImportRefused(f"{path}: a Dynamo table has at least 26 columns, positions in 24-26")
+    wanted = (4, 5, 6, 7, 8, 9, 10, 20, 24, 25, 26)
+    table = np.array([[_dynamo_number(row[column - 1], column, path) for column in wanted]
+                      for row in rows])
+    numbers = sorted({int(round(value)) for value in table[:, 7]})
+    if tomogram_number is None and len(numbers) > 1:
+        raise ImportRefused(
+            f"{path} holds rows of tomograms {numbers} (column 20); name this one's with "
+            "--dynamo-tomogram"
+        )
+    if tomogram_number is not None:
+        table = table[np.rint(table[:, 7]) == tomogram_number]
+        if not len(table):
+            raise ImportRefused(f"{path} has no rows of tomogram {tomogram_number}")
+    # Dynamo crops the box whose centre is the voxel holding p, and puts the
+    # particle at that centre plus the shift.
+    positions = np.floor(table[:, 8:11]) + table[:, 0:3]
+    angles = np.array([
+        matrix_to_relion_euler(dynamo_to_native(row[3:6], np.zeros(3), 2)[0]) for row in table
+    ]).reshape(-1, 3)
+    return SourcePicks(positions, angles, table[:, 6], "picked")
 
 
 def read_csv(path: Path, column_names: Sequence[str]) -> SourcePicks:
@@ -475,6 +526,7 @@ def import_picks(
     relion_tilt_series_pixel: float | None = None,
     relion_tomograms_star: Path | None = None,
     imod_object: int | None = None,
+    dynamo_tomogram: int | None = None,
     variant: str | None = None,
     overrule_picks_check: bool = False,
 ) -> PicksImportResult:
@@ -543,6 +595,10 @@ def import_picks(
             source = read_imod_model(picks_path, imod_object, out)
             if imod_object is not None:
                 content["imod_object"] = imod_object
+        elif format_name == "dynamo-table":
+            source = read_dynamo_table(picks_path, dynamo_tomogram)
+            if dynamo_tomogram is not None:
+                content["dynamo_tomogram"] = dynamo_tomogram
         else:
             if not csv_columns:
                 raise ImportRefused("a CSV needs --csv-columns, naming each column in order")

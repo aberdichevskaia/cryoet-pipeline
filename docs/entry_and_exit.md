@@ -176,7 +176,7 @@ one person to the next the answers change, not the questions. So:
   |---|---|---|---|
   | pytom's STAR | `rlnCoordinateX/Y/Z`, voxels of the tomogram picked | `rlnAngleRot/Tilt/Psi` | our own picking and extraction; an even template box's half voxel is accounted for (`pick_template_box_px`) |
   | RELION 5's STAR | `rlnCenteredCoordinate*Angst`: Å from the centre, in `imod-standard` | `rlnAngleRot/Tilt/Psi`, in `imod-standard` | our export writes it, and RELION placed the particles where we did, 10 November (`relion_particle_check.py`) |
-  | Dynamo's table | position and shift, in voxels | tdrot, tilt, narot | as a particle folder, the port's MRA matches Dynamo; as positions in a tomogram, to be measured |
+  | Dynamo's table | our voxel floor(p) + shift of the tomogram Dynamo read (columns 24–26 and 4–6) | tdrot, tilt, narot, as the port's MRA reads them | measured 16 November with Dynamo 1.1.511 (`dynamo_table_check.py`): dtcrop centres its box on the voxel holding p, and Dynamo's average puts the particle at that centre plus the shift; as a particle folder, the port's MRA matches Dynamo |
   | IMOD model | `model2point`'s (X, Y, Z) is voxel (X − 0.5, Y − 0.5, Z) of the volume it was made on, in that volume's orientation | none | measured 16 November: findbeads3d on beads of known centre, in IMOD's three layouts, to 0.13 voxel (`imod_model_check.py`) |
   | CSV | the columns the person names | if named | nothing to measure; the checks below test it |
   | RELION 3/4, Warp, copick | | | not measured, refused |
@@ -468,10 +468,10 @@ unchanged.
    against Dynamo's own cropping, and IMOD models against `findbeads3d`'s model
    of the gold beads in one of our tomograms, before either is offered. The
    bypass flags go. Built 16 November, uncommitted (Status below):
-   - pytom's STAR, RELION 5's STAR, CSV and IMOD models, with the check;
+   - pytom's STAR, RELION 5's STAR, CSV, IMOD models and Dynamo's table, with the
+     check;
    - `--derived-from` for 3dmod edits;
-   - not yet: Dynamo's table, still refused until measured, and edits saved by
-     ArtiaX.
+   - not yet: edits saved by ArtiaX.
 
    The bypass flags stay for now. Three ground-truth tools of the benchmark
    (`run_centered_gt_pair.py`, `run_voxel_gt_control.py`,
@@ -621,8 +621,8 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   box. Picks without angles carry zeros and `angles: none`; the MRA does not read
   that mark yet.
 - **Refused.**
-  - Formats not measured: `dynamo-table`, `relion3-star`, `warp-star`, `copick`,
-    each with what measuring it needs.
+  - Formats not measured: `relion3-star`, `warp-star`, `copick`, each with what
+    measuring it needs.
   - RELION 5 particles with nonzero `rlnOrigin*` or `rlnTomoSubtomogram*`: how
     RELION combines them was not measured here.
   - A binning that is not a whole number of the tilt series' pixels.
@@ -658,7 +658,6 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   would have refused these picks, and so did a null drawn from the whole volume.
   Both were replaced.
 - **Not built.**
-  - The measurement for Dynamo's table.
   - `--derived-from` for edits saved by ArtiaX.
   - The control with shuffled poses.
   - The MRA reading `angles: none`.
@@ -724,4 +723,38 @@ on the Mac).
   - the import counts them right, puts each where it belongs to 0.006 voxel, and
     the lineage reaches the imported tomogram.
 - **Refused:** an edit saved by ArtiaX (a STAR file), which is not measured.
+
+**Dynamo's table, measured 16 November** (`scripts/dynamo_table_check.py`,
+Dynamo 1.1.511 on the Mac).
+
+- **Read first.** Dynamo's source, `dynamo_table_crop.m` of 1.1.591, says that
+  dtcrop crops at the position alone (the shifts play no part). Its box of side
+  L runs over the 1-based indices c − L/2 to c + L/2 − 1, with c = ceil(p), and
+  "positions are supposed to be expressed in semiintegers".
+- **Positions.** dtcrop cropped a noise volume, every voxel distinct, at eight
+  positions: whole, semi-integer and other fractions. Each crop was found in the
+  volume, equal up to dtcrop's normalisation of each particle to mean 0 and sd 1
+  (correlation 1 − 2·10⁻⁷). The axes were neither swapped nor flipped. The first
+  voxel was floor(p) − L/2 for all eight. The source's ceil rule fits six: it
+  differs on whole positions, which 1.1.511 crops as it crops p + 0.5. So
+  Dynamo's box centre is our voxel floor(p), the voxel that holds p. For the
+  semi-integers Dynamo documents, that is p − 0.5, the + 0.5 the pipeline's own
+  Dynamo export adds.
+- **Shifts.** Six crops of one blob, at positions moved off it by d, were
+  averaged by `daverage`:
+  - with shifts +d, the blob sits at the box centre (8.02, 8.08, 8.07 against
+    8), peak 14.8;
+  - with −d it is smeared and off centre, peak 5.8.
+
+  So a particle is at the box centre plus the shift.
+- **What the import does.** A row is the particle at our voxel floor(p) + shift
+  of the tomogram Dynamo read. That volume is the one picked in (`--picked-in`),
+  read as an MRC's columns, rows and sections. The pose is `dynamo_to_native` of
+  tdrot, tilt, narot, the conversion the port's MRA uses and matches Dynamo
+  with. `--dynamo-tomogram` picks the rows of column 20 when the table holds
+  several tomograms. Entries Dynamo wrote as complex are read by their real part.
+- **Tested** on the synthetic tomogram with tables written as Dynamo keeps them:
+  whole or semi-integer positions, the fraction in the shift, and poses from
+  `native_to_dynamo`. The particles come back to 1e-5 voxel, with the same
+  rotations.
 
