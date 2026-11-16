@@ -339,7 +339,8 @@ one person to the next the answers change, not the questions. So:
    wedge comes from the table's columns. The MRA then reads them from the registry
    with its usual reports, and the particles are known by the hash of their voxels,
    not by the table alone. RELION 3/4 subtomograms come with CTF volumes the MRA
-   does not model, so they are refused until someone needs them.
+   does not model, so they are refused until someone needs them. Built 16 November
+   (Status below).
 
 9. **Re-entry of an edit.** `--derived-from <artifact>` imports a file as an edit
    of a project artifact that was exported, such as picks after cleaning in ArtiaX
@@ -478,7 +479,8 @@ unchanged.
    `run_gt_positive_control.py`) pass `--picks-star`. Moving them to
    `import-picks` changes their half-voxel path, so it is a decision about those
    controls.
-4. `import-particles`: a Dynamo folder and its table.
+4. `import-particles`: a Dynamo folder and its table. Built 16 November,
+   uncommitted (Status below).
 5. Exits: picks to RELION 5, the tomogram in a listed orientation, the methods
    record.
 6. Lane inputs `tomograms`, `picks` and `particles`, and the assistant's readers
@@ -757,4 +759,50 @@ Dynamo 1.1.511 on the Mac).
   whole or semi-integer positions, the fraction in the shift, and poses from
   `native_to_dynamo`. The particles come back to 1e-5 voxel, with the same
   rotations.
+
+**import-particles, built 16 November, uncommitted**
+([particles_import.py](../src/cryoet_pipeline/particles_import.py)).
+
+- **What it takes.** A Dynamo data folder (`particle_<tag>.em` or `.mrc`, five or
+  six digits) and its table. `--series 1=TS_01` names the project's series of each
+  tomogram number in column 20, and an unnamed number is refused. The columns are
+  read as Dynamo's `dynamo_columninfo.m` numbers them.
+- **What it writes.** Per series, a `PARTICLE_STACK`: the voxels as they are, in a
+  Zarr with one chunk per particle, and the pipeline's particle STAR. It lands in
+  a run folder `imports/<series>/particles[_<label>]/` with `run.json`, whose
+  inputs are the table and the particle files' bytes. The stack is
+  registered as `imported`, with no parent.
+- **The conversions.**
+  - Poses and shifts go through `dynamo_to_native`, the conversion the port's
+    MRA matches Dynamo with.
+  - The wedge is the table's single-axis ytilt, negated into the pipeline's
+    sign as `dynamo_ytilt` negates it on the way to Dynamo (measured 19 October),
+    and the stack carries it as `tilt_range_deg`. `reconstructed_tilt_range` now
+    takes a stack's own range first, there being no tomogram to read it from.
+  - The pixel size is column 36 (apix), checked against `--pixel-size` when both
+    are given.
+  - The positions are kept as p − 0.5, for the record.
+  - The series gets a manifest with `entry: particles` and no views: what its
+    particles came from is not here. Such a manifest is the only one allowed
+    without images.
+- **Its checks.**
+  - Every row's file is there, all boxes are cubic and even, one pixel size, one
+    wedge per series, and the wedge type is 1. Anything else is refused.
+  - **The wedge in the particles.** Boxes cut from one tomogram and not turned all
+    hold its wedge in the same place. So the mean of their power spectra is set
+    against the table's range, with the same fit and verdicts as for a tomogram
+    (`wedge_check.measure_particles_wedge`). A table whose wedge has the other
+    sign is refused; `--overrule-wedge-check` lets it through and is recorded.
+- **Tested** (`tests/test_particles_import.py`, 8): noise particles with a wedge
+  over −50..+60, in the pipeline's convention, and a table of two series giving
+  Dynamo's ytilt.
+  - After the import, the MRA's own reader of the registry
+    (`registry_particles`) gives back the shifts, rotations, ytilt, positions,
+    tomogram numbers, pixel size and box the table gave, to the six decimals the
+    STAR holds, and the voxels exactly.
+  - The wedge check agrees on both series, and refuses the table with ytilt
+    negated.
+- **Not built.** RELION subtomograms, and particles attached to a tomogram the
+  project has. Imported particles are in no tomogram here, so they cannot be
+  re-extracted.
 

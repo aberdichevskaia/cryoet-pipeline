@@ -147,6 +147,7 @@ from cryoet_pipeline.models import (
     SeriesEntry,
     TiltSeriesManifest,
 )
+from cryoet_pipeline.particles_import import import_particles
 from cryoet_pipeline.pick_geometry import (
     AXIS_DIRECTIONS,
     TEMPLATE_AXES,
@@ -392,6 +393,62 @@ def import_tomogram_command(
     for warning in result.warnings:
         typer.echo(f"warning: {warning}")
     typer.echo(f"manifest: {result.manifest_path}")
+
+
+@app.command("import-particles")
+def import_particles_command(
+    folder: Annotated[
+        Path,
+        typer.Option(help="A Dynamo data folder: particle_<tag>.em (or .mrc) files."),
+    ],
+    table: Annotated[Path, typer.Option(help="The Dynamo table (.tbl) of those particles.")],
+    out: Annotated[Path, typer.Option(help="Project directory.")],
+    series: Annotated[
+        list[str],
+        typer.Option(help="A tomogram number of the table (column 20) and the project's "
+                     "series it is, as 1=TS_01; repeat for each."),
+    ],
+    pixel_size: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="Pixel size in angstrom, when column 36 (apix) has none; "
+                     "checked against it when it has."),
+    ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(help="Label for these stacks, the lane the MRA reads them by."),
+    ] = None,
+    overrule_wedge_check: Annotated[
+        bool,
+        typer.Option(help="Import even though the particles' wedge contradicts the table's, "
+                     "and record that you did."),
+    ] = False,
+) -> None:
+    """Enter a Dynamo data folder and its table as the project's particle stacks.
+
+    One stack per series, the voxels as they are, with the table's poses, shifts and
+    wedge; the MRA then reads them from the registry (docs/entry_and_exit.md).
+    """
+
+    mapping: dict[int, str] = {}
+    for item in series:
+        number, _, name = item.partition("=")
+        if not number.strip().isdigit() or not name.strip():
+            raise typer.BadParameter(f"--series takes <number>=<series>, got {item!r}")
+        mapping[int(number)] = name.strip()
+    try:
+        results = import_particles(folder=folder, table_path=table, out=out, series=mapping,
+                                   declared_pixel_size=pixel_size, variant=variant,
+                                   overrule_wedge_check=overrule_wedge_check)
+    except ImportRefused as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for result in results:
+        state = "already imported" if result.already_imported else "wrote"
+        typer.echo(f"{result.tilt_series_id}: {state} {result.folder}, "
+                   f"{result.stack.shape[0] if result.stack.shape else '?'} particles, "
+                   f"wedge {result.stack.parameters['tilt_range_deg']}")
+        typer.echo(f"  wedge check: {result.wedge['verdict']}: {result.wedge['reason']}")
+        for warning in result.warnings:
+            typer.echo(f"  warning: {warning}")
 
 
 @app.command("import-picks")

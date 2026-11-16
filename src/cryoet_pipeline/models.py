@@ -226,18 +226,15 @@ class TiltSeriesManifest(BaseModel):
     """What the series entered the project as. Manifests written before the field
     existed were all written by `init` or `import-tilt-stack`, and read as frames."""
 
-    @field_validator("images")
-    @classmethod
-    def require_images(cls, value: list[TiltImage]) -> list[TiltImage]:
-        if not value:
-            raise ValueError("tilt-series manifest must contain at least one image")
-        return value
-
     @model_validator(mode="after")
     def require_frame_fields_for_frames(self) -> TiltSeriesManifest:
         """A series entered as frames keeps the guarantee it always had: every image
-        names its movie, its frame count, its pixel size and its binning."""
+        names its movie, its frame count, its pixel size and its binning. Only a
+        series entered as particles may have no images: what its particles came
+        from is not here, and its wedge is its particle stack's."""
 
+        if not self.images and self.entry is not SeriesEntry.PARTICLES:
+            raise ValueError("tilt-series manifest must contain at least one image")
         if self.entry is SeriesEntry.FRAMES:
             missing = sorted(
                 {

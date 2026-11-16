@@ -73,8 +73,14 @@ def reconstructed_tilt_range(
     also shifted to make the specimen flat (+7 deg on ryr1 039); then the nominal
     angles of the views the tomogram kept (`included_z_values`); then the manifest.
     The caller says which it used. The range is in the tomogram's own angles; a
-    Dynamo table gets it as Dynamo's ytilt, through `dynamo_ytilt`.
+    Dynamo table gets it as Dynamo's ytilt, through `dynamo_ytilt`. Particles
+    imported with a table of their own carry its range, and it comes first.
     """
+    recorded = stack.parameters.get("tilt_range_deg")
+    if isinstance(recorded, list) and len(recorded) == 2:
+        # Particles imported with their own table: the wedge it gave them
+        # (import-particles), there being no tomogram here to read it from.
+        return (float(recorded[0]), float(recorded[1])), "imported particles' table"
     angle_by_z = {image.z_value: image.tilt_angle_deg for image in manifest.images}
     tomogram_id = stack.parameters.get("input_tomogram_id")
     if isinstance(tomogram_id, str):

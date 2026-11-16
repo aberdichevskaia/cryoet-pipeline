@@ -117,17 +117,39 @@ def angular_profile(
     crop = _centred_crop(volume, crop_z, crop_xy)
     if min(crop.shape) < 16:
         raise ValueError(f"a wedge needs a volume of at least 16 voxels a side, got {crop.shape}")
-    crop -= crop.mean()
-    window = (
-        tukey(crop.shape[0])[:, None, None]
-        * tukey(crop.shape[1])[None, :, None]
-        * tukey(crop.shape[2])[None, None, :]
-    )
-    power = np.abs(np.fft.rfftn(crop * window)) ** 2
+    power = windowed_power(crop)
+    shape = (int(crop.shape[0]), int(crop.shape[1]), int(crop.shape[2]))
+    centres, profile = profile_of_power(power, shape, shell=shell, bin_deg=bin_deg)
+    return centres, profile, shape
 
-    kz = np.fft.fftfreq(crop.shape[0])[:, None, None]
-    ky = np.fft.fftfreq(crop.shape[1])[None, :, None]
-    kx = np.fft.rfftfreq(crop.shape[2])[None, None, :]
+
+def windowed_power(volume: np.ndarray) -> np.ndarray:
+    """The power spectrum (rfftn) of a volume, its mean removed and Tukey-windowed."""
+
+    data = np.asarray(volume, dtype=np.float64)
+    data = data - data.mean()
+    window = (
+        tukey(data.shape[0])[:, None, None]
+        * tukey(data.shape[1])[None, :, None]
+        * tukey(data.shape[2])[None, None, :]
+    )
+    power: np.ndarray = np.abs(np.fft.rfftn(data * window)) ** 2
+    return power
+
+
+def profile_of_power(
+    power: np.ndarray,
+    shape: tuple[int, int, int],
+    *,
+    shell: tuple[float, float] = DEFAULT_SHELL,
+    bin_deg: float = DEFAULT_BIN_DEG,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bin centres and the median log10 power in each, of an rfftn power spectrum of a
+    real `(z, y, x)` array of `shape`: one volume's, or the mean of many particles'."""
+
+    kz = np.fft.fftfreq(shape[0])[:, None, None]
+    ky = np.fft.fftfreq(shape[1])[None, :, None]
+    kx = np.fft.rfftfreq(shape[2])[None, None, :]
     in_plane = np.sqrt(kx**2 + kz**2)
     radius = np.sqrt(in_plane**2 + ky**2)
     # An in-plane radius well above zero, so that the angle is defined.
@@ -154,13 +176,12 @@ def angular_profile(
     if empty.sum() > len(profile) // 4:
         raise ValueError(
             f"the shell leaves {int(empty.sum())} of {len(profile)} angle bins empty; "
-            f"the volume ({crop.shape}) is too small to measure its wedge"
+            f"the volume ({shape}) is too small to measure its wedge"
         )
     if empty.any():
         profile[empty] = np.interp(centres[empty], centres[~empty], profile[~empty],
                                    period=180.0)
-    shape = (int(crop.shape[0]), int(crop.shape[1]), int(crop.shape[2]))
-    return centres, profile - np.median(profile), shape
+    return centres, profile - np.median(profile)
 
 
 def measured_bins(centres: np.ndarray, minimum: float, maximum: float) -> np.ndarray:
@@ -233,11 +254,60 @@ def measure_wedge(
     - `inconclusive`: neither is.
     """
 
+    centres, profile, crop_shape = angular_profile(volume, shell=shell)
+    return judge_wedge(centres, profile, crop_shape, tilt_angles_deg, shell=shell,
+                       no_wedge_below=no_wedge_below, side_tolerance_deg=side_tolerance_deg,
+                       side_margin_deg=side_margin_deg)
+
+
+def measure_particles_wedge(
+    particles: Any,
+    tilt_angles_deg: Sequence[float],
+    *,
+    shell: tuple[float, float] = DEFAULT_SHELL,
+) -> WedgeMeasurement:
+    """The wedge the particles share, from the mean of their power spectra.
+
+    Particles are boxes cut from one tomogram and not turned, so every one holds
+    its tomogram's wedge in the same place. `particles` gives `(z, y, x)` arrays of
+    one shape.
+    """
+
+    total: np.ndarray | None = None
+    shape: tuple[int, int, int] | None = None
+    count = 0
+    for particle in particles:
+        array = np.asarray(particle, dtype=np.float64)
+        if shape is None:
+            shape = (int(array.shape[0]), int(array.shape[1]), int(array.shape[2]))
+        elif array.shape != shape:
+            raise ValueError(f"particles of shapes {shape} and {array.shape}")
+        power = windowed_power(array)
+        total = power if total is None else total + power
+        count += 1
+    if total is None or shape is None:
+        raise ValueError("no particles to measure a wedge in")
+    centres, profile = profile_of_power(total / count, shape, shell=shell)
+    return judge_wedge(centres, profile, shape, tilt_angles_deg, shell=shell)
+
+
+def judge_wedge(
+    centres: np.ndarray,
+    profile: np.ndarray,
+    crop_shape: tuple[int, int, int],
+    tilt_angles_deg: Sequence[float],
+    *,
+    shell: tuple[float, float] = DEFAULT_SHELL,
+    no_wedge_below: float = 0.15,
+    side_tolerance_deg: float = 3.0,
+    side_margin_deg: float = 2.0,
+) -> WedgeMeasurement:
+    """Fit the profile's wedge and set it against the declared angles' (`measure_wedge`)."""
+
     if len(tilt_angles_deg) < 2:
         raise ValueError("a wedge needs at least two tilt angles")
     declared_min = float(min(tilt_angles_deg))
     declared_max = float(max(tilt_angles_deg))
-    centres, profile, crop_shape = angular_profile(volume, shell=shell)
     fitted_min, fitted_max, fitted_contrast = fit_range(centres, profile)
     _, declared = sector_split(centres, profile, declared_min, declared_max)
     _, mirrored = sector_split(centres, profile, -declared_max, -declared_min)
@@ -300,8 +370,12 @@ __all__ = [
     "WedgeMeasurement",
     "angular_profile",
     "fit_range",
+    "judge_wedge",
+    "measure_particles_wedge",
     "measure_wedge",
     "measured_bins",
+    "profile_of_power",
+    "windowed_power",
     "sector_split",
     "tukey",
 ]

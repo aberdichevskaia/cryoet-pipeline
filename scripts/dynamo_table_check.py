@@ -72,7 +72,7 @@ def table_rows(positions: list[tuple[float, float, float]],
         row[19] = 1  # tomogram
         row[21] = 1  # class
         row[23:26] = position
-        row[34] = 1.0  # pixel size
+        row[35] = 1.0  # column 36, apix
         lines.append(" ".join(f"{value:g}" for value in row))
     return "\n".join(lines) + "\n"
 
