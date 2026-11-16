@@ -29,6 +29,7 @@ from cryoet_pipeline.models import (
     MotionPatchAlignment,
     QcStatus,
     RetentionPolicy,
+    SeriesEntry,
     StorageRole,
     TiltImage,
     TiltSeriesManifest,
@@ -168,25 +169,30 @@ class MotionCor3MotionCorrectionBackend:
         eer_parameters: dict[str, object] = {}
         fmint_path: Path | None = None
         if settings.movie_format is MovieFormat.EER:
+            frame_count = image.num_subframes
+            if frame_count is None:
+                raise ValueError(
+                    f"{manifest.tilt_series_id} z={image.z_value}: no frame count"
+                )
             tilt_dose = _eer_tilt_dose_e_per_a2(
                 image.local_frame_file, settings.pixel_spacing_angstrom
             )
             fractions = (
                 settings.eer_fractions
                 if settings.eer_fractions is not None
-                else eer_fractions_for_dose(image.num_subframes, tilt_dose)
+                else eer_fractions_for_dose(frame_count, tilt_dose)
             )
-            fmint_line = motioncor3_eer_fmint(image.num_subframes, fractions)
+            fmint_line = motioncor3_eer_fmint(frame_count, fractions)
             fmint_path = work_dir / f"{output_stem}.fmint"
             fmint_path.write_text(fmint_line)
             group_size = int(fmint_line.split()[1])
             # MotionCor3 makes N // G groups, the last N % G of them one frame longer.
-            groups = image.num_subframes // group_size
+            groups = frame_count // group_size
             eer_parameters = {
                 "eer_sampling": settings.eer_sampling,
                 "eer_fractions": fractions,
                 "eer_fractions_given": settings.eer_fractions is not None,
-                "eer_frames": image.num_subframes,
+                "eer_frames": frame_count,
                 "eer_group_size": group_size,
                 "eer_groups": groups,
                 # From the movie's metadata and pixel; None when it states no dose.
@@ -469,6 +475,7 @@ def correct_and_register(
 ) -> list[Artifact]:
     """Run motion correction and add the returned artifacts to the registry."""
 
+    manifest.require_entry("correct-motion", SeriesEntry.FRAMES)
     artifacts = backend.correct(manifest, context)
     registry.extend(artifacts, replace=replace_existing)
     return artifacts

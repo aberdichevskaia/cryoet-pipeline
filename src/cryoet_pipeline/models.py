@@ -96,6 +96,42 @@ class RetentionPolicy(StrEnum):
     DELETE_AFTER_EXPORT = "delete_after_export"
 
 
+class Provenance(StrEnum):
+    """Whether an artifact was made here, entered from outside, or edited outside.
+
+    docs/entry_and_exit.md (What an import is, 2). What descends from an imported
+    or attested artifact is not marked one artifact at a time: that is a question
+    about the lineage, `ArtifactRegistry.not_derived_lineage`.
+    """
+
+    DERIVED = "derived"
+    """Made by a run of this pipeline from registered inputs; the default."""
+    IMPORTED = "imported"
+    """Entered from outside, with no upstream here."""
+    ATTESTED = "attested"
+    """A person's edit, made outside, of an artifact that is here."""
+
+
+# The backends that entered files from outside before `provenance` existed. Their
+# artifacts carry no provenance on disk and read as imported.
+LEGACY_IMPORT_BACKENDS = frozenset({"external-bypass", "external_stack_import"})
+
+
+class SeriesEntry(StrEnum):
+    """What a tilt series entered the project as, and so what it has.
+
+    A series entered as frames has every image's frame fields. One entered later,
+    as a stack or a tomogram, has only what its import was told, and the steps
+    before its entry refuse it (docs/entry_and_exit.md, What an import is, 6).
+    """
+
+    FRAMES = "frames"
+    STACK = "stack"
+    TOMOGRAM = "tomogram"
+    PICKS = "picks"
+    PARTICLES = "particles"
+
+
 class QcStatus(StrEnum):
     """Machine-readable outcome of a pipeline quality-control check."""
 
@@ -148,17 +184,23 @@ class ProjectConfig(BaseModel):
 
 
 class TiltImage(BaseModel):
-    """One tilt image: an entry of a SerialEM `.mdoc` file, or one movie file name."""
+    """One tilt image: an entry of a SerialEM `.mdoc` file, or one movie file name.
+
+    The frame fields (`subframe_path`, `num_subframes`, `pixel_spacing_angstrom`,
+    `binning`) describe the movie the image was made from. A series entered as
+    frames has all four (`TiltSeriesManifest.entry`); a view of a series entered
+    later, as a tomogram, has none, rather than stand-ins.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     z_value: int
     tilt_angle_deg: float
-    subframe_path: str
+    subframe_path: str | None = None
     local_frame_file: Path | None = None
-    num_subframes: int
-    pixel_spacing_angstrom: float
-    binning: int
+    num_subframes: int | None = None
+    pixel_spacing_angstrom: float | None = None
+    binning: int | None = None
     exposure_time_s: float | None = None
     exposure_dose: float | None = None
     defocus_um: float | None = None
@@ -180,6 +222,9 @@ class TiltSeriesManifest(BaseModel):
     mdoc_pixel_spacing_angstrom: float | None = None
     raw_pixel_spacing_angstrom: float | None = None
     notes: list[str] = Field(default_factory=list)
+    entry: SeriesEntry = SeriesEntry.FRAMES
+    """What the series entered the project as. Manifests written before the field
+    existed were all written by `init` or `import-tilt-stack`, and read as frames."""
 
     @field_validator("images")
     @classmethod
@@ -187,6 +232,39 @@ class TiltSeriesManifest(BaseModel):
         if not value:
             raise ValueError("tilt-series manifest must contain at least one image")
         return value
+
+    @model_validator(mode="after")
+    def require_frame_fields_for_frames(self) -> TiltSeriesManifest:
+        """A series entered as frames keeps the guarantee it always had: every image
+        names its movie, its frame count, its pixel size and its binning."""
+
+        if self.entry is SeriesEntry.FRAMES:
+            missing = sorted(
+                {
+                    name
+                    for image in self.images
+                    for name in ("subframe_path", "num_subframes", "pixel_spacing_angstrom",
+                                 "binning")
+                    if getattr(image, name) is None
+                }
+            )
+            if missing:
+                raise ValueError(
+                    f"{self.tilt_series_id} entered as frames, but some images have no "
+                    f"{', '.join(missing)}"
+                )
+        return self
+
+    def require_entry(self, step: str, *entries: SeriesEntry) -> None:
+        """Refuse, saying why, a step that needs what this series' entry lacks."""
+
+        if self.entry not in entries:
+            needs = " or ".join(entry.value for entry in entries)
+            raise ValueError(
+                f"{self.tilt_series_id} entered the project as {self.entry.value}, and "
+                f"{step} needs a series entered as {needs}: the files it reads were "
+                "never made for this series here"
+            )
 
     @property
     def tilt_angles_deg(self) -> list[float]:
@@ -198,7 +276,7 @@ class TiltSeriesManifest(BaseModel):
 
     @property
     def num_subframes_set(self) -> set[int]:
-        return {image.num_subframes for image in self.images}
+        return {image.num_subframes for image in self.images if image.num_subframes is not None}
 
 
 class AlignmentTransform(BaseModel):
@@ -1470,6 +1548,10 @@ class Artifact(BaseModel):
     storage_role: StorageRole = StorageRole.CACHE
     retention_policy: RetentionPolicy = RetentionPolicy.RECOMPUTE
     can_recompute: bool = True
+    provenance: Provenance = Provenance.DERIVED
+    """Made here, imported, or attested (docs/entry_and_exit.md). Derived is the
+    default, so every registry on disk stays readable; the artifacts of the
+    backends in `LEGACY_IMPORT_BACKENDS` read as imported."""
     size_bytes: int | None = Field(default=None, ge=0)
     tilt_series_ids: list[str] = Field(default_factory=list)
     """Which tilt-series this artifact is about — its scope.
@@ -1485,6 +1567,24 @@ class Artifact(BaseModel):
     `backend` and `variant` were: a scope buried in an untyped dict cannot be
     indexed, joined, or checked.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def read_legacy_imports_as_imported(cls, data: Any) -> Any:
+        """An artifact of an import made before `provenance` existed says imported.
+
+        Only where provenance was not given: the field, once written, is the record.
+        """
+
+        if not isinstance(data, dict) or "provenance" in data:
+            return data
+        backend = data.get("backend")
+        parameters = data.get("parameters")
+        if backend is None and isinstance(parameters, dict):
+            backend = parameters.get("backend")
+        if backend in LEGACY_IMPORT_BACKENDS:
+            return {**data, "provenance": Provenance.IMPORTED}
+        return data
 
     @model_validator(mode="after")
     def adopt_scope_from_parameters(self) -> Artifact:

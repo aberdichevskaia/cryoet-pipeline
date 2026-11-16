@@ -7,7 +7,14 @@ import mrcfile  # type: ignore[import-untyped]
 import numpy as np
 import zarr
 
-from cryoet_pipeline.models import Artifact, ArtifactKind, AxisOrder, RetentionPolicy, StorageRole
+from cryoet_pipeline.models import (
+    Artifact,
+    ArtifactKind,
+    AxisOrder,
+    Provenance,
+    RetentionPolicy,
+    StorageRole,
+)
 from cryoet_pipeline.mrc_validation import validate_complete_mrc
 
 
@@ -57,6 +64,7 @@ def import_external_tomogram_for_extraction(
         storage_role=StorageRole.SOURCE,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=False,
+        provenance=Provenance.IMPORTED,
         size_bytes=_path_size_bytes(zarr_path),
     )
 
@@ -95,6 +103,7 @@ def import_external_picks_for_extraction(
         storage_role=StorageRole.SOURCE,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=False,
+        provenance=Provenance.IMPORTED,
         size_bytes=star_path.stat().st_size,
     )
 

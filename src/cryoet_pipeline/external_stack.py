@@ -16,7 +16,9 @@ from cryoet_pipeline.models import (
     Artifact,
     ArtifactKind,
     AxisOrder,
+    Provenance,
     RetentionPolicy,
+    SeriesEntry,
     StorageRole,
     TiltSeriesManifest,
 )
@@ -70,7 +72,8 @@ def check_external_tilt_stack(
         )
     if stack_info.pixel_spacing_angstrom is None:
         raise ValueError(f"external stack MRC header has no pixel spacing: {stack_path}")
-    return with_raw_pixel_spacing(manifest, stack_info.pixel_spacing_angstrom), stack_info
+    manifest = with_raw_pixel_spacing(manifest, stack_info.pixel_spacing_angstrom)
+    return manifest.model_copy(update={"entry": SeriesEntry.STACK}), stack_info
 
 
 def import_external_tilt_stack(
@@ -144,6 +147,7 @@ def import_external_tilt_stack(
         storage_role=StorageRole.SOURCE,
         retention_policy=RetentionPolicy.KEEP,
         can_recompute=False,
+        provenance=Provenance.IMPORTED,
         size_bytes=canonical_stack_path.stat().st_size,
     )
 

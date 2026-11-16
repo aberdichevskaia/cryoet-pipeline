@@ -41,8 +41,8 @@ implemented in this repository and need nothing beyond its Python dependencies.
 | | `cone-search` | | — | Cone search + multi-reference classification. |
 | | `fft-refinement` | | — | Simple per-Euler-angle baseline. |
 
-`compute-fsc`, `visualize-picks`, `import-tilt-stack` and `download-empiar`
-have no backend choice. That is not the same as needing nothing installed:
+`compute-fsc`, `visualize-picks`, `import-tilt-stack`, `import-tomogram` and
+`download-empiar` have no backend choice. That is not the same as needing nothing installed:
 `visualize-picks` calls IMOD's `point2model` to turn the picks into a model
 3dmod can draw on the tomogram, and finds it with the same
 `resolve_imod_executable` helper and the same `BackendContext` the IMOD

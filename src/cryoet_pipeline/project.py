@@ -194,7 +194,8 @@ def _with_eer_frame_counts(manifest: TiltSeriesManifest) -> TiltSeriesManifest:
         if frames == image.num_subframes:
             images.append(image)
             continue
-        declared.add(image.num_subframes)
+        if image.num_subframes is not None:
+            declared.add(image.num_subframes)
         images.append(
             image.model_copy(
                 update={

@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
-from cryoet_pipeline.models import Artifact, ArtifactKind, StorageRole
+from cryoet_pipeline.models import Artifact, ArtifactKind, Provenance, StorageRole
 
 LOCK_TIMEOUT_SECONDS = 600.0
 """How long a commit waits for the registry lock before giving up.
@@ -261,6 +261,33 @@ class ArtifactRegistry(BaseModel):
             if parent.kind == kind:
                 found.append(parent)
             pending.extend(parent.parent_ids)
+        return found
+
+    def not_derived_lineage(self, artifact_id: str) -> list[Artifact]:
+        """The artifact and its ancestors that were not made here: imported or attested.
+
+        What descends from an import is not marked one artifact at a time. It is
+        this question about the lineage (docs/entry_and_exit.md, What an import is,
+        2), and whatever reports on a result asks it. Empty when everything upstream
+        was derived here. The artifact itself first, then nearest generation first,
+        each once.
+        """
+
+        found: list[Artifact] = []
+        seen: set[str] = set()
+        pending = [artifact_id]
+        while pending:
+            current = pending.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            index = self._find_index(current)
+            if index is None:
+                continue
+            artifact = self.artifacts[index]
+            if artifact.provenance is not Provenance.DERIVED:
+                found.append(artifact)
+            pending.extend(artifact.parent_ids)
         return found
 
     @property

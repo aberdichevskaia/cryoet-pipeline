@@ -143,6 +143,20 @@ def files_fingerprint(paths: Sequence[Path]) -> str:
     return digest.hexdigest()
 
 
+def bytes_fingerprint(path: Path) -> str:
+    """sha256 of a file's bytes alone: what an external file is, whatever it is called.
+
+    An import's inputs are known this way (docs/entry_and_exit.md, What an import
+    is, 1), so the same file under another name or folder is the same input.
+    """
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def code_record() -> dict[str, str]:
     """The package's version and its source's commit, with `dirty` when the source has
     uncommitted changes: recorded with every run, never fingerprinted."""
@@ -277,6 +291,6 @@ def writing(
     os.rename(temporary, folder)
 
 
-__all__ = ["Attempt", "RunInput", "RunRecord", "Selection", "canonical_json", "clear_abandoned",
-           "code_record", "completed", "files_fingerprint", "fingerprint", "read_record",
-           "writing"]
+__all__ = ["Attempt", "RunInput", "RunRecord", "Selection", "bytes_fingerprint", "canonical_json",
+           "clear_abandoned", "code_record", "completed", "files_fingerprint", "fingerprint",
+           "read_record", "writing"]

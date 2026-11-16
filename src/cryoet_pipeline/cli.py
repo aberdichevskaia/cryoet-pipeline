@@ -22,6 +22,10 @@ from cryoet_pipeline.backends.alignment_qc import (
     ImodCoarseAlignmentQcBackend,
     evaluate_coarse_alignment_and_register,
 )
+from cryoet_pipeline.backends.aretomo_alignment import (
+    AretomoAlignmentBackend,
+    aretomo_align_and_register,
+)
 from cryoet_pipeline.backends.ctf import (
     Ctffind5CtfEstimationBackend,
     ImodCtfPhaseFlipBackend,
@@ -48,10 +52,6 @@ from cryoet_pipeline.backends.fiducials import (
 from cryoet_pipeline.backends.final_stack import (
     ImodFinalAlignedStackBackend,
     build_final_stack_and_register,
-)
-from cryoet_pipeline.backends.aretomo_alignment import (
-    AretomoAlignmentBackend,
-    aretomo_align_and_register,
 )
 from cryoet_pipeline.backends.fine_alignment import (
     ImodTiltalignBackend,
@@ -144,6 +144,7 @@ from cryoet_pipeline.models import (
     ArtifactKind,
     MotionCorrectionQc,
     ProjectConfig,
+    SeriesEntry,
     TiltSeriesManifest,
 )
 from cryoet_pipeline.pick_geometry import (
@@ -174,6 +175,7 @@ from cryoet_pipeline.project import initialize_project
 from cryoet_pipeline.reports.collect import SeriesArtifacts
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
+from cryoet_pipeline.tomogram_import import ORIENTATIONS, ImportRefused, import_tomogram
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
@@ -302,6 +304,93 @@ def import_tilt_stack(
     typer.echo(f"wrote tilt stack: {result.tilt_stack.path}")
     typer.echo(f"wrote tilt angles: {result.tilt_angles.path}")
     typer.echo(f"updated {result.artifact_registry_path}")
+
+
+_ORIENTATION_HELP = "; ".join(
+    f"{item.name}: {item.volume}" for item in ORIENTATIONS.values()
+)
+
+
+@app.command("import-tomogram")
+def import_tomogram_command(
+    volume: Annotated[
+        Path,
+        typer.Option(help="The tomogram, an MRC reconstructed outside this pipeline."),
+    ],
+    tilt_angles: Annotated[
+        Path,
+        typer.Option(
+            help="The angles it was reconstructed with: IMOD's .tlt, or RELION 5's "
+            "tilt-series STAR (its rlnTomoYTilt). They enter unchanged."
+        ),
+    ],
+    orientation: Annotated[
+        str,
+        typer.Option(help=f"Which orientation the volume is in. {_ORIENTATION_HELP}."),
+    ],
+    processing: Annotated[
+        str,
+        typer.Option(
+            help="What was done to the volume after its reconstruction: 'raw', or a "
+            "comma-separated set of ctf-corrected, denoised, wedge-filled."
+        ),
+    ],
+    tilt_series_id: Annotated[
+        str,
+        typer.Option(help="The series' id in this project, for example TS_01."),
+    ],
+    out: Annotated[Path, typer.Option(help="Project directory.")],
+    pixel_size: Annotated[
+        float | None,
+        typer.Option(
+            min=0.0,
+            help="Voxel size in angstrom. Checked against the header; needed when the "
+            "header has none.",
+        ),
+    ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(help="Label for this import, to keep it beside another of the series."),
+    ] = None,
+    overrule_wedge_check: Annotated[
+        bool,
+        typer.Option(
+            help="Import even though the wedge seen in the volume contradicts the answers, "
+            "and record that you did."
+        ),
+    ] = False,
+) -> None:
+    """Enter a tomogram reconstructed elsewhere, as a run with its own record.
+
+    The volume is copied into the project in the pipeline's orientation, its angles
+    beside it, and its series gets a manifest that says it entered as a tomogram.
+    Picking, extraction and the MRA then find it like any tomogram of the project
+    (docs/entry_and_exit.md).
+    """
+
+    try:
+        result = import_tomogram(
+            volume_path=volume,
+            tilt_angles_path=tilt_angles,
+            orientation_name=orientation,
+            processing=processing,
+            tilt_series_id=tilt_series_id,
+            out=out,
+            declared_pixel_size=pixel_size,
+            variant=variant,
+            overrule_wedge_check=overrule_wedge_check,
+        )
+    except ImportRefused as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if result.already_imported:
+        typer.echo(f"already imported, the same files with the same answers: {result.folder}")
+    else:
+        typer.echo(f"wrote {result.folder}")
+    typer.echo(f"tomogram {result.tomogram.id}: {result.tomogram.path}")
+    typer.echo(f"wedge check: {result.wedge['verdict']}: {result.wedge['reason']}")
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}")
+    typer.echo(f"manifest: {result.manifest_path}")
 
 
 @app.command("download-empiar")
@@ -513,6 +602,7 @@ def correct_motion(
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="storage-policy") from exc
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "correct-motion", SeriesEntry.FRAMES)
     artifact_registry = ArtifactRegistry.load(registry)
     context = BackendContext(
         output_dir=out,
@@ -676,6 +766,7 @@ def prepare_tilt_series(
         raise typer.BadParameter(str(exc), param_hint="storage-policy") from exc
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "prepare-tilt-series", SeriesEntry.FRAMES)
     artifact_registry = ArtifactRegistry.load(registry)
     context = BackendContext(
         output_dir=out,
@@ -788,6 +879,7 @@ def align_tilt_series(
     """Coarsely align a prepared tilt series and register normalized transforms."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "align-tilt-series", SeriesEntry.FRAMES, SeriesEntry.STACK)
     artifact_registry = ArtifactRegistry.load(registry)
     tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
     selected_backend = _alignment_backend(backend)
@@ -875,6 +967,9 @@ def qc_coarse_alignment(
     """Create a reduced prealigned preview and coarse-alignment QC report."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "qc-coarse-alignment", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
     alignment = _alignment_artifact(artifact_registry, tilt_series_manifest)
@@ -1020,6 +1115,9 @@ def generate_fiducial_seed(
     """Prepare an aligned tracking stack and generate a fiducial seed model."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "generate-fiducial-seed", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
     alignment = _alignment_artifact(artifact_registry, tilt_series_manifest)
@@ -1166,6 +1264,7 @@ def track_fiducials(
     _reject_foreign_tracking_options(selected_backend.name, backend_only_options)
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "track-fiducials", SeriesEntry.FRAMES, SeriesEntry.STACK)
     artifact_registry = ArtifactRegistry.load(registry)
     tracking_stack = _fiducial_tracking_stack_artifact(
         artifact_registry,
@@ -1349,6 +1448,9 @@ def fine_align_tilt_series(
     """Solve fiducial fine alignment and compose final global transforms."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "fine-align-tilt-series", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     aretomo_options = {
         "aretomo_executable": aretomo_executable,
@@ -1488,6 +1590,9 @@ def build_final_aligned_stack(
     """Apply fine transforms and build a reconstruction-ready tilt stack."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "build-final-aligned-stack", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     tilt_stack = _tilt_stack_artifact(artifact_registry, tilt_series_manifest)
     fine_alignment = _fine_alignment_artifact(
@@ -1591,6 +1696,9 @@ def estimate_defocus_hint(
     """Estimate a single-image defocus hint to seed CTF correction."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "estimate-defocus-hint", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     corrected_projection = _zero_tilt_corrected_projection_artifact(
         artifact_registry,
@@ -1804,6 +1912,7 @@ def estimate_ctf(
     """Estimate per-tilt defocus and write an IMOD-format CTF model."""
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "estimate-ctf", SeriesEntry.FRAMES, SeriesEntry.STACK)
     artifact_registry = ArtifactRegistry.load(registry)
     # Fitted on the stack built without a label, so that `correct-ctf` in any lane
     # can fall back to the resulting model. Named lanes rebuild the same stage at
@@ -1946,6 +2055,7 @@ def correct_ctf(
     """
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(tilt_series_manifest, "correct-ctf", SeriesEntry.FRAMES, SeriesEntry.STACK)
     artifact_registry = ArtifactRegistry.load(registry)
     aligned_stack = _final_aligned_stack_artifact(
         artifact_registry, tilt_series_manifest, variant=variant
@@ -2080,6 +2190,9 @@ def reconstruct_tomogram(
         )
 
     tilt_series_manifest = TiltSeriesManifest.model_validate_json(manifest.read_text())
+    _require_entry(
+        tilt_series_manifest, "reconstruct-tomogram", SeriesEntry.FRAMES, SeriesEntry.STACK
+    )
     artifact_registry = ArtifactRegistry.load(registry)
     aligned_stack = _reconstruction_input_stack_artifact(
         artifact_registry,
@@ -5691,6 +5804,15 @@ def _select_variant(
         f"pass --variant to choose one of: {available}",
         param_hint="registry",
     )
+
+
+def _require_entry(manifest: TiltSeriesManifest, step: str, *entries: SeriesEntry) -> None:
+    """Refuse a step whose inputs a series of this entry never had, and say why."""
+
+    try:
+        manifest.require_entry(step, *entries)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="manifest") from exc
 
 
 def _tomogram_artifact(
