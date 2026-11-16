@@ -131,6 +131,44 @@ def read_star_loop(path: Path) -> tuple[list[str], list[list[str]]]:
     return columns, rows
 
 
+def read_star_blocks(path: Path) -> dict[str, tuple[list[str], list[list[str]]]]:
+    """Every `loop_` table of a STAR file, by its data block's name (`data_` dropped).
+
+    RELION 5 writes `data_optics` before `data_particles`, so the first table, all
+    that `read_star_loop` reads, is not always the one wanted. Key-value blocks
+    without a loop are left out; a block with two loops keeps the last.
+    """
+
+    blocks: dict[str, tuple[list[str], list[list[str]]]] = {}
+    name: str | None = None
+    columns: list[str] = []
+    rows: list[list[str]] = []
+    state = "outside"
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("data_"):
+            if name is not None and columns:
+                blocks[name] = (columns, rows)
+            name, columns, rows, state = line[len("data_"):], [], [], "block"
+            continue
+        if line == "loop_":
+            if name is not None and columns:
+                blocks[name] = (columns, rows)
+            columns, rows, state = [], [], "columns"
+            continue
+        if state == "columns" and line.startswith("_"):
+            columns.append(line.split()[0].lstrip("_"))
+            continue
+        if state in {"columns", "rows"} and columns and not line.startswith("_"):
+            state = "rows"
+            rows.append(line.split())
+    if name is not None and columns:
+        blocks[name] = (columns, rows)
+    return blocks
+
+
 # Every name here is REQUIRED on read: `read_particle_star` collects the missing
 # ones and raises. So appending a column to this tuple makes every particle STAR
 # already on disk unreadable, and a new column has to be read as optional instead

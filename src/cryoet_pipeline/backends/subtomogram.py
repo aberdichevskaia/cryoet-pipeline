@@ -94,8 +94,7 @@ class CubicCropExtractionBackend:
 
         tomogram_shape = _validate_tomogram(tomogram, manifest)
         _validate_picks(picks, tomogram, manifest)
-        template_box = _pick_template_box_px(picks, context)
-        center_offset = pick_center_offset_px(template_box)
+        template_box, center_offset = _pick_centre(picks, context)
         box_size = _positive_int_parameter(context, "box_size_px")
         minimum_score = _optional_float_parameter(context, "minimum_score")
         overwrite = _bool_parameter(context, "overwrite", default=False)
@@ -2532,6 +2531,29 @@ def _validate_picks(picks: Artifact, tomogram: Artifact, manifest: TiltSeriesMan
         raise ValueError("picks were generated from a different tomogram")
     if not picks.path.is_file():
         raise FileNotFoundError(f"picks STAR file not found: {picks.path}")
+
+
+def _pick_centre(picks: Artifact, context: BackendContext) -> tuple[int | None, float]:
+    """The template box, when there is one, and how far each pick lies above its centre.
+
+    Picks an import wrote (import-picks) are particle centres already and say so,
+    with `pick_center_offset_px` 0 and no box; pytom's picks are known by their box.
+    """
+
+    stated = picks.parameters.get("pick_center_offset_px")
+    pytom = (picks.parameters.get("pick_template_box_px") is not None
+             or picks.parameters.get("pytom_job_json_path") is not None)
+    if stated is not None and not pytom:
+        if isinstance(stated, bool) or not isinstance(stated, (int, float)):
+            raise ValueError(f"picks state an invalid centre offset {stated!r}")
+        if _optional_positive_int_parameter(context, "pick_template_box_px") is not None:
+            raise ValueError(
+                "these picks are particle centres already, as their import wrote them; a "
+                "template box given for them would move every one"
+            )
+        return None, float(stated)
+    box = _pick_template_box_px(picks, context)
+    return box, pick_center_offset_px(box)
 
 
 def _pick_template_box_px(picks: Artifact, context: BackendContext) -> int:

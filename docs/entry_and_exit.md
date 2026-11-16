@@ -4,7 +4,7 @@ Drafted 2026-11-15, revised and agreed 2026-11-16: the same questions for every
 case, two of them answered from lists that hold only measured answers,
 measurements as checks of the answers, the assistant for the long tail, and the
 six decisions under Decided. Order of work item 2, `import-tomogram`, is built
-(Status, at the end).
+and committed (dc75610), and item 3, `import-picks`, in part (Status, at the end).
 
 ## Purpose
 
@@ -229,7 +229,8 @@ one person to the next the answers change, not the questions. So:
    three values:
    - `derived`: made by a run of this pipeline from registered inputs. This is the
      default, so every registry on disk stays readable.
-   - `imported`: entered from outside, with no upstream here.
+   - `imported`: entered from outside, with no upstream here. Imported picks
+     name the tomogram they are coordinates in as their parent.
    - `attested`: a person's edit, made outside, of an artifact that is here.
 
    It is not called `origin`, because roadmap section 7 gives that name to the
@@ -373,7 +374,15 @@ it checks is an identity.
   `scripts/decoy_picks.py`. A wrong scale or exchanged axes give an average as flat
   as the decoys'. With angles, the average at the stated poses is compared with one
   at shuffled poses. That control has a known limit: it is blind when every
-  particle shares a tilt.
+  particle shares a tilt. Built for positions as `picks_check.py` (Status below):
+  - The random positions lie in the picks' own region, with the picks' own
+    depths.
+  - The picks are also set against their own mirrors along each axis, so picks
+    taken in the other orientation of a mirror pair show as such.
+  - It cannot see a shift smaller than the box.
+  - It cannot tell a z mirror of picks that sit near the middle of the slab, or
+    on a lattice.
+  - The control with shuffled poses is not built.
 - **Round trip.** Export to the format, import back, and get the same artifact:
   voxels equal, positions within 0.01 voxel, poses within 0.01°. Necessary, but
   circular: an export and an import that both mirror pass it together.
@@ -456,7 +465,16 @@ unchanged.
    CSV, with the decoy check and `--derived-from`. Dynamo's table is measured
    against Dynamo's own cropping, and IMOD models against `findbeads3d`'s model
    of the gold beads in one of our tomograms, before either is offered. The
-   bypass flags go.
+   bypass flags go. Built 16 November, uncommitted (Status below):
+   - pytom's STAR, RELION 5's STAR and CSV, with the check;
+   - not yet: the two measurements, so Dynamo's table and IMOD models are still
+     refused, and `--derived-from`.
+
+   The bypass flags stay for now. Three ground-truth tools of the benchmark
+   (`run_centered_gt_pair.py`, `run_voxel_gt_control.py`,
+   `run_gt_positive_control.py`) pass `--picks-star`. Moving them to
+   `import-picks` changes their half-voxel path, so it is a decision about those
+   controls.
 4. `import-particles`: a Dynamo folder and its table.
 5. Exits: picks to RELION 5, the tomogram in a listed orientation, the methods
    record.
@@ -504,8 +522,8 @@ All six agreed on 16 November.
 
 ## Status
 
-16 November 2026. Order of work item 2 is built and tested on the Mac. It is
-uncommitted and has not run on max.
+16 November 2026. Order of work item 2 is built, tested on the Mac and committed
+(dc75610). Item 3 is built in part, uncommitted (below). Neither has run on max.
 
 **Built.**
 
@@ -571,3 +589,76 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   9 November.
 - The exit twin, and lanes that take tomograms (items 5 and 6).
 - Nothing has run on max or on a colleague's volume yet.
+
+**import-picks, built in part 16 November, uncommitted.**
+
+- **The command.** `cryoet import-picks` ([picks_import.py](../src/cryoet_pipeline/picks_import.py))
+  asks for the picks file, its format from the list, the series and the tomogram
+  the coordinates refer to, and the particle's diameter (for the check). Each
+  format adds its own questions:
+  - `pytom-star`: the template box. pytom's pick lies half a voxel above the
+    particle's centre for an even box.
+  - `relion5-star`: the rows' `rlnTomoName` and the tilt series' pixel. The pixel
+    comes from an optics table, RELION's `tomograms.star`, or
+    `--relion-tilt-series-pixel-size`; given `tomograms.star`, RELION's
+    tomogram size is checked against the named tomogram's.
+  - `csv`: the columns, their units (voxels or angstrom), and where zero is:
+    `voxel-0`, `voxel-1`, `corner` or `centre`. There are no defaults: these
+    are stated, not assumed.
+
+  Picks taken in a volume of another orientation (`--picked-in`; by default the
+  tomogram's own import orientation) are mapped by that orientation's transform,
+  and their poses by `M A M`. A mirror in `M` is recorded, because the poses are
+  then relative to the picker's reference mirrored.
+- **What it writes.** The pipeline's picks STAR, particle centres in the
+  tomogram's voxels, in a run folder `imports/<series>/picks[_<label>]/` with
+  `run.json` (the picks file and the tomogram as inputs) and `picks_qc.json`. The
+  picks are registered with `provenance: imported`, their tomogram as parent, and
+  `pick_center_offset_px` 0. Extraction reads that offset in place of a template
+  box. Picks without angles carry zeros and `angles: none`; the MRA does not read
+  that mark yet.
+- **Refused.**
+  - Formats not measured: `dynamo-table`, `imod-model`, `relion3-star`,
+    `warp-star`, `copick`, each with what measuring it needs.
+  - RELION 5 particles with nonzero `rlnOrigin*` or `rlnTomoSubtomogram*`: how
+    RELION combines them was not measured here.
+  - A binning that is not a whole number of the tilt series' pixels.
+- **The check** ([picks_check.py](../src/cryoet_pipeline/picks_check.py)). The
+  spread of the picks' low-passed average inside its sphere is compared with 19
+  sets at random positions in the picks' own region, and with the picks mirrored
+  along each axis. Below 3 standard deviations of the random sets is `flat`, and
+  refused. A mirror landing 1.2 times better, and itself past 5, is `mirrored`,
+  and refused. From 5 the picks `land`. Between 3 and 5 is `weak`: imported, with a
+  warning. `--overrule-picks-check` lets a refusal through and the record says so.
+- **Tests.** On a synthetic tomogram with particles at known centres
+  (`tests/test_picks_import.py`, 17):
+  - pytom's picks taken in the pipeline's, IMOD's standard and tilt's raw
+    orientation give the centres back to 1e-5 voxel, and the same rotations;
+  - RELION 5 picks written with `relion_export`'s own functions import as its
+    inverse;
+  - CSVs with each origin give the centres back;
+  - exchanged axes and a doubled scale are refused, and so are picks taken in
+    the mirror orientation;
+  - extraction of imported picks runs, and the particle stack's lineage names
+    the imported picks and tomogram.
+- **On real picks.** 407 Gag picks of TS_01 from the October averaging
+  (`outputs/progress-report/gag/fsc`), in the local bin8 TS_01 tomogram. Those
+  picks come from the cluster's reconstruction, which may not match this one.
+  - As given: 4.3 standard deviations, `weak`. `cryoet import-picks` on them
+    (pytom-star, box 24, into a copy of dev-ts01-registry) gives 4.4 and imports
+    them with a warning.
+  - With x and y exchanged: 0.1, `flat`.
+  - Mirrored in z: 5.0. The check cannot tell this mirror for picks on a lattice
+    near the middle of the slab.
+
+  The first threshold (the picks' average at 1.5 times the random sets' median)
+  would have refused these picks, and so did a null drawn from the whole volume.
+  Both were replaced.
+- **Not built.**
+  - The measurements for Dynamo's table and IMOD models.
+  - `--derived-from`: a 3dmod edit comes back as an IMOD model, so it waits for
+    that measurement.
+  - The control with shuffled poses.
+  - The MRA reading `angles: none`.
+  - Moving the benchmark off the bypass flags.
+

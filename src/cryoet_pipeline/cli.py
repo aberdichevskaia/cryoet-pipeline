@@ -167,6 +167,7 @@ from cryoet_pipeline.pick_selection import (
     thresholds_from_json,
     write_thresholds_template,
 )
+from cryoet_pipeline.picks_import import import_picks
 from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
@@ -391,6 +392,121 @@ def import_tomogram_command(
     for warning in result.warnings:
         typer.echo(f"warning: {warning}")
     typer.echo(f"manifest: {result.manifest_path}")
+
+
+@app.command("import-picks")
+def import_picks_command(
+    picks: Annotated[Path, typer.Option(help="The picks file made outside this pipeline.")],
+    format_name: Annotated[
+        str,
+        typer.Option(
+            "--format",
+            help="What the file is: pytom-star (rlnCoordinateX/Y/Z in voxels of the volume "
+            "picked), relion5-star (RELION 5's centred angstroms), or csv (columns named "
+            "with --csv-columns).",
+        ),
+    ],
+    tilt_series_id: Annotated[str, typer.Option(help="The series the picks are in.")],
+    out: Annotated[Path, typer.Option(help="Project directory.")],
+    particle_diameter: Annotated[
+        float,
+        typer.Option(min=0.0, help="The particle's diameter in angstrom, for the check that "
+                     "the picks land on particles."),
+    ],
+    tomogram_id: Annotated[
+        str | None,
+        typer.Option(help="The registered tomogram the coordinates refer to."),
+    ] = None,
+    tomogram_variant: Annotated[
+        str | None,
+        typer.Option(help="Instead of --tomogram-id: the label of the series' tomogram."),
+    ] = None,
+    picked_in: Annotated[
+        str | None,
+        typer.Option(help="The orientation of the volume the picks were taken in. Default: "
+                     "the one the tomogram was imported in, or pipeline for the project's own."),
+    ] = None,
+    template_box_px: Annotated[
+        int | None,
+        typer.Option(min=1, help="pytom-star: the template box pytom matched with."),
+    ] = None,
+    csv_columns: Annotated[
+        str | None,
+        typer.Option(help="csv: each column's name in order, from x, y, z, rot, tilt, psi "
+                     "(RELION's convention), score, skip; e.g. 'x,y,z,score'."),
+    ] = None,
+    coordinate_units: Annotated[
+        str | None,
+        typer.Option(help="csv: voxels or angstrom."),
+    ] = None,
+    coordinate_origin: Annotated[
+        str | None,
+        typer.Option(help="csv: where zero is: voxel-0 (the first voxel's centre), voxel-1 "
+                     "(that centre called 1), corner (the first voxel's outer edge), centre "
+                     "(the volume's centre)."),
+    ] = None,
+    relion_tomo_name: Annotated[
+        str | None,
+        typer.Option(help="relion5-star: the rows' rlnTomoName. Default: the series id."),
+    ] = None,
+    relion_tomograms_star: Annotated[
+        Path | None,
+        typer.Option(help="relion5-star: RELION's tomograms.star, for the tilt series' pixel "
+                     "and its tomogram's size."),
+    ] = None,
+    relion_tilt_series_pixel_size: Annotated[
+        float | None,
+        typer.Option(min=0.0, help="relion5-star: the tilt series' pixel size in angstrom, "
+                     "when no table gives it."),
+    ] = None,
+    variant: Annotated[
+        str | None,
+        typer.Option(help="Label for these picks, to keep them beside others of the series."),
+    ] = None,
+    overrule_picks_check: Annotated[
+        bool,
+        typer.Option(help="Import even though the picks land no better than random positions, "
+                     "and record that you did."),
+    ] = False,
+) -> None:
+    """Enter picks made elsewhere as picks in one of the project's tomograms.
+
+    The coordinates are converted into the tomogram's voxels, particle centres,
+    and checked against boxes at random positions. Extraction then reads them
+    like the project's own picks (docs/entry_and_exit.md).
+    """
+
+    try:
+        result = import_picks(
+            picks_path=picks,
+            format_name=format_name,
+            tilt_series_id=tilt_series_id,
+            out=out,
+            particle_diameter_angstrom=particle_diameter,
+            tomogram_id=tomogram_id,
+            tomogram_variant=tomogram_variant,
+            picked_in=picked_in,
+            template_box_px=template_box_px,
+            csv_columns=[name.strip() for name in csv_columns.split(",")] if csv_columns else None,
+            coordinate_units=coordinate_units,
+            coordinate_origin=coordinate_origin,
+            relion_tomo_name=relion_tomo_name,
+            relion_tilt_series_pixel=relion_tilt_series_pixel_size,
+            relion_tomograms_star=relion_tomograms_star,
+            variant=variant,
+            overrule_picks_check=overrule_picks_check,
+        )
+    except ImportRefused as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if result.already_imported:
+        typer.echo(f"already imported, the same file with the same answers: {result.folder}")
+    else:
+        typer.echo(f"wrote {result.folder}")
+    typer.echo(f"picks {result.picks.id}: {result.picks.parameters['count']} in "
+               f"{result.picks.parameters['input_tomogram_id']}")
+    typer.echo(f"picks check: {result.check['verdict']}: {result.check['reason']}")
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}")
 
 
 @app.command("download-empiar")
@@ -4076,16 +4192,17 @@ def extract_particles(
     tomogram_mrc: Annotated[
         Path | None,
         typer.Option(
-            help="BYPASS (temporary): use this external MRC tomogram instead of looking "
-            "one up in the registry. For testing against tomograms reconstructed "
-            "outside this pipeline."
+            help="BYPASS, kept for the benchmark's ground-truth controls: use this "
+            "external MRC tomogram instead of looking one up in the registry. It asks "
+            "nothing about the volume; import-tomogram asks and checks."
         ),
     ] = None,
     picks_star: Annotated[
         Path | None,
         typer.Option(
-            help="BYPASS (temporary): use this external pytom-match-pick STAR file "
-            "instead of looking one up in the registry."
+            help="BYPASS, kept for the benchmark's ground-truth controls: use this "
+            "external pytom-match-pick STAR file instead of looking one up in the "
+            "registry. It is read as it is; import-picks converts and checks."
         ),
     ] = None,
     device: Annotated[
