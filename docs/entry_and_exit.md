@@ -1000,6 +1000,40 @@ Dynamo 1.1.511 on the Mac).
   - `tests/test_show_imports.py`, 29. The rules are held to IMOD's own `tilt`,
     `clip` and `trimvol` outputs. The wedge splits the pair, and the RELION layout
     and the picks formats are read. Four mutants of the rules are all caught.
+- **A first run at a site, where the answer is known**
+  ([tomograms_lane_test.py](../scripts/tomograms_lane_test.py)). `prepare --lane L
+  --series S` takes a series that lane L reconstructed and picked at the site, and
+  hands a tomograms lane the volume as an etomo user would bring it: tilt's own
+  output of that series, turned by IMOD's `clip rotx` into IMOD's standard
+  orientation, with its angles. The lane it writes has the source lane's
+  template, picking and extraction settings and partitions, a project of its own
+  beside the source project (on the storage the source lane used), and the
+  template's map copied from the source project's EMDB cache; the source project
+  is only read. `check` sets the result against what is known:
+  - the imported volume has to be the source project's tomogram voxel for voxel,
+    against the same reversed in z, which the other answer of the mirror pair
+    gives;
+  - the import's wedge check has to agree, or to say a symmetric range leaves it
+    blind to the side;
+  - the picks are matched with the source lane's within 2 voxels both ways,
+    against the same picks mirrored in z and random positions. The import carries
+    no CTF weighting and no dose, which the source lane had, so they are reported,
+    not judged.
+
+  Measured on EMPIAR-10164 TS_01 at bin8 on the Mac, 17 November, by hand: `clip
+  rotx` of the project's `TS_01_fine_bin8.rec`, imported as `imod-standard`, is
+  the project's tomogram with a largest difference of 0, against 35 for the
+  tomogram reversed in z; the import's wedge agrees and `show_imports.py` reads
+  the file as `imod-standard`. Tested in `tests/test_tomograms_lane_test.py` (5,
+  with IMOD's clip; three mutants caught). The instances:
+  - in Munich, `--lane configs/lanes/gag-bin8.toml --series TS_01`, on the project
+    of 7 October (`outputs/hiv`). Its range is asymmetric, so the wedge can catch a
+    mirror there as well as the volume. Its picks were made with the lane as it
+    stood then, before the template's mask and box were sized from the diameter
+    (16 October), which the test's picks follow, so they differ for that reason
+    too;
+  - at MDC, `--lane configs/lanes/ryr1-bin8.toml --series 039`. Gag TS_01 is in
+    Munich and on the Mac only.
 - **Not built, or not checked.**
   - Nothing has run on max, and no lane of these inputs on real data.
   - The MRA reading `angles: none`: a picks lane without poses starts the MRA at
