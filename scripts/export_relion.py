@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Export a class of an MRA run to a folder RELION 5 runs as it is.
+"""Export a class of an MRA run, or picks or particle stacks, to a folder RELION 5 runs as it is.
 
 After an MRA run someone says which class looks right; this writes that class
 for RELION's high-resolution refinement (docs/relion_export.md):
@@ -23,6 +23,18 @@ run-record layout (run.json written last, the folder renamed into place):
     selection.json                 each particle's tag, RELION name and half; the
                                    duplicates left out and what they duplicate
     README.md
+
+Picks or particle stacks leave the same way without an MRA run, for someone who goes
+on in RELION after picking (docs/entry_and_exit.md, Exits):
+
+    python scripts/export_relion.py --project <project> \\
+        --particles TS_01:picks:pytom TS_02:picks:pytom --box 48 --dry-run
+
+Each particle is placed and posed as an MRA run of its extracted stack would start
+(relion_export.read_particle_set), and then converted as a class's particles are.
+Such an export has no reference/: relion_commands.sh extracts and, when the picks
+have poses, reconstructs the average at them; refinement is left to the person.
+Picks with no poses, or only some, go as positions only.
 
 Nothing is submitted, and relion_commands.sh has not been run by the export.
 
@@ -62,6 +74,7 @@ import numpy as np
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.models import ArtifactKind
 from cryoet_pipeline.relion_export import (
+    ParticleSet,
     RelionParticle,
     RunClass,
     SeriesSources,
@@ -70,6 +83,7 @@ from cryoet_pipeline.relion_export import (
     export_series,
     optimisation_set_text,
     particle_centre,
+    read_particle_set,
     read_run_class,
     relion_pose,
     remove_duplicates,
@@ -108,7 +122,7 @@ class SeriesPlan:
 
 @dataclass(frozen=True)
 class ExportPlan:
-    chosen: RunClass
+    chosen: RunClass | ParticleSet
     project: Path
     out: Path
     kept: list[int]
@@ -135,23 +149,38 @@ def default_stack_binning(tomogram_binning: int, raw_pixel: float) -> int:
     return tomogram_binning
 
 
+def particles_name(ids: tuple[str, ...]) -> str:
+    """The default export folder's name for picks or stacks: their ids, ':' as '_'."""
+
+    names = [artifact_id.replace(":", "_") for artifact_id in ids]
+    return "-".join(names) if len(names) <= 2 else f"{names[0]}-and-{len(names) - 1}-more"
+
+
 def make_plan(args: argparse.Namespace) -> ExportPlan:
-    chosen = read_run_class(args.run, args.channel, iteration=args.iteration, agree=args.agree)
-    project = (args.project or chosen.project).resolve()
-    registry = ArtifactRegistry.load(project / "artifacts.json")
-    tomogram_of_stack: dict[str, str] = {}
-    for stack_id in {member.stack_id for member in chosen.members}:
-        stack = registry.get(stack_id)
-        parents = [registry.get(parent) for parent in stack.parent_ids]
-        tomograms = [parent.id for parent in parents if parent.kind is ArtifactKind.TOMOGRAM]
-        if len(tomograms) != 1:
-            raise ValueError(f"particle stack {stack_id} has {len(tomograms)} tomograms as parents")
-        tomogram_of_stack[stack_id] = tomograms[0]
+    chosen: RunClass | ParticleSet
     tomogram_of_series: dict[str, str] = {}
-    for member in chosen.members:
-        tomogram = tomogram_of_stack[member.stack_id]
-        if tomogram_of_series.setdefault(member.series, tomogram) != tomogram:
-            raise ValueError(f"{member.series}'s particles come from two tomograms")
+    if args.particles:
+        project = Path(args.project).resolve()
+        chosen = read_particle_set(project, tuple(args.particles), box=args.box)
+        tomogram_of_series = dict(chosen.tomograms)
+    else:
+        chosen = read_run_class(args.run, args.channel, iteration=args.iteration, agree=args.agree)
+        project = (args.project or chosen.project).resolve()
+        registry = ArtifactRegistry.load(project / "artifacts.json")
+        tomogram_of_stack: dict[str, str] = {}
+        for stack_id in {member.stack_id for member in chosen.members}:
+            stack = registry.get(stack_id)
+            parents = [registry.get(parent) for parent in stack.parent_ids]
+            tomograms = [parent.id for parent in parents if parent.kind is ArtifactKind.TOMOGRAM]
+            if len(tomograms) != 1:
+                raise ValueError(
+                    f"particle stack {stack_id} has {len(tomograms)} tomograms as parents"
+                )
+            tomogram_of_stack[stack_id] = tomograms[0]
+        for member in chosen.members:
+            tomogram = tomogram_of_stack[member.stack_id]
+            if tomogram_of_series.setdefault(member.series, tomogram) != tomogram:
+                raise ValueError(f"{member.series}'s particles come from two tomograms")
 
     centres = {member.tag: particle_centre(member, chosen.box) for member in chosen.members}
     series_of = {member.tag: member.series for member in chosen.members}
@@ -194,7 +223,11 @@ def make_plan(args: argparse.Namespace) -> ExportPlan:
             "the series would need different RELION binnings to reach the MRA's "
             "pixel; give --stack-binning"
         )
-    out = args.out or project / "relion" / f"{chosen.run.name}-class{chosen.channel}"
+    if isinstance(chosen, ParticleSet):
+        default = project / "relion" / particles_name(chosen.artifact_ids)
+    else:
+        default = project / "relion" / f"{chosen.run.name}-class{chosen.channel}"
+    out = args.out or default
     return ExportPlan(
         chosen=chosen,
         project=project,
@@ -210,17 +243,28 @@ def make_plan(args: argparse.Namespace) -> ExportPlan:
     )
 
 
+POSES = {
+    "given": "the picks' own, the poses an MRA run of their stack starts from",
+    "none": "none, so positions only",
+    "partial": "only some particles have one, so positions only",
+}
+
+
 def describe(plan: ExportPlan) -> list[str]:
     chosen = plan.chosen
-    total = len(chosen.members) + chosen.decoys_left_out + chosen.not_agreed
-    lines = [
-        f"class {chosen.channel} of {chosen.run} after iteration {chosen.iteration}: "
-        f"{total:,} particles",
-    ]
-    if chosen.decoys_left_out:
-        lines.append(f"  decoys left out: {chosen.decoys_left_out:,} (decoys in this class)")
-    if chosen.agreed_with:
-        lines.append(f"  not in {chosen.agreed_with}: {chosen.not_agreed:,} left out")
+    if isinstance(chosen, ParticleSet):
+        lines = [f"{chosen.source} {', '.join(chosen.artifact_ids)}: "
+                 f"{len(chosen.members):,} particles"]
+    else:
+        total = len(chosen.members) + chosen.decoys_left_out + chosen.not_agreed
+        lines = [
+            f"class {chosen.channel} of {chosen.run} after iteration {chosen.iteration}: "
+            f"{total:,} particles",
+        ]
+        if chosen.decoys_left_out:
+            lines.append(f"  decoys left out: {chosen.decoys_left_out:,} (decoys in this class)")
+        if chosen.agreed_with:
+            lines.append(f"  not in {chosen.agreed_with}: {chosen.not_agreed:,} left out")
     lines.append(
         f"  duplicates left out: {len(plan.duplicates):,} (centres within "
         f"{plan.min_distance:g} voxels of a better-scoring particle)"
@@ -237,16 +281,25 @@ def describe(plan: ExportPlan) -> list[str]:
         f"  exported: {len(plan.kept):,}; half 1 {halves[1]:,}, half 2 {halves[2]:,} "
         f"({together}; seed {plan.seed})"
     )
-    lines.append(
-        f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the MRA's; "
-        f"particles traced through {chosen.source}"
-    )
+    if isinstance(chosen, ParticleSet):
+        lines.append(
+            f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the tomograms' "
+            f"pixel, for RELION to extract; poses: {POSES[chosen.angles]}"
+        )
+        lines.extend(f"  note: {note}" for note in chosen.notes)
+        pixel_of = "the tomograms' pixel"
+    else:
+        lines.append(
+            f"  box {chosen.box} voxels at {chosen.pixel_angstrom:.3f} A, the MRA's; "
+            f"particles traced through {chosen.source}"
+        )
+        pixel_of = "the MRA's pixel"
     for series in plan.series:
         lines.append(
             f"  {series.name}: {series.particles:,} particles, {series.views} views, "
             f"tilt images binned {series.stack_binning} "
             f"({series.stack_gb:.1f} GB as float32), RELION at --bin {series.relion_bin} "
-            f"for the MRA's pixel"
+            f"for {pixel_of}"
         )
         lines.extend(f"    note: {note}" for note in series.notes)
     lines.append(f"  to {plan.out}")
@@ -259,15 +312,26 @@ def plan_record(plan: ExportPlan, args: argparse.Namespace) -> dict[str, Any]:
     class and the iteration name the thread, as a config and its series do for a lane."""
 
     chosen = plan.chosen
+    if isinstance(chosen, ParticleSet):
+        thread = {"config": str(plan.project),
+                  "series": "particles " + ", ".join(chosen.artifact_ids),
+                  "agree": None, "decoys_left_out": 0, "not_agreed_left_out": 0,
+                  "box": chosen.box, "angles": chosen.angles}
+    else:
+        thread = {"config": str(chosen.run.resolve()),
+                  "series": f"class {chosen.channel} after iteration {chosen.iteration}",
+                  "agree": chosen.agreed_with, "decoys_left_out": chosen.decoys_left_out,
+                  "not_agreed_left_out": chosen.not_agreed}
     return {
         "recipe": JOURNAL_ACTION,
-        "config": str(chosen.run.resolve()),
-        "series": f"class {chosen.channel} after iteration {chosen.iteration}",
+        "config": thread.pop("config"),
+        "series": thread.pop("series"),
         "project": str(plan.project),
-        "agree": chosen.agreed_with,
+        "agree": thread.pop("agree"),
         "particles": len(plan.kept),
-        "decoys_left_out": chosen.decoys_left_out,
-        "not_agreed_left_out": chosen.not_agreed,
+        "decoys_left_out": thread.pop("decoys_left_out"),
+        "not_agreed_left_out": thread.pop("not_agreed_left_out"),
+        **thread,
         "duplicates_left_out": len(plan.duplicates),
         "halves": {
             str(half): count for half, count in sorted(Counter(plan.halves.values()).items())
@@ -320,6 +384,41 @@ def _write_mrc(path: Path, volume: np.ndarray, pixel: float) -> None:
         handle.voxel_size = pixel
 
 
+RELION_ENVIRONMENT = """if [ -n "${RELION5_MODULE:-}" ]; then
+    if ! type module >/dev/null 2>&1 && [ -n "${MODULESHOME:-}" ]; then
+        source "$MODULESHOME/init/bash"
+    fi
+    # One or more module names, split on spaces.
+    # shellcheck disable=SC2086
+    module load $RELION5_MODULE
+fi
+if [ -n "${RELION5_HOME:-}" ]; then
+    export PATH="$RELION5_HOME/bin:$PATH"
+    export LD_LIBRARY_PATH="$RELION5_HOME/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+for program in @PROGRAMS@; do
+    if ! command -v "$program" >/dev/null 2>&1; then
+        echo "$program not found: set RELION5_MODULE and/or RELION5_HOME, or put RELION 5" \\
+            "on PATH" >&2
+        exit 2
+    fi
+done
+# A RELION whose libraries this node lacks fails here, not after an hour of Extract.
+if ! version=$(relion_refine --version 2>&1); then
+    echo "relion_refine does not start on $(hostname): $version" >&2
+    exit 2
+fi
+echo "$version" | head -1
+"""
+
+
+def relion_environment(programs: str) -> str:
+    """Where RELION comes from, and a stop before anything runs when `programs`, or
+    RELION itself, cannot start on this node."""
+
+    return RELION_ENVIRONMENT.replace("@PROGRAMS@", programs).rstrip("\n")
+
+
 def commands_text(plan: ExportPlan, diameter: float, ini_high: float) -> str:
     box, relion_bin = plan.chosen.box, plan.series[0].relion_bin
     return f"""#!/usr/bin/env bash
@@ -341,31 +440,7 @@ cd "$(dirname "$0")"
 THREADS=${{THREADS:-8}}
 MPI=${{MPI:-3}}
 
-if [ -n "${{RELION5_MODULE:-}}" ]; then
-    if ! type module >/dev/null 2>&1 && [ -n "${{MODULESHOME:-}}" ]; then
-        source "$MODULESHOME/init/bash"
-    fi
-    # One or more module names, split on spaces.
-    # shellcheck disable=SC2086
-    module load $RELION5_MODULE
-fi
-if [ -n "${{RELION5_HOME:-}}" ]; then
-    export PATH="$RELION5_HOME/bin:$PATH"
-    export LD_LIBRARY_PATH="$RELION5_HOME/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
-fi
-for program in relion_tomo_subtomo relion_refine relion_refine_mpi mpirun; do
-    if ! command -v "$program" >/dev/null 2>&1; then
-        echo "$program not found: set RELION5_MODULE and/or RELION5_HOME, or put RELION 5" \\
-            "on PATH" >&2
-        exit 2
-    fi
-done
-# A RELION whose libraries this node lacks fails here, not after an hour of Extract.
-if ! version=$(relion_refine --version 2>&1); then
-    echo "relion_refine does not start on $(hostname): $version" >&2
-    exit 2
-fi
-echo "$version" | head -1
+{relion_environment("relion_tomo_subtomo relion_refine relion_refine_mpi mpirun")}
 if [ -n "${{SLURM_NTASKS:-}}" ] && [ "$SLURM_NTASKS" -lt "$MPI" ]; then
     echo "this job has $SLURM_NTASKS task(s) and mpirun needs $MPI: submit it with" \\
         "--ntasks=$MPI, or set MPI" >&2
@@ -402,6 +477,45 @@ mpirun -n "$MPI" relion_refine_mpi --ios Extract/job001/optimisation_set.star \\
 """
 
 
+def particles_commands_text(plan: ExportPlan) -> str:
+    """Extract, and with poses the average at them: no refinement, whose first step
+    (Class3D or Refine3D, global or local) is a choice about the data."""
+
+    chosen = plan.chosen
+    assert isinstance(chosen, ParticleSet)
+    box, relion_bin = chosen.box, plan.series[0].relion_bin
+    programs = "relion_tomo_subtomo relion_refine" + (
+        " relion_tomo_reconstruct_particle" if chosen.angles == "given" else ""
+    )
+    text = f"""#!/usr/bin/env bash
+# RELION 5, run from this folder in a job. Written by scripts/export_relion.py and not
+# run by it: review before submitting (README.md says why each value is what it is).
+#
+# RELION comes from PATH, from the modules RELION5_MODULE names (one or more, loaded
+# here), and from RELION5_HOME, an installation whose bin/ and lib/ go first; README.md
+# says what works at MDC. THREADS sets the threads.
+set -euo pipefail
+cd "$(dirname "$0")"
+THREADS=${{THREADS:-8}}
+
+{relion_environment(programs)}
+
+# Pseudo-subtomograms at the tomograms' pixel ({chosen.pixel_angstrom:.3f} A), {box} voxels.
+mkdir -p Extract/job001
+relion_tomo_subtomo --i optimisation_set.star --o Extract/job001/ \\
+    --b {2 * box} --crop {box} --bin {relion_bin} --float16 --j "$THREADS"
+"""
+    if chosen.angles == "given":
+        text += f"""
+# The average at the picks' poses, made from the tilt images: a reference in RELION's
+# own frame for what comes next.
+mkdir -p Reconstruct/job002
+relion_tomo_reconstruct_particle --i optimisation_set.star --o Reconstruct/job002/ \\
+    --b {box} --bin {relion_bin} --j "$THREADS"
+"""
+    return text
+
+
 def submit_hint(out: Path) -> str:
     """The line that runs an export's commands in a Slurm job, with the folder filled
     in: a person who has to guess the folder submits from the wrong one (MDC, job
@@ -412,6 +526,15 @@ def submit_hint(out: Path) -> str:
     return (
         "sbatch --nodes=1 --ntasks=3 --cpus-per-task=8 --time=1-00:00:00 "
         "<GPU partition and --gres> "
+        f'--chdir={Path(out).resolve()} --wrap "./relion_commands.sh"'
+    )
+
+
+def particles_submit_hint(out: Path) -> str:
+    """The same for an export of picks or stacks: one task, no GPU."""
+
+    return (
+        "sbatch --nodes=1 --ntasks=1 --cpus-per-task=8 --time=12:00:00 "
         f'--chdir={Path(out).resolve()} --wrap "./relion_commands.sh"'
     )
 
@@ -474,23 +597,126 @@ def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: floa
     return "\n".join(lines)
 
 
+def particles_readme_text(plan: ExportPlan, written: dict) -> str:
+    chosen = plan.chosen
+    assert isinstance(chosen, ParticleSet)
+    notes = sorted({note for series in written["series"] for note in series["notes"]})
+    posed = chosen.angles == "given"
+    lines = [
+        f"# {chosen.source.capitalize()} {', '.join(chosen.artifact_ids)}, for RELION 5",
+        "",
+        "Written by scripts/export_relion.py from picks or particle stacks, without an MRA",
+        "run (docs/relion_export.md, docs/entry_and_exit.md). The numbers:",
+        "",
+        "```text",
+        *describe(plan),
+        "```",
+        "",
+        "## Frame",
+        "",
+        "RELION is given IMOD's standard orientation of each tomogram, the one its own",
+        "IMOD import gives. The pipeline's tomograms are its mirror in z, so the positions",
+        "and poses in particles.star are mirrored with them.",
+        "",
+        "## Poses",
+        "",
+        *(
+            [
+                "Each particle has the pose it was picked with, the pose an MRA run of its",
+                "extracted stack starts from: template matching's, for pytom's picks. It is a pose",
+                "of the template as the pipeline keeps it, which in RELION's frame is that",
+                "template mirrored in z.",
+            ]
+            if posed
+            else [
+                "The picks have no poses, or only some do, so particles.star holds positions",
+                "only, as RELION's own picking writes them, and what comes next has to search",
+                "globally. A particle is where the identity pose puts it.",
+            ]
+        ),
+        "",
+        "## What the rows fall back on",
+        "",
+        *([f"- {note}" for note in chosen.notes]),
+        *([f"- {note}" for note in notes] or ["- nothing: CTF, dose and order are the data's own"]),
+        f"- rlnTomoHand is {written['hand']:+d}, not measured for these data (RELION's",
+        "  documentation: it has to be determined experimentally; always -1 in their hands).",
+        f"- RELION's model drops tiltalign's per-view magnification: up to "
+        f"{written['dropped_angstrom_max']:.1f} A at the corners of the aligned images.",
+        "",
+        "## Commands",
+        "",
+        "`relion_commands.sh` extracts pseudo-subtomograms at the tomograms' pixel and a box",
+        f"of {chosen.box} voxels"
+        + (
+            ", and reconstructs the average at the picks' poses from the tilt images, a"
+            if posed
+            else "."
+        ),
+        *(
+            [
+                "reference in RELION's own frame. It writes no refinement: whether Class3D or",
+                "Refine3D comes first, and with what searches, is a choice about the data.",
+            ]
+            if posed
+            else ["It writes no refinement or classification: those are choices about the data."]
+        ),
+        "",
+        "RELION comes from PATH, from the modules `RELION5_MODULE` names, and from",
+        "`RELION5_HOME` (its bin/ and lib/). At MDC (10 November 2026):",
+        "`RELION5_MODULE=openmpi/v5.0.5-xchu` and",
+        "`RELION5_HOME=/fast/AG_Kudryashev/software/relion-5.0.1/build-gpu_sm86_cu11.7`.",
+        "From any folder:",
+        "",
+        "```bash",
+        particles_submit_hint(plan.out),
+        "```",
+        "",
+        "## Checks",
+        "",
+        "The geometry and the particle conversion were checked with RELION's own",
+        "reconstructions (docs/relion_export.md). `scripts/export_relion.py --particles ...",
+        "--relion-check` has RELION reconstruct these particles at the exported poses and",
+        "compares that with the pipeline's own average of the same boxes at the same poses.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
     chosen = plan.chosen
-    content = {
-        "run": str(chosen.run.resolve()),
-        "iteration": chosen.iteration,
-        "class": chosen.channel,
-        "agree": chosen.agreed_with,
+    shared = {
         "stack_binning": {s.name: s.stack_binning for s in plan.series},
         "min_distance_voxels": plan.min_distance,
         "seed": plan.seed,
         "hand": args.hand,
         "dose_per_tilt": args.dose_per_tilt,
     }
-    inputs = [
-        RunInput(slot=slot, path=str(chosen.run.resolve()), fingerprint=value)
-        for slot, value in chosen.record_fingerprints.items()
-    ]
+    if isinstance(chosen, ParticleSet):
+        content: dict[str, Any] = {
+            "particles": list(chosen.artifact_ids),
+            "box": chosen.box,
+            "angles": chosen.angles,
+            **shared,
+        }
+        inputs = [
+            RunInput(slot=f"particles {artifact_id}", path=str(plan.project), fingerprint=value)
+            for artifact_id, value in chosen.record_fingerprints.items()
+        ]
+        class_number, posed = 1, chosen.angles == "given"
+    else:
+        content = {
+            "run": str(chosen.run.resolve()),
+            "iteration": chosen.iteration,
+            "class": chosen.channel,
+            "agree": chosen.agreed_with,
+            **shared,
+        }
+        inputs = [
+            RunInput(slot=slot, path=str(chosen.run.resolve()), fingerprint=value)
+            for slot, value in chosen.record_fingerprints.items()
+        ]
+        class_number, posed = chosen.channel, True
     inputs.append(
         RunInput(
             slot="registry",
@@ -550,35 +776,37 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
                     numbers[member.series],
                     tuple(centred),
                     angles,
-                    class_number=chosen.channel,
+                    class_number=class_number,
                     half_set=plan.halves[tag],
                 )
             )
             names[tag] = f"{member.series}/{numbers[member.series]}"
-        write_particles(folder / "particles.star", particles)
+        write_particles(folder / "particles.star", particles, angles=posed)
         attempt.add(ArtifactKind.DATASET_EXPORT, "particles.star")
         (folder / "optimisation_set.star").write_text(
             optimisation_set_text("particles.star", "tomograms.star")
         )
         attempt.add(ArtifactKind.DATASET_EXPORT, "optimisation_set.star")
 
-        average = chosen.average
-        mask = chosen.mask
-        _write_mrc(
-            folder / "reference" / f"class_{chosen.channel}.mrc",
-            standard_frame_reference(average),
-            chosen.pixel_angstrom,
-        )
-        _write_mrc(
-            folder / "reference" / "mask.mrc", standard_frame_reference(mask), chosen.pixel_angstrom
-        )
-        attempt.add(ArtifactKind.CLASS_AVERAGE, f"reference/class_{chosen.channel}.mrc")
-        attempt.add(ArtifactKind.ALIGNMENT_MASK, "reference/mask.mrc")
-
-        diameter = particle_diameter(chosen.run, chosen.box, chosen.pixel_angstrom)
-        ini_high = float(args.ini_high)
         commands = folder / "relion_commands.sh"
-        commands.write_text(commands_text(plan, diameter, ini_high))
+        if isinstance(chosen, ParticleSet):
+            commands.write_text(particles_commands_text(plan))
+        else:
+            _write_mrc(
+                folder / "reference" / f"class_{chosen.channel}.mrc",
+                standard_frame_reference(chosen.average),
+                chosen.pixel_angstrom,
+            )
+            _write_mrc(
+                folder / "reference" / "mask.mrc",
+                standard_frame_reference(chosen.mask),
+                chosen.pixel_angstrom,
+            )
+            attempt.add(ArtifactKind.CLASS_AVERAGE, f"reference/class_{chosen.channel}.mrc")
+            attempt.add(ArtifactKind.ALIGNMENT_MASK, "reference/mask.mrc")
+            diameter = particle_diameter(chosen.run, chosen.box, chosen.pixel_angstrom)
+            ini_high = float(args.ini_high)
+            commands.write_text(commands_text(plan, diameter, ini_high))
         commands.chmod(0o755)
         attempt.add(ArtifactKind.DATASET_EXPORT, "relion_commands.sh")
 
@@ -598,7 +826,7 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
                 for name, e in exported.items()
             ],
         }
-        selection = {
+        selection: dict[str, Any] = {
             "particles": [
                 {
                     "tag": tag,
@@ -611,18 +839,33 @@ def write(plan: ExportPlan, args: argparse.Namespace) -> dict:
             "duplicates_left_out": [
                 {"tag": tag, "duplicates": other} for tag, other in plan.duplicates
             ],
-            "decoys_left_out": chosen.decoys_left_out,
-            "not_agreed_left_out": chosen.not_agreed,
         }
+        if isinstance(chosen, ParticleSet):
+            # Where each particle came from: its picks or stack, and its row there.
+            rows: dict[int, int] = {}
+            seen: Counter[str] = Counter()
+            for member in chosen.members:
+                rows[member.tag] = seen[member.stack_id]
+                seen[member.stack_id] += 1
+            for entry in selection["particles"]:
+                entry["source"] = member_of[entry["tag"]].stack_id
+                entry["row"] = rows[entry["tag"]]
+            readme = particles_readme_text(plan, written)
+        else:
+            selection["decoys_left_out"] = chosen.decoys_left_out
+            selection["not_agreed_left_out"] = chosen.not_agreed
+            readme = readme_text(plan, written, diameter, ini_high)
         (folder / "selection.json").write_text(json.dumps(selection, indent=1) + "\n")
         attempt.add(ArtifactKind.DATASET_EXPORT, "selection.json")
-        (folder / "README.md").write_text(readme_text(plan, written, diameter, ini_high))
+        (folder / "README.md").write_text(readme)
         attempt.add(ArtifactKind.DATASET_EXPORT, "README.md")
         attempt.metrics.update(
             {
                 "particles": float(len(plan.kept)),
                 "duplicates_left_out": float(len(plan.duplicates)),
-                "decoys_left_out": float(chosen.decoys_left_out),
+                "decoys_left_out": float(
+                    0 if isinstance(chosen, ParticleSet) else chosen.decoys_left_out
+                ),
             }
         )
     return written
@@ -656,9 +899,59 @@ def _find(value: object, key: str) -> object:
     return None
 
 
+def particles_average(plan: ExportPlan, mask: np.ndarray) -> tuple[np.ndarray, int]:
+    """The pipeline's own average of the exported picks or stacks, in its own frame.
+
+    Each box is cut where extraction cuts it and averaged at the particle's pose by
+    the MRA's `average_class`, with its series' wedge as the MRA's table gives it
+    (`dynamo_ytilt`). A box leaving the tomogram is left out; their count is returned.
+    """
+
+    import zarr
+
+    from cryoet_pipeline.backends.dynamo_search import average_class, dynamo_ytilt
+    from cryoet_pipeline.tomogram_export import tilt_angles_of
+
+    chosen = plan.chosen
+    box = chosen.box
+    registry = ArtifactRegistry.load(plan.project / "artifacts.json")
+    member_of = {member.tag: member for member in chosen.members}
+    boxes, angles, shifts, wedges = [], [], [], []
+    left_out = 0
+    for series in plan.series:
+        tomogram = series.sources.tomogram
+        volume = zarr.open_array(str(tomogram.path), mode="r")
+        found = tilt_angles_of(registry, tomogram, series.name)
+        tilts = (
+            [float(word) for word in found.read_text().split()]
+            if found is not None
+            else series.sources.manifest.tilt_angles_deg
+        )
+        wedge = dynamo_ytilt((min(tilts), max(tilts)))
+        depth, height, width = (int(size) for size in volume.shape)
+        for tag in plan.kept:
+            member = member_of[tag]
+            if member.series != series.name:
+                continue
+            x, y, z = box_start(member.pick_xyz, box)
+            if min(x, y, z) < 0 or z + box > depth or y + box > height or x + box > width:
+                left_out += 1
+                continue
+            boxes.append(np.asarray(volume[z : z + box, y : y + box, x : x + box], dtype=float))
+            angles.append(member.angles_deg)
+            shifts.append(member.shifts_px)
+            wedges.append(wedge)
+    if not boxes:
+        raise ValueError("no exported particle's box lies inside its tomogram")
+    average = average_class(boxes, angles, shifts, wedges, mask, workers=os.cpu_count() or 1)
+    return np.asarray(average.raw, dtype=np.float64), left_out
+
+
 def relion_check(plan: ExportPlan, relion: str, threads: int) -> bool:
-    """RELION reconstructs the exported class at the MRA's pixel; it must be the
-    exported reference (scripts/relion_particle_check.py's comparison)."""
+    """RELION reconstructs the exported particles at the MRA's pixel and their poses.
+    For a class it must be the exported reference; for picks or stacks, the
+    pipeline's own average of the same boxes at the same poses (`particles_average`).
+    The comparison is scripts/relion_particle_check.py's."""
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from relion_particle_check import _sphere, compare
@@ -692,10 +985,20 @@ def relion_check(plan: ExportPlan, relion: str, threads: int) -> bool:
             f"see {checks / 'relion_reconstruct_particle.log'}"
         )
     relion_map = -mrcfile.read(target).astype(np.float64)
-    reference = mrcfile.read(folder / "reference" / f"class_{plan.chosen.channel}.mrc").astype(
-        np.float64
-    )
     mask = _sphere(box, box / 2 - 2)
+    if isinstance(plan.chosen, ParticleSet):
+        ours, left_out = particles_average(plan, mask)
+        reference = standard_frame_reference(ours)
+        _write_mrc(checks / "pipeline_average_relion_frame.mrc", reference,
+                   plan.chosen.pixel_angstrom)
+        against = "the pipeline's average of the same boxes at the same poses"
+        if left_out:
+            against += f" ({left_out} boxes leaving their tomogram left out of it)"
+    else:
+        reference = mrcfile.read(
+            folder / "reference" / f"class_{plan.chosen.channel}.mrc"
+        ).astype(np.float64)
+        against = "the exported reference"
     outcome = compare(reference, relion_map, mask)
     # For information: RELION's weighted map (merged.mrc). Its division by the Fourier
     # weights is noisy for few particles, so the verdict stays on the backprojected data.
@@ -707,7 +1010,7 @@ def relion_check(plan: ExportPlan, relion: str, threads: int) -> bool:
     ranked = sorted(outcome["ncc"].items(), key=lambda item: item[1], reverse=True)
     shift = outcome["shift_zyx_voxel"]
     print(
-        f"RELION's reconstruction of the class against the exported reference: best "
+        f"RELION's reconstruction against {against}: best "
         f"{ranked[0][0]} {ranked[0][1]:+.3f}, next {ranked[1][0]} {ranked[1][1]:+.3f}; "
         f"offset (z, y, x) {shift[0]:+.2f} {shift[1]:+.2f} {shift[2]:+.2f}: "
         + ("pass" if outcome["passed"] else "FAIL: " + "; ".join(outcome["reasons"]))
@@ -717,8 +1020,21 @@ def relion_check(plan: ExportPlan, relion: str, threads: int) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--run", type=Path, required=True, help="<project>/mra/<NAME>")
-    parser.add_argument("--class", dest="channel", type=int, required=True)
+    parser.add_argument("--run", type=Path, help="<project>/mra/<NAME>, with --class")
+    parser.add_argument("--class", dest="channel", type=int)
+    parser.add_argument(
+        "--particles",
+        nargs="+",
+        metavar="ARTIFACT_ID",
+        help="instead of a class: picks or particle stacks of --project, one per series, "
+        "by their ids in the registry",
+    )
+    parser.add_argument(
+        "--box",
+        type=int,
+        help="with --particles: the box RELION extracts, even (default: the stacks' own; "
+        "picks have none)",
+    )
     parser.add_argument("--iteration", type=int, help="default: the last finished")
     parser.add_argument(
         "--agree", type=_class_spec, help="RUN:CLASS: keep only particles also in this run's class"
@@ -754,6 +1070,17 @@ def main(argv: list[str] | None = None) -> int:
         "--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", "8"))
     )
     args = parser.parse_args(argv)
+    if args.particles:
+        if args.run or args.channel is not None or args.agree or args.iteration is not None:
+            parser.error("--particles exports picks or stacks, not a class: leave out "
+                         "--run, --class, --iteration and --agree")
+        if args.project is None:
+            parser.error("--particles needs --project, the project they are in")
+    else:
+        if args.run is None or args.channel is None:
+            parser.error("give --run and --class, or --particles with --project")
+        if args.box is not None:
+            parser.error("--box is for --particles; a class has the MRA's box")
     try:
         plan = make_plan(args)
     except (KeyError, ValueError) as error:
@@ -811,7 +1138,12 @@ def main(argv: list[str] | None = None) -> int:
         for note in series["notes"]:
             print(f"note, {series['name']}: {note}")
     print(f"wrote {plan.out}")
-    print(f"next, RELION in a job (README.md): {submit_hint(plan.out)}")
+    hint = (
+        particles_submit_hint(plan.out)
+        if isinstance(plan.chosen, ParticleSet)
+        else submit_hint(plan.out)
+    )
+    print(f"next, RELION in a job (README.md): {hint}")
     if args.relion_check:
         return 0 if relion_check(plan, args.relion_check, args.threads) else 1
     return 0

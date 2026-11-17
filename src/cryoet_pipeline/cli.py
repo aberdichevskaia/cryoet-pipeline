@@ -138,6 +138,7 @@ from cryoet_pipeline.fsc import (
     load_mrc_volume,
     plot_fsc_curve,
 )
+from cryoet_pipeline.methods_record import MethodsRefused, write_methods_record
 from cryoet_pipeline.models import (
     AlignmentFrame,
     Artifact,
@@ -177,6 +178,7 @@ from cryoet_pipeline.project import initialize_project
 from cryoet_pipeline.reports.collect import SeriesArtifacts
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
+from cryoet_pipeline.tomogram_export import ExportRefused, export_tomogram, tilt_angles_of
 from cryoet_pipeline.tomogram_import import ORIENTATIONS, ImportRefused, import_tomogram
 
 app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
@@ -449,6 +451,86 @@ def import_particles_command(
         typer.echo(f"  wedge check: {result.wedge['verdict']}: {result.wedge['reason']}")
         for warning in result.warnings:
             typer.echo(f"  warning: {warning}")
+
+
+@app.command("export-tomogram")
+def export_tomogram_command(
+    project: Annotated[Path, typer.Option(help="Project directory.")],
+    tomogram_id: Annotated[
+        str,
+        typer.Option(help="The tomogram's id in the registry, e.g. TS_01:tomogram:fine."),
+    ],
+    orientation: Annotated[
+        str,
+        typer.Option(help=f"The orientation to write it in. {_ORIENTATION_HELP}."),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option(help="The export's folder, which must not exist. Default: "
+                     "<project>/exports/<tomogram id>_<orientation>."),
+    ] = None,
+) -> None:
+    """Write a tomogram of the project as MRC in a listed orientation, its angles beside it.
+
+    export.json says what the volume is and gives the import-tomogram command that
+    enters the files again as they are (docs/entry_and_exit.md, Exits).
+    """
+
+    folder = out or project / "exports" / f"{tomogram_id.replace(':', '_')}_{orientation}"
+    try:
+        result = export_tomogram(project=project, tomogram_id=tomogram_id,
+                                 orientation_name=orientation, out=folder)
+    except (ExportRefused, ImportRefused) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    sidecar = result.sidecar
+    typer.echo(f"wrote {result.folder}")
+    typer.echo(f"  {result.volume.name}: {sidecar['orientation']}, "
+               f"{sidecar['from_the_pipelines_volume']}; sections, rows, columns "
+               f"{sidecar['shape_sections_rows_columns']} at {sidecar['pixel_size_angstrom']:g} A")
+    low, high = sidecar["tilt_range_deg"]
+    typer.echo(f"  {result.tilt_angles.name}: the angles it was reconstructed with, "
+               f"{low:+.1f} to {high:+.1f}, unchanged")
+    typer.echo(f"  processing: {', '.join(sidecar['processing'])}")
+    for root in sidecar["not_derived_lineage"]:
+        typer.echo(f"  lineage: {root['id']} is {root['provenance']}")
+    typer.echo(f"  back in: {sidecar['import_command']}")
+
+
+@app.command("methods-record")
+def methods_record_command(
+    project: Annotated[Path, typer.Option(help="Project directory.")],
+    artifact: Annotated[
+        list[str] | None,
+        typer.Option(help="The result, by its id in the registry; repeat for several."),
+    ] = None,
+    run: Annotated[
+        Path | None,
+        typer.Option(help="Or an MRA run of the registry, <project>/mra/<NAME>."),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(help="The record's folder, which must not exist. Default: "
+                     "<project>/exports/methods_<result>."),
+    ] = None,
+) -> None:
+    """Write the lineage of a result as a methods record: every step from the raw data
+    or the imported roots on, with programs, versions and parameters as recorded
+    (docs/entry_and_exit.md, Exits)."""
+
+    ids = list(artifact or [])
+    name = run.name if run is not None else (ids[0].replace(":", "_") if ids else "result")
+    folder = out or project / "exports" / f"methods_{name}"
+    try:
+        written = write_methods_record(project, folder, artifact_ids=ids, run=run)
+    except (MethodsRefused, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    record = written.record
+    typer.echo(f"wrote {written.folder / 'methods.md'} and methods.json")
+    typer.echo(f"  {len(record['steps'])} steps; programs: "
+               + (", ".join(f"{program} {'/'.join(versions)}"
+                            for program, versions in record["programs"].items()) or "none"))
+    for item in record["not_made_here"]:
+        typer.echo(f"  not made here: {item['id']} ({item['provenance']})")
 
 
 @app.command("import-picks")
@@ -5569,20 +5651,7 @@ def _tilt_angles_for_tomogram(
     correct-ctf can leave out views CTFFIND did not fit.
     """
 
-    own = tomogram.parameters.get("tilt_angles_path")
-    if isinstance(own, (str, Path)) and Path(own).is_file():
-        return Path(own)
-    stacks = [
-        artifact
-        for artifact in registry.by_kind(ArtifactKind.ALIGNED_TILT_STACK)
-        if artifact.covers(manifest.tilt_series_id)
-        and registry.descends_from(tomogram.id, artifact.id)
-    ]
-    for stack in stacks:
-        value = stack.parameters.get("tilt_file_path")
-        if isinstance(value, (str, Path)) and Path(value).is_file():
-            return Path(value)
-    return None
+    return tilt_angles_of(registry, tomogram, manifest.tilt_series_id)
 
 
 def _ctf_weighting_for_tomogram(

@@ -3,8 +3,9 @@
 Drafted 2026-11-15, revised and agreed 2026-11-16: the same questions for every
 case, two of them answered from lists that hold only measured answers,
 measurements as checks of the answers, the assistant for the long tail, and the
-six decisions under Decided. Order of work item 2, `import-tomogram`, is built
-and committed (dc75610), and item 3, `import-picks`, in part (Status, at the end).
+six decisions under Decided. Order of work items 2 to 4, the imports of
+tomograms, picks and particles, are built and committed; item 5, the exits, is
+built (Status, at the end).
 
 ## Purpose
 
@@ -414,6 +415,11 @@ cannot be, because what enters informs decisions. Gaps worth closing:
 
 Every importer gets its exporter twin, for the round trip.
 
+Built 16 November (Status, Exits): picks or particle stacks to RELION 5
+(`scripts/export_relion.py --particles`), a tomogram in a listed orientation
+(`cryoet export-tomogram`), and the methods record (`cryoet methods-record`). copick
+and CZ portal points are not built.
+
 ## A worked case: tomograms from elsewhere to the MRA
 
 This is the first case to arrive, and an example of the questions and lists above
@@ -463,12 +469,13 @@ unchanged.
    - the wedge check.
 
    These five are measured already, and cover IMOD's and RELION 5's users. Built
-   16 November, uncommitted (Status below).
+   16 November, committed (dc75610; Status below).
 3. `import-picks`: pytom's STAR, RELION 5's STAR, Dynamo's table, IMOD models and
    CSV, with the decoy check and `--derived-from`. Dynamo's table is measured
    against Dynamo's own cropping, and IMOD models against `findbeads3d`'s model
    of the gold beads in one of our tomograms, before either is offered. The
-   bypass flags go. Built 16 November, uncommitted (Status below):
+   bypass flags go. Built 16 November, committed (519d3ac, 231a730, 5bc5491,
+   97a64c2; Status below):
    - pytom's STAR, RELION 5's STAR, CSV, IMOD models and Dynamo's table, with the
      check;
    - `--derived-from` for 3dmod edits;
@@ -480,9 +487,9 @@ unchanged.
    `import-picks` changes their half-voxel path, so it is a decision about those
    controls.
 4. `import-particles`: a Dynamo folder and its table. Built 16 November,
-   uncommitted (Status below).
+   committed (62430de; Status below).
 5. Exits: picks to RELION 5, the tomogram in a listed orientation, the methods
-   record.
+   record. Built 16 November, uncommitted (Status below).
 6. Lane inputs `tomograms`, `picks` and `particles`, and the assistant's readers
    that propose the declarations from the files, as `show_folder.py` does for
    frames.
@@ -527,8 +534,9 @@ All six agreed on 16 November.
 
 ## Status
 
-16 November 2026. Order of work item 2 is built, tested on the Mac and committed
-(dc75610). Item 3 is built in part, uncommitted (below). Neither has run on max.
+16 November 2026. Order of work items 2 to 4 are built, tested on the Mac and
+committed (dc75610; 519d3ac, 231a730, 5bc5491, 97a64c2; 62430de). Item 5 is built
+and uncommitted (Exits, at the end). None has run on max.
 
 **Built.**
 
@@ -592,10 +600,10 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   on raw bin8 reconstructions.
 - `relion5`'s answer was not measured again; that needs RELION, which ran here on
   9 November.
-- The exit twin, and lanes that take tomograms (items 5 and 6).
+- Lanes that take tomograms (item 6). The exit twin is built (Exits, below).
 - Nothing has run on max or on a colleague's volume yet.
 
-**import-picks, built in part 16 November, uncommitted.**
+**import-picks, built 16 November, committed (519d3ac).**
 
 - **The command.** `cryoet import-picks` ([picks_import.py](../src/cryoet_pipeline/picks_import.py))
   asks for the picks file, its format from the list, the series and the tomogram
@@ -760,7 +768,7 @@ Dynamo 1.1.511 on the Mac).
   `native_to_dynamo`. The particles come back to 1e-5 voxel, with the same
   rotations.
 
-**import-particles, built 16 November, uncommitted**
+**import-particles, built 16 November, committed (62430de)**
 ([particles_import.py](../src/cryoet_pipeline/particles_import.py)).
 
 - **What it takes.** A Dynamo data folder (`particle_<tag>.em` or `.mrc`, five or
@@ -806,3 +814,90 @@ Dynamo 1.1.511 on the Mac).
   project has. Imported particles are in no tomogram here, so they cannot be
   re-extracted.
 
+
+**Exits, built 16 November, uncommitted** (Order of work item 5).
+
+- **A tomogram in a listed orientation.** `cryoet export-tomogram`
+  ([tomogram_export.py](../src/cryoet_pipeline/tomogram_export.py)).
+  - It writes a tomogram of the project as MRC in an orientation from the same
+    list the import reads. It undoes that answer's transform, so the list has one
+    entry for both directions, and an unmeasured orientation is refused here too.
+  - Beside the MRC go the angles the volume was reconstructed with, unchanged, and
+    `export.json`. That records:
+    - the orientation and how we know it;
+    - what was done to the volume;
+    - the tomogram and the imported or attested artifacts in its lineage;
+    - the `import-tomogram` command that enters the files again.
+  - The export is a run with `run.json`, and is never written over.
+  - The angles are the tomogram's own `tilt_angles_path`, else the tilt file of
+    the aligned stack it was made from, the lookup picking uses. A tomogram with
+    neither is refused.
+  - **Tested**:
+    - the round trip, for every listed orientation: exported, then imported with
+      the sidecar's own command, the volume comes back voxel for voxel, with the
+      same angles, and the wedge agrees;
+    - against IMOD's own `clip`: tilt's output imported as `imod-tilt`, then
+      exported, equals `clip rotx` of it as `imod-standard`, `clip flipyz` of it as
+      `imod-parallel`, and the file itself as `imod-tilt`.
+
+    `tests/test_tomogram_export.py`, 15.
+- **Picks or particle stacks to RELION 5 without an MRA run.**
+  `scripts/export_relion.py --project P --particles <ids> [--box B]`
+  (`relion_export.read_particle_set`).
+  - Each particle enters the class export's conversion at the pose an MRA run of
+    its stack would start from:
+    - for a stack, the row `registry_particles` gives a run;
+    - for picks, what extraction would record, the pick less its centre offset,
+      with its angles.
+
+    The dry run, the journal, the gate for the assistant, the tilt series,
+    `tomograms.star`, the duplicates and the halves are the class export's.
+  - There is no `reference/`. `relion_commands.sh` extracts and, when the picks
+    have poses, reconstructs the average at them. It writes no refinement: which
+    comes first is a choice about the data.
+  - Picks without poses, or with only some, go as positions only, with no
+    `rlnAngle` columns, as RELION's own picking writes them.
+  - Refused:
+    - particles imported with their own table, which are in no tomogram here;
+    - picks in an imported tomogram, which has no tilt images here;
+    - picks in a denoised tomogram, for now;
+    - a series given twice;
+    - picks without `--box`.
+  - **Tested** (`tests/test_relion_particles_export.py`, 14):
+    - a stack's members are the rows an MRA run of it starts from;
+    - picks' members are those of their extracted stack, to the six decimals of
+      the stack's STAR;
+    - where RELION puts a particle does not depend on the box.
+  - **Checked by RELION** on 16 November, on the Mac (RELION 5.0 at 7f45a71). The
+    407 Gag picks of TS_01 (imported earlier, pytom-star, box 24) went out as 404
+    particles, 3 left out as duplicates, box 32, tilt images at the tomogram's
+    pixel. `--relion-check` had RELION reconstruct them at the exported poses, and
+    set that against the pipeline's own average of the same boxes at the same
+    poses (the MRA's `average_class`):
+    - the map as written correlates best, NCC 0.514, the next of the eight axis
+      reversals 0.100;
+    - the offset is 0.04 voxel;
+    - 3 boxes leaving the tomogram were left out of the average.
+
+    The class export's commands are unchanged byte for byte.
+- **The methods record.** `cryoet methods-record --project P --artifact <id>` or
+  `--run <project>/mra/<NAME>` ([methods_record.py](../src/cryoet_pipeline/methods_record.py)).
+  - It writes `methods.md` and `methods.json` in a run folder. These hold every
+    step the result descends from, parents first. Per step:
+    - the backend, the programs' versions as recorded, and the parameters;
+    - artifacts that differ only by a trailing number are one step, the varying
+      parameters as a range;
+    - paths stay in the JSON only.
+  - What entered from outside is listed with its declarations, the import's
+    content parameters, and the fingerprints of its files. An MRA run adds its
+    plan and its nodes' records.
+  - It holds nothing the records do not. A version recorded as `external`, and
+    the pipeline's own code version where no run record keeps it, are written as
+    not recorded. On dev-ts01-registry that is IMOD's version at every step: its
+    records predate the version probes.
+  - **Tested**: `tests/test_methods_record.py`, 5.
+- **Not built.**
+  - copick and CZ portal points.
+  - Picks in denoised tomograms to RELION.
+  - A methods record of an MRA run read from an export folder: its lineage is in
+    the registry the export came from.

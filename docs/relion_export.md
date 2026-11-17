@@ -204,6 +204,38 @@ same box at the same pose, mirrored as above:
 The first run, before the comparison was fixed, failed everywhere (NCC 0.02);
 the cause was RELION's map, not the export (below).
 
+### Picks or particle stacks, without an MRA run (16 November 2026)
+
+```bash
+python scripts/export_relion.py --project <project> --particles TS_01:picks:pytom \
+    TS_02:picks:pytom --box 48 --dry-run
+```
+
+For someone who goes on in RELION after picking (docs/entry_and_exit.md, Exits).
+`--particles` takes picks or particle stacks of the registry, one per series.
+`relion_export.read_particle_set` gives each particle the pose an MRA run of its
+stack would start from:
+
+- a stack's particle is the row `registry_particles` gives a run;
+- a pick is what extraction would record: the pick less its centre offset, and
+  its angles.
+
+From there the conversion, the dry run and the gate are the class export's.
+
+- **What is written.** No `reference/`. The commands extract and, when the picks
+  have poses, reconstruct the average at them. Picks without poses, or with
+  only some, go as positions only.
+- **Where a particle lands** does not depend on the box: the rounded pick plus
+  the shift, for every even box. So `--box` is only what RELION extracts.
+- **The check.** `--relion-check` sets RELION's reconstruction against the
+  pipeline's own average of the same boxes at the same poses. On the 407 Gag
+  picks of TS_01 (404 exported, box 32, bin8) the map as written correlated
+  best:
+
+  | NCC as written | next of the eight reversals | offset |
+  |---|---|---|
+  | 0.514 | 0.100 | 0.04 voxel |
+
 ### RELION facts found on the way
 
 - `reconstruct_particle` writes `data_merged.mrc` (the backprojected data) and

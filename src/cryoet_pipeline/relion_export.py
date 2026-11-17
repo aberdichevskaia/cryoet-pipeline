@@ -69,16 +69,17 @@ import numpy as np
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.alignment import write_binned_mrc_stack
-from cryoet_pipeline.backends.dynamo_search import euler_matrix
+from cryoet_pipeline.backends.dynamo_search import euler_matrix, native_to_dynamo
 from cryoet_pipeline.imod_defocus import read_imod_defocus_file
 from cryoet_pipeline.models import (
     AlignmentTransform,
     Artifact,
     ArtifactKind,
+    Provenance,
     TiltAlignment,
     TiltSeriesManifest,
 )
-from cryoet_pipeline.rotations import matrix_to_relion_euler
+from cryoet_pipeline.rotations import matrix_to_relion_euler, relion_euler_to_matrix
 
 # The STAR dialect RELION 5.0 writes at the top of its files.
 STAR_VERSION_LINE = "# version 50001"
@@ -548,10 +549,13 @@ class RelionParticle:
     half_set: int | None = None
 
 
-def write_particles(path: Path, particles: Sequence[RelionParticle]) -> Path:
+def write_particles(
+    path: Path, particles: Sequence[RelionParticle], *, angles: bool = True
+) -> Path:
     """`data_particles` as RELION 5 reads it straight after picking: no optics
     table (RELION makes one per tomogram from tomograms.star); rlnRandomSubset
-    for every particle or for none."""
+    for every particle or for none. Without `angles` the rlnAngle columns are left
+    out, as RELION's own picking leaves them: the particles have no pose yet."""
 
     if not particles:
         raise ValueError("no particles to write")
@@ -563,14 +567,16 @@ def write_particles(path: Path, particles: Sequence[RelionParticle]) -> Path:
     names = [f"{particle.tomogram}/{particle.number}" for particle in particles]
     if len(set(names)) != len(names):
         raise ValueError("two particles share a name")
-    labels = PARTICLE_LABELS + (() if halves == {None} else ("rlnRandomSubset",))
+    labels = tuple(
+        label for label in PARTICLE_LABELS if angles or not label.startswith("rlnAngle")
+    ) + (() if halves == {None} else ("rlnRandomSubset",))
     rows = []
     for particle, name in zip(particles, names, strict=True):
         row: list[object] = [
             particle.tomogram,
             name,
             *(float(value) for value in particle.centred_angstrom),
-            *(float(value) for value in particle.angles_deg),
+            *((float(value) for value in particle.angles_deg) if angles else ()),
             particle.class_number,
         ]
         if particle.half_set is not None:
@@ -1149,6 +1155,222 @@ def particle_centre(member: ClassMember, box: int) -> np.ndarray:
     the box corner plus N/2 plus the Dynamo shift."""
 
     return np.asarray(box_start(member.pick_xyz, box), dtype=float) + box // 2 + member.shifts_px
+
+
+# Picks and particle stacks, for an export without an MRA run ------------------
+
+
+def extraction_pose(
+    pick_xyz: Sequence[float], angles_deg: Sequence[float], centre_offset: float, box: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Dynamo's angles and shift, about N/2, for a pick as extraction would cut it.
+
+    Extraction cuts the box at `box_start` and records the native pose: the pick's
+    angles, and the shift from the box's geometric centre (N - 1)/2 to the
+    particle's centre, the pick less its centre offset (the cubic-crop backend).
+    The MRA reads that through `native_to_dynamo` (`particle_sources.table_row`).
+    The same two steps give a pick the pose a run of its stack would start from.
+    """
+
+    start = np.asarray(box_start(pick_xyz, box), dtype=float)
+    native_shift = np.asarray(pick_xyz, dtype=float) - centre_offset - start - (box - 1) / 2.0
+    matrix = relion_euler_to_matrix(*(float(value) for value in angles_deg))
+    angles, shift = native_to_dynamo(matrix, native_shift, box)
+    return np.asarray(angles, dtype=float), np.asarray(shift, dtype=float)
+
+
+@dataclass(frozen=True)
+class ParticleSet:
+    """Picks or particle stacks of a project, read for an export without an MRA run.
+
+    Each member is a particle as an MRA run of it would start: its pick in its
+    tomogram's voxels, and its pose and shift as Dynamo's about N/2. For a stack that
+    is the row `particle_sources.table_row` gives a run; for picks, what extraction
+    would record (`extraction_pose`). The export places a particle at the box corner
+    plus N/2 plus the shift (`particle_centre`), the rounded pick plus the shift for
+    every even box, so `box` is only the size RELION extracts.
+
+    `angles` says, in import-picks' words, whether the particles have poses:
+    "given" when every one has, else "none" or "partial", and then every member is
+    given the identity, since RELION is given no angles: its particles are then where
+    the identity puts them.
+    """
+
+    project: Path
+    artifact_ids: tuple[str, ...]
+    box: int
+    pixel_angstrom: float
+    members: tuple[ClassMember, ...]
+    tomograms: dict[str, str]  # series -> the tomogram its particles are in
+    angles: str
+    notes: tuple[str, ...]
+    record_fingerprints: dict[str, str]
+    source: str
+
+
+def _file_digest(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _record_digest(artifact: Artifact, path: Path) -> str:
+    import hashlib
+
+    from cryoet_pipeline.runs import canonical_json
+
+    document = {"record": artifact.model_dump(mode="json"), "file": _file_digest(path)}
+    return hashlib.sha256(canonical_json(document).encode()).hexdigest()
+
+
+def _set_angles(marks: Iterable[str]) -> str:
+    found = set(marks)
+    if found == {"given"}:
+        return "given"
+    if found == {"none"}:
+        return "none"
+    return "partial"
+
+
+def read_particle_set(
+    project: Path, artifact_ids: Sequence[str], *, box: int | None = None
+) -> ParticleSet:
+    """The particles of picks or particle stacks of `project`, one artifact per series.
+
+    Picks are read as extraction reads them, and placed with their centre offset (a
+    pytom pick lies half a voxel above its centre for an even template box). A
+    stack's particles are read from its STAR, at the poses a run of it starts from.
+    Refused: other kinds, a series given twice, particles whose tomogram entered as
+    one (RELION 5 extracts from the tilt images, which such a series has none of
+    here), and tomograms of several pixel sizes.
+    """
+
+    from cryoet_pipeline.backends.subtomogram import _read_pytom_star, pick_centre_offset
+    from cryoet_pipeline.particles import read_particle_star
+
+    project = Path(project)
+    if not artifact_ids:
+        raise ValueError("no picks or particle stacks given")
+    if len(set(artifact_ids)) != len(artifact_ids):
+        raise ValueError("an artifact is given twice")
+    registry = ArtifactRegistry.load(project / "artifacts.json")
+    read: list[tuple[Artifact, str, list[tuple[tuple[float, float, float],
+                                              tuple[float, float, float], np.ndarray, float]]]] = []
+    tomograms: dict[str, str] = {}
+    pixels: set[float] = set()
+    stack_boxes: set[int] = set()
+    marks: list[str] = []
+    notes: list[str] = []
+    fingerprints: dict[str, str] = {}
+    for artifact_id in artifact_ids:
+        try:
+            artifact = registry.get(artifact_id)
+        except KeyError as error:
+            raise ValueError(f"{project} has no artifact {artifact_id!r}") from error
+        if artifact.kind not in {ArtifactKind.PICKS, ArtifactKind.PARTICLE_STACK}:
+            raise ValueError(f"{artifact_id} is a {artifact.kind.value}: give picks or "
+                             "particle stacks")
+        if len(artifact.tilt_series_ids) != 1:
+            raise ValueError(f"{artifact_id} is about {len(artifact.tilt_series_ids)} series")
+        series = artifact.tilt_series_ids[0]
+        if series in tomograms:
+            raise ValueError(f"{series} is given twice; one picks or stack artifact a series")
+        tomogram_id = artifact.parameters.get("input_tomogram_id")
+        if not isinstance(tomogram_id, str):
+            raise ValueError(
+                f"{artifact_id} names no tomogram it is in: particles imported with their own "
+                "table are in no tomogram of the project, and RELION 5 extracts its "
+                "particles from the tilt images"
+            )
+        tomogram = registry.get(tomogram_id)
+        if tomogram.provenance is Provenance.IMPORTED:
+            raise ValueError(
+                f"{artifact_id}: its tomogram {tomogram_id} entered as a tomogram "
+                "(import-tomogram), so the project has no tilt images for it, and RELION 5 "
+                "extracts its particles from the tilt images"
+            )
+        if tomogram.kind is not ArtifactKind.TOMOGRAM:
+            raise ValueError(
+                f"{artifact_id} is in {tomogram_id}, a {tomogram.kind.value}: the export "
+                "follows a tomogram's reconstruction back to its tilt images, so it needs "
+                "particles in a reconstructed tomogram"
+            )
+        tomograms[series] = tomogram_id
+        pixels.add(float(tomogram.pixel_spacing_angstrom or 0.0))
+        rows: list[tuple[tuple[float, float, float], tuple[float, float, float], np.ndarray,
+                         float]] = []
+        if artifact.kind is ArtifactKind.PICKS:
+            # pytom's picks carry no mark: template matching gives every pick a pose.
+            mark = str(artifact.parameters.get("angles", "given"))
+            offset = pick_centre_offset(artifact)
+            for row in _read_pytom_star(artifact.path):
+                rows.append(((row.x_px, row.y_px, row.z_px),
+                             (row.rot_deg, row.tilt_deg, row.psi_deg),
+                             np.full(3, offset), float(row.lccmax or 0.0)))
+            fingerprints[artifact.id] = _record_digest(artifact, artifact.path)
+        else:
+            star = Path(str(artifact.parameters["metadata_path"]))
+            if not artifact.shape or len(artifact.shape) != 4:
+                raise ValueError(f"{artifact_id} records no particle box")
+            stack_box = int(artifact.shape[1])
+            stack_boxes.add(stack_box)
+            picks_id = artifact.parameters.get("picks_id")
+            mark = "given"
+            if isinstance(picks_id, str) and picks_id in registry.artifact_ids:
+                mark = str(registry.get(picks_id).parameters.get("angles", "given"))
+            for record in read_particle_star(star):
+                pick = (record.x_px, record.y_px, record.z_px)
+                start = np.asarray(box_start(pick, stack_box), dtype=float)
+                # The offset that gives back the recorded shift: the stack's own centre.
+                native = np.array([record.shift_x_px, record.shift_y_px, record.shift_z_px])
+                offset_xyz = np.asarray(pick) - start - (stack_box - 1) / 2.0 - native
+                rows.append((pick, (record.rot_deg, record.tilt_deg, record.psi_deg),
+                             offset_xyz, float(record.score or 0.0)))
+            fingerprints[artifact.id] = _record_digest(artifact, star)
+        if artifact.parameters.get("reference_mirrored"):
+            notes.append(f"{artifact_id}: picked in a mirror orientation of its tomogram, so "
+                         "its poses are of the picker's reference mirrored")
+        marks.append(mark)
+        read.append((artifact, series, rows))
+    if len(pixels) != 1 or not next(iter(pixels)) > 0:
+        raise ValueError(f"the tomograms' pixel sizes differ or are missing: {sorted(pixels)}")
+    if box is None:
+        if any(artifact.kind is ArtifactKind.PICKS for artifact, _, _ in read):
+            raise ValueError(
+                "picks have no box yet: give --box, the box RELION extracts (twice the "
+                "particle's diameter, say)"
+            )
+        if len(stack_boxes) != 1:
+            raise ValueError(f"the stacks' boxes differ, {sorted(stack_boxes)}: give --box")
+        box = next(iter(stack_boxes))
+    if type(box) is not int or box < 2 or box % 2:
+        raise ValueError(f"the box must be an even integer, as the MRA's are; got {box!r}")
+    angles = _set_angles(marks)
+    if angles != "given":
+        notes.append(f"the picks' poses are {angles}: RELION is given positions only")
+    members: list[ClassMember] = []
+    for artifact, series, rows in read:
+        for pick, pose, offset_xyz, score in rows:
+            start = np.asarray(box_start(pick, box), dtype=float)
+            native = np.asarray(pick, dtype=float) - offset_xyz - start - (box - 1) / 2.0
+            matrix = relion_euler_to_matrix(*pose) if angles == "given" else np.eye(3)
+            dynamo, shift = native_to_dynamo(matrix, native, box)
+            members.append(ClassMember(
+                tag=len(members) + 1, series=series, stack_id=artifact.id,
+                pick_xyz=(float(pick[0]), float(pick[1]), float(pick[2])),
+                angles_deg=tuple(float(value) for value in dynamo),  # type: ignore[arg-type]
+                shifts_px=tuple(float(value) for value in shift),  # type: ignore[arg-type]
+                cc=score,
+            ))
+    if not members:
+        raise ValueError("the picks and stacks given hold no particle")
+    kinds = sorted({artifact.kind.value for artifact, _, _ in read})
+    return ParticleSet(
+        project=project, artifact_ids=tuple(artifact_ids), box=box,
+        pixel_angstrom=next(iter(pixels)), members=tuple(members), tomograms=tomograms,
+        angles=angles, notes=tuple(notes), record_fingerprints=fingerprints,
+        source=" and ".join(kinds).replace("_", " "),
+    )
 
 
 def remove_duplicates(
