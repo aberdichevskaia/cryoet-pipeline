@@ -59,7 +59,14 @@ A40 = "0, NVIDIA A40, 8.6, 46068 MiB, 610.57.04"
 V100 = "0, Tesla V100-SXM2-32GB, 7.0, 32768 MiB, 610.57.04"
 
 
-def _nvidia_smi(folder: Path, gpu: str = A40, cuda: str = "13.3", mig: bool = False) -> None:
+# nvidia-smi's header: driver 610.57.04 names the driver KMD and its CUDA UMD (an A40
+# node of max, 17 November 2026); older drivers, such as Munich's 575, say Driver and CUDA.
+KMD_HEADER = "| NVIDIA-SMI {driver}              KMD Version: {driver}     CUDA UMD Version: {cuda}     |"
+DRIVER_HEADER = "| NVIDIA-SMI {driver}   Driver Version: {driver}   CUDA Version: {cuda} |"
+
+
+def _nvidia_smi(folder: Path, gpu: str = A40, cuda: str = "13.3", mig: bool = False,
+                header: str = KMD_HEADER, driver: str = "610.57.04") -> None:
     listing = "GPU 0: NVIDIA A40 (UUID: GPU-1)"
     if mig:
         listing += "\n  MIG 3g.20gb     Device  0: (UUID: MIG-1)"
@@ -67,7 +74,7 @@ def _nvidia_smi(folder: Path, gpu: str = A40, cuda: str = "13.3", mig: bool = Fa
 case "$1" in
   --query-gpu=*) echo "{gpu}" ;;
   -L) printf '%s\\n' "{listing}" ;;
-  *) echo "| NVIDIA-SMI 610.57.04   Driver Version: 610.57.04   CUDA Version: {cuda} |" ;;
+  *) echo "{header.format(driver=driver, cuda=cuda)}" ;;
 esac
 """)
 
@@ -222,7 +229,7 @@ def test_json_holds_the_same_report(site, capsys):
 
 
 def test_a_build_for_a_newer_cuda_than_the_driver_is_a_problem(site):
-    _nvidia_smi(site["bin"], cuda="12.9")
+    _nvidia_smi(site["bin"], cuda="12.9", header=DRIVER_HEADER, driver="575.57.08")
     problems = _findings(_check(), True)
     (text,) = [text for entry, text in problems if entry == "I-6"]
     assert "the pipeline's PyTorch is built for CUDA 13.2" in text

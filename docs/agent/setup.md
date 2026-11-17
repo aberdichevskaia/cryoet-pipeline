@@ -261,10 +261,11 @@ record's `software_versions`.
 ### In plain words
 
 - **The driver** is NVIDIA's software on a GPU node. It decides the newest CUDA
-  a program may be built for. `nvidia-smi` prints both: "Driver Version" and
-  "CUDA Version" in its header. A login node usually has no GPU and no driver,
-  so there `nvidia-smi` is missing and PyTorch sees no GPU, which is fine
-  (I-11).
+  a program may be built for. `nvidia-smi` prints both in its header, as
+  "Driver Version" and "CUDA Version", or as "KMD Version" and "CUDA UMD
+  Version" (driver 610.57.04 on max's A40 nodes, 17 November 2026). A login
+  node usually has no GPU and no driver, so there `nvidia-smi` is missing and
+  PyTorch sees no GPU, which is fine (I-11).
 - **A program's CUDA version** is the one it was built for:
   `torch.version.cuda` for PyTorch, CuPy's runtime version, and the
   `libcudart.so.<major>` MotionCor3 is linked to.
