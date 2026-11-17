@@ -3,9 +3,10 @@
 Drafted 2026-11-15, revised and agreed 2026-11-16: the same questions for every
 case, two of them answered from lists that hold only measured answers,
 measurements as checks of the answers, the assistant for the long tail, and the
-six decisions under Decided. Order of work items 2 to 4, the imports of
-tomograms, picks and particles, are built and committed; item 5, the exits, is
-built (Status, at the end).
+six decisions under Decided. Order of work items 2 to 5, the imports of
+tomograms, picks and particles and the exits, are built and committed; item 6,
+the lanes of these inputs and the assistant's reader of their files, is built
+(Status, at the end).
 
 ## Purpose
 
@@ -489,10 +490,10 @@ unchanged.
 4. `import-particles`: a Dynamo folder and its table. Built 16 November,
    committed (62430de; Status below).
 5. Exits: picks to RELION 5, the tomogram in a listed orientation, the methods
-   record. Built 16 November, uncommitted (Status below).
+   record. Built 16 November, committed (95d87f5; Status below).
 6. Lane inputs `tomograms`, `picks` and `particles`, and the assistant's readers
    that propose the declarations from the files, as `show_folder.py` does for
-   frames.
+   frames. Built 17 November, uncommitted (Status below).
 7. Then, as asked: the orientations `aretomo`, `warp` and `cz-portal`, and the
    picks of RELION 3/4, Warp and copick, each once measured; alignment, CTF,
    segmentation and even/odd imports; stacks without an mdoc.
@@ -534,9 +535,9 @@ All six agreed on 16 November.
 
 ## Status
 
-16 November 2026. Order of work items 2 to 4 are built, tested on the Mac and
-committed (dc75610; 519d3ac, 231a730, 5bc5491, 97a64c2; 62430de). Item 5 is built
-and uncommitted (Exits, at the end). None has run on max.
+17 November 2026. Order of work items 2 to 5 are built, tested on the Mac and
+committed (dc75610; 519d3ac, 231a730, 5bc5491, 97a64c2; 62430de; 95d87f5). Item 6
+is built and uncommitted (Lanes and the reader, at the end). None has run on max.
 
 **Built.**
 
@@ -600,7 +601,8 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
   on raw bin8 reconstructions.
 - `relion5`'s answer was not measured again; that needs RELION, which ran here on
   9 November.
-- Lanes that take tomograms (item 6). The exit twin is built (Exits, below).
+- Lanes that take tomograms, picks or particles are built (item 6, at the end), and
+  the exit twin (Exits, below); none has run on real data.
 - Nothing has run on max or on a colleague's volume yet.
 
 **import-picks, built 16 November, committed (519d3ac).**
@@ -815,7 +817,7 @@ Dynamo 1.1.511 on the Mac).
   re-extracted.
 
 
-**Exits, built 16 November, uncommitted** (Order of work item 5).
+**Exits, built 16 November, committed (95d87f5)** (Order of work item 5).
 
 - **A tomogram in a listed orientation.** `cryoet export-tomogram`
   ([tomogram_export.py](../src/cryoet_pipeline/tomogram_export.py)).
@@ -901,3 +903,106 @@ Dynamo 1.1.511 on the Mac).
   - Picks in denoised tomograms to RELION.
   - A methods record of an MRA run read from an export folder: its lineage is in
     the registry the export came from.
+
+**Lanes and the reader, built 17 November, uncommitted** (Order of work item 6).
+
+- **Three lane inputs** ([run_series.py](../scripts/run_series.py)). `[lane] input`
+  takes `tomograms`, `picks` and `particles` beside `frames` and `stack`. The
+  import is the lane's first step, and `[data]` holds its answers, one key per
+  option of its command ([pipeline_map.md](agent/pipeline_map.md), step 1″).
+  - `tomograms`: `import-tomogram`, then `segment-tomogram` with `[segment]`,
+    `prepare-template`, `pick-particles`, `visualize-picks`, `extract-particles`.
+    `[pick] low_pass_angstrom` is required, as there is no fine alignment to
+    derive it from, and `ctf_weighting = true` is refused: the tomograms enter
+    without a CTF fit.
+  - `picks`: `import-tomogram`, `import-picks`, `visualize-picks`,
+    `extract-particles`. A key of one picks format is refused with another, since
+    the import passes over it without a word.
+  - `particles`: `import-particles`, then the `mra` stage. A lane runs one series
+    at a time, so the import takes `--only-series`: the whole table's series are
+    still named, so that none of its tomograms is left out unnoticed, and this
+    series' rows are imported. A series imported alone gives the same run, by its
+    fingerprint, as the whole table at once.
+  - Every import takes `[lane] variant` as its label, and every step after it
+    finds what it entered by that label. `--overwrite` is never given to an
+    import: the same files with the same answers are imported once, and other
+    answers go under another variant.
+  - A section or key the input does not read is refused, all of them named at
+    once: a `[ctf]` left in a tomograms lane would look as if it applied. A
+    `[data]` key of another input is now refused in frames and stack lanes too;
+    no tracked lane has one.
+  - The commands of every tracked lane are unchanged byte for byte.
+- **Before the queue** ([submit_lanes.py](../scripts/submit_lanes.py)). Without
+  `[run] series`, a tomograms or picks lane finds its series by `{series}` in
+  `[data] tomogram`, and a particles lane takes those of `particles_series`. The
+  dry run names what the imports would refuse at once:
+  - a missing file;
+  - an orientation, a processing or a picks format not on the list, in the
+    import's own words;
+  - one volume named for several series, or one picks file in a format whose
+    rows say no series;
+  - tomogram numbers of a Dynamo table that no series is given, and series
+    without rows.
+
+  These lanes are warned, as every combination that has not run on real data is.
+- **The reader** ([show_imports.py](../scripts/show_imports.py)), read-only, as
+  `show_folder.py` is for frames. It gives each answer the files hold with what
+  it rests on, and leaves the rest as commented questions in a `[data]`
+  fragment.
+  - **Tomograms.** The orientation comes from the header's history and the
+    thinnest axis. Measured on the Mac on 17 November:
+    - IMOD 5.1.12's `tilt` writes `TILT: Tomographic reconstruction`, the same
+      with `-PARALLEL` and with `-RotateBy90`;
+    - `clip rotx` and `clip flipyz` add their own label, and so does `trimvol -rx`
+      or `-yz`, which calls them;
+    - RELION 5.0's `relion_tomo_reconstruct_tomogram` writes `Relion` and names the
+      volume `tomograms/rec_<name>.mrc`, z the thinnest.
+
+    So tilt's label with Y the thinnest is `imod-tilt`, followed by `clip rotx`
+    `imod-standard`, by `clip flipyz` `imod-parallel`, and RELION's label
+    `relion5`. Anything else after tilt is asked. The pair the label cannot split,
+    tilt with z the thinnest, is split by the wedge measured in the volume, the
+    import's own measurement (`tomogram_import.wedge_in_volume`), when the range is
+    asymmetric. A history the wedge contradicts is not taken. The angles come
+    from tilt.com's `TILTFILE`, the `.tlt` of the volume's or the series' name, or
+    RELION's `tomograms.star`. A folder whose name begins the volume's names the
+    series. What was done to the volumes is always asked, and a wedge too faint to
+    see is said. Volumes in different orientations go in separate lanes.
+  - **On a real volume.** The pipeline's own TS_01 reconstruction in
+    dev-ts01-registry (`tomograms/TS_01/TS_01_fine_bin8.rec`, tilt's output as
+    written) is read as series TS_01, `imod-tilt` by its history. The wedge
+    agrees: fitted centre +4.5°, against +5.1° declared and −5.1° for the mirror,
+    as the import measured it on 16 November.
+  - **Picks.** The format comes from the columns:
+    - pytom's `rlnLCCmax` and `rlnCutOff`;
+    - RELION 5's centred angstroms;
+    - Warp's `.tomostar` names and RELION 3/4's subtomogram columns, refused
+      as not measured.
+
+    Further: pytom's template box from the job file it wrote beside the picks;
+    its `rlnDetectorPixelSize` against the volume's; a Dynamo table's tomogram
+    numbers, and poses that are all zero; a CSV's header line; RELION's
+    `tomograms.star` near the picks; and the extent of the coordinates against
+    the volume picked in.
+  - **Particles.** The files and their box. From the table: the tomograms, the
+    pixel size, the wedge type, and each tomogram's wedge set against the
+    particles' own power, as the import sets it.
+  - The assistant may run it (`assistant/settings.json`, the Codex rules), and
+    `instructions.md` and the lane-config skill send it there. Every new key has
+    its row in `lane_questions.md`.
+- **Tests.**
+  - `tests/test_imported_lanes.py`, 30. A picks lane runs with `run_series.py
+    --execute`: an MRC in IMOD's standard orientation and pytom's picks in it, to
+    the particles the MRA reads, at the particles' centres to 1e-3 voxel. A
+    particles lane imports its table series by series, and the whole table after
+    it is already imported. A mutant that drops the orientation answer is refused
+    by the import's wedge check.
+  - `tests/test_show_imports.py`, 29. The rules are held to IMOD's own `tilt`,
+    `clip` and `trimvol` outputs. The wedge splits the pair, and the RELION layout
+    and the picks formats are read. Four mutants of the rules are all caught.
+- **Not built, or not checked.**
+  - Nothing has run on max, and no lane of these inputs on real data.
+  - The MRA reading `angles: none`: a picks lane without poses starts the MRA at
+    zeros, which its global rounds search over.
+  - Labels of IMOD versions other than 5.1.12, and of denoising programs.
+  - The README's list of inputs: it holds another session's uncommitted edits.

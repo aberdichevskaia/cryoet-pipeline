@@ -214,10 +214,15 @@ def import_particles(
     declared_pixel_size: float | None = None,
     variant: str | None = None,
     overrule_wedge_check: bool = False,
+    only_series: str | None = None,
 ) -> list[ParticlesImportResult]:
     """Enter a Dynamo data folder and its table as one particle stack per series.
 
     `series` maps the table's tomogram numbers (column 20) to the project's series.
+    `only_series` imports that series' rows alone, as a lane does one series at a
+    time; the whole table is still read and every tomogram number in it must have a
+    series, so that none is left out unnoticed. A series imported alone gets the
+    same run, by its fingerprint, as when the table is imported at once.
     """
 
     if variant is not None and not _VARIANT_PATTERN.fullmatch(variant):
@@ -231,6 +236,14 @@ def import_particles(
     if unmapped:
         raise ImportRefused(f"{table_path}: rows of tomograms {unmapped} (column 20) have no "
                             "series; name each with --series <number>=<series>")
+    if only_series is not None:
+        named = [number for number, name in series.items() if name == only_series]
+        if not named:
+            raise ImportRefused(f"--only-series {only_series}: --series names no tomogram "
+                                "number for it")
+        if named[0] not in numbers:
+            raise ImportRefused(f"{table_path} has no rows of tomogram {named[0]} (column 20), "
+                                f"which --series names {only_series}")
     tags = [int(round(value)) for value in table[:, TAG]]
     if len(set(tags)) != len(tags):
         raise ImportRefused(f"{table_path}: a tag (column 1) is used twice")
@@ -248,6 +261,8 @@ def import_particles(
     results = []
     for number in numbers:
         name = series[number]
+        if only_series is not None and name != only_series:
+            continue
         rows = table[np.rint(table[:, TOMO]) == number]
         series_tags = [int(round(value)) for value in rows[:, TAG]]
         low, high = _wedge(rows, name, table_path)

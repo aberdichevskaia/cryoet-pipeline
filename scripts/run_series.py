@@ -144,7 +144,69 @@ def record_timing(
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-INPUTS = ("frames", "stack")
+INPUTS = ("frames", "stack", "tomograms", "picks", "particles")
+# Inputs made elsewhere and entered by an import (docs/entry_and_exit.md): tomograms,
+# picked here; tomograms with their picks; or particles with their table. Their
+# series begin at the import, so the sections of the steps before it have nothing to
+# act on.
+IMPORTED_INPUTS = ("tomograms", "picks", "particles")
+# The steps that enter such files. An import is never written over: the same files
+# with the same answers are imported once, and other answers go under another
+# [lane] variant. So --overwrite, which every other step takes, is not given to them.
+IMPORT_STEPS = frozenset({"import-tomogram", "import-picks", "import-particles"})
+# What each input enters as, said in the refusal of a section it does not read.
+ENTERS_AS = {
+    "tomograms": "tomograms reconstructed elsewhere, and no step before picking runs",
+    "picks": "tomograms with their picks, and no step before extraction runs",
+    "particles": "particles with their table, and no step before the MRA runs",
+}
+# The sections a lane of an imported input reads, besides [lane], [run], [data] and
+# [mra]. A section outside them is refused, as an unread key is: a [ctf] left in a
+# tomograms lane would look as if it applied.
+INPUT_SECTIONS = {
+    "tomograms": frozenset({"segment", "template", "pick", "extract", "executables"}),
+    "picks": frozenset({"pick", "extract"}),
+    "particles": frozenset({"pick"}),
+}
+# [pick] and [executables] in those lanes: picks and particles are imported with
+# the particle's diameter only (the check that picks land on particles, and the
+# MRA's default), and a tomograms lane runs pytom alone.
+INPUT_KEYS = {
+    ("picks", "pick"): frozenset({"particle_diameter_angstrom"}),
+    ("particles", "pick"): frozenset({"particle_diameter_angstrom"}),
+    ("tomograms", "executables"): frozenset({"pytom_create_template", "pytom_create_mask",
+                                             "pytom_match_template",
+                                             "pytom_extract_candidates"}),
+}
+# [data] by input. The tomogram keys are import-tomogram's questions; the picks keys
+# import-picks', of which the ones after picks_format belong to one format each; the
+# particles keys import-particles'.
+TOMOGRAM_DATA = frozenset({"tomogram", "tilt_angles", "orientation", "processing",
+                           "tomogram_pixel_size_angstrom"})
+PICKS_DATA = frozenset({"picks", "picks_format", "picked_in", "template_box_px", "csv_columns",
+                        "coordinate_units", "coordinate_origin", "relion_tomo_name",
+                        "relion_tomograms_star", "relion_tilt_series_pixel_size_angstrom",
+                        "imod_object", "dynamo_tomograms"})
+PARTICLES_DATA = frozenset({"particles_folder", "particles_table", "particles_series",
+                            "particles_pixel_size_angstrom"})
+DATA_KEYS = {
+    "frames": frozenset({"frames", "mdocs", "frames_pattern", "pixel_size_angstrom"}),
+    "stack": frozenset({"mdoc", "stack"}),
+    "tomograms": TOMOGRAM_DATA,
+    "picks": TOMOGRAM_DATA | PICKS_DATA,
+    "particles": PARTICLES_DATA,
+}
+# The picks keys each format reads (picks_import.import_picks); it passes over the
+# others without a word, so a lane refuses them. picked_in is the orientation of
+# the volume picked, which RELION 5's centred coordinates do not have.
+FORMAT_KEYS = {
+    "pytom-star": frozenset({"template_box_px", "picked_in"}),
+    "csv": frozenset({"csv_columns", "coordinate_units", "coordinate_origin", "picked_in"}),
+    "relion5-star": frozenset({"relion_tomo_name", "relion_tomograms_star",
+                               "relion_tilt_series_pixel_size_angstrom"}),
+    "imod-model": frozenset({"imod_object", "picked_in"}),
+    "dynamo-table": frozenset({"dynamo_tomograms", "picked_in"}),
+}
 # The seed and the tracking backend come in pairs: beads are seeded and tracked
 # as beads, patches as patches. A mixed pair has no defined meaning.
 FIDUCIAL_PAIRS = {
@@ -180,8 +242,7 @@ LANE_KEYS: dict[str, frozenset[str]] = {
     # the frames half of [data] by `cryoet init`; the rest by build_steps below.
     "lane": frozenset({"name", "input", "variant"}),
     "run": frozenset({"project", "series", "stage"}),
-    "data": frozenset({"frames", "mdocs", "frames_pattern", "pixel_size_angstrom",
-                       "mdoc", "stack"}),
+    "data": frozenset().union(*DATA_KEYS.values()),
     "motion": frozenset({"backend", "storage_policy", "gpu", "patch_x", "patch_y",
                          "pixel_size_angstrom", "gain_reference", "gain_rotation",
                          "gain_flip", "ftbin", "eer_sampling", "eer_fractions"}),
@@ -363,26 +424,36 @@ def lane_combination(
     `movies` are the formats of a frames lane's movies (submit_lanes.movie_formats).
     EER movies make the input "EER frames", an input of its own: the frames lanes
     that have run had MRC and TIFF movies, and no lane of EER movies has run yet.
+    An imported input has no alignment here, and picks and particles no membranes:
+    those parts are empty.
     """
+    source = lane_input(cfg)
+    if source == "tomograms":
+        return source, "", "membranes" if "segment" in cfg else "no membranes"
+    if source in IMPORTED_INPUTS:
+        return source, "", ""
     seed = cfg.get("fiducials", {}).get("seed_backend")
     alignment = ALIGNMENTS.get(seed, str(seed))
     if cfg.get("fine_align", {}).get("backend") == "aretomo":
         alignment = "AreTomo"
-    source = lane_input(cfg)
     if source == "frames" and "eer" in movies:
         source = "EER frames"
     return source, alignment, "membranes" if "segment" in cfg else "no membranes"
 
 
 def combination_text(combination: tuple[str, str, str]) -> str:
-    """`frames + patches, no membranes`, `frames + beads + membranes`."""
+    """`frames + patches, no membranes`, `frames + beads + membranes`, `tomograms, no
+    membranes`, `picks`."""
     source, alignment, membranes = combination
-    return f"{source} + {alignment}" + (" + membranes" if membranes == "membranes"
-                                        else f", {membranes}")
+    text = f"{source} + {alignment}" if alignment else source
+    if membranes == "membranes":
+        return f"{text} + membranes"
+    return f"{text}, {membranes}" if membranes else text
 
 
 def lane_input(cfg: dict[str, Any]) -> str:
-    """How the series enter the project: `frames` (movies, through init) or `stack`."""
+    """How the series enter the project: `frames` (movies, through init), `stack`, or
+    one of the IMPORTED_INPUTS."""
     lane = cfg.get("lane", {})
     if "chain" in lane:
         raise SystemExit(f"[lane] chain {RENAMED['lane', 'chain']}")
@@ -392,6 +463,43 @@ def lane_input(cfg: dict[str, Any]) -> str:
     return value
 
 
+def input_problems(cfg: dict[str, Any], source: str) -> list[str]:
+    """The sections and keys that a lane of input `source` does not read."""
+
+    found = []
+    data = cfg.get("data")
+    if isinstance(data, dict):
+        for key in sorted(set(data) - DATA_KEYS[source]):
+            homes = " or ".join(repr(name) for name, keys in DATA_KEYS.items() if key in keys)
+            found.append(f"[data] {key}, read with input {homes}")
+        chosen = data.get("picks_format")
+        if source == "picks" and chosen in FORMAT_KEYS:
+            for key in sorted(set(data) & (PICKS_DATA - FORMAT_KEYS[chosen]
+                                           - {"picks", "picks_format"})):
+                homes = " or ".join(name for name, keys in FORMAT_KEYS.items() if key in keys)
+                found.append(f"[data] {key}, read with picks_format {homes}")
+    if source in INPUT_SECTIONS:
+        read = INPUT_SECTIONS[source] | {"lane", "run", "data", "mra"}
+        found += [f"[{section}]" for section in sorted(set(cfg) - read)]
+        for (name, section), keys in INPUT_KEYS.items():
+            values = cfg.get(section)
+            if name == source and isinstance(values, dict):
+                found += [f"[{section}] {key}" for key in sorted(set(values) - keys)]
+    return found
+
+
+def check_input_keys(cfg: dict[str, Any], source: str) -> None:
+    """Refuse what the lane's input does not read, naming all of it at once."""
+
+    found = input_problems(cfg, source)
+    if found:
+        why = f"; its series enter as {ENTERS_AS[source]}" if source in ENTERS_AS else ""
+        raise SystemExit(
+            f"a lane of input {source!r} does not read these, so they would be ignored{why}:"
+            "\n  " + "\n  ".join(found)
+        )
+
+
 def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[str, Command]]:
     """The lane's chain, in the one order this file fixes.
 
@@ -399,7 +507,9 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
 
     * `[lane] input` — `frames`: movies, motion-corrected here, after `init`
       wrote the manifests (project-level, so not a step); `stack`: one assembled
-      stack per series, imported here;
+      stack per series, imported here; `tomograms`, `picks` or `particles`: files
+      made elsewhere, entered by their import, and the chain from there
+      (_imported_steps);
     * `[fiducials]` backends — gold beads or patch tracking;
     * `[segment]` — present: membranes are segmented after reconstruction, and
       picking may use them as a mask; absent: the step is left out.
@@ -411,14 +521,18 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
 
     check_keys(cfg)
     source = lane_input(cfg)
+    check_input_keys(cfg, source)
     manifest = project / "manifests" / f"{series}.json"
     registry = project / "artifacts.json"
     common = ["--manifest", str(manifest), "--registry", str(registry), "--out", str(project)]
 
     lane = _require(cfg, "lane", ("variant",), "every lane")["variant"]
-    binning = _require(cfg, "binning", ("ctf_fit", "tomogram"), "every lane")
-    align = _require(cfg, "align", ("binning", "min_std_ratio"), "every lane")
-    qc = _require(cfg, "qc_coarse", ("preview_binning", "residual_warning_px"), "every lane")
+    if source in IMPORTED_INPUTS:
+        return _imported_steps(cfg, project, series, source, common, lane)
+    binning = _require(cfg, "binning", ("ctf_fit", "tomogram"), "every lane that reconstructs")
+    align = _require(cfg, "align", ("binning", "min_std_ratio"), "every lane that reconstructs")
+    qc = _require(cfg, "qc_coarse", ("preview_binning", "residual_warning_px"),
+                  "every lane that reconstructs")
     fine = cfg.get("fine_align", {})
     fine_backend = fine.get("backend", "imod-tiltalign")
     if fine_backend not in FINE_BACKENDS:
@@ -443,25 +557,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             )
         fid: dict[str, Any] = {}
     else:
-        fid = _require(cfg, "fiducials", ("seed_backend", "track_backend"), "every lane")
-    ctf = _require(cfg, "ctf", ("voltage_kv", "spherical_aberration_mm"), "every lane")
-    tmpl = _require(cfg, "template", ("low_pass_angstrom",), "every lane")
-    pick = _require(
-        cfg, "pick", ("particle_diameter_angstrom", "gpu_ids"),
-        "every lane",
-    )
-    if "number_of_particles" in pick and "expected_particles_per_tomogram" in pick:
-        raise SystemExit(
-            "[pick] sets both number_of_particles (the count to take) and "
-            "expected_particles_per_tomogram (twice it is taken); keep one"
-        )
-    extract = _require(cfg, "extract", ("box_size_px",), "every lane")
-    exe = _require(
-        cfg, "executables",
-        ("pytom_create_template", "pytom_create_mask",
-         "pytom_match_template", "pytom_extract_candidates"),
-        "every lane",
-    )
+        fid = _require(cfg, "fiducials", ("seed_backend", "track_backend"),
+                       "every lane that reconstructs")
+    ctf = _require(cfg, "ctf", ("voltage_kv", "spherical_aberration_mm"),
+                   "every lane that reconstructs")
+    tmpl, pick, extract, exe = _picking_sections(cfg)
     recon = cfg.get("reconstruct", {})
     seg = cfg.get("segment")
 
@@ -487,22 +587,7 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
             "[reconstruct] thickness must be set with patch tracking: patches cannot "
             "measure the sample depth (see configs/lanes/ribo-bin8.toml)"
         )
-    if ("emdb_id" in tmpl) == ("source_map" in tmpl):
-        raise SystemExit(
-            "[template] needs exactly one of emdb_id (fetched from EMDB) and "
-            "source_map (a local MRC map)"
-        )
-    if "cut_off" in pick and "number_of_false_positives" in pick:
-        # pick-particles refuses the pair too, but only once its job has started.
-        raise SystemExit(
-            "[pick] sets both cut_off and number_of_false_positives, which are "
-            "alternatives: cut_off = 0 keeps the best number_of_particles peaks with "
-            "no score floor, number_of_false_positives sets a floor from the noise"
-        )
-    if pick.get("use_segmentation_mask") and seg is None:
-        raise SystemExit(
-            "[pick] use_segmentation_mask needs membranes, but there is no [segment] section"
-        )
+    _check_picking(tmpl, pick, seg)
 
     def sub(template: str) -> str:
         return template.format(series=series)
@@ -693,27 +778,87 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
         ),
     ]
 
-    segmentation: list[tuple[str, Command]] = []
-    if seg is not None:
-        if "model" not in seg:
-            raise SystemExit("[segment] is missing model, the MemBrain-seg checkpoint")
-        tta = seg.get("test_time_augmentation")
-        segmentation = [
-            (
-                "segment-tomogram",
-                ["segment-tomogram", *common,
-                 *flag("membrain-executable", seg.get("executable")),
-                 *flag("membrain-model", seg["model"]),
-                 *flag("membrain-sliding-window-size", seg.get("sliding_window_size")),
-                 *([] if tta is None else [
-                     "--membrain-test-time-augmentation" if tta
-                     else "--no-membrain-test-time-augmentation"
-                 ]),
-                 *flag("variant", lane)],
-            ),
-        ]
+    return [*entry, *alignment, *_segmentation_steps(seg, common, lane),
+            *_picking_steps(tmpl, pick, exe, common, lane),
+            *_extraction_steps(extract, common, lane)]
 
-    picking: list[tuple[str, Command]] = [
+
+def _picking_sections(
+    cfg: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """[template], [pick], [extract] and [executables] of a lane that picks."""
+    tmpl = _require(cfg, "template", ("low_pass_angstrom",), "every lane that picks")
+    pick = _require(
+        cfg, "pick", ("particle_diameter_angstrom", "gpu_ids"),
+        "every lane that picks",
+    )
+    if "number_of_particles" in pick and "expected_particles_per_tomogram" in pick:
+        raise SystemExit(
+            "[pick] sets both number_of_particles (the count to take) and "
+            "expected_particles_per_tomogram (twice it is taken); keep one"
+        )
+    extract = _require(cfg, "extract", ("box_size_px",), "every lane that picks")
+    exe = _require(
+        cfg, "executables",
+        ("pytom_create_template", "pytom_create_mask",
+         "pytom_match_template", "pytom_extract_candidates"),
+        "every lane that picks",
+    )
+    return tmpl, pick, extract, exe
+
+
+def _check_picking(
+    tmpl: dict[str, Any], pick: dict[str, Any], seg: dict[str, Any] | None
+) -> None:
+    """The choices of a picking lane that contradict each other."""
+    if ("emdb_id" in tmpl) == ("source_map" in tmpl):
+        raise SystemExit(
+            "[template] needs exactly one of emdb_id (fetched from EMDB) and "
+            "source_map (a local MRC map)"
+        )
+    if "cut_off" in pick and "number_of_false_positives" in pick:
+        # pick-particles refuses the pair too, but only once its job has started.
+        raise SystemExit(
+            "[pick] sets both cut_off and number_of_false_positives, which are "
+            "alternatives: cut_off = 0 keeps the best number_of_particles peaks with "
+            "no score floor, number_of_false_positives sets a floor from the noise"
+        )
+    if pick.get("use_segmentation_mask") and seg is None:
+        raise SystemExit(
+            "[pick] use_segmentation_mask needs membranes, but there is no [segment] section"
+        )
+
+
+def _segmentation_steps(
+    seg: dict[str, Any] | None, common: Command, lane: str
+) -> list[tuple[str, Command]]:
+    """Membrane segmentation, when the lane has [segment]."""
+    if seg is None:
+        return []
+    if "model" not in seg:
+        raise SystemExit("[segment] is missing model, the MemBrain-seg checkpoint")
+    tta = seg.get("test_time_augmentation")
+    return [
+        (
+            "segment-tomogram",
+            ["segment-tomogram", *common,
+             *flag("membrain-executable", seg.get("executable")),
+             *flag("membrain-model", seg["model"]),
+             *flag("membrain-sliding-window-size", seg.get("sliding_window_size")),
+             *([] if tta is None else [
+                 "--membrain-test-time-augmentation" if tta
+                 else "--no-membrain-test-time-augmentation"
+             ]),
+             *flag("variant", lane)],
+        ),
+    ]
+
+
+def _picking_steps(
+    tmpl: dict[str, Any], pick: dict[str, Any], exe: dict[str, Any], common: Command, lane: str
+) -> list[tuple[str, Command]]:
+    """The template, then template matching."""
+    return [
         (
             "prepare-template",
             ["prepare-template", *common,
@@ -768,6 +913,14 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("pytom-extract-candidates-executable", exe["pytom_extract_candidates"]),
              *flag("variant", lane)],
         ),
+    ]
+
+
+def _extraction_steps(
+    extract: dict[str, Any], common: Command, lane: str
+) -> list[tuple[str, Command]]:
+    """The picks' preview, then the particles cut from the tomogram."""
+    return [
         # Look at the picks before spending the extraction on them: this writes
         # the tomogram with its picks for both ChimeraX and 3dmod. It registers
         # nothing, so it is the one step here that can be skipped or re-run at
@@ -784,7 +937,145 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("variant", lane)],
         ),
     ]
-    return [*entry, *alignment, *segmentation, *picking]
+
+
+def particles_series(cfg: dict[str, Any]) -> dict[str, int]:
+    """[data] particles_series of a particles lane: each series with the tomogram
+    number (Dynamo's column 20) of its rows in the table."""
+    value = cfg.get("data", {}).get("particles_series")
+    if (not isinstance(value, dict) or not value
+            or not all(isinstance(number, int) and not isinstance(number, bool)
+                       for number in value.values())):
+        raise SystemExit(
+            "[data] particles_series must map each series to the tomogram number of its "
+            "rows in the table (column 20), as {TS_01 = 1, TS_02 = 2}"
+        )
+    if len(set(value.values())) != len(value):
+        raise SystemExit("[data] particles_series gives two series the same tomogram number")
+    return dict(value)
+
+
+def _listed(value: Any, where: str) -> str:
+    """A list of words as the commands take it, comma-separated; a string as it is."""
+    if isinstance(value, str) and value:
+        return value
+    if isinstance(value, list) and value and all(
+            isinstance(item, str) and item for item in value):
+        return ",".join(value)
+    raise SystemExit(f"{where} must be a word or a list of words, as [\"x\", \"y\"]")
+
+
+def _imported_steps(
+    cfg: dict[str, Any], project: Path, series: str, source: str, common: Command, lane: str
+) -> list[tuple[str, Command]]:
+    """The chain of a lane whose series enter as files made elsewhere
+    (docs/entry_and_exit.md): their import, then the steps from there.
+
+    [data] answers the questions the import asks, each key one option of its
+    command, and nothing is assumed for a key left out: the import refuses what it
+    needs and was not told. Every import takes the lane's label, as every step after
+    it does, so they find what it entered by that label.
+    """
+
+    def sub(template: str) -> str:
+        return template.format(series=series)
+
+    if source == "particles":
+        data = _require(cfg, "data", ("particles_folder", "particles_table", "particles_series"),
+                        "input = 'particles'")
+        named = particles_series(cfg)
+        return [(
+            "import-particles",
+            ["import-particles",
+             "--folder", str(data["particles_folder"]),
+             "--table", str(data["particles_table"]),
+             "--out", str(project),
+             # The whole table's series are named, so that none of its tomograms is
+             # left out unnoticed; this series' rows are imported.
+             *[part for name, number in named.items() for part in ("--series", f"{number}={name}")],
+             "--only-series", series,
+             *flag("pixel-size", data.get("particles_pixel_size_angstrom")),
+             *flag("variant", lane)],
+        )]
+
+    data = _require(cfg, "data", ("tomogram", "tilt_angles", "orientation", "processing"),
+                    f"input = {source!r}")
+    entry: list[tuple[str, Command]] = [(
+        "import-tomogram",
+        ["import-tomogram",
+         "--volume", sub(str(data["tomogram"])),
+         "--tilt-angles", sub(str(data["tilt_angles"])),
+         "--orientation", str(data["orientation"]),
+         "--processing", _listed(data["processing"], "[data] processing"),
+         "--tilt-series-id", series,
+         "--out", str(project),
+         *flag("pixel-size", data.get("tomogram_pixel_size_angstrom")),
+         *flag("variant", lane)],
+    )]
+    if source == "tomograms":
+        tmpl, pick, extract, exe = _picking_sections(cfg)
+        if "low_pass_angstrom" not in pick:
+            # pick-particles would refuse it in the GPU job, after the queue.
+            raise SystemExit(
+                "[pick] low_pass_angstrom must be set with input = 'tomograms': "
+                "pick-particles derives it from a fine alignment, and these tomograms "
+                "were aligned elsewhere"
+            )
+        if pick.get("ctf_weighting"):
+            raise SystemExit(
+                "[pick] ctf_weighting = true cannot apply with input = 'tomograms': the "
+                "tomograms enter without a CTF fit, so picking has none to weight by"
+            )
+        seg = cfg.get("segment")
+        _check_picking(tmpl, pick, seg)
+        return [*entry, *_segmentation_steps(seg, common, lane),
+                *_picking_steps(tmpl, pick, exe, common, lane),
+                *_extraction_steps(extract, common, lane)]
+
+    pick = _require(cfg, "pick", ("particle_diameter_angstrom",),
+                    "input = 'picks' (the check that the picks land on particles)")
+    extract = _require(cfg, "extract", ("box_size_px",), "every lane that extracts")
+    data = _require(cfg, "data", ("picks", "picks_format"), "input = 'picks'")
+    number = None
+    if "dynamo_tomograms" in data:
+        numbers = data["dynamo_tomograms"]
+        number = numbers.get(series) if isinstance(numbers, dict) else None
+        if not isinstance(number, int) or isinstance(number, bool):
+            raise SystemExit(
+                f"[data] dynamo_tomograms gives no tomogram number for {series}: it maps "
+                "each series to the number of its rows in the table (column 20), as "
+                "{TS_01 = 1, TS_02 = 2}"
+            )
+    columns = data.get("csv_columns")
+    tomo_name = data.get("relion_tomo_name")
+    return [
+        *entry,
+        (
+            "import-picks",
+            ["import-picks",
+             "--picks", sub(str(data["picks"])),
+             "--format", str(data["picks_format"]),
+             "--tilt-series-id", series,
+             "--out", str(project),
+             *flag("particle-diameter", pick["particle_diameter_angstrom"]),
+             # The coordinates are in the tomogram the step before imported.
+             *flag("tomogram-variant", lane),
+             *flag("picked-in", data.get("picked_in")),
+             *flag("template-box-px", data.get("template_box_px")),
+             *flag("csv-columns",
+                   None if columns is None else _listed(columns, "[data] csv_columns")),
+             *flag("coordinate-units", data.get("coordinate_units")),
+             *flag("coordinate-origin", data.get("coordinate_origin")),
+             *flag("relion-tomo-name", None if tomo_name is None else sub(str(tomo_name))),
+             *flag("relion-tomograms-star", data.get("relion_tomograms_star")),
+             *flag("relion-tilt-series-pixel-size",
+                   data.get("relion_tilt_series_pixel_size_angstrom")),
+             *flag("imod-object", data.get("imod_object")),
+             *flag("dynamo-tomogram", number),
+             *flag("variant", lane)],
+        ),
+        *_extraction_steps(extract, common, lane),
+    ]
 
 
 def slice_steps(
@@ -816,8 +1107,9 @@ def main() -> int:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="add --overwrite to every step; blanket by design, since a re-run "
-        "of a range is what it is for, and every command accepts the flag",
+        help="add --overwrite to every step but the imports; blanket by design, since a "
+        "re-run of a range is what it is for. An import is never written over: the same "
+        "files with the same answers are imported once",
     )
     parser.add_argument("--execute", action="store_true", help="run instead of printing")
     parser.add_argument("--list-steps", action="store_true")
@@ -844,7 +1136,7 @@ def main() -> int:
         steps = slice_steps(build_steps(cfg, args.project, series), args.start, args.end)
         print(f"\n# ---- {series} ({cfg['lane']['name']}) ----")
         for name, command in steps:
-            if args.overwrite:
+            if args.overwrite and name not in IMPORT_STEPS:
                 command = [*command, "--overwrite"]
             if not args.execute:
                 print(f"\n# {name}")

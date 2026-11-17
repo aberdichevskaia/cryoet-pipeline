@@ -13,7 +13,14 @@ follows it.
    [data_folders.md](data_folders.md) says. It gives `[lane] input`, `[data]`
    and `[run] series`, and the values of the rows marked *data* below: the
    pixel size, the frames per tilt, the tilts and angles. From the mdocs it
-   also reads the voltage, the tilt axis and the target defocus.
+   also reads the voltage, the tilt axis and the target defocus. For
+   tomograms, picks or particles made elsewhere, read them with
+   `scripts/show_imports.py` instead ([entry_and_exit.md](../entry_and_exit.md)).
+   It gives `[lane] input` (`tomograms`, `picks` or `particles`) and the `[data]`
+   answers the files hold, each with what it rests on, and leaves the rest as
+   questions. Such a lane begins at its import, so the sections of the steps
+   before it are refused, and the questions below about frames, alignment and
+   the CTF do not arise.
 2. **The site.** Copy the rows marked *site* from the closest lane that ran on
    the same cluster: `ryr1-bin8.toml` or `ribo-mdc.toml` at MDC, `gag-bin8.toml`
    or `ribo-bin8.toml` in Munich.
@@ -133,16 +140,30 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | Keys | From | How |
 |---|---|---|
 | `[lane] name` | rule | `<dataset>-<variant>`, such as `ryr1-bin8`; also the file name, `configs/lanes/<name>.toml`, unless the person names another place |
-| `[lane] input` | data | `frames` or `stack`, as `show_folder.py` reads the folder |
+| `[lane] input` | data | `frames` or `stack`, as `show_folder.py` reads the folder; `tomograms`, `picks` or `particles` for files made elsewhere, as `show_imports.py` reads them |
 | `[lane] variant` | rule | `bin8`: a new dataset starts at bin8. It labels every output from the tomogram on |
 | `[run] project` | person | question 9 |
 | `[run] series` | data, person | the ids `show_folder.py` found; question 8 picks one or all |
 | `[run] stage` | rule, site | one `[[run.stage]]` table per job, as below |
-| `[run.stage] name, from, until` | rule | the stages of `example.toml`. With `input = "stack"`, a CPU stage from `import-tilt-stack` replaces `motion`. Without `[segment]`, the GPU stage starts at `prepare-template`. The last `until` is the goal's step. Stages follow one another without skipping a step. The `mra` stage has `from` and `until` both `mra`, and comes last |
+| `[run.stage] name, from, until` | rule | the stages of `example.toml`. With `input = "stack"`, a CPU stage from `import-tilt-stack` replaces `motion`. With an imported input, the first stage starts at its import (`import-tomogram`, or `import-particles`, whose lane has the MRA stage alone after it), on a CPU partition. Without `[segment]`, the GPU stage starts at `prepare-template`. The last `until` is the goal's step. Stages follow one another without skipping a step. The `mra` stage has `from` and `until` both `mra`, and comes last |
 | `[run.stage] time, sbatch` | site | from the closest lane at the same site: partitions, QOS and GPUs differ between sites |
 | `[data] frames, mdocs, frames_pattern` | data | the fragment `show_folder.py` prints, for a frames lane |
 | `[data] mdoc, stack` | data | the fragment `show_folder.py` prints, for a stack lane |
 | `[data] pixel_size_angstrom` | card | unset: the movie headers give it. Set it only to override a header known to be wrong, and name what says so |
+| `[data] tomogram, tilt_angles` | data | input `tomograms` or `picks`: the fragment `show_imports.py tomograms` prints, `{series}` in each name; the angles each volume was reconstructed with (tilt.com's TILTFILE, the series' `.tlt`, or RELION's tilt-series STAR) |
+| `[data] orientation` | data, person | as `show_imports.py` reads it from the header's history and the wedge in the volume. When it asks, the person names the program and its options, and the answer must be on the list |
+| `[data] processing` | person | always asked: `raw`, or what was done after the reconstruction, from `ctf-corrected`, `denoised`, `wedge-filled`. `show_imports.py` says when it sees no wedge |
+| `[data] tomogram_pixel_size_angstrom` | data | unset: the header gives it. Set it when the header has none, or to have it checked against the header |
+| `[data] picks, picks_format` | data | input `picks`: the fragment `show_imports.py picks` prints, `{series}` in the name of a file per series |
+| `[data] picked_in` | person | unset: the picks are read as taken in the volume as it is imported. Set it only when they were taken in another orientation of it |
+| `[data] template_box_px` | data, person | `pytom-star`: from pytom's job file beside the picks, else asked |
+| `[data] csv_columns, coordinate_units, coordinate_origin` | data, person | `csv`: the columns from its header line; the units and the origin are always asked |
+| `[data] relion_tomo_name, relion_tomograms_star, relion_tilt_series_pixel_size_angstrom` | data | `relion5-star`: the name is the series id unless set (with `{series}` in it); RELION's `tomograms.star` near the picks gives the tilt series' pixel |
+| `[data] imod_object` | data, person | `imod-model`: unset for a model of one object; asked when it holds several |
+| `[data] dynamo_tomograms` | person | `dynamo-table`: one table of several tomograms needs the series of each tomogram number, as `{TS_01 = 1}` |
+| `[data] particles_folder, particles_table` | data | input `particles`: the fragment `show_imports.py particles` prints |
+| `[data] particles_series` | person | the series of each tomogram number of the table (column 20), which `show_imports.py` lists with their particles |
+| `[data] particles_pixel_size_angstrom` | data | unset: the table's column 36 gives it. Asked when that column is 0 |
 | `[motion] backend` | rule | `motioncor3`, the only backend that reads EER |
 | `[motion] storage_policy, gpu, patch_x, patch_y` | rule | the values of `example.toml` |
 | `[motion] pixel_size_angstrom` | rule | unset: `example.toml` gives no reason to set it |
@@ -181,7 +202,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[template] particle_diameter_angstrom` | rule | unset: `run_series.py` passes `[pick] particle_diameter_angstrom` |
 | `[template] low_pass_angstrom` | rule | about 2 × the tomogram pixel, as `example.toml` says |
 | `[template] mask_radius_px, mask_sigma_px, box_size_px` | rule | unset: derived from the diameter, as the lab's rule says (radius half the diameter plus 3 px, a soft edge, a box twice the diameter). Set them only for a map with no single particle in it, such as a lattice |
-| `[pick] particle_diameter_angstrom` | person, card | question 2; `show_emdb.py measure` proposes it from the template map, for the person to confirm |
+| `[pick] particle_diameter_angstrom` | person, card | question 2; `show_emdb.py measure` proposes it from the template map, for the person to confirm. It is the one `[pick]` key of a `picks` or `particles` lane: the import's check and the MRA read it |
 | `[pick] gpu_ids` | site | the value of the closest lane at the same site |
 | `[pick] low_pass_angstrom` | rule | about 1.3 × the tomogram's Nyquist (2 × the tomogram pixel), by the lab's rule: a Nyquist of 19.6 Å gives 25 Å |
 | `[pick] number_of_particles, number_of_false_positives, cut_off` | rule | unset: twice the peaks above pytom's false-positive cut-off, by the lab's rule. A number only when the person asks for one |

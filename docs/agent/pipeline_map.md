@@ -25,7 +25,10 @@ lane TOML
 
 - **The order is code.** The config chooses three things only: `[lane] input`
   (`frames` or `stack`), the alignment method (`[fiducials]`: beads or patches),
-  and whether membranes are segmented (`[segment]` present or not). List a
+  and whether membranes are segmented (`[segment]` present or not). A lane of
+  files made elsewhere, `[lane] input` `tomograms`, `picks` or `particles`,
+  begins at their import instead (step 1″): it has no alignment, and the
+  sections of the steps before its import are refused. List a
   lane's steps with
   `python3 scripts/run_series.py --project P --config C --series X --list-steps`.
 - **Stages** are consecutive slices of that chain, each one Slurm job over every
@@ -84,6 +87,11 @@ The other six produce valid commands but have not been run. Nor has any lane
 of EER movies, which `cryoet init` has read since 5 November 2026. A frames
 lane whose `[data] frames` folder holds EER movies counts as an input of its
 own, "EER frames", in each of its four combinations.
+
+Lanes of files made elsewhere (`tomograms`, with or without membranes, `picks`
+and `particles`, since 17 November 2026) have not run on real data either.
+`import-tomogram` and `import-picks` have, by hand on the Mac (EMPIAR-10164 TS_01
+and its Gag picks); `import-particles` only on synthetic particles.
 
 `scripts/submit_lanes.py` warns a lane of any combination not listed here that
 it is the first, in its dry run and when it submits. The list is
@@ -210,6 +218,38 @@ Motion correction, then the tilt stack from the corrected sums.
   `--mdoc`, `--stack`; the id → `--tilt-series-id`.
 - Writes: the manifest, the registry entries, and `stacks/<TS>/`. Refuses if the
   stack or the manifest exists already.
+
+### 1″. The imports — lanes of files made elsewhere
+
+The import is the lane's first step, and `[data]` holds the answers it asks for
+([entry_and_exit.md](../entry_and_exit.md)). Every import takes `--variant` from
+`[lane] variant`, and every step after it finds what it entered by that label.
+`--overwrite` is never given to an import: the same files with the same answers
+are imported once, and other answers go under another variant. `submit_lanes.py`
+checks the files and the answers on the imports' lists before the queue.
+`scripts/show_imports.py` reads the files and proposes the answers.
+
+- `tomograms`: `import-tomogram`, then `[segment]` if present, `prepare-template`,
+  `pick-particles`, `visualize-picks`, `extract-particles`. Keys: `[data]
+  tomogram`*, `tilt_angles`* (with `{series}`) → `--volume`, `--tilt-angles`;
+  `orientation`* → `--orientation`; `processing`* (a word or a list) →
+  `--processing`; `tomogram_pixel_size_angstrom` → `--pixel-size`. `[pick]
+  low_pass_angstrom` is required, since there is no fine alignment to derive it
+  from, and `ctf_weighting = true` is refused: the tomograms have no CTF fit here.
+- `picks`: `import-tomogram` as above, `import-picks`, `visualize-picks`,
+  `extract-particles`. Keys: `[data] picks`* → `--picks`; `picks_format`* →
+  `--format`; one key per format (`template_box_px`, `csv_columns`,
+  `coordinate_units`, `coordinate_origin`, `relion_tomo_name`,
+  `relion_tomograms_star`, `relion_tilt_series_pixel_size_angstrom`,
+  `imod_object`, `dynamo_tomograms` → `--dynamo-tomogram` of the series),
+  each refused with another format; `picked_in` → `--picked-in`; `[pick]
+  particle_diameter_angstrom`*, its one key here → `--particle-diameter`.
+- `particles`: `import-particles` alone, then the `mra` stage. Keys: `[data]
+  particles_folder`*, `particles_table`* → `--folder`, `--table`;
+  `particles_series`* (`{TS_01 = 1}`) → one `--series 1=TS_01` per series, and
+  `--only-series` this one; `particles_pixel_size_angstrom` → `--pixel-size`.
+  The MRA's diameter is `[pick] particle_diameter_angstrom` or `[mra]
+  diameter_angstrom`.
 
 ### 2. `align-tilt-series` — coarse alignment
 

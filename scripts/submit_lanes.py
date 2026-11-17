@@ -59,7 +59,13 @@ scripts/submit_recipe.py, with these checks and into the same journal.
 [run] series may be left out, to take every series: a frames lane then gets the
 ones `init` finds, or, for a project that exists, the ones it has manifests for;
 a stack lane gets every series its [data] stack path matches, with {series} as
-the wildcard.
+the wildcard, and a tomograms or picks lane every series its [data] tomogram path
+matches; a particles lane gets the series of [data] particles_series.
+
+A lane of tomograms, picks or particles made elsewhere starts with their import
+(docs/entry_and_exit.md). Its files and the answers in its [data] that are not
+on the imports' lists are checked here, before the queue; what the files hold is
+checked by the imports themselves, in the job.
 
 For a frames lane whose project does not exist yet, `cryoet init` runs here
 first, from [data] frames and either mdocs or frames_pattern (tilt metadata
@@ -193,9 +199,10 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
     if not isinstance(project, str) or not project:
         raise SystemExit(f"{config}: [run] project must be a path")
     if run.get("series") is None:
-        # Every series. A stack lane finds them now, in its stack paths; a frames
-        # lane only once init has run (see project_series).
-        series = stack_series(cfg, config) if run_series.lane_input(cfg) == "stack" else ()
+        # Every series. A stack, tomograms or picks lane finds them now, in its file
+        # paths, and a particles lane in [data] particles_series; a frames lane only
+        # once init has run (see project_series).
+        series = every_series(cfg, config)
     else:
         series = _string_list(run.get("series"), f"{config}: [run] series")
         if not series:
@@ -292,13 +299,28 @@ def plan(cfg: dict[str, Any], config: Path) -> Plan:
     return Plan(config=config, project=project, series=series, stages=tuple(stages), mra=mra)
 
 
-def stack_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
-    """Every series a stack lane's [data] stack path matches, {series} its wildcard."""
+def every_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
+    """The series of a lane without [run] series, where its config can say them:
+    empty for a frames lane, whose series init finds."""
 
-    template = cfg.get("data", {}).get("stack")
+    source = run_series.lane_input(cfg)
+    if source == "stack":
+        return stack_series(cfg, config)
+    if source in ("tomograms", "picks"):
+        return stack_series(cfg, config, key="tomogram")
+    if source == "particles":
+        return tuple(sorted(run_series.particles_series(cfg)))
+    return ()
+
+
+def stack_series(cfg: dict[str, Any], config: Path, key: str = "stack") -> tuple[str, ...]:
+    """Every series a lane's [data] path matches, {series} its wildcard: the stacks of
+    a stack lane, or the tomograms of a tomograms or picks lane (key "tomogram")."""
+
+    template = cfg.get("data", {}).get(key)
     if not isinstance(template, str) or template.count("{series}") != 1:
         raise SystemExit(
-            f"{config}: without [run] series, [data] stack must contain {{series}} once, "
+            f"{config}: without [run] series, [data] {key} must contain {{series}} once, "
             "so that the series can be found"
         )
     prefix, suffix = os.path.join(ROOT, template).split("{series}")
@@ -307,7 +329,7 @@ def stack_series(cfg: dict[str, Any], config: Path) -> tuple[str, ...]:
         for path in glob.glob(glob.escape(prefix) + "*" + glob.escape(suffix))
     )
     if not found:
-        raise SystemExit(f"{config}: no file matches [data] stack {template!r}")
+        raise SystemExit(f"{config}: no file matches [data] {key} {template!r}")
     return tuple(found)
 
 
@@ -349,7 +371,7 @@ def project_series(project: str) -> tuple[str, ...]:
 UNSET_HINT = (
     "the $ variables above say where the tools are, and the jobs take them from this "
     "shell: set them in ~/.bashrc, then open a new terminal (README, \"0. One-time "
-    "setup\"; at MDC, the two lines that source "
+    "setup\"; at MDC, the lines that source "
     "/fast/AG_Kudryashev/software/cryoet-tools.sh and set PYTOMO_MP_DIR)"
 )
 
@@ -394,6 +416,8 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
                     f"stage {stage.name!r} runs fine-align-tilt-series with AreTomo2, "
                     "which needs a GPU; give that stage --partition=gpu and --gres=gpu:..."
                 )
+    if run_series.lane_input(cfg) in run_series.IMPORTED_INPUTS:
+        return found + import_problems(cfg, lane)
     if run_series.lane_input(cfg) != "frames":
         # A stack lane writes its own manifests in import-tilt-stack; only its
         # inputs can be checked here, which saves a queue wait on a typo.
@@ -431,6 +455,98 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
             f"{lane.project} already exists but has no manifest for {', '.join(absent)}, "
             "and init would erase the project to add them; use a new project for them"
         )
+    return found
+
+
+def import_problems(cfg: dict[str, Any], lane: Plan) -> list[str]:
+    """What the imports of a tomograms, picks or particles lane would refuse at once,
+    found before the queue: their files, the answers that are not on the imports'
+    lists, and one file named for several series where its format holds one. The
+    checks the imports make on what the files hold, the wedge and whether the picks
+    land on particles, are theirs, made in the job."""
+
+    # Here, not at the top: only these lanes need the package.
+    from cryoet_pipeline.picks_import import check_format
+    from cryoet_pipeline.tomogram_import import ImportRefused, orientation, parse_processing
+
+    source = run_series.lane_input(cfg)
+    data = cfg.get("data", {})
+    series = lane.series
+    found: list[str] = []
+
+    def files(key: str, folder: bool = False) -> None:
+        value = data.get(key)
+        if not isinstance(value, str):
+            return
+        for one in series if "{series}" in value else series[:1]:
+            path = ROOT / value.format(series=one)
+            if not (path.is_dir() if folder else path.is_file()):
+                found.append(f"[data] {key}: no {'directory' if folder else 'file'} {path}")
+
+    def answer(key: str, check: Any) -> None:
+        value = data.get(key)
+        if value is None:
+            return
+        try:
+            check(",".join(value) if isinstance(value, list) else str(value))
+        except ImportRefused as error:
+            found.append(f"[data] {key}: {error}")
+
+    if source == "particles":
+        files("particles_folder", folder=True)
+        files("particles_table")
+        named = run_series.particles_series(cfg)
+        absent = [one for one in series if one not in named]
+        if absent:
+            found.append(f"[data] particles_series names no tomogram number for "
+                         f"{', '.join(absent)}")
+        table = ROOT / str(data.get("particles_table"))
+        if table.is_file():
+            from cryoet_pipeline.particles_import import TOMO, _table
+
+            try:
+                numbers = sorted({int(round(value)) for value in _table(table)[:, TOMO]})
+            except (ImportRefused, ValueError) as error:
+                found.append(f"[data] particles_table: {error}")
+            else:
+                unnamed = [number for number in numbers if number not in named.values()]
+                if unnamed:
+                    found.append(f"[data] particles_table holds rows of tomograms {unnamed} "
+                                 "(column 20), which [data] particles_series gives no series")
+                missing = [name for name, number in named.items() if number not in numbers]
+                if missing:
+                    found.append(f"[data] particles_table has no rows for "
+                                 f"{', '.join(missing)}, by [data] particles_series")
+        return found
+
+    files("tomogram")
+    files("tilt_angles")
+    answer("orientation", orientation)
+    answer("processing", parse_processing)
+    shared = len(series) > 1
+    if shared and "{series}" not in str(data.get("tomogram", "{series}")):
+        found.append(f"[data] tomogram names one volume for {len(series)} series; give each "
+                     "its own with {series}")
+    if source == "picks":
+        files("picks")
+        files("relion_tomograms_star")
+        answer("picks_format", check_format)
+        answer("picked_in", orientation)
+        chosen = data.get("picks_format")
+        if shared and "{series}" not in str(data.get("picks", "{series}")):
+            if chosen == "relion5-star":
+                if "{series}" not in str(data.get("relion_tomo_name", "{series}")):
+                    found.append("[data] relion_tomo_name names one tomogram for every series; "
+                                 "leave it out for the series ids, or write it with {series}")
+            elif chosen == "dynamo-table":
+                if "dynamo_tomograms" not in data:
+                    found.append(f"[data] picks is one Dynamo table for {len(series)} series; "
+                                 "[data] dynamo_tomograms says which tomogram number (column "
+                                 "20) is each, as {TS_01 = 1, TS_02 = 2}")
+            else:
+                found.append(f"[data] picks names one file for {len(series)} series, and a "
+                             f"{chosen} file holds no series of its rows; give each series its "
+                             "own with {series}")
     return found
 
 
@@ -582,7 +698,8 @@ def mra_lines(lane: Plan, stages: tuple[Stage, ...]) -> list[str]:
                                      len(particles.particles))
     else:
         before = stages[stages.index(stage) - 1]
-        lines.append(f"  after stage {before.name!r}, on the particles it extracts")
+        made = "imports" if before.end == "import-particles" else "extracts"
+        lines.append(f"  after stage {before.name!r}, on the particles it {made}")
     lines += [f"  {line}" for line in described]
     left = sorted(name for name in MRA_VARIABLES if name not in _MRA_SET and os.environ.get(name))
     if left:

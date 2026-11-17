@@ -82,6 +82,26 @@ the repository root.
   tilt scheme they describe or the instrument card. Only then copy the tool's
   config fragment into the config. If the tool says there is no entry, or
   refuses, say so and stop. Do not bend the data into another input.
+- **Data made elsewhere.** Tomograms, picks or particles from another program
+  make a lane of input `tomograms`, `picks` or `particles`: the import is its
+  first step, and `[data]` answers the import's questions
+  (`docs/entry_and_exit.md`, "Same questions, listed answers"). Read the files
+  with `scripts/show_imports.py`, never with Python of your own:
+
+  ```bash
+  python3 scripts/show_imports.py tomograms <folder or volumes>
+  python3 scripts/show_imports.py picks <file> --tomogram <the volume picked in>
+  python3 scripts/show_imports.py particles <Dynamo data folder> [--table <.tbl>]
+  ```
+
+  It gives each answer with what it rests on (the header's history, the wedge
+  measured in the volume, pytom's job file, the table's columns) and leaves the
+  rest as commented questions in its fragment. Show the person both, and ask
+  the questions in one message. What was done to the volumes (`processing`) and
+  the series of each tomogram number are always theirs to say. An orientation or
+  a format not on the list is refused: say what measuring it needs, as the tool
+  does, and stop. A picks lane needs the tomogram's answers too: read the volume
+  with `tomograms` as well.
 - **The source of every value.** Next to every value you set or change, write a
   comment saying where it came from:
   - the person (who, and when);

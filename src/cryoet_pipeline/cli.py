@@ -424,6 +424,11 @@ def import_particles_command(
         typer.Option(help="Import even though the particles' wedge contradicts the table's, "
                      "and record that you did."),
     ] = False,
+    only_series: Annotated[
+        str | None,
+        typer.Option(help="Import this series' rows alone, as a lane does one series at a "
+                     "time. Every tomogram number of the table still needs its --series."),
+    ] = None,
 ) -> None:
     """Enter a Dynamo data folder and its table as the project's particle stacks.
 
@@ -440,7 +445,8 @@ def import_particles_command(
     try:
         results = import_particles(folder=folder, table_path=table, out=out, series=mapping,
                                    declared_pixel_size=pixel_size, variant=variant,
-                                   overrule_wedge_check=overrule_wedge_check)
+                                   overrule_wedge_check=overrule_wedge_check,
+                                   only_series=only_series)
     except ImportRefused as exc:
         raise typer.BadParameter(str(exc)) from exc
     for result in results:

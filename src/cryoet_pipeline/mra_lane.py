@@ -401,7 +401,7 @@ class LaneMra:
                 lines += [f"{'':<12} {one.describe(number, box, pixel_size)}"
                           for number, one in enumerate(rounds, 1)]
         elif self.from_run is None:
-            lines.append(f"{'particles':<12} not extracted yet: the job reads their pixel size "
+            lines.append(f"{'particles':<12} not there yet: the job reads their pixel size "
                          "and box, and the low-pass in A follows from them")
         return lines
 

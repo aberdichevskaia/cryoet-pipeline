@@ -302,6 +302,16 @@ class _CanonicalView:
         return np.asarray(self._data[z, y, x])
 
 
+def wedge_in_volume(path: Path, transform: Transform,
+                    angles: Sequence[float]) -> WedgeMeasurement:
+    """The wedge seen in the MRC at `path` brought into the canonical orientation by
+    `transform`, set against `angles` (wedge_check.measure_wedge). Only a central crop
+    is read, so a volume of any size costs little."""
+
+    with mrcfile.mmap(path, mode="r", permissive=True) as mrc:
+        return measure_wedge(_CanonicalView(mrc.data, transform), angles)
+
+
 @dataclass(frozen=True)
 class _Statistics:
     minimum: float
@@ -496,9 +506,7 @@ def import_tomogram(
     folder = out / "imports" / tilt_series_id / f"tomogram{label}"
     artifact_id = f"{tilt_series_id}:tomogram:imported" + (f":{variant}" if variant else "")
 
-    with mrcfile.mmap(volume_path, mode="r", permissive=True) as mrc:
-        view = _CanonicalView(mrc.data, chosen.transform)
-        wedge = measure_wedge(view, angles.angles)
+    wedge = wedge_in_volume(volume_path, chosen.transform, angles.angles)
     warnings = _judge_wedge(wedge, steps, overrule_wedge_check)
 
     inputs = [

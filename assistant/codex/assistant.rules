@@ -32,6 +32,7 @@ prefix_rule(
         "scripts/show_failure.py",
         "scripts/show_series.py",
         "scripts/show_folder.py",
+        "scripts/show_imports.py",
         "scripts/show_empiar.py",
         "scripts/show_emdb.py",
         "scripts/show_setup.py",

@@ -3,7 +3,9 @@
 # The values here are placeholders or generic starting values, not measurements.
 #
 # The order of the steps is fixed in scripts/run_series.py. This file chooses:
-#   [lane] input   - movies ("frames", MRC or TIFF) or one assembled stack per tilt-series
+#   [lane] input   - movies ("frames", MRC or TIFF) or one assembled stack per tilt-series;
+#                    for tomograms, picks or particles made elsewhere, see
+#                    docs/agent/pipeline_map.md, step 1″ (scripts/show_imports.py reads them)
 #   alignment      - gold beads or patch tracking (no gold): one of two blocks below
 #   [segment]      - present: membranes are segmented; delete it to skip
 #
@@ -18,7 +20,7 @@
 
 [lane]
 name = "my-lane-bin8"     # EDIT: any name, for you
-input = "frames"          # EDIT: "frames" (movies + mdocs or file names) or "stack" (one MRC stack per tilt-series)
+input = "frames"          # EDIT: "frames" (movies + mdocs or file names) or "stack" (one MRC stack per tilt-series); "tomograms", "picks", "particles": see above
 variant = "bin8"          # label on every output from the tomogram on; keep it short
 
 [run]
