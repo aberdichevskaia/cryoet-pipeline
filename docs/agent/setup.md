@@ -37,6 +37,7 @@ Then the problems and the notes, each with its playbook entry.
 | the `cryoet-pipeline` environment | Python and the pipeline with its extras: `io`, `gpu` (PyTorch with its CUDA libraries), `viz` (the reports), `library` (the reference library) | the environments' folder, `$MAMBA_ROOT_PREFIX/envs` with micromamba | you |
 | the `pytom_tm` environment | Python 3.12, CuPy for CUDA 12 from conda-forge, and pytom-match-pick 0.14.0 | beside it | you |
 | IMOD, CTFFIND 5, MotionCor3, AreTomo2, MemBrain-seg | the programs the steps run | a shared install: at MDC the group's software folder | the site, once |
+| the reference library | the tools' manuals at the versions the site installed, and NVIDIA's, CuPy's and PyTorch's pages for its CUDA versions, as read-only snapshots of some 20 MB (19 MB on the Mac, 17 November 2026) | a folder the group can read: at MDC `/fast/AG_Kudryashev/cryoet-library` | one person of the group, once per site, and again when the tools change |
 | Claude Code or Codex | the assistant's client | your home (`~/.local/bin` and the clients' own folders) | you |
 
 The lanes name each tool by a variable: `IMOD_DIR`, `CTFFIND5`, `MOTIONCOR3`,
@@ -79,6 +80,28 @@ has one already: the assistant runs from it. In order:
    shows no problems. Then on a GPU node of the kind the lanes use (below, "GPU
    and CUDA"). Then the lane's dry run, which checks the lane's keys, folders,
    tool variables and named programs.
+7. **The site's reference library**, once per site rather than per person
+   ([library.md](../library.md)). The assistant reads the tools' manuals at the
+   versions installed here from it, and NVIDIA's and PyTorch's pages for the
+   site's CUDA versions; without one it answers from this page and the
+   playbook. At MDC it is built, and `scripts/assistant` finds it. On another
+   site, after step 6, one person of the group builds it on a login node, in
+   the pipeline's environment and from a shell that names the tools, since the
+   builder finds them as the lanes do:
+
+   ```bash
+   python3 scripts/build_library.py --site <site> --dry-run
+   python3 scripts/build_library.py --site <site> --root <folder>
+   ```
+
+   The folder is one the group can read (library.md, "Where snapshots live"),
+   and the host has to reach NVIDIA's, CuPy's and PyTorch's sites and GitHub.
+   `--gpu-node-report` adds what `nvidia-smi` printed on a GPU node (library.md,
+   "How a snapshot is built"). Each person then names the folder with
+   `export CRYOET_LIBRARY=<folder>` in `~/.bashrc` or the setup file: by itself
+   `scripts/assistant` looks only in MDC's. Build again when a tool, its version
+   or the site's CUDA changes. The new snapshot becomes `current`, and each
+   session reads the one that was current when it started.
 
 ## What can run where
 

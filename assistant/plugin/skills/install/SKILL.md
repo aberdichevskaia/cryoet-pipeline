@@ -132,6 +132,15 @@ Give only commands you have read in those files, in `setup.md`, or in a tool's
 own documentation (`scripts/search_library.py`). If the person's site is not
 covered, say so, and ask who installs the site's software.
 
+The last step, the site's reference library, is done once per site, not once
+per person (`setup.md`, "Order of installation", 7). If this session has no
+library (your instructions name no snapshot), say what one would add, and ask
+whether the group has one. If it has, the person names its folder with
+`export CRYOET_LIBRARY=<folder>` in `~/.bashrc` and starts the session again
+from a new terminal. If not, once the check shows no problems, give the build
+commands of step 7 for one person of the group to run;
+`scripts/build_library.py` is refused to you.
+
 ## 7. Versions
 
 Use the table in `setup.md`, "Versions", and say which kind each answer is:

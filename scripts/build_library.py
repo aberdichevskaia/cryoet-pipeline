@@ -1721,7 +1721,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.gpu_node_report is None and shutil.which("nvidia-smi") is None:
         snapshot.notes.append("the site card has no GPU: there is no nvidia-smi on this host. "
                               "Give --gpu-node-report with what nvidia-smi prints on a GPU node "
-                              "(docs/library.md, \"The site card\")")
+                              "(docs/library.md, \"How a snapshot is built\", the site "
+                              "card's GPU)")
     if args.dry_run:
         print_plan(snapshot, args.root, items)
         return 0
