@@ -29,7 +29,8 @@ def test_every_case_folder_is_a_case_eval_cases_describes(case_id):
     assert case.folder.name == case.id
     assert case.id in run_cases.listed_cases()
     assert case.request and case.pass_if and case.must_not
-    assert (case.folder / "tree").is_dir()
+    # A knowledge case's request holds its evidence, and the library its answer.
+    assert (case.folder / "tree").is_dir() or case.library
 
 
 def test_the_constructed_cases_have_folders():
@@ -1077,3 +1078,65 @@ def test_a_codex_batch_stops_when_the_assistants_codex_is_not_signed_in(tmp_path
     assert [(record["case"], record["exit_codes"], record["signed_out"])
             for record in records] == [("E13", [1], True), ("E17", [1], True)]
     assert "the assistant's Codex is not signed in" in (out / "grading.md").read_text()
+
+
+# --- the knowledge cases and the library arm ---------------------------------------------
+
+
+def _library(tmp_path: Path, sources: list[str]) -> tuple[Path, Path]:
+    """A library folder whose `current` snapshot holds a page of each source."""
+    folder = tmp_path / "library"
+    snapshot = folder / "test-2026-11-16"
+    for source in sources:
+        page = snapshot / "text" / source / "page.md"
+        page.parent.mkdir(parents=True)
+        page.write_text('---\ntool: "x"\n---\n# A page\n')
+    (snapshot / "library.json").write_text("{}\n")
+    os.symlink("test-2026-11-16", folder / "current")
+    return folder, snapshot
+
+
+def test_with_the_library_every_run_reads_the_snapshot_current_names(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    folder, snapshot = _library(tmp_path, ["pytorch"])
+    assert run_cases.main(["E19", "--runs", "1", "--library", str(folder)]) == 0
+    [run_dir] = (tmp_path / "runs").glob("*/E19-1")
+    assert json.loads((run_dir / "record.json").read_text())["library"] == "test-2026-11-16"
+    # The launcher took it, as it takes a person's: the client may read the snapshot.
+    assert f"--add-dir {snapshot.resolve()}" in (tmp_path / "claude_args").read_text()
+    assert "With the reference library test-2026-11-16." in (
+        run_dir.parent / "grading.md").read_text()
+
+
+def test_without_the_library_a_run_has_none(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    monkeypatch.setenv("CRYOET_LIBRARY", str(tmp_path / "anywhere"))
+    assert run_cases.main(["E19", "--runs", "1"]) == 0
+    [run_dir] = (tmp_path / "runs").glob("*/E19-1")
+    assert json.loads((run_dir / "record.json").read_text())["library"] is None
+    assert "--add-dir" not in (tmp_path / "claude_args").read_text()
+    assert "Without the reference library." in (run_dir.parent / "grading.md").read_text()
+
+
+def test_a_snapshot_without_a_cases_pages_is_refused(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    folder, _ = _library(tmp_path, ["pytorch", "nvidia", "cuda/13.2.0"])
+    with pytest.raises(SystemExit, match=r"lacks the pages E21 needs cuda/12\.5\.0"):
+        run_cases.main(["E19", "E20", "E21", "--runs", "1", "--library", str(folder)])
+    assert not (tmp_path / "runs").exists() or not any((tmp_path / "runs").iterdir())
+
+
+def test_a_library_folder_without_a_snapshot_is_refused(tmp_path, monkeypatch):
+    _stand_in(tmp_path, monkeypatch)
+    (tmp_path / "library").mkdir()
+    with pytest.raises(SystemExit, match="no snapshot with a library.json"):
+        run_cases.main(["E19", "--runs", "1", "--library", str(tmp_path / "library")])
+
+
+def test_the_knowledge_cases_name_sources_their_answers_are_on():
+    import build_library
+    sources = set(build_library.read_web(build_library.SOURCES))
+    for case_id, wanted in (("E19", ["pytorch"]), ("E20", ["nvidia"]), ("E21", ["cuda/12.5.0"])):
+        case = BUILT[case_id]
+        assert case.library == wanted and case.playbook == [], case_id
+        assert {source.split("/")[0] for source in case.library} <= sources, case_id

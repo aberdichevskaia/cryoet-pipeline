@@ -10,6 +10,8 @@ own, and lay out what every run did for a person to grade.
     python3 scripts/run_cases.py --all --model glm-5.3 --base-url http://127.0.0.1:11434 \
         --context-tokens 131072                      an open-weight model in Claude's place
     python3 scripts/run_cases.py --all --codex       the assistant in OpenAI's Codex
+    python3 scripts/run_cases.py E19 E20 E21 --library /fast/AG_Kudryashev/cryoet-library
+                                                     with the reference library
     python3 scripts/run_cases.py --rewrite outputs/eval-runs/<batch>
                                                      a Codex batch's answers and actions
                                                      written again, as read now
@@ -48,6 +50,11 @@ memory kept before it or a CLAUDE.md from above its folder.
 --held-out removes the case's own playbook entries from the sandbox's playbook
 files (docs/agent/playbook/, one per step), to test reasoning from the evidence
 rather than applying what it was told.
+
+--library gives every run the reference library (docs/library.md): the folder of
+its snapshots, as CRYOET_LIBRARY, from which the launcher takes the one `current`
+names. Without it a run has none, which is the other arm of the knowledge cases
+(E19 to E21, whose case.toml `library` lists the sources a snapshot must hold).
 
 --base-url points the client at another server that speaks the Anthropic API,
 such as an open-weight model's behind Ollama; scripts/open_model_cases.sbatch
@@ -275,6 +282,9 @@ class Case:
     # a few patterns.
     held_out_replace: list[dict[str, str]] = field(default_factory=list)
     markers: list[str] = field(default_factory=list)
+    # A knowledge case: the reference library's sources its answer is on, as
+    # text/<source>/ in a snapshot (docs/library.md, "How we will know it helps").
+    library: list[str] = field(default_factory=list)
 
 
 def load_case(folder: Path) -> Case:
@@ -293,7 +303,25 @@ def load_case(folder: Path) -> Case:
         sacct={str(job): {key: str(value) for key, value in fields.items()}
                for job, fields in sacct.items()},
         held_out_replace=list(hidden.get("replace", [])), markers=list(hidden.get("markers", [])),
+        library=[str(source) for source in data.get("library", [])],
     )
+
+
+def library_snapshot(folder: Path) -> Path:
+    """The snapshot a run given --library reads: the one `current` names in the
+    library's folder, taken as the launcher takes it, which starts a session
+    without the library, and only warns, when the snapshot has no library.json."""
+    current = folder / "current"
+    if not (current / "library.json").is_file():
+        raise SystemExit(f"--library {folder}: no snapshot with a library.json at `current` "
+                         "(docs/library.md), so the runs would have no library")
+    return current.resolve()
+
+
+def missing_sources(snapshot: Path, cases: list[Case]) -> list[str]:
+    """For each knowledge case, the sources of its answer the snapshot does not hold."""
+    return [f"{case.id} needs {source}" for case in cases for source in case.library
+            if not (snapshot / "text" / source).is_dir()]
 
 
 def built_cases() -> dict[str, Case]:
@@ -1007,6 +1035,10 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
     sandbox = run_dir / "sandbox"
     env = prepare_run(run_dir, case, held_out)
     env.update(backend_env(args.base_url, args.model, args.context_tokens))
+    # The library arm: the launcher gives a headless run the library only when
+    # CRYOET_LIBRARY names it.
+    if args.library is not None:
+        env["CRYOET_LIBRARY"] = str(args.library)
     prompts = [case.request, *case.follow_up]
     command = command_for(sandbox, case.request, args)
     record: dict[str, Any] = {
@@ -1018,6 +1050,9 @@ def run_one(case: Case, number: int, held_out: bool, out: Path, args: argparse.N
         # Another server than Anthropic's and its window, or None; never its token.
         "base_url": args.base_url, "context_tokens": args.context_tokens,
         "client_name": "Codex" if args.codex else "Claude Code", "effort": args.effort,
+        # The reference library's snapshot the run was given, or None: a run
+        # record names the snapshot as it names the commit.
+        "library": library_snapshot(args.library).name if args.library is not None else None,
         "user_settings_sha256": _sha256(Path.home() / ".claude" / "settings.json"),
         "user_claude_md": (Path.home() / ".claude" / "CLAUDE.md").is_file(),
         # Claude Code reads every CLAUDE.md from the run's folder up, these included.
@@ -1224,6 +1259,9 @@ def grading_sheet(cases: list[Case], records: list[dict[str, Any]], out: Path,
         + (f" with {len(code['modified'])} tracked files changed" if code["modified"] else "")
         + f", on {', '.join(sorted({str(record.get('host')) for record in records})) or '?'}.",
         "",
+        *([f"With the reference library {sorted(libraries)[0]}.", ""]
+          if (libraries := {record.get("library") for record in records} - {None})
+          else ["Without the reference library.", ""]),
         "Tick a Pass-if line when it holds, and a Must-not line when it did not happen. A run "
         "passes when every box of it is ticked; report each case as passes out of its runs "
         "(docs/agent/eval_cases.md, \"How the cases are run\").", "",
@@ -1312,6 +1350,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds each message's turn may take")
     parser.add_argument("--dry-run", action="store_true",
                         help="build the sandboxes and show the commands; run nothing")
+    parser.add_argument("--library", type=Path, metavar="FOLDER",
+                        help="the reference library to give every run, the folder of its "
+                             "snapshots, as CRYOET_LIBRARY: the library arm (docs/library.md, "
+                             "\"How we will know it helps\"); without it, runs have none")
     parser.add_argument("--rewrite", type=Path, metavar="BATCH",
                         help="write a Codex batch's answers and actions again from its "
                              "transcripts, as this runner reads them now; run nothing")
@@ -1341,6 +1383,13 @@ def main(argv: list[str] | None = None) -> int:
     program, name = ("codex", "OpenAI's Codex") if args.codex else ("claude", "Claude Code")
     if shutil.which(program) is None and not args.dry_run:
         raise SystemExit(f"{name} ({program}) is not on PATH")
+    if args.library is not None:
+        args.library = args.library.resolve()
+        snapshot = library_snapshot(args.library)
+        if missing := missing_sources(snapshot, [built[case_id] for case_id in wanted]):
+            raise SystemExit(f"the library's snapshot {snapshot.name} lacks the pages "
+                             f"{'; '.join(missing)}: build a snapshot that holds them "
+                             "(scripts/build_library.py, docs/library.md)")
 
     out = RUNS / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)

@@ -14,6 +14,11 @@ The `.gitignore` here keeps every file of a `tree/` in git. Without it, the
 repository's own rules leave out `outputs/`, `data/` and Slurm logs at any
 depth, and until 30 October 2026 they left out the cases' evidence too.
 
+The knowledge cases E19–E21 (16 November 2026) hold a `case.toml` only: the
+request carries their evidence, and `library` names the reference library's
+sources their answer is on, such as `pytorch` or `cuda/12.5.0`, as folders of a
+snapshot's `text/`.
+
 The constructed cases E11–E14 and E16–E18 have folders since 29 October 2026.
 Their files were made up to give the evidence each case describes, and the
 values they need, such as the stand-in paths in `[env]`, only have to be set.
@@ -29,7 +34,13 @@ python3 scripts/run_cases.py E11 E12 --runs 3
 python3 scripts/run_cases.py --all --runs 3
 python3 scripts/run_cases.py --all --runs 1 --dry-run
 python3 scripts/run_cases.py --all --runs 3 --codex
+python3 scripts/run_cases.py E19 E20 E21 --runs 3 --library /fast/AG_Kudryashev/cryoet-library
 ```
+
+A run has no reference library unless `--library` names the folder of its
+snapshots. Then every run gets the snapshot `current` names there, as a person's
+session would, and its record and the grading sheet name it. The runner refuses
+a snapshot that lacks the sources a case's `library` lists.
 
 Each run starts the assistant through `scripts/assistant`, headless, with the
 case's request as the prompt. It works in its own copy of this repository's

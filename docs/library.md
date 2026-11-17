@@ -511,10 +511,16 @@ backend version is part of a run's fingerprint.
   - Candidates go in [eval_cases.md](agent/eval_cases.md), which runs cannot
     read. This file is copied into the eval sandboxes, so it names no case's
     answer.
-- **Arms.** Model (Claude, an open-weight model) × library (off, on).
+- **Arms.** Model (Claude, an open-weight model) × library (off, on). The
+  library arm is `scripts/run_cases.py --library <folder>`, which gives every run
+  the snapshot `current` names there. Without the option, runs have no library.
 - **Regression.** The existing cases also run with the library on, because a
   model may start quoting manuals instead of reading the evidence.
-- **Records.** A run record names the snapshot, as it names the commit.
+- **Records.** A run record names the snapshot, as it names the commit, and the
+  grading sheet says which arm it is.
+- **Written.** Three knowledge cases were written on 16 November 2026, for the
+  pages of NVIDIA, CuPy and PyTorch. Each names the sources its answer is on,
+  and the runner refuses a snapshot that lacks them.
 
 ## How others do it
 
@@ -586,7 +592,3 @@ Parked on 2026-11-05, while the work is at MDC.
 4. Whether MDC's cluster has a wiki of its own (Munich's: see
    [Later](#later)).
 5. Whether Claude Code's Bash sandbox runs on the login nodes.
-6. The knowledge cases for NVIDIA's, CuPy's and PyTorch's pages (2026-11-16):
-   questions whose answer is only on them, such as which driver a CUDA 13
-   build needs, whether a CUDA 13 build runs on a V100, or where CuPy takes its
-   CUDA headers from. Proposed, not written.

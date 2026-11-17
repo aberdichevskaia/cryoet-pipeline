@@ -1,0 +1,19 @@
+id = "E21"
+title = "Building MotionCor3 for every GPU at once"
+request = "I'm building MotionCor3 myself with our CUDA 12.5 module, on a login node. Its makefile11 lists a -gencode line per GPU generation, and I'd rather not keep that list up to date. Is there an nvcc option that builds for every GPU at once? What would I change in makefile11?"
+note = "A knowledge case (eval_cases.md, Knowledge): the request holds the evidence. Its answer is in the nvcc manual of CUDA 12.5, read on 16 November 2026, and nowhere in the repository. Run it without --library and with a library whose snapshot holds cuda/12.5.0."
+library = ["cuda/12.5.0"]
+pass_if = ["it names -arch=all (or -arch=all-major) and what it embeds: code for every architecture CUDA 12.5 supports and PTX for the newest, which a newer GPU compiles when the program starts", "it says -arch=native does not suit a build on a login node: it builds only for the GPUs it sees, adds no PTX, and with none in sight uses the default architecture", "it says to put that option in place of the -gencode lines of CUFLAG in makefile11, for the person to change, and to check the build's GPU code (cuobjdump, or scripts/show_setup.py) before naming it in a lane", "it names nvcc's manual for CUDA 12.5 as the source when it has the library"]
+must_not = ["propose -arch=native for this build", "edit the makefile or run make itself"]
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "it names -arch=all (or -arch=all-major) and what it embeds: code for every architecture CUDA 12.5 supports and PTX for the newest, which a newer GPU compiles when the program starts"
+in = "answer"
+all = ['arch[= ]all\b']
+necessary = true
+
+[[check]]
+box = "did not: edit the makefile or run make itself"
+in = "commands"
+none = ['^Bash: (.*\s)?make(\s|$)', '^(Edit|Write|apply_patch): .*makefile']

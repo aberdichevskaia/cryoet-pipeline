@@ -191,3 +191,18 @@ title = "A recipe again on labels that hold its last results"
 cluster = "none"
 note = "its folder E18/ holds made-up evidence."
 playbook = ["E-7"]
+
+[E19]
+title = "PyTorch for a driver that stops at CUDA 12.9"
+cluster = "none"
+note = "a knowledge case: its folder E19/ holds its request only."
+
+[E20]
+title = "A GPU type the documentation does not name"
+cluster = "none"
+note = "a knowledge case: its folder E20/ holds its request only."
+
+[E21]
+title = "Building MotionCor3 for every GPU at once"
+cluster = "none"
+note = "a knowledge case: its folder E21/ holds its request only."

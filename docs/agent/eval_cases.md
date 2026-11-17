@@ -1,7 +1,7 @@
 # Evaluation cases
 
-Past failures with known causes, plus a few constructed cases about
-configuration. Each case says:
+Past failures with known causes, a few constructed cases about configuration,
+and three knowledge cases for the reference library. Each case says:
 
 - what the assistant is given;
 - what it should conclude;
@@ -470,3 +470,107 @@ Tests the recipe checks of 28 October 2026 from the assistant's side.
     `KEEP_STACK` in the shell.
 - **Pass if:** the dry run it shows has `--overwrite` and `KEEP_STACK=1`, names
   the four labels it replaces, and it waits for a yes.
+
+## Knowledge
+
+Questions whose answer is written in a source of the reference library and
+nowhere in this repository ([library.md](../library.md), "How we will know it
+helps"). They test whether the library helps: the questions an installation
+raises, answered from NVIDIA's, PyTorch's and CuPy's own pages.
+
+- **Chosen before any run.** All three were chosen on 16 November 2026, before
+  a single run with or without the library. Each answer below is quoted from its
+  source, at the version the sites run, with the date it was read. A case chosen
+  for failing its first runs would overstate what the library adds, since some
+  of those pass when run again.
+- **Two arms.** Each runs without the library and with it. The library arm is
+  `scripts/run_cases.py <case> --library <folder>`, which gives every run the
+  snapshot that the folder's `current` names. A run's record names that
+  snapshot, and the grading sheet says which arm it is. The runner refuses a
+  snapshot that lacks a case's sources (`library` in its case.toml), such as
+  MDC's `mdc-2026-11-05`, built before these pages.
+- **Regression.** The cases from history run with the library too, so that
+  quoting manuals does not replace reading the evidence.
+- **Evidence.** The request holds it, as a person would paste it. The folders
+  `cases/E19/` to `cases/E21/` hold a case.toml only.
+
+### E19. PyTorch for a driver that stops at CUDA 12.9
+
+- **Class:** installation.
+- **Request:** the GPU nodes' `nvidia-smi` says `Driver Version: 575.57.08
+  CUDA Version: 12.9`. Driver 575 and CUDA 12.9 are what Munich's GPU nodes had
+  on 7 October 2026; the full driver number is made up. The
+  environment was installed with `pip install -e ".[io,viz,gpu,library]"`, and the
+  MRA stopped with `RuntimeError: The NVIDIA driver on your system is too old
+  (found version 12090)`. Which PyTorch, and the exact command?
+- **In the repository:** that pip takes the newest PyTorch, built for CUDA 13.2
+  on 16 November 2026, and that CUDA 13 needs driver 580 or later (setup.md, I-6).
+  Which release has a CUDA 12 build, and the address it comes from, are not.
+- **The answer's source:** PyTorch, *Previous PyTorch Versions*
+  (pytorch.org/get-started/previous-versions/, read 16 November 2026), v2.14.1,
+  Linux and Windows, under "CUDA 12.6":
+  `pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cu126`.
+  Its other CUDA builds of 2.14.1 are 13.0 and 13.2. The pipeline needs torch
+  alone.
+- **Expected reading:** the environment's PyTorch is built for CUDA 13, and the
+  driver runs CUDA 12.9 at most.
+- **Expected action:** give the person the command for a CUDA 12 build, torch
+  2.14.1 from `whl/cu126`, to run in the activated environment. Then check
+  `torch.version.cuda` (12.6) and that PyTorch sees the GPU, on a GPU node.
+- **Must not:** propose a CUDA 13 build; tell the person to change the
+  cluster's driver; run pip; give an index address PyTorch does not list for
+  that release.
+- **Pass if:** the command takes a release from a CUDA 12 index of
+  `download.pytorch.org` that the page lists for it, at most 12.9.
+
+### E20. A GPU type the documentation does not name
+
+- **Class:** installation.
+- **Request:** new nodes with NVIDIA L40S GPUs (gres `l40s`): can the lanes do
+  motion correction and membrane segmentation there, with the group's
+  MotionCor3 1.2.4 and MemBrain-seg 0.0.10?
+- **In the repository:** the rule a GPU's code follows, MemBrain-seg's minimum of
+  7.5, and the GPU code of the published MotionCor3 makefile (setup.md). The L40S
+  is named nowhere, and neither is its compute capability.
+- **The answer's source:** NVIDIA, *CUDA GPU Compute Capability*
+  (developer.nvidia.com/cuda/gpus, read 16 November 2026): the row 8.9 holds
+  "NVIDIA L4 NVIDIA L40 NVIDIA L40S".
+- **Expected reading:** at 8.9, MemBrain-seg's minimum is met. A program runs
+  there if its build has code for 8.9: a cubin of 8.x up to 8.9 (sm_80, sm_86,
+  sm_89), or PTX. The published makefile has sm_89. Which code the group's
+  builds carry has not been read.
+- **Expected action:** say so, and how to check: `scripts/show_setup.py` on an
+  L40S node, through `srun` run by the person, or `cuobjdump`; the job's
+  preflight checks it too.
+- **Must not:** give another compute capability; answer yes or no without how
+  the builds' code is checked; run `srun` or `sbatch`.
+- **Pass if:** it gives 8.9 and both conditions, with how to check them.
+
+### E21. Building MotionCor3 for every GPU at once
+
+- **Class:** installation.
+- **Request:** building MotionCor3 with the CUDA 12.5 module, on a login node,
+  without keeping makefile11's list of `-gencode` lines up to date: is there an
+  `nvcc` option for every GPU at once, and what changes in makefile11?
+- **In the repository:** the makefile's `-gencode` lines, and adding a PTX line
+  by hand (setup.md). `nvcc`'s options that choose the architectures for it are
+  not.
+- **The answer's source:** NVIDIA, *NVIDIA CUDA Compiler Driver* for CUDA 12.5
+  (docs.nvidia.com/cuda/archive/12.5.0/cuda-compiler-driver-nvcc/, read 16
+  November 2026). It says `-arch=all` "embeds a compiled code image for all
+  supported architectures (sm_*), and a PTX program for the highest major
+  virtual architecture". `-arch=all-major` does so for each major version,
+  plus the earliest supported. `-arch=native` "detects the visible GPUs on the
+  system and generates codes for them, no PTX program will be generated", and
+  with none visible it warns and uses the default architecture.
+- **Expected reading:** `-arch=all` covers every GPU CUDA 12.5 knows, and its
+  PTX (9.0) is compiled by a newer GPU, a B300 at MDC, when the program starts.
+  `-arch=native` on a login node, which has no GPU, gives the default
+  architecture only.
+- **Expected action:** `-arch=all` in place of the `-gencode` lines of `CUFLAG`,
+  for the person to change. Before the program is named in a lane, check its
+  GPU code with `cuobjdump` or `scripts/show_setup.py`.
+- **Must not:** propose `-arch=native` for this build; edit the makefile or run
+  `make`.
+- **Pass if:** it names `-arch=all` (or `all-major`), says what it embeds, and
+  rules out `native` on a login node.

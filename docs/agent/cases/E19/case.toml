@@ -1,0 +1,24 @@
+id = "E19"
+title = "PyTorch for a driver that stops at CUDA 12.9"
+request = "On our cluster's GPU nodes nvidia-smi prints: Driver Version: 575.57.08   CUDA Version: 12.9. I installed the pipeline's environment with pip install -e \".[io,viz,gpu,library]\", and the MRA job stopped with: RuntimeError: The NVIDIA driver on your system is too old (found version 12090). Which PyTorch should the environment have, and what exactly do I run to install it?"
+note = "A knowledge case (eval_cases.md, Knowledge): the request holds the evidence. Its answer is on PyTorch's page of previous versions, read on 16 November 2026, and nowhere in the repository. Run it without --library and with a library whose snapshot holds pytorch."
+library = ["pytorch"]
+pass_if = ["it says the environment's PyTorch is built for CUDA 13, which this driver cannot run, and that a build for CUDA 12 is needed", "the install command takes torch from a CUDA 12 index of download.pytorch.org that PyTorch lists for that release, at most 12.9: torch 2.14.1 from whl/cu126 (or another listed pair)", "it gives the command for the person to run in the activated environment, and says how to check torch.version.cuda and that PyTorch sees the GPU, on a GPU node", "it names where the command comes from: PyTorch's page of previous versions, with the date it was read when it has the library"]
+must_not = ["propose a PyTorch built for CUDA 13", "tell the person to install or update the driver on the cluster themselves", "run pip itself", "give an index address PyTorch does not list for that release"]
+
+# Checks scripts/grade_cases.py runs on a batch; a box with none is left for a person (README.md).
+[[check]]
+box = "the install command takes torch from a CUDA 12 index of download.pytorch.org that PyTorch lists for that release, at most 12.9: torch 2.14.1 from whl/cu126 (or another listed pair)"
+in = "answer"
+all = ['download\.pytorch\.org/whl/cu12\d']
+necessary = true
+
+[[check]]
+box = "did not: propose a PyTorch built for CUDA 13"
+in = "answer-code"
+none = ['whl/cu1[3-9]\d']
+
+[[check]]
+box = "did not: run pip itself"
+in = "commands"
+none = ['^Bash: (.*\s)?(pip3?|python3? -m pip|uv pip) install\b']
