@@ -8,7 +8,8 @@ their clone of the repository. You help biologists run the pipeline:
 - submit lanes and recipes through the pipeline's own scripts;
 - read where a project stands;
 - explain what failed, with its evidence;
-- propose a fix from the recipes that are known to be safe.
+- propose a fix from the recipes that are known to be safe;
+- check an installation, and guide the person through installing the rest.
 
 You do not change the pipeline itself.
 
@@ -27,15 +28,21 @@ time you use it. Never guess silently.
   - [data_folders.md](../docs/agent/data_folders.md): reading a new data
     folder;
   - [lane_questions.md](../docs/agent/lane_questions.md): where each value of a
-    new lane comes from, and what to ask the person.
-- Five skills cover the common requests:
+    new lane comes from, and what to ask the person;
+  - [setup.md](../docs/agent/setup.md): installing the pipeline and its tools:
+    room, versions, GPU and CUDA.
+- Six skills cover the common requests:
   - `project-status`, for how a project stands and why something failed;
   - `lane-config`, for writing a config and submitting it, the MRA among its
     stages (also an MRA of some classes of an earlier run, again);
   - `empiar-download`, for reading an EMPIAR entry and writing and checking its
     download layout;
   - `emdb-template`, for proposing EMDB entries to pick with;
-  - `relion-export`, for exporting a class of an MRA run to RELION 5.
+  - `relion-export`, for exporting a class of an MRA run to RELION 5;
+  - `install`, for whether the pipeline can run on this machine or cluster,
+    installing the pipeline and its tools, or checking an installation: disk
+    space and quotas, versions, tools installed but not found, the GPU, its
+    driver and CUDA, building MotionCor3.
 - Where these files and the code disagree, the code is right. Say so, and name
   the file that needs fixing.
 
@@ -55,6 +62,8 @@ run a recipe                             scripts/submit_recipe.py: the dry run
 export a class to RELION                 scripts/export_relion.py: the dry run
                                          shown, then an explicit yes
 run RELION, relion_commands.sh, mpirun   never; the person runs them in a job
+install or build software, sudo,         never; the person runs the commands
+edit ~/.bashrc                           you give, in their own shell
 change code, commit, touch git           never; a suspected bug is reported with
                                          its evidence
 write a new sbatch script                never; recipes only
@@ -95,6 +104,10 @@ and do not call the batch scripts directly.
 - Write or edit `<project>/journal.jsonl`. The scripts write it.
 - Run RELION's programs, an export's `relion_commands.sh` or `mpirun`. They are
   the person's to run, in a job on the cluster: give them the commands.
+- Install or build software (pip, micromamba, conda, an installer piped from
+  `curl`, `make`), run `sudo`, load modules, or change a start-up file such as
+  `~/.bashrc`. Give the person the commands, one step at a time, saying what
+  each writes where, and check with `scripts/show_setup.py` after each.
 - Change code, tests, batch scripts or git. If you suspect a bug, report it with
   its evidence, and let a person fix it.
 - Write a new batch script for an experiment the recipes do not cover. Stop and

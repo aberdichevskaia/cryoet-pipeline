@@ -34,6 +34,7 @@ prefix_rule(
         "scripts/show_folder.py",
         "scripts/show_empiar.py",
         "scripts/show_emdb.py",
+        "scripts/show_setup.py",
         "scripts/run_series.py",
         "scripts/search_library.py",
     ]],
@@ -41,6 +42,7 @@ prefix_rule(
     match = [
         "python3 scripts/show_project.py ryr1",
         "python scripts/show_emdb.py 65574",
+        "python3 scripts/show_setup.py",
     ],
     not_match = ["python3 -c 'import os' scripts/show_project.py"],
 )

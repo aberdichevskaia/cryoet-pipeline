@@ -864,6 +864,7 @@ def test_the_skills_are_there():
     assert [path.parent.name for path in SKILLS] == [
         "emdb-template",
         "empiar-download",
+        "install",
         "lane-config",
         "project-status",
         "relion-export",

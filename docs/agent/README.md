@@ -14,6 +14,7 @@ instructions, permission rules and skills are in
 | [playbook.md](playbook.md) | problems met so far, one file per step in [playbook/](playbook/): how to recognise, confirm and fix them |
 | [data_folders.md](data_folders.md) | reading a new data folder with `scripts/show_folder.py`: the main naming schemes first, then field by field |
 | [lane_questions.md](lane_questions.md) | a new lane: where each key's value comes from (data, card, site, rule, person), and the few questions to ask |
+| [setup.md](setup.md) | installing the pipeline and its tools: what goes where and the room it needs, the versions, the GPU and CUDA rules, checked with `scripts/show_setup.py` |
 | [eval_cases.md](eval_cases.md) | past failures with expected answers, to measure the assistant |
 | [templates/](templates/) | what the biologists fill in: instrument and sample cards, playbook entries, failure cases, QC ranges |
 

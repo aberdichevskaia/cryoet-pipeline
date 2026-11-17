@@ -91,6 +91,13 @@ created once, with the series it will ever hold. Series 161 will be processed
 apart from the other four (step 6 below), so all five must be in the project
 from the start.
 
+**The assistant can help with this setup.** It needs only the clone and its
+client: clone, do steps 2 and 3 below, and ask it to check your setup or to take
+you through it. It checks with `scripts/show_setup.py`, which writes nothing:
+the room where the environments, downloads and temporary files go, the
+versions of the tools, and the GPU, its driver and CUDA. You run each install
+command yourself, in your own terminal, and it checks after each.
+
 ## 2. Install the client and sign in (once)
 
 Install the client your account is for, Claude Code or Codex.

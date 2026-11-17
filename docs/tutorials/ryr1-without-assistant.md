@@ -137,6 +137,13 @@ Every tool should show a version, pytom-match-pick 0.14.0 among them, and the
 last lines should say `Problems: none`. If a tool is missing, its variable is
 not set in this shell: check the `.bashrc` lines at the top of this step.
 
+`python3 scripts/show_setup.py` checks more, and writes nothing too: the room
+where the environments, downloads and temporary files go, how PyTorch was
+built, and which of the cluster's GPUs each program can run on. Its last lines
+should say `Problems (0): none`. On a GPU node it also checks the driver
+against each program's CUDA
+([docs/agent/setup.md](../agent/setup.md), "GPU and CUDA").
+
 **Every time you come back**, start the same way: a login node, the clone's
 root, the environment active.
 
