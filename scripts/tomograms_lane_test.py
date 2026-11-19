@@ -22,13 +22,17 @@ What is known, and what `check` sets against it:
   tomogram voxel for voxel. The same tomogram reversed in z, which the other
   answer of the mirror pair would give, is the control. Measured on EMPIAR-10164
   TS_01 at bin8 on the Mac, 17 November 2026: a largest difference of 0, against
-  35 for the reversed one;
+  35 for the reversed one; in Munich, 19 November, on the October project's
+  TS_01, 0 against 354;
 - the import's wedge check, which has to agree, or to say that a symmetric range
   leaves it blind to the side;
-- the picks: pytom on the same volume with the same template finds the source
-  lane's picks again, apart from what the import cannot carry, the CTF weighting
-  and the dose. They are matched within a radius both ways, and set against the
-  same picks mirrored in z and against random positions in the picks' region.
+- the picks, matched with the source lane's within a radius both ways, and set
+  against the same picks mirrored in z and against random positions in the
+  picks' region. The two searches need not be the same: the import carries no
+  CTF weighting and no dose, and the source picks were made with the lane as it
+  stood then. So the picks are reported, with what the two pytom jobs differ in
+  besides the tomogram, read from their job files, the template and its mask
+  compared as data, since each project keeps its own.
 
 The volume and the wedge decide the exit status: 0 when both hold, 1 when either
 fails, 2 when the lane has not run far enough to tell. The picks are reported.
@@ -47,11 +51,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import mrcfile  # type: ignore[import-untyped]
 import numpy as np
 import zarr
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+import repick  # noqa: E402
 import run_series  # noqa: E402
 import show_imports  # noqa: E402
 
@@ -69,6 +75,8 @@ MATCH_RADIUS_PX = 2.0
 PYTOM_KEYS = ("pytom_create_template", "pytom_create_mask", "pytom_match_template",
               "pytom_extract_candidates")
 BLOCK = 32
+# What the picks record of their search and pytom's job file does not hold.
+RECORDED_SEARCH = ("pytom_number_of_particles", "pytom_volume_split", "tomogram_mask_coverage")
 
 
 class TestRefused(SystemExit):
@@ -331,6 +339,44 @@ def chance(others: np.ndarray, radius: float) -> float:
     return 1.0 - math.exp(-density * 4.0 / 3.0 * math.pi * radius**3)
 
 
+def same_data(first: str, second: str) -> bool:
+    """Whether two files a search read hold the same data: MRC files by their arrays,
+    so that a header alone does not count, other files by their bytes."""
+
+    one, other = Path(first), Path(second)
+    if not (one.is_file() and other.is_file()):
+        return False
+    if one.suffix == other.suffix == ".mrc":
+        return bool(np.array_equal(mrcfile.read(one), mrcfile.read(other)))
+    return one.read_bytes() == other.read_bytes()
+
+
+def search_differences(here: Artifact, there: Artifact) -> list[str] | None:
+    """What the two pytom searches differ in besides the tomogram; None without both
+    job files.
+
+    The template and its mask are files of each project, so two paths that hold the
+    same data are the same template. What the picks record and the job file does
+    not, such as the volume split and the search mask's coverage, is set side by
+    side too.
+    """
+
+    lines = repick.search_differences(here, there, names=("here", "source"))
+    if lines is None:
+        return None
+    jobs = [json.loads(Path(str(picks.parameters["pytom_job_json_path"])).read_text())
+            for picks in (here, there)]
+    same = {key for key in set(jobs[0]) & set(jobs[1])
+            if isinstance(jobs[0][key], str) and isinstance(jobs[1][key], str)
+            and same_data(jobs[0][key], jobs[1][key])}
+    lines = [line for line in lines if line.split(":", 1)[0] not in same]
+    for key in RECORDED_SEARCH:
+        ours, theirs = here.parameters.get(key), there.parameters.get(key)
+        if ours != theirs:
+            lines.append(f"{key}: {json.dumps(ours)} (here) vs {json.dumps(theirs)} (source)")
+    return lines
+
+
 def check(test: Path, radius: float) -> int:
     record = json.loads((test / RECORD).read_text())
     _, cfg = run_series.read_config(test / LANE)
@@ -360,8 +406,8 @@ def check(test: Path, radius: float) -> int:
 
     source_registry = ArtifactRegistry.load(ROOT / record["source_project"] / "artifacts.json")
     source = source_registry.get(record["source_tomogram"])
-    same, mirrored = compare_volumes(zarr.open(str(tomogram.path), mode="r"),
-                                     zarr.open(str(source.path), mode="r"))
+    source_volume = zarr.open_array(str(source.path), mode="r")
+    same, mirrored = compare_volumes(zarr.open(str(tomogram.path), mode="r"), source_volume)
     if same == 0.0:
         volume = "identical"
     elif mirrored == 0.0:
@@ -380,9 +426,10 @@ def check(test: Path, radius: float) -> int:
         print("  picks       none yet: the GPU stage has not run")
         print(f"verdict: {'the import holds' if holds else 'the import FAILS'}; picks to come")
         return 0 if holds else 1
+    source_picks = source_registry.get(record["source_picks"])
     here = centres(found[0])
-    there = centres(source_registry.get(record["source_picks"]))
-    depth = int(source.shape[0])
+    there = centres(source_picks)
+    depth = int(source_volume.shape[0])
     mirror = here * np.array([1.0, 1.0, -1.0]) + np.array([0.0, 0.0, depth - 1.0])
     ours, theirs = matched(here, there, radius), matched(there, here, radius)
     print(f"  picks       {len(here)} here, {len(there)} in the source lane; within "
@@ -391,8 +438,15 @@ def check(test: Path, radius: float) -> int:
     mirrored_share = matched(mirror, there, radius) / len(here)
     print(f"              against: these mirrored in z {mirrored_share:.1%}, random positions "
           f"in the source picks' region {chance(there, radius):.1%}")
-    print("              picked here without CTF weighting and without dose, which the import "
-          "does not carry; the source lane had them")
+    differing = search_differences(found[0], source_picks)
+    if differing is None:
+        print("              the two pytom searches not compared: a job file is missing")
+    elif not differing:
+        print("              the two pytom searches differ in nothing but the tomogram's file")
+    else:
+        print("              the two pytom searches differ, besides the tomogram, in:")
+        for line in differing:
+            print(f"                {line}")
     stacks = [artifact for artifact in registry.by_kind(ArtifactKind.PARTICLE_STACK)
               if artifact.variant == variant and artifact.covers(series)]
     if stacks:

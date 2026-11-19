@@ -93,6 +93,44 @@ def _import_step(test: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True, text=True, env={**os.environ, "PATH": path}, cwd=ROOT)
 
 
+def _search(folder: Path, seed: int, *, weighted: bool, mask_value: float = 1.0,
+            label: bytes = b"") -> Path:
+    """pytom's job file of a search, with its template and mask in `folder`."""
+
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, value in (("template.mrc", 1.0), ("mask.mrc", mask_value)):
+        with mrcfile.new(folder / name, overwrite=True) as mrc:
+            mrc.set_data(np.full((4, 4, 4), value, dtype=np.float32))
+            if label:
+                mrc.header.label[0] = label.ljust(80)
+                mrc.header.nlabl = 1
+    job = folder / "TS_01_job.json"
+    job.write_text(json.dumps({
+        "template": str(folder / "template.mrc"), "mask": str(folder / "mask.mrc"),
+        "tomogram": str(folder / "TS_01.mrc"), "low_pass": 20.0,
+        "random_phase_correction": True, "rng_seed": seed,
+        "ts_metadata": {"tilt_angles": [-60.0, 0.0, 50.0],
+                        "dose_accumulation": [0.0, 3.0, 6.0] if weighted else None,
+                        "ctf_data": [{"defocus": 3.0}] if weighted else None}}))
+    return job
+
+
+def _record_search(registry_path: Path, picks_id: str, job: Path, coverage: float) -> None:
+    registry = ArtifactRegistry.load(registry_path)
+    picks = registry.get(picks_id)
+    registry.remove(picks_id)
+    registry.add(picks.model_copy(update={"parameters": {
+        **picks.parameters, "pytom_job_json_path": str(job), "tomogram_mask_coverage": coverage}}))
+    registry.commit(registry_path)
+
+
+def _differences(shown: str) -> list[str]:
+    """The lines check lists under the two searches' differences."""
+
+    return [line.strip() for line in shown.splitlines()
+            if line.startswith(" " * 16) and not line.startswith(" " * 17)]
+
+
 def test_prepare_writes_a_lane_of_the_source_settings_and_an_imod_turned_volume(
     tmp_path: Path, source: dict[str, Any]
 ) -> None:
@@ -169,6 +207,41 @@ def test_the_check_finds_the_imported_volume_identical_and_the_picks_again(
     count = source["count"]
     assert f"{count} here, {count} in the source lane; within 2 voxels: {count} of these (100.0%)" \
         in shown
+    assert "the two pytom searches not compared: a job file is missing" in shown
+
+    # With their job files: here neither CTF nor dose, and pytom's own seed. The
+    # template and its mask, the same data in each project's own file, are not named.
+    source_registry = source["project"] / "artifacts.json"
+    _record_search(source_registry, "TS_01:picks:bin8",
+                   _search(tmp_path / "source-search", 1, weighted=True), 0.25)
+    _record_search(project / "artifacts.json", "TS_01:picks:pytom:bin8",
+                   _search(tmp_path / "test-search", 2, weighted=False), 0.25)
+    assert lane_test.check(test, 2.0) == 0
+    shown = capsys.readouterr().out
+    assert "the two pytom searches differ, besides the tomogram, in:" in shown
+    assert _differences(shown) == [
+        "rng_seed: 2 (here) vs 1 (source)",
+        'ts_metadata.ctf_data: null (here) vs [{"defocus": 3.0}] (source)',
+        "ts_metadata.dose_accumulation: null (here) vs [0.0, 3.0, 6.0] (source)"]
+
+    # A mask of other data is named, and so is a search mask of another coverage.
+    job = _search(tmp_path / "test-search", 2, weighted=False, mask_value=0.5)
+    _record_search(project / "artifacts.json", "TS_01:picks:pytom:bin8", job, 0.3)
+    assert lane_test.check(test, 2.0) == 0
+    listed = _differences(capsys.readouterr().out)
+    assert [line.split(":")[0] for line in listed] == [
+        "mask", "rng_seed", "ts_metadata.ctf_data", "ts_metadata.dose_accumulation",
+        "tomogram_mask_coverage"]
+    assert listed[-1] == "tomogram_mask_coverage: 0.3 (here) vs 0.25 (source)"
+
+    # The same searches, though the source's files carry another header: nothing but
+    # the tomogram's file.
+    _record_search(source_registry, "TS_01:picks:bin8",
+                   _search(tmp_path / "source-search", 2, weighted=False, mask_value=0.5,
+                           label=b"written in October"), 0.3)
+    assert lane_test.check(test, 2.0) == 0
+    assert "the two pytom searches differ in nothing but the tomogram's file" in \
+        capsys.readouterr().out
 
 
 def test_the_other_answer_of_the_mirror_pair_is_told_apart(

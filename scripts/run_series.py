@@ -231,6 +231,8 @@ TILTALIGN_FINE_KEYS = frozenset({"robust_fitting", "auto_prune_outliers",
 RUN_ON_REAL_DATA = frozenset({
     ("stack", "patches", "no membranes"),  # ribo-bin8.toml, EMPIAR-11538
     ("frames", "beads", "membranes"),  # gag-bin8.toml, EMPIAR-10164; the RyR1 lanes at MDC
+    # scripts/tomograms_lane_test.py on gag-bin8.toml's TS_01, Munich, 19 November 2026
+    ("tomograms", "", "membranes"),
 })
 
 # Every key a lane config may set, by section. Keys are read by name, so a

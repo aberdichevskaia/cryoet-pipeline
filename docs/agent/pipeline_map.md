@@ -88,10 +88,18 @@ of EER movies, which `cryoet init` has read since 5 November 2026. A frames
 lane whose `[data] frames` folder holds EER movies counts as an input of its
 own, "EER frames", in each of its four combinations.
 
-Lanes of files made elsewhere (`tomograms`, with or without membranes, `picks`
-and `particles`, since 17 November 2026) have not run on real data either.
-`import-tomogram` and `import-picks` have, by hand on the Mac (EMPIAR-10164 TS_01
-and its Gag picks); `import-particles` only on synthetic particles.
+Of the lanes of files made elsewhere (since 17 November 2026), one has run on
+real data:
+
+- **tomograms + membranes:** the test of a tomograms lane
+  (`scripts/tomograms_lane_test.py`) on `gag-bin8.toml`'s TS_01, in Munich on
+  19 November 2026, from the import to the extraction. The volume was that
+  series' tomogram as IMOD's tilt wrote it, turned by `clip rotx` as etomo hands
+  one over; it came from this pipeline, so no colleague's volume has run yet.
+
+`tomograms, no membranes`, `picks` and `particles` have not. `import-picks` has
+run by hand on the Mac (EMPIAR-10164 TS_01 and its Gag picks), and
+`import-particles` only on synthetic particles.
 
 `scripts/submit_lanes.py` warns a lane of any combination not listed here that
 it is the first, in its dry run and when it submits. The list is

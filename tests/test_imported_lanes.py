@@ -247,6 +247,8 @@ def test_a_lane_of_imported_files_is_its_own_combination():
     assert text(combination(tomograms_lane(segment={"model": "x"}))) == "tomograms + membranes"
     assert text(combination(picks_lane())) == "picks"
     assert text(combination(particles_lane())) == "particles"
+    # The test of a tomograms lane ran one with membranes in Munich on 19 November 2026.
+    assert combination(tomograms_lane(segment={"model": "x"})) in run_series.RUN_ON_REAL_DATA
     assert not {combination(tomograms_lane()), combination(picks_lane()),
                 combination(particles_lane())} & run_series.RUN_ON_REAL_DATA
 

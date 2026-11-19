@@ -602,7 +602,8 @@ views (−53.5..+63.8), and on the 24 views up to +16°.
 - `relion5`'s answer was not measured again; that needs RELION, which ran here on
   9 November.
 - Lanes that take tomograms, picks or particles are built (item 6, at the end), and
-  the exit twin (Exits, below); none has run on real data.
+  the exit twin (Exits, below). Of them only a lane of tomograms with membranes has
+  run on real data, the test in Munich on 19 November (item 6).
 - Nothing has run on max or on a colleague's volume yet.
 
 **import-picks, built 16 November, committed (519d3ac).**
@@ -944,7 +945,9 @@ Dynamo 1.1.511 on the Mac).
   - tomogram numbers of a Dynamo table that no series is given, and series
     without rows.
 
-  These lanes are warned, as every combination that has not run on real data is.
+  These lanes are warned, as every combination that has not run on real data is;
+  a lane of tomograms with membranes no longer is, since the Munich test of 19
+  November (below).
 - **The reader** ([show_imports.py](../scripts/show_imports.py)), read-only, as
   `show_folder.py` is for frames. It gives each answer the files hold with what
   it rests on, and leaves the rest as commented questions in a `[data]`
@@ -1023,9 +1026,12 @@ Dynamo 1.1.511 on the Mac).
   - the import's wedge check has to agree, or to say a symmetric range leaves it
     blind to the side;
   - the picks are matched with the source lane's within 2 voxels both ways,
-    against the same picks mirrored in z and random positions. The import carries
-    no CTF weighting and no dose, which the source lane had, so they are reported,
-    not judged.
+    against the same picks mirrored in z and random positions. The two searches
+    need not be the same: the import carries no CTF weighting and no dose, and
+    the source picks were made with the lane as it stood then. So the picks are
+    reported, not judged, with what the two pytom jobs differ in besides the
+    tomogram, read from their job files; the template and its mask are compared
+    as data, since each project keeps its own.
 
   Measured on EMPIAR-10164 TS_01 at bin8 on the Mac, 17 November, by hand: `clip
   rotx` of the project's `TS_01_fine_bin8.rec`, imported as `imod-standard`, is
@@ -1041,12 +1047,26 @@ Dynamo 1.1.511 on the Mac).
     too. Prepared on 19 November: the volume, 928 × 960 × 301 at 5.4 Å with angles
     −54.74..+62.48°, is read as `imod-standard` by its history, and the wedge
     agrees (fitted centre +3.5°, against +3.9° declared and −3.9° for the mirror).
-    The dry run passed; the lane's jobs have not run yet;
+    The dry run passed, and the lane ran the same day: the import in 1.5 min (job
+    43675764), then the GPU stage from the segmentation to the extraction (job
+    43675765, done at 13:41). `check`: the imported volume is the source's
+    tomogram with a largest difference of 0, against 354.145 for it reversed in
+    z, and the import's wedge check agrees, so the import holds. Picks: 2395
+    here, 2064 in the source lane, 684 within 2 voxels both ways, 28.6 % of these
+    and 33.1 % of the source's, against 0.6 % for these mirrored in z and 0.0 %
+    for random positions: the same particles in part, far above chance, and not
+    the same set. What the two searches differ in was not read on that run;
+    `check` lists it from their job files since. 1974 of the 2395 were
+    extracted, 421 being too close to the edge for the 64 px box;
   - at MDC, `--lane configs/lanes/ryr1-bin8.toml --series 039`. Gag TS_01 is in
     Munich and on the Mac only.
 - **Not built, or not checked.**
-  - Nothing has run on max, and no lane of these inputs on real data.
+  - Nothing has run on max. Of these inputs only a lane of tomograms with
+    membranes has run on real data, the Munich test; a lane of tomograms without
+    membranes, of picks or of particles has not.
   - The MRA reading `angles: none`: a picks lane without poses starts the MRA at
     zeros, which its global rounds search over.
   - Labels of IMOD versions other than 5.1.12, and of denoising programs.
-  - The README's list of inputs: it holds another session's uncommitted edits.
+  - The README's list of inputs, and its list of the combinations that have run
+    on real data, which names the first two only: the README holds another
+    session's uncommitted edits.
