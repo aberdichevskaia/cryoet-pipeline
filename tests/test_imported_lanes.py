@@ -37,6 +37,7 @@ from test_picks_import import (  # noqa: F401  (scene is a fixture)
 from test_run_series_lanes import _assert_valid_commands
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
+from cryoet_pipeline.backends.dynamo_search import dynamo_ytilt
 from cryoet_pipeline.models import ArtifactKind
 from cryoet_pipeline.particle_sources import registry_particles
 from cryoet_pipeline.particles_import import import_particles
@@ -407,12 +408,19 @@ def test_a_picks_lane_runs_from_its_files_to_the_particles_the_mra_reads(
     assert stack.variant == "bin8"
     assert {artifact.id for artifact in registry.not_derived_lineage(stack.id)} == {
         "TS_01:tomogram:imported:bin8", "TS_01:picks:imported:bin8"}
-    run = registry_particles(project, "bin8", ["TS_01"], log=lambda _: None)
+    logged: list[str] = []
+    run = registry_particles(project, "bin8", ["TS_01"], log=logged.append)
     # Dynamo's column 24 holds the pick plus 0.5; the stack's STAR keeps three decimals.
     picked = run.table[:, 23:26] - 0.5
     order = np.lexsort(picked.T[::-1])
     expected = scene["centres"][np.lexsort(scene["centres"].T[::-1])]
     np.testing.assert_allclose(picked[order], expected, atol=1e-3)
+    # The MRA's wedge is the imported tomogram's own angles, as Dynamo's ytilt, and
+    # not a manifest's: an imported series has none of its own.
+    assert (f"TS_01 particles: wedge {LOW:+.1f} to {HIGH:+.1f} deg, from the "
+            "reconstruction's solved angles") in logged, logged
+    np.testing.assert_array_equal(run.table[:, 13:15],
+                                  np.tile(dynamo_ytilt((LOW, HIGH)), (len(run.table), 1)))
 
 
 def test_a_particles_lane_imports_its_table_one_series_at_a_time(

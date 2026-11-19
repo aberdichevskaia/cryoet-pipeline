@@ -4,9 +4,9 @@ Drafted 2026-11-15, revised and agreed 2026-11-16: the same questions for every
 case, two of them answered from lists that hold only measured answers,
 measurements as checks of the answers, the assistant for the long tail, and the
 six decisions under Decided. Order of work items 2 to 5, the imports of
-tomograms, picks and particles and the exits, are built and committed; item 6,
-the lanes of these inputs and the assistant's reader of their files, is built
-(Status, at the end).
+tomograms, picks and particles and the exits, are built and committed; so is item
+6, the lanes of these inputs and the assistant's reader of their files, and a
+lane of tomograms has run on real data, in Munich (Status, at the end).
 
 ## Purpose
 
@@ -493,7 +493,8 @@ unchanged.
    record. Built 16 November, committed (95d87f5; Status below).
 6. Lane inputs `tomograms`, `picks` and `particles`, and the assistant's readers
    that propose the declarations from the files, as `show_folder.py` does for
-   frames. Built 17 November, uncommitted (Status below).
+   frames. Built 17 November, committed (50c5312, d8a4dca, 6f1a004, b738b28);
+   a lane of tomograms ran in Munich on 19 November (Status below).
 7. Then, as asked: the orientations `aretomo`, `warp` and `cz-portal`, and the
    picks of RELION 3/4, Warp and copick, each once measured; alignment, CTF,
    segmentation and even/odd imports; stacks without an mdoc.
@@ -535,9 +536,11 @@ All six agreed on 16 November.
 
 ## Status
 
-17 November 2026. Order of work items 2 to 5 are built, tested on the Mac and
+19 November 2026. Order of work items 2 to 5 are built, tested on the Mac and
 committed (dc75610; 519d3ac, 231a730, 5bc5491, 97a64c2; 62430de; 95d87f5). Item 6
-is built and uncommitted (Lanes and the reader, at the end). None has run on max.
+is built and committed (50c5312), and a lane of tomograms with membranes ran on
+real data in Munich on 19 November (Lanes and the reader, at the end). None has
+run on max.
 
 **Built.**
 
@@ -905,7 +908,7 @@ Dynamo 1.1.511 on the Mac).
   - A methods record of an MRA run read from an export folder: its lineage is in
     the registry the export came from.
 
-**Lanes and the reader, built 17 November, uncommitted** (Order of work item 6).
+**Lanes and the reader, built 17 November, committed** (Order of work item 6).
 
 - **Three lane inputs** ([run_series.py](../scripts/run_series.py)). `[lane] input`
   takes `tomograms`, `picks` and `particles` beside `frames` and `stack`. The
@@ -1002,7 +1005,9 @@ Dynamo 1.1.511 on the Mac).
 - **Tests.**
   - `tests/test_imported_lanes.py`, 30. A picks lane runs with `run_series.py
     --execute`: an MRC in IMOD's standard orientation and pytom's picks in it, to
-    the particles the MRA reads, at the particles' centres to 1e-3 voxel. A
+    the particles the MRA reads, at the particles' centres to 1e-3 voxel, with
+    the wedge from the imported tomogram's own angles as Dynamo's ytilt (two
+    mutants caught: the manifest's angles, and the range not negated). A
     particles lane imports its table series by series, and the whole table after
     it is already imported. A mutant that drops the orientation answer is refused
     by the import's wedge check.
@@ -1055,15 +1060,30 @@ Dynamo 1.1.511 on the Mac).
     here, 2064 in the source lane, 684 within 2 voxels both ways, 28.6 % of these
     and 33.1 % of the source's, against 0.6 % for these mirrored in z and 0.0 %
     for random positions: the same particles in part, far above chance, and not
-    the same set. What the two searches differ in was not read on that run;
-    `check` lists it from their job files since. 1974 of the 2395 were
-    extracted, 421 being too close to the edge for the 64 px box;
+    the same set. Read from their job files by `check` after a pull the same
+    day, the two searches differ in the template's mask, in pytom's random
+    seed, which random-phase correction draws anew for every search, in the CTF
+    weighting, which only the source had, and in the tilt angles. The source
+    search modelled the wedge from the collected angles, −56.9985..+60.0006°:
+    until 18 October (6b8e3be) pick-particles took the angles of the first
+    aligned stack in the tomogram's lineage that had a tilt file, and not the
+    tomogram's own record. The test's are the angles the tomogram was
+    reconstructed with, −54.74..+62.48°, and the import's wedge check put the
+    volume's centre at +3.5°, against +3.9° for these and +1.5° for the
+    collected ones. Dose weighting was in neither search, and the source picks
+    record no volume split and no count. So the picks differ by at least four
+    things, of which only the CTF weighting is the import's, and this run cannot
+    rank them. 1974 of the 2395 were extracted, 421 being too close to the edge
+    for the 64 px box;
   - at MDC, `--lane configs/lanes/ryr1-bin8.toml --series 039`. Gag TS_01 is in
     Munich and on the Mac only.
 - **Not built, or not checked.**
   - Nothing has run on max. Of these inputs only a lane of tomograms with
     membranes has run on real data, the Munich test; a lane of tomograms without
     membranes, of picks or of particles has not.
+  - The MRA stage of a lane, which the first case wants, has not run on a
+    cluster from any input ([mra_in_lanes.md](mra_in_lanes.md)); the Munich
+    test stopped at the extraction.
   - The MRA reading `angles: none`: a picks lane without poses starts the MRA at
     zeros, which its global rounds search over.
   - Labels of IMOD versions other than 5.1.12, and of denoising programs.
