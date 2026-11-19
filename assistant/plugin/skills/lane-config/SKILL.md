@@ -96,9 +96,12 @@ the repository root.
 
   It gives each answer with what it rests on (the header's history, the wedge
   measured in the volume, pytom's job file, the table's columns) and leaves the
-  rest as commented questions in its fragment. Show the person both, and ask
-  the questions in one message. What was done to the volumes (`processing`) and
-  the series of each tomogram number are always theirs to say. An orientation or
+  rest as commented questions in its fragment. A commented line that already
+  holds a value is a proposal: ask it with that value as the default. Show the
+  person both, and ask the questions in one message. What was done to the
+  volumes (`processing`) and the series of each tomogram number are always
+  theirs to say: the history can show IMOD's CTF correction, but not a denoising
+  or a wedge filling done after the reconstruction. An orientation or
   a format not on the list is refused: say what measuring it needs, as the tool
   does, and stop. A picks lane needs the tomogram's answers too: read the volume
   with `tomograms` as well.

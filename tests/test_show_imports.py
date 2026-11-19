@@ -219,6 +219,77 @@ def test_a_fragment_once_answered_renders_as_a_lane(tmp_path: Path, canonical: n
     assert command[command.index("--orientation") + 1] == "imod-parallel"
 
 
+# As IMOD 5.1.12's ctfphaseflip wrote it on 19 November 2026, here and in Munich.
+CTF = "ctfPhaseFlip: CTF correction with phase flipping only   19-Nov-26  12:20:17"
+
+
+@pytest.mark.parametrize(("labels", "steps"), [
+    ([NEWSTACK, CTF, TILT, ROTX], ["ctf-corrected"]),
+    ([NEWSTACK, TILT, ROTX], None),
+    ([TILT, CTF], None),  # after the reconstruction: not on the views tilt read
+    ([CTF], None),  # a stack's history, no reconstruction in it
+])
+def test_the_history_shows_ctfphaseflip_only_before_tilt(labels, steps):
+    clean = [" ".join(label.split()) for label in labels]
+    assert show_imports.processing_seen(clean)[0] == steps
+
+
+def test_ctf_corrected_is_proposed_from_the_history_and_still_asked(
+    tmp_path: Path, canonical: np.ndarray
+) -> None:
+    for series in ("TS_01", "TS_02"):
+        _volume(tmp_path / f"{series}_rec.mrc", canonical[::-1], [NEWSTACK, CTF, TILT, ROTX])
+        _angles(tmp_path / f"{series}.tlt")
+
+    reading = show_imports.read_tomograms([tmp_path], wedge=False, max_volumes=20)
+
+    (answer,) = [one for one in reading.answers if one.key == "processing"]
+    assert answer.asked and answer.value == ["ctf-corrected"]
+    assert "a denoising or a wedge filling" in answer.question
+    # Kept by uncommenting the line; the question stays a comment on it.
+    line = next(text for text in show_imports.fragment(reading).splitlines()
+                if text.startswith("# processing = "))
+    assert tomllib.loads(line[2:])["processing"] == ["ctf-corrected"]
+
+    # One volume without the label: nothing is proposed, and the count is said.
+    _volume(tmp_path / "TS_02_rec.mrc", canonical[::-1], [NEWSTACK, TILT, ROTX])
+    reading = show_imports.read_tomograms([tmp_path], wedge=False, max_volumes=20)
+    (answer,) = [one for one in reading.answers if one.key == "processing"]
+    assert answer.value is None and "in the history of 1 of 2 volumes" in answer.question
+
+
+@pytest.mark.skipif(any(_imod(name) is None for name in ("ctfphaseflip", "tilt", "clip")),
+                    reason="IMOD is not installed")
+def test_imods_ctfphaseflip_then_tilt_leave_the_history_the_reader_reads(tmp_path: Path):
+    """As etomo runs them: the stack phase-flipped, reconstructed, turned by clip rotx."""
+
+    rng = np.random.default_rng(1)
+    with mrcfile.new(tmp_path / "ts.st") as mrc:
+        mrc.set_data(rng.normal(size=(11, 64, 64)).astype(np.float32))
+        mrc.voxel_size = 10.0
+    angles = [float(a) for a in range(-50, 51, 10)]
+    _angles(tmp_path / "ts.tlt", angles)
+    # IMOD's defocus file, version 2: views, angles and defocus in nm per line.
+    (tmp_path / "ts.defocus").write_text("".join(
+        f"{view} {view} {angle:.1f} {angle:.1f} 3000.0" + (" 2" if view == 1 else "") + "\n"
+        for view, angle in enumerate(angles, start=1)))
+    for command in (
+        ["ctfphaseflip", "-InputStack", "ts.st", "-OutputFileName", "ctf.st", "-AngleFile",
+         "ts.tlt", "-DefocusFile", "ts.defocus", "-Voltage", "300", "-SphericalAberration",
+         "2.7", "-AmplitudeContrast", "0.07", "-PixelSize", "1.0", "-DefocusTol", "200",
+         "-InterpolationWidth", "15"],
+        ["tilt", "-InputProjections", "ctf.st", "-OutputFile", "ctf.rec", "-TILTFILE", "ts.tlt",
+         "-THICKNESS", "24"],
+        ["clip", "rotx", "ctf.rec", "TS_01_rec.mrc"],
+    ):
+        subprocess.run(command, cwd=tmp_path, check=True, capture_output=True)
+
+    item = show_imports.read_volume(tmp_path / "TS_01_rec.mrc", wedge=False)
+
+    assert item["processing_seen"]["steps"] == ["ctf-corrected"]
+    assert item["history"]["orientation"] == "imod-standard"
+
+
 # --- Picks ---------------------------------------------------------------------------
 
 

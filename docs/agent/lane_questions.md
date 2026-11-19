@@ -152,7 +152,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[data] pixel_size_angstrom` | card | unset: the movie headers give it. Set it only to override a header known to be wrong, and name what says so |
 | `[data] tomogram, tilt_angles` | data | input `tomograms` or `picks`: the fragment `show_imports.py tomograms` prints, `{series}` in each name; the angles each volume was reconstructed with (tilt.com's TILTFILE, the series' `.tlt`, or RELION's tilt-series STAR) |
 | `[data] orientation` | data, person | as `show_imports.py` reads it from the header's history and the wedge in the volume. When it asks, the person names the program and its options, and the answer must be on the list |
-| `[data] processing` | person | always asked: `raw`, or what was done after the reconstruction, from `ctf-corrected`, `denoised`, `wedge-filled`. `show_imports.py` says when it sees no wedge |
+| `[data] processing` | data, person | always asked: `raw`, or what was done after the reconstruction, from `ctf-corrected`, `denoised`, `wedge-filled`. `show_imports.py` proposes `ctf-corrected` when IMOD's ctfphaseflip stands before tilt in the volume's history, for the person to confirm, and says when it sees no wedge |
 | `[data] tomogram_pixel_size_angstrom` | data | unset: the header gives it. Set it when the header has none, or to have it checked against the header |
 | `[data] picks, picks_format` | data | input `picks`: the fragment `show_imports.py picks` prints, `{series}` in the name of a file per series |
 | `[data] picked_in` | person | unset: the picks are read as taken in the volume as it is imported. Set it only when they were taken in another orientation of it |

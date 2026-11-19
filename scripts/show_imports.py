@@ -26,7 +26,11 @@ Where the answers come from:
   imod-parallel and imod-standard, when the range is asymmetric. The wedge also
   checks every other answer. The angles from tilt.com's TILTFILE, a .tlt named
   after the series, or RELION's tomograms.star; the pixel size from the header.
-  What was done to the volume is asked; a wedge too faint to see is said.
+  What was done to the volume is asked. When IMOD's ctfphaseflip, which writes
+  "ctfPhaseFlip: CTF correction", stands before tilt in the history (IMOD 5.1.12,
+  19 November 2026), ctf-corrected is proposed with the question: a denoising or a
+  wedge filling by a program that leaves no label does not show. A wedge too faint
+  to see is said.
 - picks. The format from the file's columns; pytom's template box from the job
   file it wrote beside the picks; a Dynamo table's tomogram numbers; and the extent
   of the coordinates against the volume picked in.
@@ -95,6 +99,8 @@ DEFAULT_MAX_VOLUMES = 20
 TILT_LABEL = "TILT: Tomographic reconstruction"
 RELION_LABEL = "Relion"
 CLIP_TURNS = {"rotx": "imod-standard", "flipyz": "imod-parallel"}
+# IMOD's ctfphaseflip, as 5.1.12 writes it on the stack; tilt keeps it on the volume.
+CTF_LABEL = "ctfPhaseFlip: CTF correction"
 # How each answer of the list turns the voxels; the two of a pair hold the same ones.
 PAIRS = {"none": ("imod-parallel", "pipeline"), "reverse_z": ("imod-standard", "relion5")}
 _NAME_AFFIXES = re.compile(r"^(?:rec_)?(?P<series>.+?)(?:_full_rec|_rec)?$")
@@ -207,6 +213,23 @@ def history(labels: list[str], thin: str) -> tuple[str | None, str]:
     return None, f"IMOD's tilt, then clip {', '.join(turns)}, which the list does not hold"
 
 
+def processing_seen(labels: list[str]) -> tuple[list[str] | None, str]:
+    """What the history shows was done to the views before tilt reconstructed them:
+    ["ctf-corrected"] when IMOD's ctfphaseflip stands before tilt, else None.
+
+    Only a label present counts. Its absence rules nothing out: a header holds ten
+    labels, older ones can fall out, and other programs leave none. Nothing done
+    after the reconstruction shows either, so what is proposed is still asked.
+    """
+
+    tilts = [index for index, label in enumerate(labels) if label.startswith(TILT_LABEL)]
+    if not tilts:
+        return None, "no reconstruction by IMOD's tilt in the history"
+    if any(label.startswith(CTF_LABEL) for label in labels[:tilts[-1]]):
+        return ["ctf-corrected"], "IMOD's ctfphaseflip stands before tilt in the history"
+    return None, "no CTF correction in the history, which does not rule one out"
+
+
 def angles_for(volume: Path, series: str) -> tuple[Path | None, str]:
     """The angle file the volume was reconstructed with, and how it was found."""
 
@@ -264,6 +287,8 @@ def read_volume(path: Path, *, wedge: bool) -> dict[str, Any]:
     item["labels"] = labels_of(path)
     name, why = history(item["labels"], thin)
     item["history"] = {"orientation": name, "why": why}
+    steps, seen = processing_seen(item["labels"])
+    item["processing_seen"] = {"steps": steps, "why": seen}
     angle_file, found = angles_for(path, item["series"])
     item["angles_found"] = found
     if angle_file is not None:
@@ -374,8 +399,7 @@ def read_tomograms(paths: list[Path], *, wedge: bool, max_volumes: int) -> Readi
         _shared(read, "orientation", lambda item: item["orientation"],
                 "the history and the wedge",
                 question="the orientation, from the list: " + ", ".join(ORIENTATIONS)),
-        Answer("processing", question="what was done to the volumes after reconstruction: "
-               f"raw, or a set of {', '.join(PROCESSING_STEPS)}"),
+        processing_answer(read),
     ]
     voxels = sorted({round(item["voxel"], 4) for item in read})
     if voxels == [0.0]:
@@ -393,6 +417,25 @@ def read_tomograms(paths: list[Path], *, wedge: bool, max_volumes: int) -> Readi
         reading.notes.append("no wedge seen in " + ", ".join(faint) + ": filled (wedge-filled), "
                              "or too small or smooth to tell")
     return reading
+
+
+def processing_answer(items: list[dict[str, Any]]) -> Answer:
+    """Always a question; with ctf-corrected proposed when every volume's history
+    shows IMOD's ctfphaseflip before tilt."""
+
+    question = (f"what was done to the volumes after reconstruction: raw, or a set of "
+                f"{', '.join(PROCESSING_STEPS)}")
+    seen = [item["processing_seen"]["steps"] for item in items]
+    corrected = sum(steps == ["ctf-corrected"] for steps in seen)
+    if corrected == len(items):
+        return Answer("processing", ["ctf-corrected"], items[0]["processing_seen"]["why"],
+                      question=f"{question} (ctf-corrected is proposed: IMOD's ctfphaseflip "
+                               "stands before tilt in the history; a denoising or a wedge "
+                               "filling by a program that leaves no label does not show)")
+    if corrected:
+        question += (f" (IMOD's ctfphaseflip is in the history of {corrected} of "
+                     f"{len(items)} volumes)")
+    return Answer("processing", question=question)
 
 
 def _shared(items: list[dict[str, Any]], key: str, of: Any, source: str,
@@ -706,7 +749,9 @@ def fragment(reading: Reading) -> str:
     lines += ["", "[data]"]
     for answer in reading.answers:
         if answer.asked:
-            lines += textwrap.wrap(f"{answer.key} = ?  {answer.question}", width=86,
+            # A proposed value stands on the line, to be kept by uncommenting it.
+            given = "?" if answer.value is None else f"{json.dumps(answer.value)}  # ?"
+            lines += textwrap.wrap(f"{answer.key} = {given}  {answer.question}", width=86,
                                    initial_indent="# ", subsequent_indent="#   ",
                                    break_long_words=False, break_on_hyphens=False)
         else:
@@ -726,7 +771,10 @@ def render(reading: Reading) -> str:
     if reading.answers:
         out += ["", "The answers"]
         for answer in reading.answers:
-            if answer.asked:
+            if answer.asked and answer.value is not None:
+                out.append(f"  {answer.key:<26} ASK, proposed {json.dumps(answer.value)}: "
+                           f"{answer.question}")
+            elif answer.asked:
                 out.append(f"  {answer.key:<26} ASK: {answer.question}")
             else:
                 out.append(f"  {answer.key:<26} {json.dumps(answer.value)}   ({answer.source})")
@@ -758,6 +806,9 @@ def item_lines(kind: str, item: dict[str, Any]) -> list[str]:
             lines.append(f"    wedge        {item['wedge']['verdict']}: {item['wedge']['reason']}")
         lines.append(f"    orientation  {item['orientation'] or 'ASK'}   "
                      f"({item['orientation_from']})")
+        steps = item["processing_seen"]["steps"]
+        lines.append(f"    processing   {', '.join(steps) if steps else 'ASK'}   "
+                     f"({item['processing_seen']['why']})")
         return lines
     if kind == "picks":
         lines = [f"  format       {item['format'] or 'ASK'}   ({item['why']})"]

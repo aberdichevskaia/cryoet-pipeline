@@ -966,8 +966,14 @@ Dynamo 1.1.511 on the Mac).
     asymmetric. A history the wedge contradicts is not taken. The angles come
     from tilt.com's `TILTFILE`, the `.tlt` of the volume's or the series' name, or
     RELION's `tomograms.star`. A folder whose name begins the volume's names the
-    series. What was done to the volumes is always asked, and a wedge too faint to
-    see is said. Volumes in different orientations go in separate lanes.
+    series. What was done to the volumes is always asked. When IMOD's
+    ctfphaseflip stands before tilt in the history, `ctf-corrected` is proposed
+    with the question. Its label, `ctfPhaseFlip: CTF correction with phase flipping
+    only`, was measured on IMOD 5.1.12 here on 19 November, and is in the October
+    TS_01 from Munich. A denoising or a wedge filling by a program that leaves no
+    label does not show, and a missing label rules nothing out: a header keeps ten
+    labels. A wedge too faint to see is said. Volumes in different orientations go
+    in separate lanes.
   - **On a real volume.** The pipeline's own TS_01 reconstruction in
     dev-ts01-registry (`tomograms/TS_01/TS_01_fine_bin8.rec`, tilt's output as
     written) is read as series TS_01, `imod-tilt` by its history. The wedge
@@ -997,9 +1003,10 @@ Dynamo 1.1.511 on the Mac).
     particles lane imports its table series by series, and the whole table after
     it is already imported. A mutant that drops the orientation answer is refused
     by the import's wedge check.
-  - `tests/test_show_imports.py`, 29. The rules are held to IMOD's own `tilt`,
-    `clip` and `trimvol` outputs. The wedge splits the pair, and the RELION layout
-    and the picks formats are read. Four mutants of the rules are all caught.
+  - `tests/test_show_imports.py`, 35. The rules are held to IMOD's own `tilt`,
+    `clip`, `trimvol` and `ctfphaseflip` outputs. The wedge splits the pair, and the
+    RELION layout and the picks formats are read. Four mutants of the orientation
+    rules and four of the processing rule are all caught.
 - **A first run at a site, where the answer is known**
   ([tomograms_lane_test.py](../scripts/tomograms_lane_test.py)). `prepare --lane L
   --series S` takes a series that lane L reconstructed and picked at the site, and
@@ -1031,7 +1038,10 @@ Dynamo 1.1.511 on the Mac).
     mirror there as well as the volume. Its picks were made with the lane as it
     stood then, before the template's mask and box were sized from the diameter
     (16 October), which the test's picks follow, so they differ for that reason
-    too;
+    too. Prepared on 19 November: the volume, 928 × 960 × 301 at 5.4 Å with angles
+    −54.74..+62.48°, is read as `imod-standard` by its history, and the wedge
+    agrees (fitted centre +3.5°, against +3.9° declared and −3.9° for the mirror).
+    The dry run passed; the lane's jobs have not run yet;
   - at MDC, `--lane configs/lanes/ryr1-bin8.toml --series 039`. Gag TS_01 is in
     Munich and on the Mac only.
 - **Not built, or not checked.**
