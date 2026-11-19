@@ -267,7 +267,10 @@ web, dated       a page without versions, such as NVIDIA's guides or the Dynamo 
     redirect, and the address without one only if the page's title states the
     version. `versions = "cupy"` reads the pages at the CuPy version of
     pytom-match-pick's environment. `--version-of cuda=12.5` (repeatable) or
-    `--version-of cupy=14.2.0` gives a version the builder cannot find.
+    `--version-of cupy=14.2.0` gives a version the builder cannot find, such
+    as the CUDA a site's MotionCor3 and AreTomo2 were built with, which it
+    does not read (12.5 at MDC: [setup.md](agent/setup.md), "Order of
+    installation", 7).
   - **Dated.** A source without `versions` is read as it stands that day. Its
     text says "as of" the build's date, and `library.json` keeps the sha256 of
     what came.

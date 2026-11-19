@@ -96,6 +96,20 @@ has one already: the assistant runs from it. In order:
 
    The folder is one the group can read (library.md, "Where snapshots live"),
    and the host has to reach NVIDIA's, CuPy's and PyTorch's sites and GitHub.
+   In the dry run, check two things before the build:
+
+   - every tool has a version. A program that starts only with its module
+     loaded, such as AreTomo2 at MDC (`aretomo/v2-cu12.5`), needs the module in
+     that shell, or it gets no version and no pages;
+   - the CUDA versions. The builder takes them from `nvcc` on PATH, the `cuda`
+     modules and the CUDA the pipeline's PyTorch and pytom-match-pick's CuPy are
+     built for, but not from MotionCor3 or AreTomo2: give the CUDA they were
+     built with as `--version-of cuda=<version>`. At MDC on 19 November 2026
+     the dry run found 11.7, 12.9 and 13.0, while the group's MotionCor3 and
+     AreTomo2 are builds for 12.5 by their folders' names (`MotionCor3-cu12.5`,
+     `AreTomo2-cu12.5`) and their module, so the build there adds
+     `--version-of cuda=12.5`.
+
    `--gpu-node-report` adds what `nvidia-smi` printed on a GPU node (library.md,
    "How a snapshot is built"). Each person then names the folder with
    `export CRYOET_LIBRARY=<folder>` in `~/.bashrc` or the setup file: by itself
