@@ -1152,13 +1152,28 @@ def usable(capability: str, code: GpuCode) -> bool:
 
 
 def coverage(code: GpuCode) -> str:
-    """The compute capabilities the code runs on, in words."""
+    """The compute capabilities the code runs on, in words. A cubin runs on its
+    major version from its own minor up, an arch-specific one ("a") on its own
+    capability alone; ranges that overlap or meet are joined, so that MDC's
+    MotionCor3 reads 5.2 to 5.9, 7.0 to 9.9 (it listed each cubin's range on
+    19 November 2026). The PTX comes last."""
 
-    parts = []
-    for arch in code.cubins:
-        number = arch_number(arch)
-        major, minor = divmod(number, 10)
-        parts.append(f"{major}.{minor} only" if arch.endswith("a") else f"{major}.{minor} to {major}.9")
+    def after(point: tuple[int, int]) -> tuple[int, int]:
+        major, minor = point
+        return (major + 1, 0) if minor == 9 else (major, minor + 1)
+
+    ranges = sorted((divmod(arch_number(arch), 10),
+                     divmod(arch_number(arch), 10) if arch.endswith("a")
+                     else (arch_number(arch) // 10, 9))
+                    for arch in code.cubins)
+    joined: list[list[tuple[int, int]]] = []
+    for start, end in ranges:
+        if joined and start <= after(joined[-1][1]):
+            joined[-1][1] = max(joined[-1][1], end)
+        else:
+            joined.append([start, end])
+    parts = [f"{start[0]}.{start[1]} only" if start == end
+             else f"{start[0]}.{start[1]} to {end[0]}.{end[1]}" for start, end in joined]
     if code.ptx:
         lowest = min(arch_number(arch) for arch in code.ptx)
         parts.append(f"{lowest // 10}.{lowest % 10} and newer through PTX")

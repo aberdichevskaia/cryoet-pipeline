@@ -828,3 +828,36 @@ def test_setup_file_prints_the_file_alone(site, capsys):
     assert show_setup.main(["--setup-file"]) == 0
     out = capsys.readouterr().out
     assert out.startswith("# pipeline_setup.sh") and "1. Room" not in out
+
+
+# What the check read on max on 19 November 2026 (an A40 node), and the ranges it
+# then listed one cubin at a time.
+MDC_MOTIONCOR3 = ["sm_52", "sm_70", "sm_75", "sm_80", "sm_86", "sm_87", "sm_89", "sm_90"]
+MDC_ARETOMO2 = ["sm_52", "sm_53", "sm_60", "sm_61", "sm_70", "sm_75", "sm_80", "sm_86", "sm_90"]
+MDC_TORCH = ["sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120"]
+
+
+@pytest.mark.parametrize("cubins, ptx, words", [
+    (MDC_MOTIONCOR3, [], "5.2 to 5.9, 7.0 to 9.9"),
+    (MDC_ARETOMO2, [], "5.2 to 9.9"),
+    (MDC_TORCH, [], "7.5 to 10.9, 12.0 to 12.9"),
+    (["sm_86"], [], "8.6 to 8.9"),
+    (["sm_90a"], [], "9.0 only"),
+    (["sm_90", "sm_90a"], [], "9.0 to 9.9"),
+    (["sm_80", "sm_100a"], ["compute_90"], "8.0 to 8.9, 10.0 only, 9.0 and newer through PTX"),
+])
+def test_the_ranges_a_program_runs_on_are_joined(cubins, ptx, words):
+    code = show_setup.GpuCode("a program", cubins=cubins, ptx=ptx)
+    assert show_setup.coverage(code) == "runs on compute capability " + words
+    # The words say what runs_on decides, capability by capability.
+    for major in range(5, 13):
+        for minor in range(10):
+            capability = f"{major}.{minor}"
+            said = any(
+                part.endswith(" only") and part == f"{capability} only"
+                or " to " in part and show_setup.version_tuple(part.split(" to ")[0])
+                <= (major, minor) <= show_setup.version_tuple(part.split(" to ")[1])
+                or part.endswith("through PTX")
+                and show_setup.version_tuple(part.split(" and ")[0]) <= (major, minor)
+                for part in words.split(", "))
+            assert said == show_setup.runs_on(capability, code), capability

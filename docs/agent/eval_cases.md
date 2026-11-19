@@ -530,15 +530,19 @@ raises, answered from NVIDIA's, PyTorch's and CuPy's own pages.
   motion correction and membrane segmentation there, with the group's
   MotionCor3 1.2.4 and MemBrain-seg 0.0.10?
 - **In the repository:** the rule a GPU's code follows, MemBrain-seg's minimum of
-  7.5, and the GPU code of the published MotionCor3 makefile (setup.md). The L40S
-  is named nowhere, and neither is its compute capability.
+  7.5, and the GPU code of the published MotionCor3 makefile (setup.md), and
+  since 19 November 2026 that of MDC's MotionCor3 1.2.4 (setup.md, "Site
+  facts"). The L40S is named nowhere, and neither is its compute capability.
 - **The answer's source:** NVIDIA, *CUDA GPU Compute Capability*
   (developer.nvidia.com/cuda/gpus, read 16 November 2026): the row 8.9 holds
   "NVIDIA L4 NVIDIA L40 NVIDIA L40S".
 - **Expected reading:** at 8.9, MemBrain-seg's minimum is met. A program runs
   there if its build has code for 8.9: a cubin of 8.x up to 8.9 (sm_80, sm_86,
-  sm_89), or PTX. The published makefile has sm_89. Which code the group's
-  builds carry has not been read.
+  sm_89), or PTX. The published makefile has sm_89. The group's build has to be
+  read, unless it is MDC's, which has sm_89 (setup.md). Until 19 November 2026,
+  when setup.md recorded MDC's builds, this said no group's build had been read,
+  and the batches of 17 November (20261117-104427 and 20261117-105541) were
+  graded against that.
 - **Expected action:** say so, and how to check: `scripts/show_setup.py` on an
   L40S node, through `srun` run by the person, or `cuobjdump`; the job's
   preflight checks it too.

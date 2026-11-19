@@ -450,8 +450,10 @@ line, and the cluster's GPU types it runs on.
    "Building MotionCor3 and AreTomo2"): `sm_90` for H100 and H200, `sm_100`
    for B300 (CUDA 12.8 or later), or PTX (`code=compute_90`) for anything newer.
 
-**Applies to:** the makefiles as read on 16 November 2026. Which code the
-builds installed at MDC carry has not been read.
+**Applies to:** the makefiles as read on 16 November 2026, and the builds
+installed at MDC as the check read them on 19 November: no PTX and nothing for
+the B300s either, while their AreTomo2 has `sm_90` for H100 and H200
+([setup.md](../setup.md), "Site facts").
 
 **Source:** MotionCor3's and AreTomo2's `makefile11`; NVIDIA's table of compute
 capabilities; CUDA 12.8's release notes. Not met in a job yet.

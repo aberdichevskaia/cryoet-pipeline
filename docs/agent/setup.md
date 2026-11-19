@@ -347,10 +347,17 @@ run the check there directly.
 
 - **MDC (max).** The GPU node max023 had driver 610.57.04, supporting CUDA 13.3,
   and A40s (13 October 2026). The `gpu` partition had A40, H100, H200 and B300
-  nodes in early November 2026 ([playbook/cluster.md](playbook/cluster.md)). A
-  MotionCor3 or AreTomo2 built from the published makefiles has no code for the
-  B300s (I-14). Which code the group's builds carry has not been read: the check
-  reads it on a node with `cuobjdump`.
+  nodes in early November 2026 ([playbook/cluster.md](playbook/cluster.md)), and
+  `sinfo` named its GPU types a40, b300, h100, h200, tesla-t4 and tesla-v100 on
+  19 November. The check read the group's builds on an A40 node that day:
+  MotionCor3 1.2.4 (`/fast/AG_Kudryashev/software/MotionCor3-cu12.5`) has cubins
+  sm_52, sm_70, sm_75, sm_80, sm_86, sm_87, sm_89 and sm_90, and AreTomo2 1.1.3
+  (`AreTomo2-cu12.5` beside it) sm_52, sm_53, sm_60, sm_61, sm_70, sm_75, sm_80,
+  sm_86 and sm_90; neither has PTX. So, as with the published makefiles (I-14),
+  neither runs on the B300s: motion correction and fine alignment with AreTomo2
+  run on every other GPU type there, and the lanes at MDC ask for
+  `--gres=gpu:a40:1`. The pipeline's PyTorch and MemBrain-seg's, both for CUDA
+  13.0, start at sm_75 and do not run on the V100s.
 - **Munich.** The GPU nodes had driver 575, supporting CUDA 12.9 (7 October
   2026), so by the rule above a PyTorch for CUDA 13 does not run there; that
   has not been tried. GPUs there can be MIG slices (P-1).
