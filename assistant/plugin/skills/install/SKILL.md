@@ -67,7 +67,8 @@ and from the picks to the MRA, on the CPU; not motion correction or picking,
 which need an NVIDIA GPU."
 
 - Where Slurm answers, the jobs run on the cluster's nodes: the answer is about
-  the cluster's GPU types (part 4 lists them), not this login node's.
+  the cluster's GPU types (part 4 lists them), not those of the node the check
+  runs on.
 - Without Slurm, it is about this machine. The lanes' submissions need Slurm;
   here a lane's steps run with `scripts/run_series.py --execute`, which the
   person runs. Never run it yourself.
@@ -159,9 +160,12 @@ Use the table in `setup.md`, "Versions", and say which kind each answer is:
   reads each program's GPU code there, and says which of the cluster's GPU
   types it can run on.
 - Whether the driver suits each CUDA build, and whether PyTorch and CuPy see the
-  GPU, shows only on a GPU node. Give the person the `srun` command of
-  `setup.md`, "On a GPU node", with the partition and GPU type of the lane's GPU
-  stage. Never run `srun` yourself.
+  GPU, shows only on a GPU node. The person may already be on one: in an
+  interactive job with a GPU, such as an `slogin` session at MDC, the check's
+  first line says "inside Slurm job" and part 4 lists the job's GPU, and that
+  run is the check on a GPU node. Otherwise give the person the `srun` command
+  of `setup.md`, "On a GPU node", with the partition and GPU type of the lane's
+  GPU stage. Never run `srun` yourself.
 - **A card without its driver** (I-12): on a cluster, the administrators install
   drivers, so the person tells them, with the node and the check's PCI line. On
   the person's own machine, explain `setup.md`, "The NVIDIA driver", and point
@@ -198,6 +202,8 @@ Use the table in `setup.md`, "Versions", and say which kind each answer is:
 
 The installation is ready when:
 
-- the check shows no problems, in a new terminal on a login node;
-- and on a GPU node of the kind the lanes use;
+- the check shows no problems, in a new terminal where the person submits from
+  (a login node, or an interactive job such as `slogin` at MDC);
+- and on a GPU node of the kind the lanes use, which a job with such a GPU
+  already is;
 - and the lane's dry run shows none (the `lane-config` skill).

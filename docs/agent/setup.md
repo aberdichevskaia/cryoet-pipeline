@@ -76,18 +76,20 @@ has one already: the assistant runs from it. In order:
    found"). Name each by its variable, in `~/.bashrc` or in a setup file it
    sources. At MDC that is the line that sources `cryoet-tools.sh`, and
    `PYTOMO_MP_DIR`.
-6. **Check**, in a new terminal on a login node: `python3 scripts/show_setup.py`
+6. **Check**, in a new terminal where you submit from, a login node or an
+   interactive job such as `slogin` at MDC: `python3 scripts/show_setup.py`
    shows no problems. Then on a GPU node of the kind the lanes use (below, "GPU
-   and CUDA"). Then the lane's dry run, which checks the lane's keys, folders,
-   tool variables and named programs.
+   and CUDA"); a check that ran in a job with such a GPU was that one already.
+   Then the lane's dry run, which checks the lane's keys, folders, tool
+   variables and named programs.
 7. **The site's reference library**, once per site rather than per person
    ([library.md](../library.md)). The assistant reads the tools' manuals at the
    versions installed here from it, and NVIDIA's and PyTorch's pages for the
    site's CUDA versions; without one it answers from this page and the
    playbook. At MDC it is built, and `scripts/assistant` finds it. On another
-   site, after step 6, one person of the group builds it on a login node, in
-   the pipeline's environment and from a shell that names the tools, since the
-   builder finds them as the lanes do:
+   site, after step 6, one person of the group builds it where they submit
+   from, in the pipeline's environment and from a shell that names the tools,
+   since the builder finds them as the lanes do:
 
    ```bash
    python3 scripts/build_library.py --site <site> --dry-run
@@ -190,7 +192,8 @@ What it finds goes into the shell as variables, in one of two places:
 
 Either way the lines go after micromamba's own block and outside any check for
 the host name, since the jobs take the variables from the shell that submits
-them, on a login node. Then open a new terminal and run the check again.
+them, a login node's or an interactive job's. Then open a new terminal and run
+the check again.
 
 A program found as a module may need its module loaded to run (its libraries),
 not only its path: `module show <name>` says what loading it sets.
@@ -329,9 +332,8 @@ GPU, and whether the driver suits it, shows only on a GPU node.
 
 ### On a GPU node
 
-From a login node, in the shell the jobs are submitted from, with the
-environment active, the person runs the check on one GPU of the kind the lanes
-use. At MDC:
+In the shell the jobs are submitted from, with the environment active, the
+person runs the check on one GPU of the kind the lanes use. At MDC:
 
 ```bash
 srun --partition=gpu --gres=gpu:a40:1 --time=00:15:00 --mem=16G python3 scripts/show_setup.py
@@ -341,7 +343,10 @@ Elsewhere, take the partition and the GPU type from the lane's GPU stage, or
 from `sinfo -o "%P %G"`. `srun` gives the check this shell's variables. A shell
 that is itself inside a job (`echo $SLURM_JOB_ID` prints a number) runs `srun`
 as a step of that job, with that job's resources only: if the job has a GPU,
-run the check there directly.
+run the check there directly. At MDC the shell one works in can be such a job,
+an `slogin` session on a compute node: on 19 November 2026 these were max020
+and max021, each with an A40, and the check's first line said "inside Slurm
+job" and part 4 listed the A40. That run is the check on a GPU node.
 
 ### Site facts
 
@@ -452,7 +457,8 @@ building are in I-13.
 - **Whether a step runs.** A version and a list of GPU code are not a run. The
   lane's dry run checks the lane, and a job's preflight checks the tools its
   stages need, on its node.
-- **The nodes' view.** On a cluster it takes the login node's paths for the
-  nodes', which holds where the software is on a shared filesystem.
+- **The nodes' view.** On a cluster it takes the paths of the node it runs on
+  for the other nodes', which holds where the software is on a shared
+  filesystem.
 - **What a module needs loaded.** `--find` takes a program's path from a module;
   whether the program also needs the module's libraries shows when it runs.

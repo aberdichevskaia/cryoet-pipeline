@@ -18,10 +18,11 @@ line, including after `&&`, `|`, `$(`, `env`, `nohup` or `bash -c` (or -lc):
 * writing a project's journal.jsonl, which only those two scripts and
   scripts/export_relion.py write;
 * running RELION itself: a relion_* program, an export's relion_commands.sh, or
-  mpirun/mpiexec, which would compute on the login node. The person runs RELION,
+  mpirun/mpiexec, which would compute in this shell. The person runs RELION,
   in a job on the cluster;
 * running scripts/build_library.py, which writes the reference library;
-* running scripts/run_series.py with --execute, which computes on the login node;
+* running scripts/run_series.py with --execute, which computes in this shell, on a
+  login node or in an interactive job;
 * a shell with nothing to run (a bare `bash`, or `... | bash`), which reads its
   commands from its input, where this guard never sees them. Codex can start one
   and type into it later;
@@ -296,7 +297,8 @@ def journal_message():
 
 def relion_message(name):
     return (
-        f"`{name}` would run RELION here, on the login node. RELION is the person's to run, "
+        f"`{name}` would run RELION here, in this shell (a login node or an interactive "
+        "job). RELION is the person's to run, "
         "in a job on the cluster: give them the commands of the export's relion_commands.sh."
     )
 
@@ -391,8 +393,9 @@ def runner_problem(command):
 
 def runner_message():
     return (
-        "scripts/run_series.py --execute would run pipeline steps here, on the login "
-        "node. Without --execute it prints them; a run goes to the cluster through "
+        "scripts/run_series.py --execute would run pipeline steps here, in this shell (a "
+        "login node or an interactive job). Without --execute it prints them; a run goes "
+        "to the cluster through "
         "scripts/submit_lanes.py."
     )
 

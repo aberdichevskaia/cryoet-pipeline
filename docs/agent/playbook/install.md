@@ -24,12 +24,13 @@ in [cluster.md](cluster.md): a full temporary folder (E-1), a program not found
 
 ## How a healthy install looks
 
-- **`python3 scripts/show_setup.py`**, in a new terminal on a login node, ends
-  in "Problems (0): none". Every tool has a version, the environment imports the
+- **`python3 scripts/show_setup.py`**, in a new terminal where you submit from
+  (a login node, or an interactive job such as `slogin` at MDC), ends in
+  "Problems (0): none". Every tool has a version, the environment imports the
   pipeline from this clone, and PyTorch is built for a CUDA version.
-- **The same check on a GPU node** of the kind the lanes use, through `srun`,
-  also shows PyTorch seeing the GPU, and each program's GPU code able to run on
-  it.
+- **The same check on a GPU node** of the kind the lanes use, through `srun`
+  or directly in a job that has such a GPU, also shows PyTorch seeing the GPU,
+  and each program's GPU code able to run on it.
 - **The lane's dry run** lists its jobs and no problems.
 
 ## Where to look first
@@ -468,7 +469,9 @@ capabilities; CUDA 12.8's release notes. Not met in a job yet.
 is missing, on a login node.
 
 **What it means:** login nodes have no GPU. What counts is the GPU nodes: check
-there ([setup.md](../setup.md), "GPU and CUDA").
+there ([setup.md](../setup.md), "GPU and CUDA"). An interactive job without a
+GPU looks the same; one with a GPU sees it, as `slogin` sessions on max's A40
+nodes did on 19 November 2026.
 
 **Source:** max's login nodes, October 2026.
 

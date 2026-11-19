@@ -96,5 +96,5 @@ prefix_rule(
 prefix_rule(
     pattern = [PYTHON, "scripts/run_series.py", "--execute"],
     decision = "forbidden",
-    justification = "run_series.py --execute computes on the login node; runs go through scripts/submit_lanes.py",
+    justification = "run_series.py --execute computes in this shell, on the login node or in an interactive job; runs go through scripts/submit_lanes.py",
 )
