@@ -141,6 +141,21 @@ or another client can read as well.
   keeps out the editor's, such as VS Code's over SSH. The first session in
   Munich had 21 such servers, none of them for the pipeline, and each person's
   set differs. `/mcp` in a session should list none.
+- **No skills but the pipeline's.** `assistant/settings.json` sets
+  `syncClaudeAiSkills` and `syncClaudeAiPlugins` to false, and
+  `disableBundledSkills` to true. A session then offers neither the skills and
+  plugins the signed-in claude.ai account has enabled nor Claude Code's own
+  skills and workflows. Given with `--settings`, the two sync settings
+  hide what was synced in that session only, and move nothing: the person's
+  own Claude Code keeps it (Claude Code 2.1.312 says so in its description of
+  the settings). In Stockholm on 19 November 2026, `/skills` in a session listed
+  33 skills, the pipeline's among 13 synced from the claude.ai account and
+  those of a plugin the organization enabled on claude.ai
+  (`claude-for-nonprofits`). Which set arrives depends on whose account signed
+  in. On the Mac the same day, a headless start through the launcher listed 55
+  skills in its init event without these settings and 9 with them: the
+  pipeline's six, and `design`, `doctor` and `plugin-authoring`, which these
+  settings do not reach. Codex's are off the same way (below).
 - **Options that would undo this are refused.** These include
   `--dangerously-skip-permissions`, `--permission-mode`, `--settings`,
   `--allowed-tools`, `--system-prompt`, `--plugin-dir`, `--mcp-config`, `--ide`,

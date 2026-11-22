@@ -91,5 +91,8 @@
         ]
       }
     ]
-  }
+  },
+  "syncClaudeAiSkills": false,
+  "syncClaudeAiPlugins": false,
+  "disableBundledSkills": true
 }

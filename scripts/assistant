@@ -44,8 +44,11 @@
 # In Claude Code:
 #   --setting-sources user  the person's own settings, but not this clone's
 #                           .claude/settings*.json, which belong to development
-#   --settings              assistant/settings.json: the permission rules, and
-#                           assistant/guard.py on every shell command
+#   --settings              assistant/settings.json: the permission rules,
+#                           assistant/guard.py on every shell command, and no
+#                           skills but the pipeline's: none synced from the
+#                           claude.ai account, none of its plugins, none of
+#                           Claude Code's own
 #   --plugin-dir            assistant/plugin: the skills
 #   --append-system-prompt  the instructions
 #   --add-dir               the library's snapshot, which the session may read

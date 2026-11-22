@@ -314,6 +314,16 @@ def _rules() -> dict[str, list[str]]:
     return json.loads((ASSISTANT / "settings.json").read_text())["permissions"]
 
 
+def test_a_session_offers_no_skills_but_the_pipelines():
+    # In Stockholm on 19 November 2026 a session listed 33 skills: those synced
+    # from the signed-in claude.ai account and its organization's plugin besides
+    # the pipeline's. Claude Code honours only false for the two sync settings.
+    settings = json.loads((ASSISTANT / "settings.json").read_text())
+    assert settings["syncClaudeAiSkills"] is False
+    assert settings["syncClaudeAiPlugins"] is False
+    assert settings["disableBundledSkills"] is True
+
+
 def test_the_client_rules_hold_the_gates():
     rules = _rules()
     for rule in (
