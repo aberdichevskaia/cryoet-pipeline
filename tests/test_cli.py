@@ -35,10 +35,11 @@ def test_init_command_passes_normalized_project_config(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, ProjectConfig] = {}
+    captured: dict[str, object] = {}
 
-    def fake_initialize_project(config: ProjectConfig) -> InitResult:
+    def fake_initialize_project(config: ProjectConfig, *, add_series: bool) -> InitResult:
         captured["config"] = config
+        captured["add_series"] = add_series
         return InitResult(
             project_path=tmp_path / "project.json",
             manifest_paths=[],
@@ -65,8 +66,11 @@ def test_init_command_passes_normalized_project_config(
     )
 
     assert result.exit_code == 0
-    assert captured["config"].tilt_series == ["TS_TEST"]
-    assert captured["config"].device == DevicePreference.CPU
+    config = captured["config"]
+    assert isinstance(config, ProjectConfig)
+    assert config.tilt_series == ["TS_TEST"]
+    assert config.device == DevicePreference.CPU
+    assert captured["add_series"] is False
 
 
 def test_correct_motion_command_writes_outputs_and_updates_registry(

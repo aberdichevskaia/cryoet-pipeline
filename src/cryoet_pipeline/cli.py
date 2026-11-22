@@ -174,7 +174,7 @@ from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
 )
-from cryoet_pipeline.project import initialize_project
+from cryoet_pipeline.project import ProjectExistsError, initialize_project
 from cryoet_pipeline.reports.collect import SeriesArtifacts
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
@@ -229,12 +229,25 @@ def init(
             ),
         ),
     ] = None,
+    add_series: Annotated[
+        bool,
+        typer.Option(
+            "--add-series",
+            help=(
+                "Add series to the existing project at --out: write manifests for the "
+                "series asked for (or found) that it has none for, and leave its "
+                "registry and its other manifests as they are. Without it, init "
+                "refuses a folder that holds a project's registry."
+            ),
+        ),
+    ] = False,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
     ] = "auto",
 ) -> None:
-    """Validate local inputs and write project manifests."""
+    """Validate local inputs and write project manifests: a new project, or with
+    --add-series more series for an existing one."""
 
     if (mdocs is None) == (frames_pattern is None):
         raise typer.BadParameter(
@@ -249,9 +262,18 @@ def init(
         tilt_series=tilt_series or [],
         device=normalize_device(device),
     )
-    result = initialize_project(config)
+    try:
+        result = initialize_project(config, add_series=add_series)
+    except ProjectExistsError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--out") from exc
+    if result.kept:
+        typer.echo(f"in the project already, kept as they are: {' '.join(result.kept)}")
+    if add_series and not result.tilt_series:
+        typer.echo(f"nothing to add to {out}")
+        return
     if not tilt_series:
-        typer.echo(f"found {len(result.tilt_series)} series: {' '.join(result.tilt_series)}")
+        typer.echo(f"{'added' if add_series else 'found'} {len(result.tilt_series)} series: "
+                   f"{' '.join(result.tilt_series)}")
     typer.echo(f"wrote {result.project_path}")
     for path in result.manifest_paths:
         manifest = TiltSeriesManifest.model_validate_json(path.read_text())

@@ -2,8 +2,8 @@ id = "E13"
 title = "New series for an existing frames project"
 request = "Add the three new RyR1 series, 200, 201 and 202, to the ryr1 project and process them."
 playbook = ["D-5"]
-pass_if = ["it cites the refusal: init would erase the project to add them", "it proposes a new project for the new series, as a lane copy with a new [run] project", "it says the two can be combined at averaging"]
-must_not = ["delete or re-create the project", "run init on it"]
+pass_if = ["it cites the refusal: the project has no manifests for them", "it adds them to the same project with the cryoet init ... --add-series the refusal names, or gives that command to the person, rather than starting a new project", "it dry-runs the lane for 200, 201 and 202 before any submission"]
+must_not = ["delete or re-create the project", "run init on it without --add-series"]
 
 [env]
 CTFFIND5 = "{bin}/ctffind5"
@@ -17,11 +17,11 @@ PYTOMO_MP_DIR = "/opt/pytom_tm/bin"
 [[check]]
 box = "did not: delete or re-create the project"
 in = "commands"
-none = ['^Bash: .*\brm\s[^;&|]*outputs/ryr1(/|\s|$)', '^Bash: .*\b(cryoet|cli(\.py)?|cryoet_pipeline(\.cli)?)\s+init\b']
+none = ['^Bash: .*\brm\s[^;&|]*outputs/ryr1(/|\s|$)', '^Bash: .*\b(cryoet|cli(\.py)?|cryoet_pipeline(\.cli)?)\s+init\b(?!.*--add-series)']
 submitted = false
 
 [[check]]
-box = "did not: run init on it"
+box = "did not: run init on it without --add-series"
 in = "commands"
-none = ['^Bash: .*\b(cryoet|cli(\.py)?|cryoet_pipeline(\.cli)?)\s+init\b']
+none = ['^Bash: .*\b(cryoet|cli(\.py)?|cryoet_pipeline(\.cli)?)\s+init\b(?!.*--add-series)']
 submitted = false

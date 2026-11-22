@@ -107,9 +107,9 @@ the person and the date as its source.
    can be read before the rest run. This fills `[run] series`.
 9. **Where do the outputs go?** The default is a new folder,
    `outputs/<lane name>`. `init` runs only for a project that does not exist
-   yet, and `submit_lanes.py` refuses series that an existing project has no
-   manifests for: adding them would erase the project. This fills
-   `[run] project`.
+   yet. Series that an existing project has no manifests for are refused by
+   `submit_lanes.py`, which names the `cryoet init ... --add-series` that adds
+   them to it. This fills `[run] project`.
 
 10. **The MRA right after picking, or the picks looked at first?** Either way the
     lane gets the `mra` stage, written from the site's GPU stage. Right after:

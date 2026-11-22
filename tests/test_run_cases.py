@@ -131,7 +131,7 @@ def test_the_assistants_tools_show_the_case_evidence(tmp_path, case_id, command,
     assert (run_dir / "slurm_calls.log").read_text() == ""
 
 
-def test_e13_new_series_in_the_existing_project_are_refused(tmp_path):
+def test_e13_new_series_in_the_existing_project_are_refused_with_the_add(tmp_path):
     run_dir, env = _sandbox(tmp_path, "E13")
     lane = run_dir / "sandbox" / "configs" / "lanes" / "ryr1-bin8.toml"
     copy = run_dir / "sandbox" / "outputs" / "ryr1" / "new-series.toml"
@@ -140,7 +140,8 @@ def test_e13_new_series_in_the_existing_project_are_refused(tmp_path):
     ))
     shown = _run(run_dir, env, "python3", "scripts/submit_lanes.py",
                  "outputs/ryr1/new-series.toml", "--dry-run")
-    assert "has no manifest for 200, 201, 202, and init would erase the project" in shown
+    assert "has no manifest for 200, 201, 202; add them to it" in shown
+    assert "--tilt-series 200 --tilt-series 201 --tilt-series 202 --add-series" in shown
 
 
 def test_e17_the_earlier_dry_run_is_not_the_plan_now(tmp_path):

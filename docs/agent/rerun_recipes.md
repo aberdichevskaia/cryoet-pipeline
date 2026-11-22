@@ -244,8 +244,9 @@ the same name with other settings is refused by the dry run.
   `submit_recipe.py`, and a script that `submit_recipe.py --list` does not name
   is not the assistant's to run.
 - Rerun a crash that reproduces without changing anything.
-- Run `cryoet init` on an existing project. It starts the registry empty, so new
-  series for a frames lane go into a new project.
+- Run `cryoet init` on an existing project without `--add-series`. Plain `init`
+  refuses one, since it would start the registry empty; new series for a frames
+  lane join it with `--add-series`, which the dry run's refusal prints.
 - Copy the config into `/tmp`.
 - Write a new batch script for an experiment these recipes do not cover. Stop and
   ask instead.

@@ -21,26 +21,71 @@ class InitResult:
     project_path: Path
     manifest_paths: list[Path]
     artifact_registry_path: Path
-    # The series included: the ones asked for, or every one found.
+    # The series whose manifests were written: the ones asked for, or every one
+    # found; when adding, those of them the project had no manifest for.
     tilt_series: tuple[str, ...] = ()
+    # When adding: the series asked for or found that the project has already,
+    # whose manifests were left as they are.
+    kept: tuple[str, ...] = ()
 
 
-def initialize_project(config: ProjectConfig) -> InitResult:
-    """Validate local input data and write project manifests."""
+class ProjectExistsError(ValueError):
+    """init asked to make a project where there is one, or to add to one that is not there."""
 
+
+def initialize_project(config: ProjectConfig, *, add_series: bool = False) -> InitResult:
+    """Validate local input data and write project manifests.
+
+    A new project gets an empty registry. A folder whose registry exists is a
+    project with results in it, which an empty registry would lose: init refuses
+    it, unless `add_series`, which writes manifests only for the series the
+    project has none for and leaves the registry and every other manifest as
+    they are. Jobs on the project's other series may run meanwhile, since
+    nothing they read changes.
+    """
+
+    artifact_registry_path = config.output_dir / "artifacts.json"
+    exists = artifact_registry_path.exists()
+    if exists and not add_series:
+        raise ProjectExistsError(
+            f"{config.output_dir} is a project already: its registry, "
+            f"{artifact_registry_path}, records what has run on its series, and init "
+            "would start it empty and lose that. To add series to the project, give "
+            "--add-series; for a project of their own, another --out."
+        )
+    if add_series and not exists:
+        raise ProjectExistsError(
+            f"--add-series adds series to an existing project, and {config.output_dir} "
+            f"has no registry ({artifact_registry_path}); without --add-series, init "
+            "makes a new project there"
+        )
     if config.frames_pattern is not None:
         # A malformed pattern is refused before any folder is listed.
         compile_frame_pattern(config.frames_pattern)
     tilt_series = config.tilt_series or find_tilt_series(config)
+    manifest_dir = config.output_dir / "manifests"
+    kept = tuple(
+        series for series in tilt_series
+        if add_series and (manifest_dir / f"{series}.json").is_file()
+    )
+    added = [series for series in tilt_series if series not in kept]
     manifests = [
         load_tilt_series_manifest(config, tilt_series_id)
-        for tilt_series_id in tilt_series
+        for tilt_series_id in added
     ]
     for manifest in manifests:
         validate_tilt_series_manifest(manifest)
 
+    project_path = config.output_dir / "project.json"
+    if add_series and not added:
+        return InitResult(
+            project_path=project_path,
+            manifest_paths=[],
+            artifact_registry_path=artifact_registry_path,
+            kept=kept,
+        )
+
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    manifest_dir = config.output_dir / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_paths: list[Path] = []
@@ -49,26 +94,51 @@ def initialize_project(config: ProjectConfig) -> InitResult:
         write_json(path, manifest.model_dump(mode="json"))
         manifest_paths.append(path)
 
-    artifact_registry_path = config.output_dir / "artifacts.json"
-    ArtifactRegistry.empty().write(artifact_registry_path)
-
-    project_path = config.output_dir / "project.json"
-    write_json(
-        project_path,
-        {
-            "config": config.model_dump(mode="json"),
-            "tilt_series": [manifest.tilt_series_id for manifest in manifests],
-            "manifests": [str(path) for path in manifest_paths],
-            "artifact_registry": str(artifact_registry_path),
-        },
-    )
+    if add_series:
+        write_json(project_path, _with_added_series(project_path, manifest_dir, config, added))
+    else:
+        ArtifactRegistry.empty().write(artifact_registry_path)
+        write_json(
+            project_path,
+            {
+                "config": config.model_dump(mode="json"),
+                "tilt_series": [manifest.tilt_series_id for manifest in manifests],
+                "manifests": [str(path) for path in manifest_paths],
+                "artifact_registry": str(artifact_registry_path),
+            },
+        )
 
     return InitResult(
         project_path=project_path,
         manifest_paths=manifest_paths,
         artifact_registry_path=artifact_registry_path,
-        tilt_series=tuple(tilt_series),
+        tilt_series=tuple(added),
+        kept=kept,
     )
+
+
+def _with_added_series(
+    project_path: Path, manifest_dir: Path, config: ProjectConfig, added: list[str]
+) -> dict[str, Any]:
+    """project.json after an addition: every series the project has manifests for,
+    its first config kept, and each addition's config and series under "added".
+
+    A project that came from import-tilt-stack has no project.json until then.
+    """
+
+    before = json.loads(project_path.read_text()) if project_path.is_file() else {}
+    paths = sorted(manifest_dir.glob("*.json"))
+    return {
+        **before,
+        "config": before.get("config"),
+        "tilt_series": [path.stem for path in paths],
+        "manifests": [str(path) for path in paths],
+        "artifact_registry": str(config.output_dir / "artifacts.json"),
+        "added": [
+            *before.get("added", []),
+            {"config": config.model_dump(mode="json"), "tilt_series": added},
+        ],
+    }
 
 
 def find_tilt_series(config: ProjectConfig) -> list[str]:

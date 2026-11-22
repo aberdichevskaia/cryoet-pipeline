@@ -2,6 +2,7 @@
 
 import copy
 import os
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -377,6 +378,44 @@ def test_init_runs_only_for_a_new_frames_project():
     assert command[:2] == ["cryoet", "init"]
     assert command[command.index("--tilt-series") + 1] == "TS_01"
     assert submit_lanes.init_command(_lane("ribo-bin8"), new) is None
+
+
+def test_new_series_of_an_existing_project_are_refused_with_the_init_that_adds_them(
+        tmp_path, monkeypatch):
+    import numpy as np
+    import tifffile
+    from typer.testing import CliRunner
+
+    def write_series(series):
+        for tilt, angle in enumerate((-3.0, 0.0, 3.0)):
+            path = tmp_path / "frames" / f"tomogram_{series}_{tilt}_{angle}.tif"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tifffile.imwrite(path, np.zeros((2, 4, 4), dtype=np.uint16),
+                             photometric="minisblack")
+
+    cfg = _lane("ryr1-bin8")
+    cfg["data"] = {"frames": "frames", "pixel_size_angstrom": 1.35, "frames_pattern":
+                   r"tomogram_(?P<series>\d+)_(?P<tilt>\d+)_(?P<angle>[-+]?\d+(?:\.\d+)?)\.tif"}
+    monkeypatch.setattr(submit_lanes, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    write_series("1")
+    first = submit_lanes.Plan(Path("lane.toml"), "proj", ("1",), ())
+    assert CliRunner().invoke(cli.app, submit_lanes.init_command(cfg, first)[1:]).exit_code == 0
+    registry = (tmp_path / "proj" / "artifacts.json").read_bytes()
+    write_series("2")
+    both = submit_lanes.Plan(Path("lane.toml"), "proj", ("1", "2"), ())
+    assert submit_lanes.init_command(cfg, both) is None
+
+    [refusal] = [one for one in submit_lanes.problems(cfg, both, ()) if "no manifest" in one]
+    assert refusal.startswith("proj already exists but has no manifest for 2; ")
+    command = shlex.split(refusal.split("with: ", 1)[1])
+    assert command[:2] == ["cryoet", "init"] and command[-1] == "--add-series"
+    assert [command[i + 1] for i, one in enumerate(command) if one == "--tilt-series"] == ["2"]
+
+    added = CliRunner().invoke(cli.app, command[1:])
+    assert added.exit_code == 0, added.output
+    assert not [one for one in submit_lanes.problems(cfg, both, ()) if "no manifest" in one]
+    assert (tmp_path / "proj" / "artifacts.json").read_bytes() == registry
 
 
 @pytest.mark.parametrize("lane", LANES, ids=[path.stem for path in LANES])

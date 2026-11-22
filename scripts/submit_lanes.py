@@ -69,8 +69,10 @@ checked by the imports themselves, in the job.
 
 For a frames lane whose project does not exist yet, `cryoet init` runs here
 first, from [data] frames and either mdocs or frames_pattern (tilt metadata
-read from the movie file names). It is never run on an existing project:
-it starts the registry empty. Not done here: downloading data and caching EMDB
+read from the movie file names). A lane naming series that an existing project
+has no manifests for is refused, with the `cryoet init ... --add-series` that
+adds them and keeps the project's registry; adding series is left to the person,
+and is not done here. Not done here either: downloading data and caching EMDB
 maps — see the README.
 
 Disposable, like scripts/run_series.py.
@@ -95,6 +97,7 @@ import sys
 import time
 import tomllib
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -449,11 +452,12 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
     manifests = ROOT / lane.project / "manifests"
     absent = [s for s in lane.series if not (manifests / f"{s}.json").is_file()]
     if absent:
-        # init writes a new, empty registry, so it is never run on a project that
-        # already has one: that would throw away every series processed so far.
+        # Plain init refuses a project with a registry; --add-series writes the
+        # missing manifests and keeps the registry. It is the person's to run.
+        add = [*_init_arguments(cfg, lane.project, absent), "--add-series"]
         found.append(
-            f"{lane.project} already exists but has no manifest for {', '.join(absent)}, "
-            "and init would erase the project to add them; use a new project for them"
+            f"{lane.project} already exists but has no manifest for {', '.join(absent)}; "
+            f"add them to it, keeping what it holds, with: {shlex.join(add)}"
         )
     return found
 
@@ -839,13 +843,19 @@ def init_command(cfg: dict[str, Any], lane: Plan) -> list[str] | None:
     """`cryoet init` for a frames lane whose project does not exist yet, else None.
 
     init is project-level and quick (it reads the mdocs and checks the movies are
-    there), so it runs here on the submit node rather than in a job. It is never
-    run on an existing project, because it starts the registry empty.
+    there), so it runs here on the submit node rather than in a job. On an
+    existing project plain init refuses, since it would start the registry empty;
+    series are added to one with --add-series, which the refusal names.
     """
     if run_series.lane_input(cfg) != "frames":
         return None
     if (ROOT / lane.project / "artifacts.json").exists():
         return None
+    return _init_arguments(cfg, lane.project, lane.series)
+
+
+def _init_arguments(cfg: dict[str, Any], project: str, series: Sequence[str]) -> list[str]:
+    """`cryoet init` from a frames lane's [data], for these series of `project`."""
     data = cfg.get("data", {})
     command = ["cryoet", "init", "--frames", str(data.get("frames"))]
     if "frames_pattern" in data:
@@ -854,9 +864,9 @@ def init_command(cfg: dict[str, Any], lane: Plan) -> list[str] | None:
         command += ["--mdocs", str(data.get("mdocs"))]
     if "pixel_size_angstrom" in data:
         command += ["--pixel-size", str(data["pixel_size_angstrom"])]
-    command += ["--out", lane.project]
-    for series in lane.series:
-        command += ["--tilt-series", series]
+    command += ["--out", project]
+    for one in series:
+        command += ["--tilt-series", one]
     return command
 
 

@@ -89,10 +89,12 @@ cd cryoet-pipeline
 ```
 
 **The pipeline's environment.** On max, environments are made with micromamba.
-The `gpu` extra brings PyTorch, which the MRA runs on; `viz` brings matplotlib,
-which the reports need; `library` brings pypdf, which reads AreTomo2's manual
-for the reference library, and without which the check at the end of this step
-names that manual as a problem.
+The pipeline brings PyTorch, which the MRA runs on, and matplotlib, which the
+reports need; `library` brings pypdf, which reads AreTomo2's manual for the
+reference library, and without which the check at the end of this step names
+that manual as a problem. `io`, `viz` and `gpu` are empty: their packages come
+with the pipeline itself, and the command names them so that it works with an
+older clone too.
 
 ```bash
 micromamba create -n cryoet-pipeline -c conda-forge python=3.13
@@ -213,9 +215,12 @@ pixel size: the same numbers as step 3.
 
 Why by hand: the submission script would create the project itself, but only
 with the series its lane file lists, and the main lane lists four of the five
-(step 5 says why). A project is never created a second time, because that
-would start its registry empty and lose everything in it. So a series left out
-here could not join later; it would need a new project.
+(step 5 says why). A project is never created a second time: `cryoet init`
+refuses a folder that holds a project, since it would start its registry empty
+and lose everything in it. A series left out here can join later, with the same
+command, `--tilt-series <series>` and `--add-series`, which writes only the
+new series' manifests and keeps the rest of the project as it is. A dry run of a
+lane naming a series the project does not have prints that command.
 
 ## 5. Read the lane file
 
@@ -524,7 +529,8 @@ export's folder.
 | It says | What it means |
 |---|---|
 | `$MOTIONCOR3 is not set` (or another `$…`) | the shell lacks the group's tools: the `.bashrc` lines of step 1, then a new terminal |
-| `… already exists but has no manifest for …` | the project was created without that series (step 4 was skipped); use a new project |
+| `… already exists but has no manifest for …; add them to it …` | the project was created without that series (step 4 was skipped): run the `cryoet init … --add-series` it prints, then the dry run again |
+| `… is a project already …` | `cryoet init` was run on an existing project; add series with `--add-series` |
 | a series is busy, naming a job | one of your jobs works on that series; wait until it has ended |
 | `OVERWRITE is set in the environment` | `unset OVERWRITE`; give `--overwrite` to the one submission that needs it |
 | `the MRA reads the particles extracted under 'bin8', and cannot` | a series has no particles yet: wait for its `gpu` job, or check why it failed |

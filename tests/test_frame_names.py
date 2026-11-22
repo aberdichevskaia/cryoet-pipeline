@@ -289,3 +289,76 @@ def test_init_without_series_takes_every_series_the_pattern_finds(tmp_path):
     assert project["tilt_series"] == ["1", "2"]
     # What was asked for stays recorded apart from what was found.
     assert project["config"]["tilt_series"] == []
+
+
+def _init(tmp_path: Path, *extra: str):
+    return CliRunner().invoke(
+        app,
+        ["init", "--frames", str(tmp_path / "frames"), "--frames-pattern", PATTERN,
+         "--pixel-size", "1.35", "--out", str(tmp_path / "out"), *extra],
+    )
+
+
+def _said(result) -> str:
+    """The output as one line: typer boxes and wraps a refusal."""
+    return " ".join(result.output.replace("\u2502", " ").split())
+
+
+def _project_with_a_result(tmp_path: Path) -> Path:
+    """A project of series 1 whose registry records one result, as a run leaves it."""
+    _write_series(tmp_path / "frames", "1")
+    assert _init(tmp_path).exit_code == 0
+    registry = tmp_path / "out" / "artifacts.json"
+    document = json.loads(registry.read_text())
+    document["artifacts"].append({"id": "stack-1", "kind": "tilt_stack", "path": "stacks/1.mrc"})
+    registry.write_text(json.dumps(document))
+    return registry
+
+
+def test_init_refuses_a_project_that_has_a_registry_and_changes_nothing(tmp_path):
+    registry = _project_with_a_result(tmp_path)
+    before = {path: path.read_bytes() for path in (tmp_path / "out").rglob("*.json")}
+
+    result = _init(tmp_path)
+
+    assert result.exit_code != 0
+    assert "is a project already" in _said(result) and "--add-series" in _said(result)
+    assert {path: path.read_bytes() for path in (tmp_path / "out").rglob("*.json")} == before
+    assert "stack-1" in registry.read_text()
+
+
+def test_add_series_writes_only_the_missing_manifests_and_keeps_the_registry(tmp_path):
+    registry = _project_with_a_result(tmp_path)
+    first = tmp_path / "out" / "manifests" / "1.json"
+    kept = {registry: registry.read_bytes(), first: first.read_bytes()}
+    # Series 1 is rewritten in the folder: an addition must not read it again.
+    _write_series(tmp_path / "frames", "1", num_frames=3)
+    _write_series(tmp_path / "frames", "2")
+
+    result = _init(tmp_path, "--add-series")
+
+    assert result.exit_code == 0, result.output
+    assert "in the project already, kept as they are: 1" in result.output
+    assert "added 1 series: 2" in result.output
+    assert {path: path.read_bytes() for path in kept} == kept
+    assert json.loads((tmp_path / "out" / "manifests" / "2.json").read_text())[
+        "tilt_series_id"] == "2"
+    project = json.loads((tmp_path / "out" / "project.json").read_text())
+    assert project["tilt_series"] == ["1", "2"]
+    assert project["config"]["tilt_series"] == []
+    assert [one["tilt_series"] for one in project["added"]] == [["2"]]
+
+    again = _init(tmp_path, "--add-series", "--tilt-series", "2")
+    assert again.exit_code == 0, again.output
+    assert "nothing to add" in again.output
+    assert registry.read_bytes() == kept[registry]
+
+
+def test_add_series_needs_a_project_to_add_to(tmp_path):
+    _write_series(tmp_path / "frames", "1")
+
+    result = _init(tmp_path, "--add-series")
+
+    assert result.exit_code != 0
+    assert "adds series to an existing project" in _said(result)
+    assert not (tmp_path / "out").exists()

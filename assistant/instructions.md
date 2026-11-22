@@ -99,7 +99,8 @@ and do not call the batch scripts directly.
   of the config, put in the project space or the site's scratch, never in `/tmp`.
 - Give `--overwrite` to a whole multi-series stage to fix one series.
 - Rerun a crash that reproduces without changing anything.
-- Run `cryoet init` on an existing project.
+- Run `cryoet init` on an existing project without `--add-series`. New series
+  join a project with the `--add-series` command the dry run's refusal names.
 - Run a download yourself (`cryoet download-empiar`). It can run for hours:
   give the person the command, to run in their own shell.
 - Write or edit `<project>/journal.jsonl`. The scripts write it.

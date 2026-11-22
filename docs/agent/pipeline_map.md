@@ -186,14 +186,17 @@ that is absent adds no flag, and the command's own default applies.
 ### 0. `cryoet init` — frames lanes only, project-level
 
 Run by `submit_lanes.py` on the submit node for a frames lane whose project does
-not exist yet. It is never run on an existing project, because it starts the
-registry empty: adding a series to an existing frames project is refused, and a
-new project is the way.
+not exist yet. On a folder that holds a registry, plain `init` refuses, since it
+would start the registry empty. Series join an existing frames project with
+`--add-series`, which writes manifests for the series it has none for and keeps
+its registry and other manifests; `submit_lanes.py` refuses a lane naming such
+series and prints that command, for the person to run.
 
 - Keys: `[data] frames`* → `--frames`; exactly one of `mdocs` → `--mdocs` and
   `frames_pattern` → `--frames-pattern`; `pixel_size_angstrom` →
   `--pixel-size`; `[run] series` → `--tilt-series`, once per series.
-- Writes: `manifests/<TS>.json`, a new `artifacts.json`.
+- Writes: `manifests/<TS>.json`, a new `artifacts.json`; with `--add-series`,
+  only the new series' manifests, and `project.json` lists the additions.
 - Prints the tilts and angle range found per series. Check them before the jobs
   run, especially with `frames_pattern`.
 
