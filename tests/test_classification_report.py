@@ -480,7 +480,8 @@ def test_a_schedule_shows_one_line_per_round_and_each_iteration_its_own(project:
                    f"use_CC_r{round_}": 1, f"localnc_r{round_}": 1}
     scipy_io.savemat(vpr_path, {"card": values})
     second = project / "cards" / "ite_0002" / "card_ite_ite_0002.card"
-    second.write_text(second.read_text() + "low=6;\ncone_range=18.6;\ncone_sampling=6.2;\n")
+    second.write_text(second.read_text() + "low=6;\ncone_range=18.6;\ncone_sampling=6.2;\n"
+                      "refine=2;\nrefine_factor=2;\n")
     write_manifest(project)
 
     run = read_dynamo_classification(project, compute_initial_average=False)
@@ -489,7 +490,9 @@ def test_a_schedule_shows_one_line_per_round_and_each_iteration_its_own(project:
     assert rows[("Search", "round 2, 1 iteration")].startswith("band 80–27 Å (px 2–6) · cone 18.6°")
     assert rows[("Search", "channels")] == "3, particles swap (mra 1)"
     assert run.iterations[0].summary is None
-    assert run.iterations[1].summary == "low-pass 27 Å, cone 18.6° in 6.2° steps · 30 min"
+    # A cone round refines too, 6.2 -> 3.1 -> 1.55 deg: it is no coarser than a global one.
+    assert run.iterations[1].summary == (
+        "low-pass 27 Å, cone 18.6° in 6.2° steps, refined to 1.6° · 30 min")
 
 
 def test_an_iteration_counts_when_the_log_says_it_is_done(project: Path) -> None:

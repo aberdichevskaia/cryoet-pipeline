@@ -225,7 +225,11 @@ class Round:
             if self.antialias:
                 search += " (low-passed to its Nyquist first)"
         else:
-            search = f"cone and in-plane {self.cone_range:.1f} deg in {self.step:.1f} deg steps"
+            # Cone rounds refine as global ones do; until 2026-11-22 this line left it
+            # out, and a cone round read as coarser than the global round before it.
+            search = (f"cone and in-plane {self.cone_range:.1f} deg in {self.step:.1f} deg "
+                      f"steps refined {self.refine} times by 2 to "
+                      f"{self.sampling / 2 ** self.refine:.1f} deg")
         return (f"round {number}: {self.iterations} iteration(s), low-pass {self.low} px "
                 f"({box * pixel_size / self.low:.1f} A), {search}")
 

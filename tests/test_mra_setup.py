@@ -65,7 +65,8 @@ def test_the_mask_is_dynamos_sphere(radius, box, edge, total, nonzero, line) -> 
     np.testing.assert_allclose(sphere[middle, middle, :], line, atol=5e-10)
 
 
-# What scripts/dynamo_mra_setup.m printed for these variables on the CZII export.
+# What scripts/dynamo_mra_setup.m printed for these variables on the CZII export, with
+# the cone rounds' refinement, which its printout and ours name since 2026-11-22.
 CZII = (48, 10.0120000839)
 ROUNDS = [
     ({"schedule": "coarse_to_fine", "global_rounds": 2}, [
@@ -74,41 +75,41 @@ ROUNDS = [
         "round 2: 1 iteration(s), low-pass 14 px (34.3 A), every orientation, 360 deg in 6.8 deg "
         "steps refined 2 times by 2 to 1.7 deg, particles at 32 px of 48",
         "round 3: 1 iteration(s), low-pass 16 px (30.0 A), "
-        "cone and in-plane 17.7 deg in 5.9 deg steps",
+        "cone and in-plane 17.7 deg in 5.9 deg steps refined 2 times by 2 to 1.5 deg",
         "round 4: 1 iteration(s), low-pass 18 px (26.7 A), "
-        "cone and in-plane 15.9 deg in 5.3 deg steps",
+        "cone and in-plane 15.9 deg in 5.3 deg steps refined 2 times by 2 to 1.3 deg",
         "round 5: 1 iteration(s), low-pass 22 px (21.8 A), "
-        "cone and in-plane 12.9 deg in 4.3 deg steps",
+        "cone and in-plane 12.9 deg in 4.3 deg steps refined 2 times by 2 to 1.1 deg",
     ]),
     ({"schedule": "coarse_to_fine", "lowpass_steps": "fourier", "first_lowpass": 80,
       "cone_steps": [5, 5, 3, 3, 3]}, [
         "round 1: 1 iteration(s), low-pass 6 px (80.1 A), "
-        "cone and in-plane 77.0 deg in 15.4 deg steps",
+        "cone and in-plane 77.0 deg in 15.4 deg steps refined 2 times by 2 to 3.9 deg",
         "round 2: 1 iteration(s), low-pass 10 px (48.1 A), "
-        "cone and in-plane 47.0 deg in 9.4 deg steps",
+        "cone and in-plane 47.0 deg in 9.4 deg steps refined 2 times by 2 to 2.4 deg",
         "round 3: 1 iteration(s), low-pass 14 px (34.3 A), "
-        "cone and in-plane 20.4 deg in 6.8 deg steps",
+        "cone and in-plane 20.4 deg in 6.8 deg steps refined 2 times by 2 to 1.7 deg",
         "round 4: 1 iteration(s), low-pass 18 px (26.7 A), "
-        "cone and in-plane 15.9 deg in 5.3 deg steps",
+        "cone and in-plane 15.9 deg in 5.3 deg steps refined 2 times by 2 to 1.3 deg",
         "round 5: 1 iteration(s), low-pass 22 px (21.8 A), "
-        "cone and in-plane 12.9 deg in 4.3 deg steps",
+        "cone and in-plane 12.9 deg in 4.3 deg steps refined 2 times by 2 to 1.1 deg",
     ]),
     ({"schedule": "fixed"}, [
         "round 1: 5 iteration(s), low-pass 16 px (30.0 A), "
-        "cone and in-plane 15.0 deg in 5.0 deg steps",
+        "cone and in-plane 15.0 deg in 5.0 deg steps refined 2 times by 2 to 1.2 deg",
     ]),
     ({"schedule": "coarse_to_fine", "global_rounds": 1, "global_step": 45}, [
         "round 1: 1 iteration(s), low-pass 12 px (40.0 A), every orientation, 360 deg in 45.0 deg "
         "steps refined 3 times by 2 to 5.6 deg, particles at 28 px of 48",
         "round 2: 1 iteration(s), low-pass 14 px (34.3 A), "
-        "cone and in-plane 20.4 deg in 6.8 deg steps",
+        "cone and in-plane 20.4 deg in 6.8 deg steps refined 2 times by 2 to 1.7 deg",
     ]),
     ({"schedule": "coarse_to_fine", "global_rounds": 1, "global_full_box": True,
       "diameter": 300}, [
         "round 1: 1 iteration(s), low-pass 12 px (40.0 A), every orientation, 360 deg in 7.6 deg "
         "steps refined 2 times by 2 to 1.9 deg, particles at 48 px of 48",
         "round 2: 1 iteration(s), low-pass 14 px (34.3 A), "
-        "cone and in-plane 19.5 deg in 6.5 deg steps",
+        "cone and in-plane 19.5 deg in 6.5 deg steps refined 2 times by 2 to 1.6 deg",
     ]),
 ]
 

@@ -954,6 +954,12 @@ def _iteration_summary(card: Mapping[str, str], box: int, spacing: float | None)
             else f"low-pass px {_text(card.get('low'))}")
     summary = (f"{band}, cone {_text(card.get('cone_range'))}° in "
                f"{_text(card.get('cone_sampling'))}° steps")
+    # Every round refines around its best orientation, cone rounds as well as global
+    # ones: without this, a cone round read as coarser than the round before it.
+    sampling, refine = _as_float(card.get("cone_sampling")), _as_float(card.get("refine"))
+    factor = _as_float(card.get("refine_factor"))
+    if sampling and refine and factor:
+        summary += f", refined to {sampling / factor ** refine:.1f}°"
     try:
         start = datetime.strptime(card.get("time_start_computation", ""), DYNAMO_TIME)
         end = datetime.strptime(card.get("time_end_iteration", ""), DYNAMO_TIME)
