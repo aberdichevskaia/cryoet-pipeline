@@ -67,8 +67,10 @@ terminal and in every step of a job.
 environment's missing packages, and names this entry.
 
 **Causes, common to rare:**
-1. The environment was installed without the `gpu` extra, which brings
-   PyTorch: for example with `pip install -e ".[io]"`.
+1. The pipeline was installed from a clone older than 22 November 2026
+   without the `gpu` extra, which then brought PyTorch: for example with
+   `pip install -e ".[io]"`. Since then PyTorch comes with the pipeline
+   itself.
 2. The command ran in another environment than the pipeline's, such as the
    base environment.
 

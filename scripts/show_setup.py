@@ -104,18 +104,20 @@ PACKAGES = (
     ("pydantic", "core"),
     ("typer", "core"),
     ("PyYAML", "core"),
-    ("mrcfile", "io"),
-    ("pyarrow", "io"),
-    ("tifffile", "io"),
-    ("zarr", "io"),
-    ("torch", "gpu"),
-    ("torch-fourier-shell-correlation", "gpu"),
-    ("matplotlib", "viz"),
+    ("mrcfile", "core"),
+    ("pyarrow", "core"),
+    ("tifffile", "core"),
+    ("zarr", "core"),
+    ("torch", "core"),
+    ("torch-fourier-shell-correlation", "core"),
+    ("matplotlib", "core"),
     ("pypdf", "library"),
 )
-# Missing from these, the pipeline does not start or read its files. matplotlib
-# only draws the reports, and pypdf only reads a manual into the library.
-REQUIRED_EXTRAS = ("the pipeline", "core", "io", "gpu")
+# Missing from these, the pipeline does not start or read its files: every cryoet
+# command imports torch, mrcfile, zarr and matplotlib. pypdf only reads a manual
+# into the library. The io, gpu and viz extras are empty since 22 November 2026,
+# their packages being core; installs that name them still work.
+REQUIRED_EXTRAS = ("the pipeline", "core")
 PYTHON_NEEDED = (3, 11)  # pyproject.toml, requires-python
 ENV_NAME = "cryoet-pipeline"
 
@@ -805,9 +807,8 @@ def environment(report: Report, given: str | None) -> dict[str, Any]:
             "I-1" if "torch" in hard else "")
     for name, extra in missing:
         if extra not in REQUIRED_EXTRAS:
-            report.note(f"{name} is missing ({extra} extra): "
-                        + ("the reports need it" if extra == "viz"
-                           else "only building the reference library needs it"))
+            report.note(f"{name} is missing ({extra} extra): only building the reference "
+                        "library needs it")
     origin = found.get("pipeline")
     if origin:
         package = Path(origin).parent

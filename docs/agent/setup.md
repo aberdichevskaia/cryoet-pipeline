@@ -34,7 +34,7 @@ Then the problems and the notes, each with its playbook entry.
 | Part | What it is | Where it goes | Who installs it |
 |---|---|---|---|
 | the clone | this repository; the lanes write their outputs inside it | a folder of yours on a large filesystem (`$CRYOET_WORK` at MDC) | you, with `git clone` |
-| the `cryoet-pipeline` environment | Python and the pipeline with its extras: `io`, `gpu` (PyTorch with its CUDA libraries), `viz` (the reports), `library` (the reference library) | the environments' folder, `$MAMBA_ROOT_PREFIX/envs` with micromamba | you |
+| the `cryoet-pipeline` environment | Python and the pipeline, which brings PyTorch with its CUDA libraries and matplotlib for the reports, with the `library` extra (the reference library); `io`, `gpu` and `viz` are empty since 22 November 2026 | the environments' folder, `$MAMBA_ROOT_PREFIX/envs` with micromamba | you |
 | the `pytom_tm` environment | Python 3.12, CuPy for CUDA 12 from conda-forge, and pytom-match-pick 0.14.0 | beside it | you |
 | IMOD, CTFFIND 5, MotionCor3, AreTomo2, MemBrain-seg | the programs the steps run | a shared install: at MDC the group's software folder | the site, once |
 | the reference library | the tools' manuals at the versions the site installed, and NVIDIA's, CuPy's and PyTorch's pages for its CUDA versions, as read-only snapshots of some 20 MB (19 MB on the Mac, 17 November 2026) | a folder the group can read: at MDC `/fast/AG_Kudryashev/cryoet-library` | one person of the group, once per site, and again when the tools change |
@@ -47,8 +47,11 @@ is submitted from and reads no `~/.bashrc` of its own (E-9). At MDC,
 `/fast/AG_Kudryashev/software/cryoet-tools.sh` names the group's tools: IMOD,
 MotionCor3, CTFFIND 5 and MemBrain-seg.
 
-Every `cryoet` command imports PyTorch, so the `gpu` extra is not optional: the
-CLI imports the averaging backend, which imports PyTorch (I-1).
+Every `cryoet` command imports PyTorch, mrcfile, zarr and matplotlib: the CLI
+imports the averaging backend, which imports PyTorch (I-1). They are the
+pipeline's own dependencies since 22 November 2026; before, they were the `io`,
+`gpu` and `viz` extras, which are now empty and kept so that the install command
+naming them still works.
 
 ## Order of installation
 

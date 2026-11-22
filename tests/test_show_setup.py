@@ -519,8 +519,9 @@ def test_the_packages_are_pyprojects():
     for name, extra in show_setup.PACKAGES:
         listed.setdefault(extra, set()).add(name)
     assert listed["core"] == names(project["dependencies"])
-    for extra in ("io", "gpu", "viz", "library"):
-        assert listed[extra] == names(extras[extra]), extra
+    assert listed["library"] == names(extras["library"])
+    # Empty, their packages core: kept for the install commands that name them.
+    assert extras["io"] == extras["gpu"] == extras["viz"] == []
     assert show_setup.PYTHON_NEEDED == tuple(
         int(part) for part in project["requires-python"].lstrip(">=").split("."))
 

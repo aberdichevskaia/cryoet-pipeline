@@ -12,27 +12,29 @@ license = { text = "MIT" }
 authors = [
   { name = "Anna Berdichevskaia" }
 ]
+# Every cryoet command imports torch, mrcfile, zarr and matplotlib (measured on
+# 22 November 2026 by blocking each import), so what were the io, gpu and viz
+# extras is needed by any install: a plain `pip install -e .` gave a cryoet that
+# did not start.
 dependencies = [
   "numpy>=1.26",
   "pydantic>=2.7",
   "typer>=0.12",
   "PyYAML>=6.0",
-]
-
-[project.optional-dependencies]
-io = [
   "mrcfile>=1.5",
   "pyarrow>=16",
   "tifffile>=2023.1",
   "zarr>=2.18",
-]
-gpu = [
   "torch>=2.2",
   "torch-fourier-shell-correlation>=0.5",
-]
-viz = [
   "matplotlib>=3.8",
 ]
+
+[project.optional-dependencies]
+# Kept, empty, so that the install commands that name them still work.
+io = []
+gpu = []
+viz = []
 # scripts/build_library.py: the PDF manuals it pins (AreTomo2's).
 library = [
   "pypdf>=7.0",
