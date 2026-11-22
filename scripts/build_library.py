@@ -11,10 +11,13 @@ at the version installed here. Of the web channel it builds two kinds:
   installed here, each checked against the sha256 configs/library.toml pins
   (AreTomo2's manual first);
 - pages ([web] in configs/library.toml): documentation no installation carries,
-  NVIDIA's on CUDA, drivers and GPUs and CuPy's and PyTorch's on their CUDA
-  builds. A page is read at each version this site has (the CUDA versions, the
-  CuPy version), which this script finds itself, or as it stands on the day,
-  dated. Only its own text is converted, not the site's menus.
+  NVIDIA's on CUDA, drivers and GPUs, CuPy's and PyTorch's on their CUDA builds,
+  and conda's and mamba's guides. A page is read at each version this site has
+  (the CUDA versions, the CuPy version, the conda and mamba versions), which
+  this script finds itself, or as it stands on the day, dated. Only its own
+  text is converted, not the site's menus; a text file (mamba's guides are
+  reStructuredText in its repository, read at the tag of the version) is kept
+  as it came.
 A file that cannot be fetched, or has changed, stops the build, and the last
 snapshot stays; a page the site does not have (404) is a problem, and the rest
 is read.
@@ -108,7 +111,7 @@ SITE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The tools this script knows how to find and ask. configs/library.toml may name
 # only these.
 KNOWN = ("imod", "ctffind", "motioncor3", "aretomo", "pytom-match-pick", "membrain-seg",
-         "slurm", "bash")
+         "slurm", "bash", "conda", "mamba")
 
 # The lane config keys that name a tool's executable. The first key of a tool is
 # the one its path is taken from.
@@ -133,6 +136,13 @@ LOOKUP: dict[str, tuple[str, tuple[str, ...]]] = {
     "membrain-seg": ("MEMBRAIN_EXE", ("membrain",)),
 }
 DISTRIBUTIONS = {"pytom-match-pick": "pytom-match-pick", "membrain-seg": "membrain-seg"}
+# The environment managers: the variable their shell init exports, then their
+# names on PATH. micromamba comes before mamba, as scripts/activate_env.sh
+# activates with it; the two share their documentation and their versions.
+ENV_MANAGERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "conda": ("CONDA_EXE", ("conda",)),
+    "mamba": ("MAMBA_EXE", ("micromamba", "mamba")),
+}
 # The backends' last place to look for IMOD.
 MAC_IMOD = Path("/Applications/IMOD")
 # Why a tool variable missing here matters: scripts/lane.sbatch reads no shell
@@ -159,10 +169,11 @@ MAN_LIMIT = 8 << 20
 
 # The web channel's pages ([web] in configs/library.toml). They come from these
 # documentation sites only, one request at a time.
-WEB_HOSTS = ("docs.nvidia.com", "developer.nvidia.com", "docs.cupy.dev", "pytorch.org")
+WEB_HOSTS = ("docs.nvidia.com", "developer.nvidia.com", "docs.cupy.dev", "pytorch.org",
+             "docs.conda.io", "raw.githubusercontent.com")
 PAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The versions a [web.<source>] may read its pages at, each found on this site.
-FINDERS = ("cuda", "cupy")
+FINDERS = ("cuda", "cupy", "conda", "mamba")
 # CuPy's distribution, as conda-forge names it and as its PyPI wheels do.
 CUPY_DISTRIBUTIONS = ("cupy", "cupy-cuda13x", "cupy-cuda12x", "cupy-cuda11x")
 # A CUDA environment module: cuda/12.5, CUDA/12.1.1, a path before it.
@@ -180,6 +191,12 @@ MAIN_TEXT: tuple[tuple[str, Callable[[str, dict[str, str | None]], bool]], ...] 
 # words in the text.
 HEADERLINK = re.compile(r"""<a\b[^>]*\bclass=["']headerlink["'][^>]*>.*?</a>""",
                         re.IGNORECASE | re.DOTALL)
+# A page whose address ends so is a text file, kept as it came in a fence, not
+# HTML: mamba's guides, reStructuredText at the tag of a release.
+TEXT_PAGES = (".rst", ".md", ".txt")
+# mamba states its version alone ("2.5.0"), or after its name (mamba 1.x:
+# "mamba 1.5.8", then conda's version on the next line).
+_MAMBA_VERSION = re.compile(r"^(?:(?:micro)?mamba\s+)?v?(?P<version>\d+\.\d+(?:\.\d+)*)\b")
 
 
 @dataclass
@@ -210,7 +227,7 @@ class Tool:
 class Item:
     tool: str
     kind: str
-    """"manual", "man", "usage" or "pinned"."""
+    """"manual", "man", "usage", "pinned" or "page"."""
     name: str
     """Its file name under text/<tool>/, without .md."""
     command: tuple[str, ...] = ()
@@ -258,6 +275,8 @@ def find_tools(sources: dict[str, Any], lanes: list[Lane],
             tool = on_path("slurm", "sinfo")
         elif name == "bash":
             tool = on_path("bash", "bash")
+        elif name in ENV_MANAGERS:
+            tool = find_env_manager(name)
         else:
             tool = find_named(name, lanes)
         if tool.path is not None:
@@ -302,6 +321,29 @@ def on_path(name: str, program: str) -> Tool:
     if found := shutil.which(program):
         return Tool(name, Path(found), f"{program} on PATH")
     return Tool(name, note=f"not on this host: no {program} on PATH")
+
+
+def find_env_manager(name: str) -> Tool:
+    """conda, or micromamba or mamba: as the variable their shell init exports
+    names it, else from PATH. A batch job finds it the same way
+    (scripts/activate_env.sh)."""
+
+    variable, programs = ENV_MANAGERS[name]
+    if value := os.environ.get(variable):
+        return path_from(name, value, f"${variable}")
+    for program in programs:
+        if found := shutil.which(program):
+            return Tool(name, Path(found), f"{program} on PATH")
+    return Tool(name, note=f"not on this host: ${variable} is not set, and "
+                           f"{' or '.join(programs)} is not on PATH")
+
+
+def mamba_version(executable: Path) -> Version:
+    result = probe([executable, "--version"])
+    lines = [line.strip() for line in result.output.splitlines() if line.strip()]
+    found = _MAMBA_VERSION.match(lines[0]) if result.ended_well and lines else None
+    return Version(found["version"] if found else None, f"{executable.name} --version",
+                   "\n".join(lines[:2]))
 
 
 def find_named(name: str, lanes: list[Lane]) -> Tool:
@@ -367,6 +409,10 @@ def ask_version(tool: Tool) -> Version | None:
             return slurm_version(tool.path)
         case "bash":
             return bash_version(tool.path)
+        case "conda":
+            return stated_version(tool.path, "conda", attempts=(("--version",),))
+        case "mamba":
+            return mamba_version(tool.path)
     return None
 
 
@@ -1131,13 +1177,44 @@ def cupy_versions(tools: dict[str, Tool], given: list[str]) -> list[tuple[str, s
     return []
 
 
+def manager_version(tools: dict[str, Tool], name: str) -> tuple[str, str] | None:
+    """An environment manager's version, and where it was seen: the program and
+    how it was found, or --version-of."""
+
+    tool = tools.get(name)
+    if tool is None or tool.version is None or not tool.version.value:
+        return None
+    if tool.path is None or tool.version.how.startswith("given with --version-of"):
+        return tool.version.value, tool.version.how
+    return tool.version.value, f"{tool.path.name} {tool.version.value}, {tool.found}"
+
+
+def conda_versions(tools: dict[str, Tool], given: list[str]) -> list[tuple[str, str]]:
+    """conda's version as its documentation names a release's folder, by major
+    and minor version: 26.3.2 is read under 26.3.x. --version-of conda gives
+    the tool's version, and so this one."""
+
+    found = manager_version(tools, "conda")
+    number = re.match(r"(\d+)\.(\d+)", found[0]) if found else None
+    return [(f"{number[1]}.{number[2]}.x", found[1])] if found and number else []
+
+
+def mamba_versions(tools: dict[str, Tool], given: list[str]) -> list[tuple[str, str]]:
+    """micromamba's or mamba's version, which names the tag of its release in
+    mamba's repository."""
+
+    found = manager_version(tools, "mamba")
+    return [found] if found else []
+
+
 def find_versions(web: dict[str, Any], tools: dict[str, Tool],
                   given: dict[str, list[str]]) -> dict[str, list[tuple[str, str]]]:
     """The versions the [web] sources read their pages at; only the finders some
     source names are asked."""
 
     wanted = {section["versions"] for section in web.values() if "versions" in section}
-    finders = {"cuda": cuda_versions, "cupy": cupy_versions}
+    finders = {"cuda": cuda_versions, "cupy": cupy_versions, "conda": conda_versions,
+               "mamba": mamba_versions}
     return {name: finders[name](tools, given.get(name, [])) for name in FINDERS if name in wanted}
 
 
@@ -1276,13 +1353,21 @@ def collect_page(snapshot: Snapshot, item: Item, out: Path) -> None:
         return
     url, final, data, html = found
     folder = f"{item.tool}/{item.version}" if item.version else item.tool
-    raw = f"raw/{folder}/{item.name}.html"
+    suffix = PurePosixPath(urllib.parse.urlsplit(final).path).suffix.lower()
+    if suffix in TEXT_PAGES:
+        raw = f"raw/{folder}/{item.name}{suffix}"
+        text = html.replace("\r\n", "\n").strip("\n")
+        markdown = f"# {PurePosixPath(urllib.parse.urlsplit(final).path).name}\n\n{_fenced(text)}\n"
+        converter = f"text {CONVERTERS['text']}"
+    else:
+        raw = f"raw/{folder}/{item.name}.html"
+        part, how = main_text(html)
+        markdown = html_to_markdown(HEADERLINK.sub("", part))
+        title = page_title(html)
+        if title and not markdown.startswith("# "):
+            markdown = f"# {title}\n\n{markdown}"
+        converter = f"html {CONVERTERS['html']}, main {CONVERTERS['main']} ({how})"
     write(out / raw, data)
-    part, how = main_text(html)
-    markdown = html_to_markdown(HEADERLINK.sub("", part))
-    title = page_title(html)
-    if title and not markdown.startswith("# "):
-        markdown = f"# {title}\n\n{markdown}"
     channel = "web, by version" if item.version else "web, dated"
     text_path = f"text/{folder}/{item.name}.md"
     write(out / text_path,
@@ -1297,7 +1382,7 @@ def collect_page(snapshot: Snapshot, item: Item, out: Path) -> None:
         "version": item.version or None, "version_from": item.version_from or None,
         "url": url, "final_url": final, "fetched": snapshot.built, "raw": raw,
         "sha256": hashlib.sha256(data).hexdigest(),
-        "converter": f"html {CONVERTERS['html']}, main {CONVERTERS['main']} ({how})",
+        "converter": converter,
         "text": text_path,
     })
 
@@ -1557,19 +1642,20 @@ def read_lane(path: Path) -> Lane:
 
 def parse_given(pairs: list[str]) -> tuple[dict[str, str], dict[str, list[str]]]:
     """--version-of: a tool's version, and the versions to read a [web] source's
-    pages at (cuda may be given more than once)."""
+    pages at (cuda may be given more than once). conda and mamba are tools: the
+    version given them is the one their pages are read at."""
 
     given: dict[str, str] = {}
     web: dict[str, list[str]] = {}
     for pair in pairs:
         name, _, value = pair.partition("=")
-        if value and name in FINDERS:
-            web.setdefault(name, []).append(value)
-        elif value and name in KNOWN:
+        if value and name in KNOWN:
             given[name] = value
+        elif value and name in FINDERS:
+            web.setdefault(name, []).append(value)
         else:
             raise SystemExit(f"--version-of {pair!r}: give NAME=VERSION, NAME one of "
-                             f"{', '.join((*KNOWN, *FINDERS))}")
+                             f"{', '.join(dict.fromkeys((*KNOWN, *FINDERS)))}")
     return given, web
 
 

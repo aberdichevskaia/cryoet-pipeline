@@ -61,6 +61,13 @@ Status, 2026-11-05:
     real AreTomo2 needs a GPU): both files were fetched and matched their pins.
     The manual became 14 pages of text, and `search_library.py` found
     "-AlignZ" and "tilt offset" in it.
+- **conda and mamba, added 2026-11-22**: the environment managers the pipeline
+  is installed and activated with. The installation channel reads their
+  versions and the `--help` of their commands; the web channel reads conda's
+  user guide at the site's conda version and mamba's guides at the tag of the
+  site's micromamba or mamba (see [What goes in](#what-goes-in) and
+  [How a snapshot is built](#how-a-snapshot-is-built)). Built on the Mac;
+  MDC's `mdc-2026-11-19b` predates them, so MDC needs a new snapshot.
 
 ## Core rule
 
@@ -147,7 +154,9 @@ The assistant reads in three tiers, as other agentic systems do (see
 ## What goes in
 
 The programs listed here are the ones the code and the lane files call, as of
-2026-11-05, and AreTomo2 since 2026-11-08.
+2026-11-05, and AreTomo2 since 2026-11-08; and since 2026-11-22 conda and
+mamba, which the pipeline is installed and activated with
+([setup.md](agent/setup.md), `scripts/activate_env.sh`).
 
 | Source | Contents | Channel |
 |---|---|---|
@@ -161,11 +170,12 @@ The programs listed here are the ones the code and the lane files call, as of
 | NVIDIA, CuPy, PyTorch | For each CUDA version the site has: its release notes (the driver it needs, the GPUs it compiles for or dropped), its `nvcc` manual (`-gencode`, cubins and PTX) and its installation guide. NVIDIA's guides to driver compatibility, the compute capability tables, MIG, and installing the driver on Ubuntu and Rocky or Red Hat Linux. CuPy's installation and environment variables (CuPy is what pytom-match-pick runs on), and PyTorch's install command for each release and CUDA version (PyTorch is what the dynamo-search port runs on). Built 2026-11-16: `[web]` in `configs/library.toml` | web, by version (CUDA, CuPy); web, dated (the rest) |
 | Slurm | `man` pages of the installed version (sbatch, sacct, squeue, sinfo, scontrol); the site's own wiki pages | installation; site wiki (see [sign-in sources](#how-a-snapshot-is-built)) |
 | bash | The installed `man bash`. A Mac has bash 3.2. | installation |
+| conda, mamba and micromamba | What each prints for `--help`, for itself and for the commands an installation uses (create, install, remove, update, list, search, env, config, clean, info, run; conda's init, mamba's shell). conda's user guide: installing it, environments, packages, channels, Python, virtual packages (`__cuda`, `CONDA_OVERRIDE_CUDA`), `.condarc` and every setting in it, where environments and the package cache go, pip, temporary files, installations shared by a group, package specifications, the solver's speed, troubleshooting. mamba's guides: installing mamba and micromamba, their user guides, configuration, the prefix and its package cache, troubleshooting, how an install, an update and a removal proceed. Built 2026-11-22 | installation; web, by version: conda's at docs.conda.io under major.minor.x, mamba's from its repository at the tag of the release, since Read the Docs keeps only mamba's `latest` and `stable` |
 | Site card | Each tool's version, GPU types and drivers, CUDA modules, partitions | collected on the site, dated |
 
 Proposed, not decided:
 
-- environment modules and micromamba;
+- environment modules;
 - data formats: MRC2014, SerialEM mdoc, RELION STAR, Dynamo tables, EER;
 - the tools' tutorials, where they exist.
 
@@ -222,6 +232,11 @@ web, dated       a page without versions, such as NVIDIA's guides or the Dynamo 
                      (AreTomo3 is another program, with another command line)
   Slurm              sinfo -V
   bash               bash --version
+  conda              conda --version, found as $CONDA_EXE (its shell init
+                     exports it), else on PATH
+  mamba              micromamba --version or mamba --version: $MAMBA_EXE, else
+                     micromamba on PATH, else mamba; "2.5.0" alone, or after
+                     the name in 1.x
   ```
 
   A version the builder cannot find is listed in the dry run. A command-line
@@ -250,9 +265,10 @@ web, dated       a page without versions, such as NVIDIA's guides or the Dynamo 
 - **Pages** (built 2026-11-16). `[web.<source>]` in `configs/library.toml`
   names documentation pages that no installation carries: NVIDIA's on CUDA,
   drivers, compute capabilities and MIG, CuPy's and PyTorch's on their CUDA
-  builds. Each page has a name and an address, or a list of addresses tried in
-  order. Only `docs.nvidia.com`, `developer.nvidia.com`, `docs.cupy.dev` and
-  `pytorch.org` may be named.
+  builds, and conda's and mamba's guides (since 2026-11-22). Each page has a
+  name and an address, or a list of addresses tried in order. Only
+  `docs.nvidia.com`, `developer.nvidia.com`, `docs.cupy.dev`, `pytorch.org`,
+  `docs.conda.io` and `raw.githubusercontent.com` may be named.
   - **By version.** `versions = "cuda"` reads the pages once for each CUDA
     version this site has, which the builder finds itself:
     - the `nvcc` on `PATH`;
@@ -271,6 +287,18 @@ web, dated       a page without versions, such as NVIDIA's guides or the Dynamo 
     as the CUDA a site's MotionCor3 and AreTomo2 were built with, which it
     does not read (12.5 at MDC: [setup.md](agent/setup.md), "Order of
     installation", 7).
+  - **conda and mamba by version.** `versions = "conda"` reads the pages at
+    the version of the `conda` tool, as Read the Docs files a release:
+    26.3.2 is read under `en/26.3.x/`. `versions = "mamba"` reads them at the
+    version of the `mamba` tool, micromamba or mamba, from mamba's repository
+    at the tag of that release: Read the Docs keeps only `latest` and `stable`
+    of mamba's (on 22 November 2026 the newest release was 2.10.0, and the Mac
+    had 2.5.0). 2.x is tagged by its number and 1.x as `micromamba-<number>`,
+    so each file names both, tried in that order. A file the release does not
+    have is a problem, as a missing page is: mamba 1.x has no `installation/`
+    folder, and conda's page on temporary files is in 26.1.x and 26.3.x but
+    not in 25.11.x or before. `--version-of conda=26.3.2` gives the tool's
+    version, and so the pages', on a site without conda.
   - **Dated.** A source without `versions` is read as it stands that day. Its
     text says "as of" the build's date, and `library.json` keeps the sha256 of
     what came.
@@ -278,12 +306,17 @@ web, dated       a page without versions, such as NVIDIA's guides or the Dynamo 
     footers. It is the first element that `itemprop="articleBody"`,
     `<article>`, `<main>` or `role="main"` marks (the converter `main 1`), else
     the whole page. The original goes to `raw/<source>[/<version>]/<name>.html`,
-    the text to `text/<source>[/<version>]/<name>.md`.
+    the text to `text/<source>[/<version>]/<name>.md`. An address ending in
+    `.rst`, `.md` or `.txt` is a text file, mamba's reStructuredText: it is
+    kept as it came, in a fence (the converter `text 1`), and its original
+    keeps its suffix.
   - **Failures.** A page the site does not have (404, 410), or none of whose
     addresses gives the right version, is a problem and is left out, and the
     rest is read. Any other failure to fetch stops the build.
   - **Size.** On the Mac on 16 November 2026, two CUDA versions, CuPy and the
-    rest gave 26 pages and 0.8 MB of text in about a minute and a half.
+    rest gave 26 pages and 0.8 MB of text in about a minute and a half. On 22
+    November, conda 26.3.2 and mamba 2.5.0 gave 61 documents (15 and 17
+    `--help` texts, 19 and 10 guide pages) and 0.36 MB of text in 14 s.
 - **The site card's GPU.** The card runs `nvidia-smi`, which a login node does
   not have. `--gpu-node-report <file>` puts what it printed on a GPU node into
   the card, with the file's date:

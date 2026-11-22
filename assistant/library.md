@@ -14,6 +14,13 @@ tools the pipeline runs, at the versions installed on this site:
 - CuPy's pages at the version pytom-match-pick runs on (`--tool cupy`), and
   PyTorch's install commands for each CUDA version (`--tool pytorch`). The
   pages NVIDIA and PyTorch keep without versions say the date they were read;
+- conda and micromamba (or mamba) at the site's versions: what their commands
+  print for `--help` (`--tool conda`, `--tool mamba`), conda's user guide
+  (`--tool conda-docs`: environments, channels, virtual packages and
+  `CONDA_OVERRIDE_CUDA`, `.condarc` and its settings, where environments and
+  the package cache go) and mamba's guides (`--tool mamba-docs`: installing
+  micromamba, `MAMBA_ROOT_PREFIX`, configuration, troubleshooting), the last
+  as reStructuredText from mamba's repository at the release's tag;
 - the site card, `site.md`: tool versions, the CUDA versions found, partitions,
   GPU types, modules, and a GPU node's `nvidia-smi` when one was given.
 

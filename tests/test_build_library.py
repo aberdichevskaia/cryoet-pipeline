@@ -288,7 +288,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_}:{pytom}:{imod / 'bin'}:/usr/bin:/bin")
     monkeypatch.setenv("PYTOMO_MP_DIR", str(pytom))
     for variable in ("IMOD_DIR", "CTFFIND5", "MOTIONCOR3", "ARETOMO", "MEMBRAIN_EXE",
-                     "CRYOET_LIBRARY"):
+                     "CRYOET_LIBRARY", "CONDA_EXE", "MAMBA_EXE"):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(bl, "SRC", src)
     monkeypatch.setattr(bl, "today", lambda: DAY)
@@ -783,7 +783,8 @@ def test_a_pages_own_text_is_told_from_the_sites_frame(html, label, kept, left):
     ('[web.x.pages]\na = "http://docs.nvidia.com/x"\n', "must be an https address"),
     ('[web.x.pages]\na = "https://example.org/x"\n', "must be an https address"),
     ('[web.x]\nversions = "torch"\n[web.x.pages]\na = "https://pytorch.org/{version}"\n',
-     "versions must be one of cuda, cupy"),
+     "versions must be one of cuda, cupy, conda, mamba"),
+    ('[web.conda.pages]\na = "https://docs.conda.io/x"\n', "not a tool's"),
     ('[web.imod.pages]\na = "https://docs.nvidia.com/x"\n', "not a tool's"),
     ('[web.x.pages]\nA_B = "https://docs.nvidia.com/x"\n', "a page's name is"),
     ('[web.x]\nurl = "https://docs.nvidia.com/x"\n', "needs pages"),
@@ -797,8 +798,12 @@ def test_a_web_source_must_be_well_formed(tmp_path, web, said):
 
 def test_the_web_pages_of_the_list_of_sources_are_well_formed():
     web = bl.read_web(bl.SOURCES)
-    assert set(web) == {"cuda", "nvidia", "cupy", "pytorch"}
+    assert set(web) == {"cuda", "nvidia", "cupy", "pytorch", "conda-docs", "mamba-docs"}
     assert web["cuda"]["versions"] == "cuda" and web["cupy"]["versions"] == "cupy"
+    assert web["conda-docs"]["versions"] == "conda" and web["mamba-docs"]["versions"] == "mamba"
+    # mamba's files at the tag of a 2.x release, then at that of a 1.x one.
+    for addresses in web["mamba-docs"]["pages"].values():
+        assert [url.split("/")[5] for url in addresses] == ["{version}", "micromamba-{version}"]
     assert "versions" not in web["nvidia"] and "versions" not in web["pytorch"]
     # The tools' part is read as before, without the pages.
     assert "web" not in bl.read_sources(bl.SOURCES)
@@ -807,6 +812,9 @@ def test_the_web_pages_of_the_list_of_sources_are_well_formed():
 def test_versions_are_given_to_tools_and_to_pages_apart():
     assert bl.parse_given(["ctffind=5.0.2", "cuda=12.5", "cuda=13.2", "cupy=14.2.0"]) == (
         {"ctffind": "5.0.2"}, {"cuda": ["12.5", "13.2"], "cupy": ["14.2.0"]})
+    # conda and mamba are tools; their pages are read at the tool's version.
+    assert bl.parse_given(["conda=26.3.2", "mamba=2.5.0"]) == (
+        {"conda": "26.3.2", "mamba": "2.5.0"}, {})
     with pytest.raises(SystemExit, match="NAME one of"):
         bl.parse_given(["torch=2.15.0"])
 
@@ -863,3 +871,139 @@ def test_a_gpu_nodes_report_goes_into_the_site_card(host, monkeypatch, capsys):
     assert not any("no nvidia-smi" in note for note in record["notes"])
     with pytest.raises(SystemExit, match="no such file"):
         run(host, "--gpu-node-report", str(host["tmp"] / "absent.txt"))
+
+
+# --- the environment managers ---------------------------------------------------------
+
+MANAGERS = """\
+[conda]
+usage = [["--help"]]
+[mamba]
+usage = [["create", "--help"]]
+"""
+
+CONDA_PAGE = "https://docs.conda.io/projects/conda/en/{}/user-guide/tasks/manage-virtual.html"
+MAMBA_FILE = ("https://raw.githubusercontent.com/mamba-org/mamba/{}/docs/source/user_guide/"
+              "micromamba.rst")
+MANAGER_PAGES = f"""\
+[web.conda-docs]
+versions = "conda"
+[web.conda-docs.pages]
+virtual-packages = "{CONDA_PAGE.format("{version}")}"
+[web.mamba-docs]
+versions = "mamba"
+[web.mamba-docs.pages]
+micromamba = [
+    "{MAMBA_FILE.format("{version}")}",
+    "{MAMBA_FILE.format("micromamba-{version}")}",
+]
+"""
+
+
+def managers(host, monkeypatch, mamba_says: str = "2.5.0") -> dict[str, Path]:
+    """conda, micromamba and mamba as stand-ins: conda in a folder its shell
+    init would name, the two mambas on PATH."""
+    bin_ = host["tmp"] / "bin"
+    conda = executable(host["tmp"] / "miniforge" / "bin" / "conda", """\
+        if [ "$1" = --version ]; then echo "conda 26.3.2"; else echo "usage: conda [-h]"; fi
+        """)
+    said = mamba_says.replace("\n", "\\n")
+    found = {"conda": conda}
+    for name in ("micromamba", "mamba"):
+        found[name] = executable(bin_ / name, f"""\
+            if [ "$1" = --version ]; then printf '{said}\\n'; else echo "$0 $*"; fi
+            """)
+    with host["sources"].open("a") as sources:
+        sources.write(MANAGERS)
+    return found
+
+
+def test_the_environment_managers_are_found_as_their_shell_init_names_them(host, monkeypatch):
+    found = managers(host, monkeypatch)
+    tools = bl.find_tools(bl.read_sources(host["sources"]), [], {})
+    # No $CONDA_EXE and no conda on PATH; micromamba before mamba, as
+    # scripts/activate_env.sh activates with it.
+    assert tools["conda"].path is None and "$CONDA_EXE is not set" in tools["conda"].note
+    assert (tools["mamba"].path, tools["mamba"].found) == (found["micromamba"],
+                                                          "micromamba on PATH")
+    assert tools["mamba"].version_text == "2.5.0"
+    monkeypatch.setenv("CONDA_EXE", str(found["conda"]))
+    monkeypatch.setenv("MAMBA_EXE", str(found["mamba"]))
+    tools = bl.find_tools(bl.read_sources(host["sources"]), [], {})
+    assert (tools["conda"].path, tools["conda"].found) == (found["conda"], "$CONDA_EXE")
+    assert tools["conda"].version_text == "26.3.2"
+    assert (tools["mamba"].path, tools["mamba"].found) == (found["mamba"], "$MAMBA_EXE")
+    monkeypatch.setenv("MAMBA_EXE", str(host["tmp"] / "gone" / "micromamba"))
+    assert "is not a file" in bl.find_tools(bl.read_sources(host["sources"]), [], {})[
+        "mamba"].problem
+
+
+@pytest.mark.parametrize("said, version", [
+    ("2.5.0", "2.5.0"),
+    ("mamba 1.5.8\nconda 24.1.2", "1.5.8"),
+    ("micromamba 1.5.9", "1.5.9"),
+    ("critical libmamba Shell not initialized", None),
+])
+def test_mamba_states_its_version_alone_or_after_its_name(tmp_path, said, version):
+    program = executable(tmp_path / "micromamba", f"printf '{said}\\n'\n")
+    assert bl.mamba_version(program).value == version
+
+
+def test_conda_and_mamba_guides_are_read_at_their_versions(host, monkeypatch, capsys):
+    found = managers(host, monkeypatch)
+    monkeypatch.setenv("CONDA_EXE", str(found["conda"]))
+    rst = b"Micromamba User Guide\r\n=====================\r\n\r\n``micromamba`` is tiny.\r\n"
+    with_web(host, monkeypatch, {
+        CONDA_PAGE.format("26.3.x"): b"<html><head><title>Managing virtual packages</title>"
+                                     b"</head><body><nav>Menu</nav><article><h1>Managing "
+                                     b"virtual packages</h1><p><code>CONDA_OVERRIDE_CUDA</code>"
+                                     b"</p></article></body></html>",
+        MAMBA_FILE.format("2.5.0"): rst,
+    }, web=MANAGER_PAGES)
+    assert run(host, "--dry-run") == 0
+    printed = capsys.readouterr().out
+    assert re.search(r"conda-docs +26\.3\.x \(conda 26\.3\.2, \$CONDA_EXE\): virtual-packages",
+                     printed)
+    assert re.search(r"mamba-docs +2\.5\.0 \(micromamba 2\.5\.0, micromamba on PATH\): "
+                     r"micromamba\n", printed)
+    assert run(host) == 0
+    snapshot = host["root"] / f"test-{DAY}"
+    virtual = (snapshot / "text" / "conda-docs" / "26.3.x" / "virtual-packages.md").read_text()
+    assert 'tool: "conda-docs"\nversion: "26.3.x"\nchannel: "web, by version"' in virtual
+    assert "`CONDA_OVERRIDE_CUDA`" in virtual and "Menu" not in virtual
+    # read_bytes: read_text would turn a \r\n kept in the text into \n.
+    guide = (snapshot / "text" / "mamba-docs" / "2.5.0" / "micromamba.md").read_bytes().decode()
+    assert guide.split("---\n", 2)[2] == (
+        "# micromamba.rst\n\n```text\nMicromamba User Guide\n=====================\n\n"
+        "``micromamba`` is tiny.\n```\n")
+    assert (snapshot / "raw" / "mamba-docs" / "2.5.0" / "micromamba.rst").read_bytes() == rst
+    assert (snapshot / "text" / "conda" / "help.md").is_file()
+    create = (snapshot / "text" / "mamba" / "create-help.md").read_text()
+    assert "micromamba create --help" in create
+    record = json.loads((snapshot / "library.json").read_text())
+    assert record["versions"]["mamba"] == [
+        {"version": "2.5.0", "seen": "micromamba 2.5.0, micromamba on PATH"}]
+    pages = {source["name"]: source for source in record["sources"] if source["kind"] == "page"}
+    assert pages["micromamba"]["converter"] == "text 1"
+    assert pages["virtual-packages"]["converter"] == "html 1, main 1 (<article>)"
+    assert record["problems"] == []
+
+
+def test_mamba_1_is_read_at_its_micromamba_tag_and_conda_at_a_given_version(host, monkeypatch):
+    managers(host, monkeypatch, mamba_says="mamba 1.5.9\nconda 24.1.2")
+    asked = with_web(host, monkeypatch, {
+        CONDA_PAGE.format("25.1.x"): b"<html><body><article><p>Virtual.</p></article></body>"
+                                     b"</html>",
+        MAMBA_FILE.format("micromamba-1.5.9"): b"Micromamba User Guide\n",
+    }, web=MANAGER_PAGES)
+    # No conda here: the version given is the one its pages are read at.
+    assert run(host, "--version-of", "conda=25.1.2") == 0
+    assert asked == [CONDA_PAGE.format("25.1.x"), MAMBA_FILE.format("1.5.9"),
+                     MAMBA_FILE.format("micromamba-1.5.9")]
+    snapshot = host["root"] / f"test-{DAY}"
+    assert (snapshot / "text" / "mamba-docs" / "1.5.9" / "micromamba.md").is_file()
+    record = json.loads((snapshot / "library.json").read_text())
+    assert record["versions"]["conda"] == [
+        {"version": "25.1.x", "seen": "given with --version-of"}]
+    assert not (snapshot / "text" / "conda").exists()
+

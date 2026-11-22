@@ -65,10 +65,59 @@ man = ["sbatch", "srun", "scancel", "squeue", "sacct", "sinfo", "scontrol"]
 [bash]
 man = ["bash"]
 
+# The environment managers the pipeline is installed and activated with
+# (docs/agent/setup.md; scripts/activate_env.sh): conda where there is one,
+# micromamba at MDC and in Stockholm. conda is found as $CONDA_EXE, which its
+# shell init exports, else on PATH; mamba as $MAMBA_EXE, else micromamba on
+# PATH, else mamba (Miniforge's, on the Mac). Their guides are pages of the web
+# channel, read at these versions: [web.conda-docs] and [web.mamba-docs].
+# `conda activate --help` is left out: without conda's shell function it shows
+# only -h.
+[conda]
+usage = [
+    ["--help"],
+    ["create", "--help"],
+    ["install", "--help"],
+    ["remove", "--help"],
+    ["update", "--help"],
+    ["list", "--help"],
+    ["search", "--help"],
+    ["env", "--help"],
+    ["env", "create", "--help"],
+    ["env", "export", "--help"],
+    ["config", "--help"],
+    ["clean", "--help"],
+    ["info", "--help"],
+    ["init", "--help"],
+    ["run", "--help"],
+]
+
+[mamba]
+usage = [
+    ["--help"],
+    ["create", "--help"],
+    ["install", "--help"],
+    ["remove", "--help"],
+    ["update", "--help"],
+    ["list", "--help"],
+    ["search", "--help"],
+    ["env", "--help"],
+    ["env", "create", "--help"],
+    ["env", "export", "--help"],
+    ["config", "--help"],
+    ["clean", "--help"],
+    ["info", "--help"],
+    ["shell", "--help"],
+    ["shell", "init", "--help"],
+    ["shell", "hook", "--help"],
+    ["run", "--help"],
+]
+
 # --- the web channel's pages ----------------------------------------------------
 #
-# Documentation no installation carries: NVIDIA's on CUDA, drivers and GPUs, and
-# CuPy's and PyTorch's on their CUDA builds (docs/library.md, "What goes in").
+# Documentation no installation carries: NVIDIA's on CUDA, drivers and GPUs,
+# CuPy's and PyTorch's on their CUDA builds, and conda's and mamba's guides
+# (docs/library.md, "What goes in").
 # A [web.<source>] names its pages, each by an address, or by a list of them
 # tried in order.
 #
@@ -80,12 +129,18 @@ man = ["bash"]
 #                       the page's title states the version.
 #   versions = "cupy"   the pages are read at the CuPy version of
 #                       pytom-match-pick's environment.
+#   versions = "conda"  the pages are read at the version of [conda] above, as
+#                       its documentation names a release: 26.3.2 is 26.3.x.
+#   versions = "mamba"  the pages are read at the version of [mamba] above,
+#                       which is the tag of its release.
 #   no versions         the pages are read as they stand on the day of the build,
 #                       and dated.
 #
-# Only a page's own text is converted, not the site's menus around it. A page
+# Only a page's own text is converted, not the site's menus around it; an
+# address ending in .rst, .md or .txt is a text file, kept as it came. A page
 # the site does not have (404) is a problem, and the rest is read; any other
-# failure to fetch stops the build. Addresses read on 2026-11-16.
+# failure to fetch stops the build. Addresses read on 2026-11-16, conda's and
+# mamba's on 2026-11-22.
 
 [web.cuda]
 # Each version's release notes (the driver it needs, the GPUs it compiles for or
@@ -148,3 +203,86 @@ environment = "https://docs.cupy.dev/en/v{version}/reference/environment.html"
 
 [web.pytorch.pages]
 previous-versions = "https://pytorch.org/get-started/previous-versions/"
+
+[web.conda-docs]
+# conda's user guide: environments, packages, channels and Python; virtual
+# packages (__cuda, and CONDA_OVERRIDE_CUDA where no GPU is seen); .condarc and
+# every setting in it; where environments and the package cache go; pip inside
+# an environment; temporary files; installations shared by a group; package
+# specifications, the solver's speed, and troubleshooting. Read the Docs keeps
+# each release's documentation under its major.minor.x. The commands
+# themselves are [conda]'s usage above, at the version installed here.
+versions = "conda"
+
+[web.conda-docs.pages]
+install = "https://docs.conda.io/projects/conda/en/{version}/user-guide/install/index.html"
+install-linux = "https://docs.conda.io/projects/conda/en/{version}/user-guide/install/linux.html"
+manage-environments = "https://docs.conda.io/projects/conda/en/{version}/user-guide/tasks/manage-environments.html"
+manage-packages = "https://docs.conda.io/projects/conda/en/{version}/user-guide/tasks/manage-pkgs.html"
+manage-channels = "https://docs.conda.io/projects/conda/en/{version}/user-guide/tasks/manage-channels.html"
+manage-python = "https://docs.conda.io/projects/conda/en/{version}/user-guide/tasks/manage-python.html"
+virtual-packages = "https://docs.conda.io/projects/conda/en/{version}/user-guide/tasks/manage-virtual.html"
+condarc = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/use-condarc.html"
+settings = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/settings.html"
+env-and-package-locations = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/custom-env-and-pkg-locations.html"
+pip = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/pip-interoperability.html"
+temp-files = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/temp-files.html"
+multi-user = "https://docs.conda.io/projects/conda/en/{version}/user-guide/configuration/admin-multi-user-install.html"
+environments = "https://docs.conda.io/projects/conda/en/{version}/user-guide/concepts/environments.html"
+channels = "https://docs.conda.io/projects/conda/en/{version}/user-guide/concepts/channels.html"
+packages = "https://docs.conda.io/projects/conda/en/{version}/user-guide/concepts/packages.html"
+package-specs = "https://docs.conda.io/projects/conda/en/{version}/user-guide/concepts/pkg-specs.html"
+performance = "https://docs.conda.io/projects/conda/en/{version}/user-guide/concepts/conda-performance.html"
+troubleshooting = "https://docs.conda.io/projects/conda/en/{version}/user-guide/troubleshooting.html"
+
+[web.mamba-docs]
+# mamba's and micromamba's guides: installing each, the user guides,
+# configuration (.mambarc and .condarc, MAMBA_ROOT_PREFIX), the prefix and its
+# package cache, troubleshooting, and how an install, an update and a removal
+# proceed. Read the Docs keeps only the newest of them, so they are read from
+# mamba's repository at the tag of the version here: 2.x is tagged by its
+# number, 1.x as micromamba-<number>, and a file that release does not have is
+# a problem. The pages of libmambapy's API (usage/) are left out.
+versions = "mamba"
+
+[web.mamba-docs.pages]
+micromamba-installation = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/installation/micromamba-installation.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/installation/micromamba-installation.rst",
+]
+mamba-installation = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/installation/mamba-installation.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/installation/mamba-installation.rst",
+]
+micromamba = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/user_guide/micromamba.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/user_guide/micromamba.rst",
+]
+mamba = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/user_guide/mamba.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/user_guide/mamba.rst",
+]
+concepts = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/user_guide/concepts.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/user_guide/concepts.rst",
+]
+configuration = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/user_guide/configuration.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/user_guide/configuration.rst",
+]
+troubleshooting = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/user_guide/troubleshooting.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/user_guide/troubleshooting.rst",
+]
+more-concepts = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/advanced_usage/more_concepts.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/advanced_usage/more_concepts.rst",
+]
+detailed-operations = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/advanced_usage/detailed_operations.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/advanced_usage/detailed_operations.rst",
+]
+package-resolution = [
+    "https://raw.githubusercontent.com/mamba-org/mamba/{version}/docs/source/advanced_usage/package_resolution.rst",
+    "https://raw.githubusercontent.com/mamba-org/mamba/micromamba-{version}/docs/source/advanced_usage/package_resolution.rst",
+]
