@@ -169,14 +169,29 @@ MEMBRAIN_CAPABILITY = (7, 5)
 MEMBRAIN = "MemBrain-seg's PyTorch"
 
 # Compute capability by GPU model, for the GRES types sinfo lists: NVIDIA's tables
-# (developer.nvidia.com/cuda/gpus and its legacy page, read 2026-11-16), for the
-# GPUs met at MDC and in Munich. A model is matched as a word of the type's name,
-# so that p600 is not taken for p6000.
+# (developer.nvidia.com/cuda/gpus and its legacy page, read 2026-11-16 and, for the
+# GeForce and RTX A cards of cryoem.se in Stockholm, in the library's copy of
+# 2026-11-17), for the GPUs met at MDC, in Munich and in Stockholm. A model is
+# matched as a word of the type's name once the maker's and the line's words are
+# taken off it (GPU_BRANDS), so that rtx_a5000, nvidia_rtx_a5000 and a5000 name one
+# card and p600 is not taken for p6000. A number shared by cards of different
+# generations, such as 4000 (Quadro RTX 4000 7.5, RTX 4000 Ada 8.9, RTX PRO 4000
+# Blackwell 12.0), is left out.
 GPU_MODELS = (
-    ("h200", "9.0"), ("h100", "9.0"), ("b300", "10.3"), ("a100", "8.0"), ("a40", "8.6"),
-    ("v100", "7.0"), ("t4", "7.5"), ("rtx8000", "7.5"), ("rtx_8000", "7.5"),
-    ("rtx-8000", "7.5"), ("p6000", "6.1"), ("p600", "6.1"),
+    ("h200", "9.0"), ("h100", "9.0"), ("gb200", "10.0"), ("b200", "10.0"), ("b300", "10.3"),
+    ("a100", "8.0"), ("a30", "8.0"), ("a40", "8.6"), ("a10", "8.6"), ("a16", "8.6"),
+    ("a2", "8.6"), ("l40s", "8.9"), ("l40", "8.9"), ("l4", "8.9"),
+    ("v100", "7.0"), ("t4", "7.5"), ("8000", "7.5"), ("p6000", "6.1"), ("p600", "6.1"),
+    # RTX A workstation cards
+    ("a6000", "8.6"), ("a5000", "8.6"), ("a4000", "8.6"), ("a3000", "8.6"), ("a2000", "8.6"),
+    # GeForce: RTX 20, 30, 40 and 50, a Ti with its card
+    ("2080", "7.5"), ("2070", "7.5"), ("2060", "7.5"),
+    ("3090", "8.6"), ("3080", "8.6"), ("3070", "8.6"), ("3060", "8.6"), ("3050", "8.6"),
+    ("4090", "8.9"), ("4080", "8.9"), ("4070", "8.9"), ("4060", "8.9"), ("4050", "8.9"),
+    ("5090", "12.0"), ("5080", "12.0"), ("5070", "12.0"), ("5060", "12.0"), ("5050", "12.0"),
 )
+# Words of a GRES type that name the maker or the line rather than the card.
+GPU_BRANDS = re.compile(r"(nvidia|geforce|quadro|tesla|rtx|gtx)[_.\-]?")
 # The lowest driver for each CUDA major version on Linux (NVIDIA, CUDA Toolkit
 # release notes, minor version compatibility; read 2026-11-16).
 DRIVER_FOR_CUDA = {"13": "580", "12": "525", "11": "450"}
@@ -1278,7 +1293,7 @@ def cluster_gpus(report: Report) -> dict[str, str]:
 
 
 def model_capability(gres: str) -> str:
-    name = gres.lower()
+    name = GPU_BRANDS.sub("", gres.lower())
     for model, capability in GPU_MODELS:
         if re.search(rf"(?<![a-z0-9]){re.escape(model)}(?![0-9])", name):
             return capability
@@ -1328,6 +1343,10 @@ def gpu_and_cuda(report: Report, code: list[GpuCode]) -> list[GpuCode]:
     unknown = sorted(name for name, capability in cluster.items() if not capability)
     if unknown:
         facts["unknown_types"] = unknown
+        report.note(f"this check knows no compute capability for the GPU type(s) {', '.join(unknown)}, "
+                    "so whether the programs' GPU code runs there is left open in parts 4 and 5; "
+                    "NVIDIA's table gives it (developer.nvidia.com/cuda/gpus), and setup.md's "
+                    "'GPU and CUDA' says how a program's code and a GPU fit")
     fits: list[str] = []
     for holder in code:
         if not (holder.cubins or holder.ptx):
@@ -1340,6 +1359,8 @@ def gpu_and_cuda(report: Report, code: list[GpuCode]) -> list[GpuCode]:
         line = f"{holder.holder}: runs on {', '.join(yes) or 'none of them'}"
         if no:
             line += f"; not on {', '.join(no)}"
+        if unknown:
+            line += f"; not known for {', '.join(unknown)}"
         fits.append(line)
         for gpu in here:
             if usable(gpu.capability, holder):
@@ -1821,7 +1842,10 @@ def judge(group: StepGroup, ready: bool, tools_ready: dict[str, bool], code: Gpu
           pci: list[dict[str, str]]) -> tuple[str, str]:
     """Whether a step group can run: "yes", "cpu" (on the CPU only), "no" or "?",
     and why. GPU code that is not known (CuPy compiles its kernels when run)
-    counts as fitting every GPU."""
+    counts as fitting every GPU. A cluster's GPU type with no known compute
+    capability ("" in `cluster`) is named as not known, never dropped: in
+    Stockholm on 23 November 2026 the check said 'a40' alone while the reserved
+    nodes were A5000s it had no capability for."""
 
     if not ready:
         return "no", "the pipeline's environment is not ready (part 2)"
@@ -1839,9 +1863,19 @@ def judge(group: StepGroup, ready: bool, tools_ready: dict[str, bool], code: Gpu
     elif on_cluster:
         if not cluster:
             return "?", "sinfo lists no GPU type to check against"
-        yes = [name for name, capability in sorted(cluster.items()) if fits(capability)]
+        any_gpu = code is None or not (code.cubins or code.ptx)
+        known = {name: capability for name, capability in cluster.items() if capability}
+        unknown = sorted(name for name in cluster if name not in known)
+        if any_gpu:
+            yes, unknown = sorted(cluster), []
+        else:
+            yes = [name for name, capability in sorted(known.items()) if fits(capability)]
+        not_known = [f"not known for {', '.join(unknown)} (part 4)"] if unknown else []
         if yes:
-            return "yes", "on the GPU nodes: " + ", ".join(yes)
+            return "yes", "; ".join(["on the GPU nodes: " + ", ".join(yes), *not_known])
+        if unknown:
+            fits_none = ["its GPU code fits none of " + ", ".join(sorted(known))] if known else []
+            return "?", "; ".join([*not_known, *fits_none])
         reason = "its GPU code fits none of the cluster's GPUs (" + ", ".join(sorted(cluster)) + ")"
     elif here:
         if code is not None and code.cuda and driver and cuda_fit(code.cuda, driver) == "no":
@@ -1875,8 +1909,7 @@ def steps_map(report: Report, lanes: list[Lane], codes: list[GpuCode]) -> None:
     holders["pytom-match-pick's CuPy"] = GpuCode("pytom-match-pick's CuPy",
                                                  cuda=cuda_text(cupy.get("runtime")))
     here = [Gpu(**gpu) for gpu in report.gpu.get("gpus", [])]
-    cluster = {name: capability for name, capability in (report.gpu.get("cluster") or {}).items()
-               if capability}
+    cluster = dict(report.gpu.get("cluster") or {})
     on_cluster = bool(report.gpu.get("slurm"))
     report.gpu["mode"] = ("on this cluster's nodes, through Slurm" if on_cluster
                           else "on this machine itself (no Slurm here)")

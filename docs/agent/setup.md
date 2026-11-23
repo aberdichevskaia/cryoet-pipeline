@@ -297,7 +297,9 @@ record's `software_versions`.
   2026).
 - **A GPU's compute capability** is its generation as a number: V100 7.0, T4
   7.5, A100 8.0, A40 8.6, H100 and H200 9.0, B300 10.3 (NVIDIA's table of CUDA
-  GPUs, read 16 November 2026).
+  GPUs, read 16 November 2026); GeForce RTX 2080 7.5, RTX A5000 and GeForce
+  RTX 3070 and 3080 8.6, GeForce RTX 4070 Ti 8.9, the cards of cryoem.se in
+  Stockholm (the same table in the library, 17 November 2026).
   `nvidia-smi --query-gpu=name,compute_cap --format=csv` prints it.
 - **A program's GPU code.** A program carries cubins, each compiled for one
   compute capability (`sm_86` for 8.6), and may carry PTX, which the driver
@@ -455,6 +457,14 @@ building are in I-13.
   its columns, which differ from site to site.
 - **Another node.** Its GPU part speaks for the node it runs on, and for the
   cluster's GPU types by their names.
+- **A GPU type it does not know.** A type whose name it has no compute
+  capability for, such as a card newer than its list or a number that names
+  cards of different generations (4000: Quadro RTX 4000 at 7.5, RTX 4000 Ada at
+  8.9, RTX PRO 4000 Blackwell at 12.0), shows as `?` in part 4, and part 5 names
+  it as not known instead of counting it in or out. NVIDIA's table gives its
+  capability (developer.nvidia.com/cuda/gpus; the library keeps it). Until 23
+  November 2026 part 5 left such types out: in Stockholm it named only the
+  A40s, not the reserved A5000s.
 - **Variables set after the shell started.** A session, or a terminal, opened
   before `~/.bashrc` changed has the old variables. Run it in a new terminal.
 - **Whether a step runs.** A version and a list of GPU code are not a run. The

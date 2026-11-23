@@ -68,7 +68,10 @@ which need an NVIDIA GPU."
 
 - Where Slurm answers, the jobs run on the cluster's nodes: the answer is about
   the cluster's GPU types (part 4 lists them), not those of the node the check
-  runs on.
+  runs on. A type marked `?` has no compute capability in the check, and part 5
+  names it as not known: look its capability up in NVIDIA's table
+  (`scripts/search_library.py`), or say it is not known; never count it as
+  unfit.
 - Without Slurm, it is about this machine. The lanes' submissions need Slurm;
   here a lane's steps run with `scripts/run_series.py --execute`, which the
   person runs. Never run it yourself.

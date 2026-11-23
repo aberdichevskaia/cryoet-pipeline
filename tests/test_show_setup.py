@@ -476,9 +476,19 @@ def test_which_gpu_runs_which_code(capability, cubins, ptx, runs):
 @pytest.mark.parametrize("gres, capability", [
     ("a40", "8.6"), ("tesla-v100", "7.0"), ("tesla-t4", "7.5"), ("h100", "9.0"), ("h200", "9.0"),
     ("b300", "10.3"), ("a100_3g.20gb", "8.0"), ("quadro_rtx_8000", "7.5"), ("p600", "6.1"),
-    ("p6000", "6.1"), ("rtx4000", ""), ("gpu", ""),
+    ("p6000", "6.1"), ("gpu", ""),
     # An RTX A1000 is no A100: a model counts only as a word of the type's name.
     ("rtx_a1000", ""),
+    # A number that names cards of different generations stays unknown: 4000 is
+    # a Quadro RTX (7.5), an RTX Ada (8.9) and an RTX PRO Blackwell (12.0).
+    ("rtx4000", ""), ("rtx_6000", ""),
+    # Stockholm's cards, however the maker's and the line's words are written,
+    # and NVIDIA's other current ones (its table in the library of 2026-11-17).
+    ("a5000", "8.6"), ("rtx_a5000", "8.6"), ("rtxa5000", "8.6"), ("nvidia_rtx_a5000", "8.6"),
+    ("3080", "8.6"), ("rtx3070", "8.6"), ("geforce_rtx_3080_ti", "8.6"), ("4070ti", "8.9"),
+    ("rtx_4070_ti", "8.9"), ("gtx2080", "7.5"), ("rtx_2080ti", "7.5"), ("l40s", "8.9"),
+    ("l4", "8.9"), ("a10", "8.6"), ("a2", "8.6"), ("a2000", "8.6"), ("a30", "8.0"),
+    ("b200", "10.0"), ("gb200", "10.0"), ("rtx_5090", "12.0"),
 ])
 def test_gres_types_to_compute_capability(gres, capability):
     assert show_setup.model_capability(gres) == capability
@@ -593,6 +603,41 @@ def test_on_a_cluster_each_gpu_step_runs_on_the_types_its_code_fits(site):
     for name in ("alignment", "CTF", "tomogram", "template", "extraction"):
         assert steps[name] == ("yes", ""), name
     assert steps["fine alignment with AreTomo2"][0] == "no"
+
+
+def _sinfo(site, gres):
+    _program(site["bin"] / "sinfo", 'if [[ "$1" == -V ]]; then echo "slurm 26.05.4"; else\n'
+                                    f'echo "gpu|{gres}"\n'
+                                    'echo "normal|(null)"; fi\n')
+
+
+def test_a_gpu_type_the_check_does_not_know_is_named_not_dropped(site):
+    # In Stockholm on 23 November 2026 part 5 said 'a40' alone: the reserved
+    # A5000s had no compute capability in the check and fell out of the list.
+    _healthy(site)
+    _sinfo(site, "gpu:a40:2(S:0-1),gpu:rtx_a5000:8(S:0-1),gpu:titan_v:2(S:0)")
+    report = _check()
+    steps = _steps(report)
+    assert report.gpu["cluster"] == {"a40": "8.6", "rtx_a5000": "8.6", "titan_v": ""}
+    assert steps["motion correction"] == (
+        "yes", "on the GPU nodes: a40, rtx_a5000; not known for titan_v (part 4)")
+    assert steps["membranes"] == (
+        "yes", "on the GPU nodes: a40, rtx_a5000; not known for titan_v (part 4)")
+    # CuPy compiles its kernels when it runs, so it fits a type of any capability.
+    assert steps["picking"] == ("yes", "on the GPU nodes: a40, rtx_a5000, titan_v")
+    (note,) = [text for _, text in _findings(report, False) if "titan_v" in text]
+    assert "compute capability" in note and "developer.nvidia.com/cuda/gpus" in note
+    assert ("MotionCor3: runs on NVIDIA A40 here, a40, rtx_a5000; not known for titan_v"
+            in report.gpu["fits"]), report.gpu["fits"]
+    assert "titan_v ?" in show_setup.render(report)
+
+
+def test_on_gpus_the_check_does_not_know_a_gpu_step_is_open(site):
+    _healthy(site)
+    _sinfo(site, "gpu:titan_v:2(S:0)")
+    steps = _steps(_check())
+    assert steps["motion correction"] == ("?", "not known for titan_v (part 4)")
+    assert steps["picking"] == ("yes", "on the GPU nodes: titan_v")
 
 
 def test_a_machine_without_a_gpu_runs_the_cpu_steps(site):
