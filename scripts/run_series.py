@@ -255,7 +255,7 @@ LANE_KEYS: dict[str, frozenset[str]] = {
     "fiducials": frozenset({
         "seed_backend", "track_backend",
         "tracking_binning", "fiducial_diameter_nm", "raw_pixel_spacing_angstrom",
-        "target_beads", "rounds",
+        "target_beads", "seed_views", "rounds",
         "pre_binning", "num_patches_x", "num_patches_y", "patch_overlap",
         "patch_margin_px", "patch_filter_sigma1", "patch_filter_radius2",
         "patch_filter_sigma2",
@@ -696,6 +696,7 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("fiducial-diameter-nm", fid.get("fiducial_diameter_nm")),
              *flag("raw-pixel-spacing", fid.get("raw_pixel_spacing_angstrom")),
              *flag("target-beads", fid.get("target_beads")),
+             *flag("seed-views", fid.get("seed_views")),
              # Patch path.
              *flag("pre-binning", fid.get("pre_binning")),
              *flag("num-patches-x", fid.get("num_patches_x")),

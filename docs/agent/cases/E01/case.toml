@@ -23,7 +23,7 @@ all = ['autofidseed\.log:\d+', 'segmentation fault|status 139|segfault|SIGSEGV']
 [[check]]
 box = "it proposes a one-series change"
 in = "answer"
-all = ['tracking_binning\b.{0,30}\b3\b', 'series\s*=\s*\[\s*"161"\s*\]']
+all = ['tracking_binning\b.{0,30}\b3\b|seed_views\b.{0,30}\b5\b', 'series\s*=\s*\[\s*"161"\s*\]']
 
 [[check]]
 box = "it asks before submitting"

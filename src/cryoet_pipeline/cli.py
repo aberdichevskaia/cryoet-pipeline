@@ -1380,6 +1380,16 @@ def generate_fiducial_seed(
         int,
         typer.Option(min=1, help="Minimum seed count required for QC pass."),
     ] = 10,
+    seed_views: Annotated[
+        int | None,
+        typer.Option(
+            min=1,
+            help="Views autofidseed finds seed points on, its -views (imod-autofidseed "
+            "backend only). Unset, it tries 3 and takes 5 or 7 when it finds too few "
+            "beads; 5 keeps them off the first view it tracks, where IMOD 5.1.12's "
+            "beadtrack writes past an array (playbook entry A-2).",
+        ),
+    ] = None,
     pre_binning: Annotated[
         int,
         typer.Option(
@@ -1480,6 +1490,8 @@ def generate_fiducial_seed(
     }
     if patch_margin_px is not None:
         parameters["patch_margin_px"] = patch_margin_px
+    if seed_views is not None:
+        parameters["seed_views"] = seed_views
     if raw_pixel_spacing is not None:
         parameters["raw_pixel_spacing_angstrom"] = raw_pixel_spacing
     if fiducial_diameter_px is not None:

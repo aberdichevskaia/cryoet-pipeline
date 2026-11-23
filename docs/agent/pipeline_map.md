@@ -289,7 +289,8 @@ checks the files and the answers on the imports' lists before the queue.
   beads, `imod-patch-seed` for patches).
   - Beads: `tracking_binning` → `--tracking-binning`; `fiducial_diameter_nm` →
     `--fiducial-diameter-nm`; `raw_pixel_spacing_angstrom` →
-    `--raw-pixel-spacing`; `target_beads` → `--target-beads`.
+    `--raw-pixel-spacing`; `target_beads` → `--target-beads`; `seed_views` →
+    `--seed-views`, `autofidseed`'s `-views`, unset by default (playbook A-2).
   - Patches: `pre_binning` → `--pre-binning`; `num_patches_x`,
     `num_patches_y` → `--num-patches-x`, `--num-patches-y`; `patch_overlap` →
     `--patch-overlap`; `patch_margin_px` → `--patch-margin-px`. Unset, the

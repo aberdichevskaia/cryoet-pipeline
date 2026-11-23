@@ -307,6 +307,69 @@ def test_autofidseed_failure_does_not_register_partial_artifacts(
     assert len(registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)) == 0
 
 
+@pytest.mark.parametrize("seed_views", [None, 5])
+def test_seed_views_reach_autofidseed_only_when_set(
+    tmp_path: Path, seed_views: int | None
+) -> None:
+    # Unset, autofidseed chooses 3, 5 or 7 views itself, as before the option.
+    stack = _stack_artifact(tmp_path, np.arange(256, dtype=np.float32).reshape(4, 8, 8))
+    alignment = _alignment_artifact(tmp_path, stack)
+    imod_dir = _fake_imod_dir(tmp_path)
+    autofidseed: list[list[str]] = []
+
+    def fake_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env
+        program = Path(command[0]).name
+        if program == "newstack":
+            shutil.copyfile(
+                Path(command[command.index("-input") + 1]),
+                Path(command[command.index("-output") + 1]),
+            )
+        elif program == "autofidseed":
+            autofidseed.append(list(command))
+            Path(command[command.index("-output") + 1]).write_bytes(b"seed")
+            Path(command[command.index("-info") + 1]).write_text("info")
+        elif program == "imodinfo":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="imod 1\nmax 4 4 3\ncontour 0 0 1 0\n", stderr=""
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    parameters: dict[str, object] = {"tracking_binning": 2, "min_seed_fiducials": 1}
+    if seed_views is not None:
+        parameters["seed_views"] = seed_views
+    artifacts = ImodAutofidseedBackend(fake_runner).generate(
+        stack, alignment, _manifest(), _context(tmp_path, imod_dir, parameters)
+    )
+
+    (command,) = autofidseed
+    if seed_views is None:
+        assert "-views" not in command
+    else:
+        assert command[command.index("-views") + 1] == "5"
+    assert artifacts[1].parameters["seed_views"] == seed_views
+
+
+@pytest.mark.parametrize("value", [0, True, "5"])
+def test_seed_views_must_be_a_positive_int(tmp_path: Path, value: object) -> None:
+    stack = _stack_artifact(tmp_path, np.arange(256, dtype=np.float32).reshape(4, 8, 8))
+    alignment = _alignment_artifact(tmp_path, stack)
+    context = _context(
+        tmp_path, _fake_imod_dir(tmp_path), {"tracking_binning": 2, "seed_views": value}
+    )
+
+    def never(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("nothing runs before the parameters are checked")
+
+    with pytest.raises((TypeError, ValueError), match="seed_views"):
+        ImodAutofidseedBackend(never).generate(stack, alignment, _manifest(), context)
+
+
 def test_a_failed_autofidseed_keeps_what_it_was_given(tmp_path: Path) -> None:
     # RyR1 161: beadtrack segfaulted inside autofidseed, and the temporary folder
     # went with the stack, the transforms and track.com that a rerun needs.

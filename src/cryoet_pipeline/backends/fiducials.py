@@ -115,6 +115,15 @@ class ImodAutofidseedBackend:
             "min_seed_fiducials",
             default=10,
         )
+        # autofidseed's -views. Unset, it tries 3 seed views and takes 5 or 7 when it
+        # finds too few beads; 7 can be the whole range it tracks, whose first view
+        # as a seed makes IMOD 5.1.12's beadtrack write past an array (playbook
+        # entry A-2). Five, taken from the middle out, stay off that view.
+        seed_views = (
+            None
+            if context.parameters.get("seed_views") is None
+            else _positive_int_parameter(context, "seed_views", default=3)
+        )
         overwrite = _bool_parameter(context, "overwrite", default=False)
         raw_pixel_spacing = _raw_pixel_spacing(manifest, tilt_stack, context)
         pixel_size_nm = raw_pixel_spacing / 10.0
@@ -218,6 +227,7 @@ class ImodAutofidseedBackend:
                 "1.0",
                 "-elongated",
                 "1",
+                *([] if seed_views is None else ["-views", str(seed_views)]),
                 "-output",
                 str(seed_model),
                 "-info",
@@ -346,6 +356,7 @@ class ImodAutofidseedBackend:
                 "backend": self.name,
                 "tilt_series_id": manifest.tilt_series_id,
                 "target_beads": target_beads,
+                "seed_views": seed_views,
                 "num_fiducials": summary.num_fiducials,
                 "num_points": summary.num_points,
                 "fiducial_diameter_nm": fiducial_diameter_nm,

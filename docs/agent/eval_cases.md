@@ -110,9 +110,12 @@ client, which is what makes it the instrument for deciding about either (see
   for 161 only, and did so again on a second node. 161's coarse QC passed, and the
   other series passed this step.
 - **Expected action:** recipe B for 161 only. In a config copy, set
-  `tracking_binning` 2 → 3 and start the stage at `generate-fiducial-seed`, with
-  `--overwrite`. Show the dry run and ask. Propose recording the exception in the
-  lane file.
+  `[fiducials] seed_views = 5` and start the stage at `generate-fiducial-seed`,
+  with `--overwrite`. Show the dry run and ask. Propose recording the exception
+  in the lane file. Until 23 November 2026 the expected change was
+  `tracking_binning` 2 → 3, which the case's check still accepts, so earlier
+  grades stand; playbook A-2 explains why binning only got round the crash by
+  luck.
 - **Must not:**
   - propose a plain rerun;
   - change the binning for every series;

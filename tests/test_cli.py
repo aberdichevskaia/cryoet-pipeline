@@ -624,6 +624,49 @@ def test_qc_coarse_alignment_command_updates_registry(
     assert len(ArtifactRegistry.load(registry_path).by_kind(ArtifactKind.QC)) == 2
 
 
+@pytest.mark.parametrize("given", [[], ["--seed-views", "5"]])
+def test_seed_views_reach_the_seed_backend_only_when_given(
+    tmp_path: Path, monkeypatch, given: list[str]
+) -> None:
+    stack = Artifact(
+        id="TS_TEST:tilt_stack",
+        kind=ArtifactKind.TILT_STACK,
+        path=tmp_path / "source.zarr",
+        parameters={"tilt_series_id": "TS_TEST"},
+    )
+    (tmp_path / "alignment.json").write_text("{}")
+    alignment = Artifact(
+        id="TS_TEST:alignment:coarse",
+        kind=ArtifactKind.ALIGNMENT,
+        path=tmp_path / "alignment.json",
+        parent_ids=[stack.id],
+        parameters={"tilt_series_id": "TS_TEST", "stage": "coarse"},
+    )
+    registry = ArtifactRegistry.empty()
+    registry.extend([stack, alignment])
+    registry.write(tmp_path / "artifacts.json")
+    (tmp_path / "manifest.json").write_text(
+        _manifest(tmp_path / "movie.mrc").model_dump_json()
+    )
+    seen: list[dict[str, object]] = []
+
+    def capture(backend, tilt_stack, alignment_artifact, manifest, context, *args, **kw):
+        seen.append(dict(context.parameters))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "generate_seed_and_register", capture)
+    CliRunner().invoke(
+        cli.app,
+        ["generate-fiducial-seed", "--manifest", str(tmp_path / "manifest.json"),
+         "--registry", str(tmp_path / "artifacts.json"), "--out", str(tmp_path / "out"),
+         "--device", "cpu", *given],
+    )
+
+    (parameters,) = seen
+    assert parameters.get("seed_views") == (5 if given else None)
+    assert ("seed_views" in parameters) == bool(given)
+
+
 def test_fiducial_seed_and_tracking_commands_update_registry(
     tmp_path: Path,
     monkeypatch,

@@ -77,6 +77,24 @@ def test_a_volume_split_renders_as_a_valid_option_in_either_chain(lane):
     assert "--pytom-volume-split" not in unsplit["pick-particles"]
 
 
+def test_seed_views_render_as_a_valid_option_only_when_set():
+    # No lane sets it yet, so the test of every lane's commands cannot see it.
+    group = typer.main.get_command(cli.app)
+    known, _ = _options(group.commands["generate-fiducial-seed"])
+    config = _lane("gag-bin8")
+    assert "seed_views" not in config["fiducials"]
+    unset = dict(run_series.build_steps(config, Path("outputs/project"), "TS_X"))
+    assert "--seed-views" not in unset["generate-fiducial-seed"]
+
+    config["fiducials"]["seed_views"] = 5
+    assert run_series.unknown_keys(config) == []
+    seed = dict(run_series.build_steps(config, Path("outputs/project"), "TS_X"))[
+        "generate-fiducial-seed"
+    ]
+    assert "--seed-views" in known
+    assert seed[seed.index("--seed-views") + 1] == "5"
+
+
 def test_an_unknown_input_and_the_old_chain_key_are_refused():
     with pytest.raises(SystemExit, match="input must be one of"):
         run_series.build_steps({"lane": {"input": "beads"}}, Path("p"), "TS_X")
