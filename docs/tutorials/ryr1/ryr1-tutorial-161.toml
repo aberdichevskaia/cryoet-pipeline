@@ -3,7 +3,12 @@
 #   - [fiducials] tracking_binning = 3: at 2, IMOD 5.1.12's beadtrack, run by
 #     autofidseed, segfaults on 161 (exit status 139, on two nodes, 14 October
 #     2026), while the other four series track. At 3 (5.04 A/px, a ~20 px bead)
-#     161 seeds, tracks and aligns with every QC passing;
+#     161 seeded, tracked and aligned with every QC passing on 14 October 2026,
+#     but in a test of the tutorial on 19 November 2026 (job 3946351, the same
+#     IMOD) beadtrack segfaulted at 3 as well, and on 23 November 2026 this
+#     file aligned it again (job 3988506). The cause is a heap overrun in
+#     beadtrack that crashes only in some runs (playbook entry A-2): this copy
+#     is a try, not a fix;
 #   - its stages are named motion-161 ... gpu-161, so that squeue tells them from
 #     the main lane's, and it has no MRA stage: the MRA of all five series is
 #     ryr1-tutorial-all.toml's.

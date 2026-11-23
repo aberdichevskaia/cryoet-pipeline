@@ -34,11 +34,13 @@ The submission scripts hold it to its yes themselves: a submission from the
 assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
-> **Status, 14 November 2026.** Every pipeline step up to the particles has run
-> on these data on max. The assistant has run on max's login nodes in Claude
-> Code since 5 November, and in Codex on 14 November, where Codex's sandbox
-> works. The MRA as a stage of a lane is new (10 November 2026) and has not run
-> on max yet. Tell Anna what happened.
+> **Status, 23 November 2026.** Every pipeline step up to the particles has run
+> on four of these series on max; 161 crashes in alignment in some runs (step
+> 6). The assistant has
+> run on max in Claude Code since 5 November, and in Codex on 14 November, where
+> Codex's sandbox works. The MRA as a stage of a lane ran on max on 19–20
+> November 2026, in a test of the other tutorial, on the four series. Tell Anna
+> what happened.
 
 ## What you need
 
@@ -48,8 +50,9 @@ minutes, with the reason you gave, and the project's journal records it.
   into it too: measure them with `du -sh` before copying (step 1 says how). At
   bin8 the outputs add about 30 GB of motion-corrected sums and stacks, plus
   the tomograms.
-- **A terminal on a login node.** You, and the assistant, run everything there.
-  The heavy work runs in Slurm jobs, which the pipeline's scripts submit.
+- **A terminal on max**, on a login node or in an interactive job such as
+  `slogin`. You, and the assistant, run everything there. The heavy work runs
+  in Slurm jobs, which the pipeline's scripts submit.
 - **An account for one of the two clients.**
   - Claude Code: a Claude subscription that includes it, that is Pro, Max,
     Team or Enterprise.
@@ -86,10 +89,11 @@ Do steps 1, 2 and 4 of the other tutorial, then come back:
 4. [Create the project, with all five series](ryr1-without-assistant.md#4-create-the-project-with-all-five-series),
    `outputs/ryr1-tutorial`, with `cryoet init`.
 
-Step 4 is yours, not the assistant's, for a reason worth knowing: a project is
-created once, with the series it will ever hold. Series 161 will be processed
-apart from the other four (step 6 below), so all five must be in the project
-from the start.
+Step 4 is yours, not the assistant's. The project holds all five series, though
+the lane takes four: 161 has a copy of its own (step 6 below), and does not
+always align. A series left out can join later, with the `cryoet init …
+--add-series` command the dry run prints, which keeps the rest of the project
+as it is.
 
 **The assistant can help with this setup.** It needs only the clone and its
 client: clone, do steps 2 and 3 below, and ask it to check your setup or to take
@@ -102,8 +106,8 @@ command yourself, in your own terminal, and it checks after each.
 
 Install the client your account is for, Claude Code or Codex.
 
-**Claude Code.** If `claude --version` already prints a version on the login
-node, skip to the sign-in. Otherwise install it into your home folder:
+**Claude Code.** If `claude --version` already prints a version on max, skip
+to the sign-in. Otherwise install it into your home folder:
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
@@ -121,8 +125,8 @@ your Claude account, and paste the code it gives you back into the terminal.
 Type `/exit` to leave. From now on, start Claude Code only through the
 launcher below: it is what gives it the pipeline's rules.
 
-**Codex.** If `codex --version` already prints a version on the login node,
-skip to the sign-in. Otherwise install it into your home folder with OpenAI's
+**Codex.** If `codex --version` already prints a version on max, skip to the
+sign-in. Otherwise install it into your home folder with OpenAI's
 installer:
 
 ```bash
@@ -185,9 +189,9 @@ For Claude Code, this tutorial has no such way yet.
 
 ## 3. Start the assistant
 
-On a login node, from the root of your clone, with the environment active (the
-assistant runs the pipeline's scripts in this shell, and your jobs take this
-shell's tool variables):
+On a login node or in an `slogin` job, from the root of your clone, with the
+environment active (the assistant runs the pipeline's scripts in this shell,
+and your jobs take this shell's tool variables):
 
 ```bash
 cd "$CRYOET_WORK/cryoet-pipeline"
@@ -230,7 +234,8 @@ Ask in your own words. A request that gives it what it cannot read for itself:
 > I copied RyR1 frames to data/ryr1/frames: SerialEM TIFF, no mdocs, gain.mrc
 > beside them. I created the project outputs/ryr1-tutorial with cryoet init,
 > all five series. I want a bin8 lane up to the MRA for 039, 096, 097 and 125;
-> 161 comes later in its own copy. I want to look at the picks before the MRA.
+> 161 is left out, it crashes in alignment in some runs. I want to look at the
+> picks before the MRA.
 > Read the folder and ask me what you cannot read.
 
 What it does, following its `lane-config` skill:
@@ -297,19 +302,31 @@ following command?* Check that it is the dry run's command without
 that says *don't ask again*: it would let every command that starts the same
 way run without asking, for the rest of the session.
 
-## 6. Series 161
+## 6. Series 161 (optional; it may crash)
 
-Ask for it once the main lane is submitted:
+> **Status, 23 November 2026.** 161 does not align reliably. IMOD 5.1.12's
+> `beadtrack` segfaults on it while seeding at tracking binning 2. At 3 it
+> aligned on 14 October, segfaulted on 19 November 2026 and aligned again on
+> 23 November, with the same lane as the crash. The cause is a memory error in
+> IMOD 5.1.12's `beadtrack`, which crashes the job only in some runs (playbook
+> entry A-2). Nothing after this step needs 161: skip it, or try it and expect
+> a crash.
 
-> Process 161 in the same project, in its own copy of the lane: IMOD's
-> beadtrack segfaults on 161 at tracking binning 2, and at 3 it aligned. Name
-> its stages with -161 so I can tell its jobs apart. No MRA in that copy.
+If you try it, ask once the main lane is submitted:
+
+> Process 161 in the same project, in its own copy of the lane, with tracking
+> binning 3: IMOD's beadtrack segfaults on 161 at 2, and at 3 it has aligned
+> twice and crashed once. Name its stages with -161 so I can tell its jobs
+> apart. No MRA in that copy.
 
 It writes the copy, shows you the difference from the main lane (`series`,
 `tracking_binning`, the stage names), dry-runs it and asks. Different series of
 one project may run at the same time, so the dry run should not refuse it as
 busy. The tutorial's version of this copy is
-[`ryr1/ryr1-tutorial-161.toml`](ryr1/ryr1-tutorial-161.toml).
+[`ryr1/ryr1-tutorial-161.toml`](ryr1/ryr1-tutorial-161.toml). If its align job
+fails at `generate-fiducial-seed` with `beadtrack` exiting with status 139, it
+is this crash: the assistant will not resubmit it unchanged. Tell Anna, with
+`fiducials/161/161_autofidseed.log`.
 
 ## 7. While the jobs run
 
@@ -353,20 +370,25 @@ it says about a picture is an impression, and it says so.
 
 ## 9. The MRA
 
-When you are satisfied with the picks, and 161's particles are extracted:
+When you are satisfied with the picks:
 
-> Run the MRA on the particles of all five series.
+> Run the MRA on the particles of the four series.
 
-The main lane lists four series, so it writes a copy for the MRA with all five,
-and a run name of its own, and submits it with `--from-stage mra`. The dry run
-shows the run's folder and every setting with its source; with no `[mra]`
-section they are the lab's rules: three references (two averages of 300
-particles, one of noise), five rounds from coarse to fine, the 340 Å diameter
-from `[pick]`, the mask from it. It refuses while a series has no particles,
-or while one of your jobs still works on the series. The tutorial's version is
+It submits the lane's `mra` stage with `--from-stage mra`. The dry run shows
+the run's folder and every setting with its source; with no `[mra]` section
+they are the lab's rules: three references (two averages of 300 particles, one
+of noise), five rounds from coarse to fine, the 340 Å diameter from `[pick]`,
+the mask from it. It refuses while a series has no particles, or while one of
+your jobs still works on the series.
+
+If 161 got through step 6 and its particles are extracted, ask for all five
+instead: the main lane lists four series, so it writes a copy for the MRA with
+all five, and a run name of its own. The tutorial's version is
 [`ryr1/ryr1-tutorial-all.toml`](ryr1/ryr1-tutorial-all.toml).
 
-The job runs on four A40s, for a few hours. If it stops on its time limit, the
+The job runs on four A40s, for a few hours: in a test of the other tutorial on
+max, on the four series, its first two iterations took 40 and 83 minutes and
+the last three about 2 minutes together. If it stops on its time limit, the
 same submission carries the run on from its last finished iteration.
 
 ## 10. Read the classification report
@@ -386,7 +408,7 @@ It writes a copy of the lane whose `[mra]` names the run and the class
 The MRA sorts the particles; it does not give a resolution. For a gold-standard
 refinement, a class that looks like RyR1 can go to RELION 5:
 
-> Export class 2 of bin8-ssn-all to RELION.
+> Export class 2 of bin8-ssn to RELION.
 
 Its `relion-export` skill runs `scripts/export_relion.py` as a dry run and
 shows you what it printed:
@@ -406,7 +428,7 @@ order unknown, a dose would weight the wrong tilts if they were taken
 dose-symmetrically. Without a dose, RELION weights no tilt by dose.
 
 After your yes it exports, to
-`outputs/ryr1-tutorial/relion/bin8-ssn-all-class2/`:
+`outputs/ryr1-tutorial/relion/bin8-ssn-class2/`:
 
 - `relion_commands.sh`: an Extract, then a gold-standard Refine3D with local
   searches from the MRA's poses, without symmetry, both at the MRA's pixel

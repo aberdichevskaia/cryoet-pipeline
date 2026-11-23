@@ -3,8 +3,8 @@
 # Submit it only with --from-stage mra, once both the main lane and
 # ryr1-tutorial-161.toml have extracted their particles. Its other stages are
 # here because a lane's stages must form the whole chain; they are never
-# submitted from this file (161's alignment needs tracking binning 3, which
-# ryr1-tutorial-161.toml has and this file does not).
+# submitted from this file (161 crashes in alignment at tracking binning 2; the
+# try at 3 is ryr1-tutorial-161.toml's, and has got it through twice, not once).
 
 [lane]
 name = "ryr1-tutorial-all"

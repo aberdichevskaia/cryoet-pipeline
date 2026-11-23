@@ -14,18 +14,20 @@ clone + install ─▶ copy frames ─▶ check them ─▶ create the project
    ─▶ optional: export a class to RELION 5 and refine it there
 ```
 
-You will end with tomograms of all five series at 13.44 Å/px, RyR1 picks on
-their membranes, and an MRA classification of the picks: a few class averages
+You will end with tomograms of four of the five series at 13.44 Å/px (the
+fifth, 161, crashes in alignment in some runs: step 7), RyR1 picks on their membranes, and an
+MRA classification of the picks: a few class averages
 and a noise class that collects the false picks. A resolution is not part of the
 pipeline's own steps: step 12 hands a class to RELION 5 for one.
 
 There is a second tutorial for the same data with the terminal assistant, in
 Claude Code or in Codex: [ryr1-with-assistant.md](ryr1-with-assistant.md).
 
-> **Status, 10 November 2026.** Every step up to the particles has run on these
-> data on max. The MRA as a stage of a lane is new, built on 10 November 2026,
-> and has not run on max yet. If it fails, the log says why; tell Anna what
-> happened.
+> **Status, 23 November 2026.** Every step up to the particles has run on four
+> of these series on max; 161 crashes in alignment in some runs (step 7). The
+> MRA as a stage of a
+> lane ran on max on 19–20 November 2026, in a test of this tutorial, on those
+> four series. If something fails, the log says why; tell Anna what happened.
 
 ## What you need
 
@@ -33,8 +35,9 @@ Claude Code or in Codex: [ryr1-with-assistant.md](ryr1-with-assistant.md).
   (step 1), the data and the outputs. Measure the frames with `du -sh` before
   copying them (step 2); the outputs at bin8 add about 30 GB of
   motion-corrected sums and stacks plus the tomograms.
-- A terminal on a login node. Every command below runs there. The heavy work
-  runs in Slurm jobs, which the pipeline's scripts submit for you.
+- A terminal on max: a login node, or an interactive job such as `slogin`.
+  Every command below runs there. The heavy work runs in Slurm jobs, which the
+  pipeline's scripts submit for you.
 - About an hour of your time for the setup, then waiting for the queue.
 
 ## 1. Clone and install (once)
@@ -70,7 +73,7 @@ export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
 - `PYTOMO_MP_DIR` is pytom-match-pick, in the environment made below.
 
 Keep them outside any check for the host name: jobs take these variables from
-the shell you submit from, and that shell is on a login node. Open a new
+the shell you submit from, a login node's or an `slogin` job's. Open a new
 terminal so that they take effect, and check:
 
 ```bash
@@ -113,7 +116,7 @@ python -m pip install --resume-retries 10 -e ".[io,viz,gpu,library]"
 ```
 
 Check that PyTorch is a CUDA build. The second number must be a CUDA version,
-not `None` (the login node has no GPU, which is fine: the jobs run on GPU
+not `None` (a login node has no GPU, which is fine: the jobs run on GPU
 nodes).
 
 ```bash
@@ -146,8 +149,8 @@ should say `Problems (0): none`. On a GPU node it also checks the driver
 against each program's CUDA
 ([docs/agent/setup.md](../agent/setup.md), "GPU and CUDA").
 
-**Every time you come back**, start the same way: a login node, the clone's
-root, the environment active.
+**Every time you come back**, start the same way: a login node or an `slogin`
+job, the clone's root, the environment active.
 
 ```bash
 cd "$CRYOET_WORK/cryoet-pipeline"
@@ -231,15 +234,16 @@ Slurm jobs. The tutorial's lanes are in `docs/tutorials/ryr1/`:
 | File | Series | What for |
 |---|---|---|
 | [`ryr1-tutorial.toml`](ryr1/ryr1-tutorial.toml) | 039 096 097 125 | the main lane, frames to particles, and an MRA of these four |
-| [`ryr1-tutorial-161.toml`](ryr1/ryr1-tutorial-161.toml) | 161 | the same, with `tracking_binning = 3` (optional, step 7) |
-| [`ryr1-tutorial-all.toml`](ryr1/ryr1-tutorial-all.toml) | all five | only the MRA of all five (step 10) |
+| [`ryr1-tutorial-161.toml`](ryr1/ryr1-tutorial-161.toml) | 161 | the same, with `tracking_binning = 3`; 161 crashes in alignment in some runs (optional, step 7) |
+| [`ryr1-tutorial-all.toml`](ryr1/ryr1-tutorial-all.toml) | all five | only the MRA of all five (step 10), if 161 got through |
 
 Open `ryr1-tutorial.toml` and read it top to bottom; each value has a comment
 saying where it came from. The parts to understand before you submit:
 
 - **`[run] series`** lists four series. On 161, IMOD's `beadtrack` segfaults at
   the tracking binning that suits the other four, and a lane cannot set a value
-  per series. 161 gets its own copy of the lane.
+  per series. 161 gets its own copy of the lane, which does not always get it
+  through either (step 7).
 - **`[[run.stage]]`** cuts the chain into five jobs: `motion` (MotionCor3, a
   GPU), `align` (beads, IMOD), `cpu` (CTF and the tomogram), `gpu` (membranes,
   template, picking, particles) and `mra`. Each job runs its steps for every
@@ -269,7 +273,7 @@ For your own data, start from
 ## 6. Submission 1: frames to particles
 
 First a dry run. It submits nothing, and checks everything that can be checked
-on the login node: the stages, the input folders, the tool variables, whether
+from your shell: the stages, the input folders, the tool variables, whether
 one of your jobs is already working on these series.
 
 ```bash
@@ -298,11 +302,20 @@ It prints the four job IDs. Every dry run and every submission is written to
 `outputs/ryr1-tutorial/journal.jsonl`, a submission with the lane file's text,
 so that the project keeps a record of what was asked, by whom and when.
 
-## 7. Series 161 (optional, recommended)
+## 7. Series 161 (optional; it may crash)
+
+> **Status, 23 November 2026.** 161 does not align reliably. At the lane's
+> tracking binning, 2, IMOD 5.1.12's `beadtrack` segfaults on it while seeding,
+> on two nodes (14 October 2026). At 3 it aligned on 14 October, segfaulted in
+> a test of this tutorial on 19 November 2026, and aligned again with this very
+> lane on 23 November, with the same IMOD each time. The cause is a memory
+> error in IMOD 5.1.12's `beadtrack`, which crashes the job only in some runs
+> (playbook entry A-2). Nothing after this step needs 161: skip it, or try it
+> and expect a crash.
 
 `ryr1-tutorial-161.toml` is the main lane with one series, `tracking_binning =
 3`, and stages named `motion-161` … `gpu-161`. Different series of one project
-may run at the same time, so submit it now:
+may run at the same time, so it can go beside the main lane:
 
 ```bash
 python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-161.toml --dry-run
@@ -312,8 +325,12 @@ python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-161.toml --dry
 python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-161.toml
 ```
 
-It uses the same project and the same label (`bin8`), so 161's particles join
-the others' in the MRA of step 10.
+If its `align-161` job fails at `generate-fiducial-seed`, that is this crash:
+`show_failure.py` with `ryr1-tutorial-161.toml` shows `beadtrack` exited with
+status 139, in `fiducials/161/161_autofidseed.log`. Do not resubmit it
+unchanged; tell Anna, with that log. If it does get through, it uses the same
+project and the same label (`bin8`), so 161's particles can join the others' in
+the MRA of step 10.
 
 ## 8. Follow the jobs
 
@@ -361,10 +378,10 @@ cryoet report --project outputs/ryr1-tutorial --variant bin8 \
     --config docs/tutorials/ryr1/ryr1-tutorial.toml
 ```
 
-It goes to `outputs/ryr1-tutorial/reports/report-bin8.pdf`. If you skipped 161,
-add `--series 039 --series 096 --series 097 --series 125`, since the report
-otherwise covers every series in the project. Copy it to your computer, or open
-it on max. Look at:
+It goes to `outputs/ryr1-tutorial/reports/report-bin8.pdf`. Unless 161 got
+through step 7, add `--series 039 --series 096 --series 097 --series 125`,
+since the report otherwise covers every series in the project. Copy it to your
+computer, or open it on max. Look at:
 
 - **the summary table**: each step's verdict per series. A `warning` does not
   stop the chain, so read each one;
@@ -392,38 +409,41 @@ classes. With the lab's rules it starts from three references: two averages of
 300 random particles each and one of pure noise, which collects the particles
 that resemble nothing.
 
-**With 161**, once both lanes have extracted their particles, the MRA of all
-five comes from `ryr1-tutorial-all.toml`:
-
-```bash
-python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-all.toml \
-    --from-stage mra --dry-run
-```
-
-**Without 161**, from the main lane:
+**The four series**, from the main lane:
 
 ```bash
 python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial.toml \
     --from-stage mra --dry-run
 ```
 
-The dry run prints the run's folder, `outputs/ryr1-tutorial/mra/bin8-ssn-all`
-(or `bin8-ssn`), and every setting with where it came from: the seeds, the five
+**All five**, only if 161 got through step 7: once both lanes have extracted
+their particles, the MRA of all five comes from `ryr1-tutorial-all.toml`
+instead:
+
+```bash
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-all.toml \
+    --from-stage mra --dry-run
+```
+
+The dry run prints the run's folder, `outputs/ryr1-tutorial/mra/bin8-ssn`
+(`bin8-ssn-all` for all five), and every setting with where it came from: the seeds, the five
 rounds and their low-pass in Å, the diameter from `[pick]`, the mask and the
 shifts. It refuses an MRA while a series has no particles yet, and while one of
 your jobs still works on the series. When it shows no `would refuse:` line,
 submit the same command without `--dry-run`.
 
 The job runs on four A40s, and takes a few hours (2 h 48 min for 2,384 RyR1
-particles at bin8, before the MRA was a lane stage). If it stops on its time
+particles at bin8, before the MRA was a lane stage). In the test of this
+tutorial on max, on the four series, its first two iterations took 40 and 83
+minutes and the last three about 2 minutes together. If it stops on its time
 limit, submitting it again carries the run on from its last finished
 iteration.
 
 ## 11. Read the classification report
 
 The job writes its report beside the run:
-`outputs/ryr1-tutorial/mra/bin8-ssn-all_classification_report.pdf` (or
-`bin8-ssn_classification_report.pdf`). Its pages, in order:
+`outputs/ryr1-tutorial/mra/bin8-ssn_classification_report.pdf`
+(`bin8-ssn-all_classification_report.pdf` for all five). Its pages, in order:
 
 1. the parameters: the data per series, the starting references, the masks,
    every round's search and how long it took;
@@ -452,12 +472,12 @@ finished iteration, the duplicates it leaves out, the two halves and a note per
 series:
 
 ```bash
-python3 scripts/export_relion.py --run outputs/ryr1-tutorial/mra/bin8-ssn-all \
+python3 scripts/export_relion.py --run outputs/ryr1-tutorial/mra/bin8-ssn \
     --class <C> --dry-run
 ```
 
-`<C>` is the class number in the classification report (without 161, the run
-is `bin8-ssn`). For these data the notes will say that the acquisition order
+`<C>` is the class number in the classification report (for all five, the run
+is `bin8-ssn-all`). For these data the notes will say that the acquisition order
 comes from the tilt order and that there is no dose. Here the tilt order is the
 angle order, not the order the tilts were taken in. **Do not give
 `--dose-per-tilt` for these data:** with the order unknown, a dose would weight
@@ -468,7 +488,7 @@ so they come out nearly equal unless one group of neighbours holds a large part
 of the class; the dry run names the largest group.
 
 **Then the export**, the same command without `--dry-run`. It writes
-`outputs/ryr1-tutorial/relion/bin8-ssn-all-class<C>/`:
+`outputs/ryr1-tutorial/relion/bin8-ssn-class<C>/`:
 
 - the tilt series, tomograms and particles as RELION 5 reads them;
 - the class average and the MRA's mask, in RELION's frame;
