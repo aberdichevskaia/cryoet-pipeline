@@ -10,7 +10,7 @@
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md).
+Kinds and evidence levels are explained in [playbook.md](../playbook.md).
 Extraction is step 16 of [pipeline_map.md](../pipeline_map.md). Averaging comes
 after the lane, as the recipe `average`. Multi-reference classification (MRA)
 and its report are in

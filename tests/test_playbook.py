@@ -49,6 +49,30 @@ def test_the_index_lists_every_file_and_holds_no_entry_of_its_own():
     assert set(re.findall(r"\(playbook/([a-z]+\.md)\)", index)) == names
 
 
+def _legend(name: str) -> set[str]:
+    """The terms the index defines under one heading of its legend, such as Kinds."""
+    block = re.search(rf"^- \*\*{name}:\*\*\n((?:  - .+\n)+)", INDEX.read_text(), flags=re.M)
+    assert block, name
+    return {line.split(":")[0].strip(" -.;") for line in block.group(1).splitlines()}
+
+
+def test_the_index_explains_kinds_and_evidence_once_and_every_entry_uses_its_terms():
+    kinds, evidence = _legend("Kinds"), _legend("Evidence")
+    assert {"crash", "silent", "false alarm"} <= kinds and {"measured", "code"} <= evidence
+    stated = re.compile(r"\*\*Kind:\*\*\s+(.+?)\s+·\s+\*\*Evidence:\*\*\s+(.+?)\n\n", re.S)
+    for path in FILES:
+        text = path.read_text()
+        # The legend lives in the index, which every file points to.
+        assert "(../playbook.md)" in text and "- **Kinds:**" not in text, path.name
+        for kind, level in stated.findall(text):
+            # Each starts with a term of the legend, which may be qualified after
+            # it ("measured, with the time inferred").
+            for value, terms in ((kind, kinds), (level, evidence)):
+                first = re.split(r"[,;]", value)[0].strip()
+                assert any(first == term or first.startswith(term + " ") for term in terms), (
+                    path.name, value)
+
+
 def test_every_entry_id_is_unique_and_every_reference_names_an_entry():
     entries = _entries()
     for path in [*FILES, INDEX]:

@@ -159,34 +159,80 @@ beads).
 
 **Where it shows:** the lane job fails at `generate-fiducial-seed`. `beadtrack`
 crashed with a segmentation fault (exit 139) inside `autofidseed`. The
-`autofidseed` log is in `fiducials/<TS>/`.
+`autofidseed` log in `fiducials/<TS>/` ends with `Running beadtrack with seed
+from view N`.
 
 **How to confirm:**
-- The same crash happens on a second node (with `--overwrite`).
+- In the same log, `REDOING IMODFINDBEADS with more views` and then
+  `RUNNING IMODFINDBEADS on views` with 7 views, the first of them N.
 - The series' coarse QC passed.
-- The other series passed the same step.
-- The series stands out in some way. Here it had the largest coarse shift in the
-  set, 0.150 of the image.
+- A rerun that passes does not clear it (Causes).
 
 **Causes, common to rare:**
-1. A crash in IMOD 5.1.12's `beadtrack` at this tracking binning on this series.
-   The root cause is unknown.
+1. A heap overrun in IMOD 5.1.12's `beadtrack`. `autofidseed` tracks a range of
+   views around zero tilt, 7 views with 3° steps (12 to 18 on 161), and runs
+   `beadtrack` once from each of its seed views with the other views skipped.
+   When it finds too few beads on 3 seed views it takes 5 or 7, and 7 is the
+   whole range. The run from the range's first view, with more than one local
+   area, makes `tiltAli()` write past an array: the overrun happens in every
+   such run, and the job crashes only when the stray write lands on memory that
+   is not mapped. So the same settings crash in one run and pass in another.
+   - Why, read in `flib/beadtrack/beadtrack.cpp` and `tiltali.cpp` of IMOD's
+     nightly source tree (19 October 2026; there is no 5.1.12 source archive,
+     and IMOD's change history has no `beadtrack` change after 5.1.12). The
+     mean residuals are kept in `mResMean`, with room for `limResid` views,
+     which with more than one local area is the number of views tracked. Each
+     area is tracked down from the seed view minus one and up from the seed
+     view, and `mIviewSeq` counts the views of both. With the seed at the first
+     view tracked, the downward sequence runs from view 11 to view 12, upward
+     since 11 is skipped, so view 12 is counted twice: 8 views in room for 7,
+     and `tiltAli` writes the 8th view's residuals past the end. A seed at the
+     last view tracked fits (1 + 6 views).
+   - Checked on the Mac on 23 November 2026, IMOD 5.1.12, under Guard Malloc,
+     with 161's tracking stack from a run that passed on max: the view-12 run
+     overruns every time and the six other seed views never do; it does not
+     with `LocalAreaTracking 0`, without the skipped views, or with the range
+     starting at view 11 instead of 12, wherever it ends. Without Guard Malloc,
+     30 runs of the same input crashed 11 times. With `-views 5` or `-views 3`,
+     no seed view overruns, and the seed keeps as many points (46 to 48
+     against 47).
 
-**What to try:** `tracking_binning` 2 → 3 for that series only, on a config copy
-(recipe B). Record the exception in the lane file, and split the stages so that
-a later run does not redo the alignment with the lane's value.
+**What to try:** `[fiducials] seed_views = 5` for that series, on a config copy
+(recipe B), from `generate-fiducial-seed`. `autofidseed` then takes its seed
+views from the middle of the range out, which leaves out the range's first view,
+except when zero tilt is within three views of the series' first view: then it
+puts the zero-tilt view among its seeds whatever their number. Record the
+setting in the lane file.
 
 **What not to do:**
-- Rerun unchanged, since the crash reproduces.
+- Rerun unchanged until it passes: a pass is luck, and a run that passes has
+  overrun too.
+- Change `tracking_binning` to get round it: it changes neither the seed views
+  nor the array. 161 passed at binning 3 once and crashed at 3 once.
 - Change the binning for every series.
 
-**When to stop and ask someone:** if it crashes at binning 3 too. Then it is a
-report for IMOD, with the model and the command.
+**When to stop and ask someone:** if it crashes with `seed_views = 5`. Then it
+is a report for IMOD, with the model and the command. Since 23 November 2026 the
+step keeps what `autofidseed` was given when it fails, in
+`fiducials/<TS>/<TS>_autofidseed_failed_bin<N>/`: the prealigned tracking stack,
+the transforms, the tilt angles, `track.com` and `autofidseed.dir`, with the
+`.com` files naming that folder. Send that folder and the log.
 
-**Applies to:** IMOD 5.1.12.
+**Applies to:** IMOD 5.1.12; the nightly source of 19 October 2026 has the same
+code. A lane leaving `seed_views` unset overruns whenever `autofidseed` takes 7
+seed views from a 7-view range, which all five RyR1 series did in October; only
+161 has crashed.
 
-**Source:** RyR1 series 161, 14 October 2026. With binning 3 the whole CPU stage
-passed, with every QC at pass.
+**Source:** RyR1 series 161 at MDC.
+- 14 October 2026: binning 2 crashed on two nodes; with binning 3, tilt axis
+  90°, the whole CPU stage passed, with every QC at pass.
+- 19 November 2026, a colleague's run of the RyR1 tutorial (job 3946351): with
+  binning 3, tilt axis 84°, `beadtrack` segfaulted inside `autofidseed` while
+  seeding (exit status 139).
+- 23 November 2026, the same tutorial lane rerun from the frames (jobs 3988505
+  and 3988506): the same settings passed. The runs of 19 and 23 November found
+  the same 501 bead candidates and differ in their inputs by at most 0.02 px of
+  coarse shift: what differs is where the overrun's write landed.
 
 ### A-3. Patch tracking left every view off by its coarse shift
 

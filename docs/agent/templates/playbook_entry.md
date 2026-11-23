@@ -8,8 +8,8 @@ Below the template is an example from our own data.
 # [step]: [the symptom in a few words]
 
 **Kind:** crash, refused, warning, silent, false alarm, reading results or slow
-· **Evidence:** measured, seen, code, manual or general (what each means is at
-the top of `playbook/ctf.md`)
+· **Evidence:** measured, seen, code, manual or general (what each means is in
+`playbook.md`)
 
 **Error text:** the message, word for word, if there is one.
 

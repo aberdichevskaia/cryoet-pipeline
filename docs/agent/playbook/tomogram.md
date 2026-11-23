@@ -10,7 +10,7 @@
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md). The
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). The
 steps are in [pipeline_map.md](../pipeline_map.md), steps 9 and 11.
 
 - **What the steps do.**

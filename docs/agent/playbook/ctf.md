@@ -10,9 +10,9 @@
 >
 > This box and the questions go once the review is in.
 
-The steps, their keys and their outputs are in
-[pipeline_map.md](../pipeline_map.md), steps 7, 8 and 10. Safe reruns are in
-[rerun_recipes.md](../rerun_recipes.md).
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). The
+steps, their keys and their outputs are in [pipeline_map.md](../pipeline_map.md),
+steps 7, 8 and 10. Safe reruns are in [rerun_recipes.md](../rerun_recipes.md).
 
 - **Tools.** CTFFIND 5 fits the defocus of every view; IMOD's `ctfphaseflip`
   corrects the views. At MDC on 5 November 2026 these were CTFFIND 5.0.2 and
@@ -27,23 +27,6 @@ The steps, their keys and their outputs are in
   so every lane of a project uses them. Changing them needs `--overwrite`, and
   then every lane reruns from `correct-ctf`. A one-series experiment goes under
   a variant label instead (recipe C).
-
-Each entry states its **kind** and its **evidence**:
-
-- **Kinds:**
-  - crash: the job stops;
-  - refused: the dry run stops the submission;
-  - warning: the QC or the report warns;
-  - silent: nothing warns;
-  - false alarm;
-  - reading results;
-  - slow.
-- **Evidence:**
-  - measured: seen on our data and checked;
-  - seen: met on our data, not checked further;
-  - code: read in our code, not met in a run;
-  - manual: in the tool's documentation, at the version named;
-  - general: general knowledge or a colleague's practice, not checked here.
 
 ## How a healthy run looks
 

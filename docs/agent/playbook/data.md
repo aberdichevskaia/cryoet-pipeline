@@ -10,7 +10,7 @@
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md). The
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). The
 steps are in [pipeline_map.md](../pipeline_map.md), steps 0 and 1′. Reading a
 new folder is in [data_folders.md](../data_folders.md), and where each lane key
 comes from is in [lane_questions.md](../lane_questions.md).
@@ -21,8 +21,9 @@ comes from is in [lane_questions.md](../lane_questions.md).
     series. Motion correction comes next ([motion.md](motion.md)).
   - A stack lane starts from assembled tilt stacks and their mdocs, through
     `import-tilt-stack`.
-- **`init` runs once per project.** It writes an empty registry. That is why a
-  frames project never takes new series: a new project is the way (D-5).
+- **`init` creates a project once.** It writes an empty registry, so it refuses
+  a folder that holds a project. New series join an existing project with
+  `cryoet init … --add-series`, which writes only their manifests (D-5).
 - **The tilt metadata comes from one of two sources:** the mdocs
   (`[data] mdocs`) or the file names (`[data] frames_pattern`), never both.
 
@@ -210,23 +211,34 @@ at what it now matches.
 
 **Kind:** refused · **Evidence:** code
 
-**Error text** (dry run): `<project> already exists but has no manifest for
-<series>, and init would erase the project to add them; use a new project for
-them`
+**Error text:**
+- dry run: `<project> already exists but has no manifest for <series>; add them
+  to it, keeping what it holds, with: cryoet init … --add-series`
+- `cryoet init`: `<project> is a project already: its registry, <registry>,
+  records what has run on its series, and init would start it empty and lose
+  that. To add series to the project, give --add-series; for a project of their
+  own, another --out.`
 
 **Causes, common to rare:**
-1. `init` writes a new, empty registry. Running it on a project that already
-   has one would throw away every series processed so far.
+1. The lane names series that the project was created without. Plain `init`
+   writes a new, empty registry, so on a project that has one it would throw
+   away every series processed so far; it refuses instead.
 
-**What to try:** a new lane with a new `[run] project` for the new series. Data
-from two projects are combined at averaging, not in one project.
+**What to try:** the `cryoet init … --add-series` command the dry run prints.
+The person runs it. It writes manifests only for the series the project has
+none for, leaves the registry and the other manifests as they are, and records
+the addition under `added` in `project.json`; jobs on the project's other
+series may run meanwhile. Then the dry run again. A project of their own, with
+another `--out`, is the other way, when the new series should stay apart.
 
 **What not to do:** delete the project's registry or manifests to get past the
 refusal.
 
-**Applies to:** every version.
+**Applies to:** since 22 November 2026. Before it, the dry run said to use a new
+project, and `init` run by hand wrote an empty registry over an existing one
+without a word.
 
-**Source:** read in `scripts/submit_lanes.py`.
+**Source:** read in `scripts/submit_lanes.py` and `src/cryoet_pipeline/project.py`.
 
 ### D-6. A movie cannot be read, or is cut short
 
@@ -288,7 +300,7 @@ series or projects.
 
 ### D-8. The mdocs are not SerialEM's
 
-**Kind:** crash or silent · **Evidence:** measured
+**Kind:** crash, or silent · **Evidence:** measured
 
 **Error text:**
 - `init`: `KeyError: 'Binning'`, or the name of another field, when an mdoc

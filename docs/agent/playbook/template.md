@@ -10,7 +10,7 @@
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md). The
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). The
 step, its keys and its QC are in [pipeline_map.md](../pipeline_map.md), step 13.
 Choosing an EMDB map has its own helper, `scripts/show_emdb.py`.
 

@@ -10,7 +10,7 @@
 >
 > This box and the questions go once the review is in.
 
-Kinds and evidence levels are explained at the top of [ctf.md](ctf.md). How a
+Kinds and evidence levels are explained in [playbook.md](../playbook.md). How a
 lane runs, where its logs are and how to read results is in
 [pipeline_map.md](../pipeline_map.md), "How a lane runs". Safe reruns are in
 [rerun_recipes.md](../rerun_recipes.md).
