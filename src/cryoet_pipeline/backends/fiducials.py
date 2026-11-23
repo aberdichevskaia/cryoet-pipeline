@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -230,11 +231,19 @@ class ImodAutofidseedBackend:
                 env=imod_environment(autofidseed, context),
             )
             write_command_log(paths.autofidseed_log, (autofidseed_command, autofidseed_result))
-            _require_success(
-                autofidseed_result,
-                program="IMOD autofidseed",
-                log_path=paths.autofidseed_log,
-            )
+            if autofidseed_result.returncode != 0:
+                # The temporary folder goes when this block ends, and with it what
+                # a rerun, or a report to IMOD's developers, needs.
+                kept = _keep_failed_seed_inputs(
+                    temporary_root,
+                    paths.output_dir
+                    / f"{paths.seed_model.stem}_autofidseed_failed_bin{tracking_binning}",
+                )
+                raise RuntimeError(
+                    f"IMOD autofidseed failed with exit code {autofidseed_result.returncode}; "
+                    f"see {paths.autofidseed_log}. What it was given is kept in {kept}, "
+                    "to run it again or to send to IMOD's developers"
+                )
             if not seed_model.is_file():
                 raise RuntimeError(
                     f"IMOD autofidseed did not write a seed model: {seed_model}"
@@ -1993,6 +2002,32 @@ def _require_success(
         raise RuntimeError(
             f"{program} failed with exit code {result.returncode}; see {log_path}"
         )
+
+
+def _keep_failed_seed_inputs(temporary_root: Path, destination: Path) -> Path:
+    """Move what autofidseed was given, and what it left in its own folder, out of
+    the seed step's temporary folder before that is removed: the prealigned
+    tracking stack, the transforms (full-resolution for beadtrack, scaled for
+    newstack), the tilt angles, track.com and autofidseed.dir.
+
+    The .com files name the temporary folder, so they are rewritten to name this
+    one, and autofidseed or beadtrack can be run again from it. The binned stack
+    before prealignment stays behind: newstack's log says how it was made. A folder
+    left by an earlier failure at the same binning is replaced."""
+
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    for entry in sorted(temporary_root.iterdir()):
+        if entry.name != "input_bin.mrc":
+            shutil.move(str(entry), str(destination / entry.name))
+    names = {str(temporary_root), str(temporary_root.resolve())}
+    for path in sorted(destination.rglob("*.com")):
+        text = path.read_text()
+        for name in names:
+            text = text.replace(name, str(destination.resolve()))
+        path.write_text(text)
+    return destination
 
 
 def _replace_file(source: Path, destination: Path) -> None:

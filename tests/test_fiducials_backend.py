@@ -307,6 +307,81 @@ def test_autofidseed_failure_does_not_register_partial_artifacts(
     assert len(registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)) == 0
 
 
+def test_a_failed_autofidseed_keeps_what_it_was_given(tmp_path: Path) -> None:
+    # RyR1 161: beadtrack segfaulted inside autofidseed, and the temporary folder
+    # went with the stack, the transforms and track.com that a rerun needs.
+    stack = _stack_artifact(
+        tmp_path,
+        np.arange(256, dtype=np.float32).reshape(4, 8, 8),
+    )
+    alignment = _alignment_artifact(tmp_path, stack)
+    registry = ArtifactRegistry.empty()
+    registry.extend([stack, alignment])
+    imod_dir = _fake_imod_dir(tmp_path)
+    temporary: list[Path] = []
+
+    def crashing_runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del env
+        program = Path(command[0]).name
+        if program == "newstack":
+            shutil.copyfile(
+                Path(command[command.index("-input") + 1]),
+                Path(command[command.index("-output") + 1]),
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        assert program == "autofidseed"
+        temporary.append(cwd)
+        own = Path(command[command.index("-tempdir") + 1])
+        own.mkdir()
+        (own / "afs1.com").write_text(f"$beadtrack -StandardInput\nImageFile\t{cwd}/x\n")
+        (own / "afs1.seed").write_bytes(b"\x00binary model")
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="beadtrack: Segmentation fault"
+        )
+
+    for attempt in range(2):
+        # The second is a rerun, which the lane submits with --overwrite.
+        context = _context(
+            tmp_path, imod_dir, {"tracking_binning": 2, "overwrite": attempt > 0}
+        )
+        with pytest.raises(RuntimeError) as failure:
+            generate_seed_and_register(
+                ImodAutofidseedBackend(crashing_runner),
+                stack,
+                alignment,
+                _manifest(),
+                context,
+                registry,
+            )
+        kept = tmp_path / "outputs/fiducials/TS_TEST/TS_TEST_autofidseed_failed_bin2"
+        message = str(failure.value)
+        assert message.startswith("IMOD autofidseed failed with exit code 1; see ")
+        assert f"is kept in {kept}" in message
+        # The second failure at the same binning replaced the first one's folder.
+        assert sorted(path.name for path in kept.iterdir()) == [
+            "autofidseed.dir", "scaled.prexg", "track.com", "tracking.prexg",
+            "tracking.rawtlt", "tracking_preali.mrc",
+        ]
+        # The .com files name the kept folder, and nothing names the temporary one.
+        for com in (kept / "track.com", kept / "autofidseed.dir" / "afs1.com"):
+            text = com.read_text()
+            assert str(kept.resolve()) in text
+            assert temporary[-1].name not in text
+        assert "ImageFile\t" + str(kept.resolve() / "tracking_preali.mrc") in (
+            kept / "track.com"
+        ).read_text()
+        assert (kept / "autofidseed.dir" / "afs1.seed").read_bytes() == b"\x00binary model"
+        assert not temporary[-1].exists()
+        (kept / "stale").write_text(f"from failure {attempt}")
+
+    assert registry.artifact_ids == {stack.id, alignment.id}
+
+
 def test_autofidseed_rejects_stale_stack_pixel_spacing(tmp_path: Path) -> None:
     stack = _stack_artifact(
         tmp_path,
