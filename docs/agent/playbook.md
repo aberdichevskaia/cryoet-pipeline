@@ -19,7 +19,7 @@ states about itself is explained below, in
 | [template.md](playbook/template.md) | `prepare-template` | T-1 to T-7 |
 | [picking.md](playbook/picking.md) | `pick-particles`, `visualize-picks` | P-1 to P-9 |
 | [averaging.md](playbook/averaging.md) | `extract-particles`, averaging, classification, FSC | X-1 to X-3, V-1 to V-12 |
-| [cluster.md](playbook/cluster.md) | Slurm, the environment, submission | E-1 to E-15 |
+| [cluster.md](playbook/cluster.md) | Slurm, the environment, submission | E-1 to E-16 |
 | [install.md](playbook/install.md) | installing the environments and tools; space, versions, GPU and CUDA | I-1 to I-14 |
 
 Each file also says what a healthy run looks like, where to look first, what the

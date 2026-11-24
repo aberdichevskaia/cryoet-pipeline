@@ -52,6 +52,20 @@ works on, or else the job's log does, once the job runs. A job named like the
 project's own jobs that neither accounts for may be on any of its series. Only
 the user's own jobs are asked about, since a project lives in its user's clone.
 
+Slurm itself is asked about every stage before anything is submitted, with
+`sbatch --test-only` and the stage's own options: the partition, the reservation,
+the GPU type, the cores, memory and time a node gives are the site's to judge,
+not rules kept here. A stage it refuses is refused, in a dry run as in a
+submission, so no stage is queued without the ones after it. A dry run prints
+what Slurm said of each stage; with no sbatch, it says the check was not made.
+
+For a new frames project, the dry run also reads the frames and mdocs as
+`cryoet init` would (cryoet_pipeline.project.read_inputs), writes nothing, and
+refuses what init would refuse: a pattern that matches nothing, a series not
+among the movies, a movie it cannot read. Otherwise it prints a line per series
+init would find. A stage that runs motion correction needs the file its
+[motion] gain_reference names.
+
 The recipes, experiments written in advance that run a lane's steps another way
 (scripts/ctf_window_test.sbatch and the like), are submitted by
 scripts/submit_recipe.py, with these checks and into the same journal.
@@ -156,6 +170,8 @@ _HEADER_SERIES = re.compile(r"^series\s+(?P<series>.+?)\s*$")
 _CTFFIND_VERSION = re.compile(r"^\s*Version\s*:\s*(?P<version>\d+(?:\.\d+)*)", re.MULTILINE)
 # How long CTFFIND may take to print its banner when asked here.
 CTFFIND_PROBE_SECONDS = 5.0
+# How long one `sbatch --test-only` may take; a busy controller answers in seconds.
+SBATCH_TEST_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -403,10 +419,17 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
     chain = run_series.build_steps(
         cfg, Path(lane.project), lane.series[0] if lane.series else "TS_X"
     )
-    found += ctffind_problems(cfg, {
+    steps = {
         name for stage in stages
         for name, _ in run_series.slice_steps(chain, stage.start, stage.end)
-    })
+    }
+    found += ctffind_problems(cfg, steps)
+    # Without its gain reference MotionCor3 fails after the queue wait.
+    gain = cfg.get("motion", {}).get("gain_reference")
+    if "prepare-tilt-series" in steps and isinstance(gain, str):
+        path = os.path.expandvars(gain)
+        if "$" not in path and not (ROOT / path).is_file():
+            found.append(f"[motion] gain_reference: no file {ROOT / path}")
     if cfg.get("fine_align", {}).get("backend") == "aretomo":
         # AreTomo2 runs only on a GPU; a CPU node fails it after the queue wait.
         for stage in stages:
@@ -432,21 +455,8 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
                     if not path.is_file():
                         found.append(f"[data] {key}: no file {path}")
         return found
-    data = cfg.get("data", {})
     if init_command(cfg, lane) is not None:
-        if ("mdocs" in data) == ("frames_pattern" in data):
-            found.append(
-                "[data] needs exactly one of mdocs and frames_pattern; init reads "
-                "the tilt metadata from one of them"
-            )
-        for key in ("frames", "mdocs"):
-            if key == "mdocs" and "mdocs" not in data:
-                continue
-            if not isinstance(data.get(key), str):
-                found.append(f"[data] {key} is not set; init needs it for a new project")
-            elif not (ROOT / data[key]).is_dir():
-                found.append(f"[data] {key}: no directory {ROOT / data[key]}")
-        return found
+        return found + init_data_problems(cfg)
     if not lane.series and not project_series(lane.project):
         found.append(f"{lane.project} exists but has no manifests to take every series from")
     manifests = ROOT / lane.project / "manifests"
@@ -460,6 +470,106 @@ def problems(cfg: dict[str, Any], lane: Plan, stages: tuple[Stage, ...]) -> list
             f"add them to it, keeping what it holds, with: {shlex.join(add)}"
         )
     return found
+
+
+def init_data_problems(cfg: dict[str, Any]) -> list[str]:
+    """The [data] keys `cryoet init` needs for a frames lane's new project."""
+
+    data = cfg.get("data", {})
+    found = []
+    if ("mdocs" in data) == ("frames_pattern" in data):
+        found.append(
+            "[data] needs exactly one of mdocs and frames_pattern; init reads "
+            "the tilt metadata from one of them"
+        )
+    for key in ("frames", "mdocs"):
+        if key == "mdocs" and "mdocs" not in data:
+            continue
+        if not isinstance(data.get(key), str):
+            found.append(f"[data] {key} is not set; init needs it for a new project")
+        elif not (ROOT / data[key]).is_dir():
+            found.append(f"[data] {key}: no directory {ROOT / data[key]}")
+    return found
+
+
+def init_preview(cfg: dict[str, Any], lane: Plan) -> tuple[list[str], list[str]]:
+    """What `cryoet init` would find for a frames lane's new project: the problems,
+    and a line per series it would write a manifest for.
+
+    Read by init's own code, cryoet_pipeline.project.read_inputs, with nothing
+    written, so a dry run refuses what init would refuse and shows the series,
+    tilts, angles and pixel size init would read. Until 24 November 2026 a dry run
+    checked only that the frames folder exists, and a pattern that matched nothing,
+    a series not among the movies or a missing movie came out at the submission,
+    after the yes. Only for a dry run: a submission runs init itself, before any job.
+    """
+
+    # Here, not at the top: only a frames lane needs the package.
+    from cryoet_pipeline.models import ProjectConfig
+    from cryoet_pipeline.project import describe_manifest, read_inputs
+
+    data = cfg.get("data", {})
+    try:
+        inputs = read_inputs(ProjectConfig(
+            frames_dir=ROOT / data["frames"],
+            mdocs_dir=ROOT / data["mdocs"] if "mdocs" in data else None,
+            frames_pattern=data.get("frames_pattern"),
+            raw_pixel_spacing_angstrom=data.get("pixel_size_angstrom"),
+            output_dir=ROOT / lane.project,
+            tilt_series=list(lane.series),
+        ))
+    except Exception as error:  # whatever it is, init would stop on it the same way
+        said = " ".join(str(error).split())
+        return [f"cryoet init would refuse: {type(error).__name__}: {said}"], []
+    return [], [f"{one.tilt_series_id}: {describe_manifest(one)}" for one in inputs.manifests]
+
+
+def slurm_check(
+    lane: Plan, stages: tuple[Stage, ...],
+) -> tuple[list[str], list[str]] | None:
+    """Each stage's job as Slurm judges it, asked with `sbatch --test-only`, which
+    submits nothing: the problems, and what Slurm said of each stage it would take.
+    None where there is no sbatch to ask.
+
+    The command is the submission's own, without the dependency on the stage
+    before, which has no job yet. So the partition, the reservation, the GPU type,
+    the cores and memory a node has, the time limits and the batch script's own
+    #SBATCH lines are judged by the site's Slurm, not by rules kept here. Until
+    24 November 2026 nothing asked it: a lane carried from MDC to Stockholm
+    (--partition=gpu --gres=gpu:a40:1) passed its dry run and would have been
+    refused only at the submission, after the yes, with the stages before the
+    refused one already queued.
+    """
+
+    prefix = Path(lane.project).name
+    found, said_of = [], []
+    for stage in stages:
+        script = MRA_SBATCH if stage.is_mra else LANE_SBATCH
+        command = [
+            "sbatch", "--test-only", *stage.sbatch, f"--time={stage.time}",
+            f"--job-name={prefix}-{stage.name}", str(script.relative_to(ROOT)),
+        ]
+        try:
+            result = subprocess.run(
+                command, cwd=ROOT, capture_output=True, text=True,
+                timeout=SBATCH_TEST_SECONDS,
+            )
+        except FileNotFoundError:
+            return None
+        except subprocess.TimeoutExpired:
+            found.append(
+                f"sbatch --test-only gave no answer in {SBATCH_TEST_SECONDS:g} s, so "
+                f"whether Slurm takes stage {stage.name!r} is unknown"
+            )
+            continue
+        lines = [line.strip() for line in (result.stderr + result.stdout).splitlines()]
+        said = " ".join(line for line in lines if line) or f"exit {result.returncode}"
+        if result.returncode != 0:
+            asked = shlex.join([*stage.sbatch, f"--time={stage.time}"])
+            found.append(f"Slurm refuses stage {stage.name!r} ({asked}): {said}")
+        else:
+            said_of.append(f"{stage.name}: {said.removeprefix('sbatch: ')}")
+    return found, said_of
 
 
 def import_problems(cfg: dict[str, Any], lane: Plan) -> list[str]:
@@ -971,6 +1081,10 @@ class Submission:
     record: dict[str, Any]
     replaces: dict[str, list[str]]
     id: str | None = None  # of its journal entries, once the first is written
+    # Shown by a dry run: a line per series init would find, and what Slurm's
+    # sbatch --test-only said of each stage.
+    found_by_init: tuple[str, ...] = ()
+    slurm_said: tuple[str, ...] = ()
 
 
 def plan_record(
@@ -1472,6 +1586,7 @@ def main(argv: list[str] | None = None) -> int:
     # Everything is checked before the first sbatch, so a broken second config
     # does not leave the first lane submitted alone.
     lanes: list[Submission] = []
+    no_sbatch = False
     for config in args.configs:
         text, cfg = run_series.read_config(config)
         lane = plan(cfg, config)
@@ -1487,11 +1602,26 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"{config}: --from-stage {args.from_stage!r} comes after "
                              f"--until-stage {args.until_stage!r}")
         stages = lane.stages[first : last + 1]
+        lane_problems = problems(cfg, lane, stages)
+        found_by_init: list[str] = []
+        if args.dry_run and init_command(cfg, lane) is not None and not init_data_problems(cfg):
+            trouble, found_by_init = init_preview(cfg, lane)
+            lane_problems += trouble
+        slurm = slurm_check(lane, stages)
+        if slurm is None:
+            no_sbatch = True
+        else:
+            lane_problems += slurm[0]
         lanes.append(Submission(
-            cfg, text, lane, stages, problems(cfg, lane, stages),
+            cfg, text, lane, stages, lane_problems,
             plan_record(cfg, lane, stages, text, args.overwrite),
             recorded_runs(cfg, lane, stages) if args.overwrite else {},
+            found_by_init=tuple(found_by_init),
+            slurm_said=tuple(slurm[1]) if slurm else (),
         ))
+    if no_sbatch:
+        print("not checked whether Slurm takes the stages' resources: no sbatch here",
+              file=sys.stderr)
 
     projects = [one.lane.project for one in lanes]
     if len(set(projects)) != len(projects):
@@ -1571,6 +1701,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if init is not None:
                 print(("would run: " if args.dry_run else "") + shlex.join(init))
+                for line in one.found_by_init:
+                    print(f"  init would find {line}")
                 if not args.dry_run:
                     subprocess.run(init, cwd=ROOT, check=True)
             if not lane.series and (init is None or not args.dry_run):
@@ -1601,6 +1733,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 1
         print("  " + " -> ".join(f"{name} {job}" for name, job in jobs.items()))
+        if args.dry_run and one.slurm_said:
+            print("  Slurm, asked with sbatch --test-only (nothing submitted):")
+            for line in one.slurm_said:
+                print(f"    {line}")
         for line in mra_lines(lane, stages):
             print(f"  {line}")
         if args.overwrite:

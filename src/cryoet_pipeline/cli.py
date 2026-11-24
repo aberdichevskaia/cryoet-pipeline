@@ -174,7 +174,7 @@ from cryoet_pipeline.picks_visualization import (
     resolve_sphere_radius,
     write_picks_visualization,
 )
-from cryoet_pipeline.project import ProjectExistsError, initialize_project
+from cryoet_pipeline.project import ProjectExistsError, describe_manifest, initialize_project
 from cryoet_pipeline.reports.collect import SeriesArtifacts
 from cryoet_pipeline.runtime import normalize_device, resolve_device
 from cryoet_pipeline.storage import resolve_storage_policy
@@ -284,15 +284,7 @@ def init(
     typer.echo(f"wrote {result.project_path}")
     for path in result.manifest_paths:
         manifest = TiltSeriesManifest.model_validate_json(path.read_text())
-        angles = manifest.tilt_angles_deg
-        frames_per_tilt = ", ".join(str(n) for n in sorted(manifest.num_subframes_set))
-        # Printed so that a pattern which matched the wrong part of the names
-        # shows up here, as a strange angle range or tilt count, before any job.
-        typer.echo(
-            f"wrote {path}: {manifest.num_tilts} tilts, {min(angles):g} to "
-            f"{max(angles):g} deg, {frames_per_tilt} frames per tilt, "
-            f"{manifest.raw_pixel_spacing_angstrom:g} A/px"
-        )
+        typer.echo(f"wrote {path}: {describe_manifest(manifest)}")
 
 
 @app.command("import-tilt-stack")

@@ -18,8 +18,21 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import submit_lanes  # noqa: E402
 
 # Stands in for sbatch: notes the OVERWRITE it was given and its arguments, fails
-# on the call SBATCH_FAIL_AT counts to, and otherwise answers with a job id.
+# on the call SBATCH_FAIL_AT counts to, and otherwise answers with a job id. With
+# --test-only it submits nothing and counts nothing: it notes its arguments in
+# SBATCH_TESTS and answers as Slurm does, refusing any whose arguments hold
+# SBATCH_TEST_REFUSE.
 SBATCH = """#!/bin/bash
+if [[ " $* " == *" --test-only "* ]]; then
+    echo "$*" >> "$SBATCH_TESTS"
+    if [[ -n "${SBATCH_TEST_REFUSE:-}" && "$*" == *"$SBATCH_TEST_REFUSE"* ]]; then
+        echo "sbatch: error: Batch job submission failed: Invalid partition name specified" >&2
+        exit 1
+    fi
+    echo "sbatch: Job 4242 to start at 2026-11-24T16:00:00 using 8 processors" \
+        "on nodes gpu54 in partition cryo5000" >&2
+    exit 0
+fi
 echo "${OVERWRITE:-}|$*" >> "$SBATCH_CALLS"
 n=$(wc -l < "$SBATCH_CALLS" | tr -d ' ')
 if [[ "$n" == "${SBATCH_FAIL_AT:-0}" ]]; then
@@ -83,11 +96,12 @@ def make_lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         (bin_dir / name).chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("SBATCH_CALLS", str(tmp_path / "sbatch_calls"))
+    monkeypatch.setenv("SBATCH_TESTS", str(tmp_path / "sbatch_tests"))
     monkeypatch.setenv("PYTOMO_MP_DIR", "/opt/pytom")
     # A person, whatever runs the tests, until a test says otherwise.
     for name in (
         *submit_lanes.CLIENT_VARIABLES, "OVERWRITE", "SBATCH_FAIL_AT", "SQUEUE_EXIT",
-        "SQUEUE_LINES", "FAKE_CTFFIND_VERSION",
+        "SQUEUE_LINES", "FAKE_CTFFIND_VERSION", "SBATCH_TEST_REFUSE",
     ):
         monkeypatch.delenv(name, raising=False)
     return config
@@ -361,6 +375,7 @@ def test_a_squeue_that_fails_is_a_problem_and_a_missing_one_a_note(
     code, _, err = _run(capsys, lane, "--dry-run")
     assert code == 0
     assert "no squeue here" in err and "would refuse" not in err
+    assert "not checked whether Slurm takes the stages' resources: no sbatch here" in err
 
 
 def test_a_ctffind_4_that_estimate_ctf_would_find_is_refused(lane, capsys, monkeypatch):
@@ -639,6 +654,9 @@ def _frames_lane(lane: Path, monkeypatch, movies: tuple[str, ...]) -> Path:
         assert count == 1, f"gag-bin8.toml has no line {pattern}"
     for name in ("MOTIONCOR3", "MEMBRAIN_EXE", "MEMBRAIN_CKPT"):
         monkeypatch.setenv(name, f"/opt/{name.lower()}")
+    # Empty stand-ins, which init could not read; what init would find is tested
+    # on real TIFFs below.
+    monkeypatch.setattr(submit_lanes, "init_preview", lambda cfg, plan: ([], []))
     config = lane.parent / "frames-lane.toml"
     config.write_text(text)
     return config
@@ -679,3 +697,106 @@ def test_movie_formats_reads_the_suffixes_as_the_pipeline_does(tmp_path):
     gone = {**cfg, "data": {"frames": str(tmp_path / "gone")}}
     assert submit_lanes.movie_formats(gone) == set()
     assert submit_lanes.movie_formats({**cfg, "lane": {"input": "stack"}}) == set()
+
+
+def test_a_dry_run_asks_slurm_about_every_stage_and_submits_nothing(lane, capsys):
+    code, out, err = _run(capsys, lane, "--dry-run")
+    assert code == 0, err
+    stages = submit_lanes.plan(tomllib.loads(lane.read_text()), lane).stages
+    asked = (lane.parent / "sbatch_tests").read_text().splitlines()
+    assert len(asked) == len(stages)
+    for line, stage in zip(asked, stages, strict=True):
+        # The submission's own options, without the dependency on a job not there yet.
+        args = line.split()
+        assert args[0] == "--test-only"
+        assert args[1 : 1 + len(stage.sbatch)] == list(stage.sbatch)
+        assert f"--time={stage.time}" in args and args[-1] == "scripts/lane.sbatch"
+        assert not any(arg.startswith("--dependency") for arg in args)
+    assert "  Slurm, asked with sbatch --test-only (nothing submitted):" in out
+    assert ("    cpu: Job 4242 to start at 2026-11-24T16:00:00 using 8 processors on nodes "
+            "gpu54 in partition cryo5000") in out
+    assert not _overwrite_per_call(lane)
+
+
+def test_a_stage_slurm_refuses_is_refused_before_any_job_is_submitted(
+        lane, capsys, monkeypatch):
+    # The second stage's partition, as a lane carried to another site would name it.
+    monkeypatch.setenv("SBATCH_TEST_REFUSE", "--partition=gpu_p")
+    code, out, err = _run(capsys, lane, "--dry-run")
+    assert code == 0
+    assert "would refuse: " in err and "Slurm refuses stage 'gpu' (--partition=gpu_p " in err
+    assert "Invalid partition name specified" in err
+    assert "    gpu:" not in out
+    # The submission asks again before its first sbatch, so the cpu stage is not
+    # left in the queue alone.
+    code, _, err = _run(capsys, lane)
+    assert code == 1 and "refused: " in err
+    assert not _overwrite_per_call(lane)
+
+
+def _tiff_frames(folder: Path, series: str) -> None:
+    """Three tilts of one series, named as the RyR1 frames are, two frames each."""
+    import numpy as np
+    import tifffile
+
+    folder.mkdir(exist_ok=True)
+    for tilt, angle in enumerate((-3.0, 0.0, 3.0)):
+        tifffile.imwrite(folder / f"tomogram_{series}_{tilt}_{angle}.tif",
+                         np.zeros((2, 4, 4), dtype=np.uint16), photometric="minisblack")
+
+
+def _ryr1_lane(lane: Path, monkeypatch, gain: Path, series: str | None = None) -> Path:
+    """ryr1-bin8 moved onto TIFF frames of series 1 and the gain `gain`, for a
+    project not made yet, asking for `series` or, without it, every one init finds."""
+    frames = lane.parent / "frames"
+    _tiff_frames(frames, "1")
+    text = (ROOT / "configs" / "lanes" / "ryr1-bin8.toml").read_text()
+    project = f'project = "{lane.parent / "ryr1-project"}"'
+    for pattern, value in (
+        (r'^project = ".*"$', project + (f'\nseries = ["{series}"]' if series else "")),
+        (r'^frames = ".*"$', f'frames = "{frames}"\npixel_size_angstrom = 1.35'),
+        (r'^gain_reference = ".*"$', f'gain_reference = "{gain}"'),
+    ):
+        text, count = re.subn(pattern, lambda _, v=value: v, text, count=1, flags=re.MULTILINE)
+        assert count == 1, f"ryr1-bin8.toml has no line {pattern}"
+    for name in ("MOTIONCOR3", "MEMBRAIN_EXE", "MEMBRAIN_CKPT", "CTFFIND5"):
+        monkeypatch.setenv(name, f"/opt/{name.lower()}")
+    config = lane.parent / "ryr1-lane.toml"
+    config.write_text(text)
+    return config
+
+
+def test_a_dry_run_shows_what_init_would_find_and_writes_no_project(
+        lane, monkeypatch, capsys):
+    gain = lane.parent / "gain.mrc"
+    gain.write_bytes(b"")
+    config = _ryr1_lane(lane, monkeypatch, gain)
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0, err
+    assert "cryoet init would refuse" not in err and "[motion] gain_reference" not in err
+    assert "  init would find 1: 3 tilts, -3 to 3 deg, 2 frames per tilt, 1.35 A/px" in out
+    project = lane.parent / "ryr1-project"
+    assert not (project / "manifests").exists() and not (project / "artifacts.json").exists()
+
+
+def test_a_series_init_would_not_find_is_refused_by_the_dry_run(lane, monkeypatch, capsys):
+    gain = lane.parent / "gain.mrc"
+    gain.write_bytes(b"")
+    config = _ryr1_lane(lane, monkeypatch, gain, series="161")
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0
+    [refusal] = [line for line in err.splitlines() if "cryoet init would refuse: " in line]
+    assert refusal.startswith("would refuse: ") and "161" in refusal
+    assert "init would find" not in out
+
+
+def test_a_missing_gain_reference_is_refused_where_motion_correction_runs(
+        lane, monkeypatch, capsys):
+    gone = lane.parent / "no-gain.mrc"
+    config = _ryr1_lane(lane, monkeypatch, gone)
+    code, _, err = _run(capsys, config, "--dry-run")
+    assert code == 0
+    assert f"would refuse: {config}: [motion] gain_reference: no file {gone}" in err
+    # A submission from a later stage runs no motion correction, and needs no gain.
+    code, _, err = _run(capsys, config, "--dry-run", "--from-stage", "align")
+    assert code == 0 and "[motion] gain_reference" not in err

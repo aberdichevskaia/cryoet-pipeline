@@ -58,7 +58,9 @@ comes from is in [lane_questions.md](../lane_questions.md).
 - **The `[data]` keys and folders.** The dry run refuses missing `[data]` keys,
   missing folders, and a stack lane's missing stack or mdoc (D-3).
 - **The frames pattern.** `init` refuses a pattern that matches nothing, or that
-  leaves files unmatched, and two movies that share a tilt (D-4).
+  leaves files unmatched, and two movies that share a tilt (D-4). The dry run
+  of a new project reads the frames as `init` does, and refuses with its words.
+  When the frames pass, it prints a line per series it would find.
 - **The movies.** `init` refuses a movie it cannot read, an EER whose frame
   count differs from its own metadata, and pixel sizes that differ between
   movies (D-6, D-7).
@@ -174,7 +176,8 @@ lane writes `{series}` in its paths where the series id goes.
 
 **Kind:** crash · **Evidence:** code; the traps behind it are measured (D-2)
 
-**Error text** (`cryoet init`):
+**Error text** (`cryoet init`; since 24 November 2026 also the dry run of a new
+project, after `cryoet init would refuse: ValueError:`):
 - `no file in <folder> matches the frames pattern <pattern>; first names: <names>`
 - `<n> files in <folder> do not match the frames pattern <pattern>, e.g.
   <name>. Fix the pattern, or move what is not a frame out of the folder;

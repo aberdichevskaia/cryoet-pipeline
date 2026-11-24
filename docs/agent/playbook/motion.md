@@ -55,7 +55,9 @@ step 1. The backend is described in
   executable, loads all its libraries, and has code for the job's GPU (M-1,
   M-5).
 - **The gain is loaded.** MotionCor3's "Gain reference not found" stops the
-  step (M-4).
+  step (M-4). Since 24 November 2026 the dry run also refuses a
+  `[motion] gain_reference` that names no file, when a stage runs motion
+  correction: `[motion] gain_reference: no file <path>`.
 - **The output.** A sum that is not one 2D image of the frame's shape, or that
   holds non-finite pixels, stops the step.
 - **The frame count.** A movie whose frame count differs from the manifest is

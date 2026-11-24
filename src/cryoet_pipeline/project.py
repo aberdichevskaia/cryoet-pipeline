@@ -33,15 +33,23 @@ class ProjectExistsError(ValueError):
     """init asked to make a project where there is one, or to add to one that is not there."""
 
 
-def initialize_project(config: ProjectConfig, *, add_series: bool = False) -> InitResult:
-    """Validate local input data and write project manifests.
+@dataclass(frozen=True)
+class ProjectInputs:
+    """What init read and checked, before it writes anything."""
 
-    A new project gets an empty registry. A folder whose registry exists is a
-    project with results in it, which an empty registry would lose: init refuses
-    it, unless `add_series`, which writes manifests only for the series the
-    project has none for and leaves the registry and every other manifest as
-    they are. Jobs on the project's other series may run meanwhile, since
-    nothing they read changes.
+    # The manifests init would write: of the series asked for, or of every one
+    # found; when adding, of those the project has no manifest for.
+    manifests: tuple[TiltSeriesManifest, ...]
+    # When adding: the series asked for or found that the project has already.
+    kept: tuple[str, ...] = ()
+
+
+def read_inputs(config: ProjectConfig, *, add_series: bool = False) -> ProjectInputs:
+    """Everything init checks, with nothing written: the project folder, the
+    series found or asked for, and every movie each manifest names.
+
+    initialize_project writes what this returns. scripts/submit_lanes.py's dry run
+    calls it too, so that the dry run refuses what init would, by the same reading.
     """
 
     artifact_registry_path = config.output_dir / "artifacts.json"
@@ -68,13 +76,45 @@ def initialize_project(config: ProjectConfig, *, add_series: bool = False) -> In
         series for series in tilt_series
         if add_series and (manifest_dir / f"{series}.json").is_file()
     )
-    added = [series for series in tilt_series if series not in kept]
-    manifests = [
+    manifests = tuple(
         load_tilt_series_manifest(config, tilt_series_id)
-        for tilt_series_id in added
-    ]
+        for tilt_series_id in tilt_series
+        if tilt_series_id not in kept
+    )
     for manifest in manifests:
         validate_tilt_series_manifest(manifest)
+    return ProjectInputs(manifests=manifests, kept=kept)
+
+
+def describe_manifest(manifest: TiltSeriesManifest) -> str:
+    """One line on what a manifest holds, as init prints it: a pattern that matched
+    the wrong part of the names shows up here, as a strange angle range or tilt
+    count, before any job."""
+
+    angles = manifest.tilt_angles_deg
+    frames_per_tilt = ", ".join(str(n) for n in sorted(manifest.num_subframes_set))
+    return (
+        f"{manifest.num_tilts} tilts, {min(angles):g} to {max(angles):g} deg, "
+        f"{frames_per_tilt} frames per tilt, {manifest.raw_pixel_spacing_angstrom:g} A/px"
+    )
+
+
+def initialize_project(config: ProjectConfig, *, add_series: bool = False) -> InitResult:
+    """Validate local input data and write project manifests.
+
+    A new project gets an empty registry. A folder whose registry exists is a
+    project with results in it, which an empty registry would lose: init refuses
+    it, unless `add_series`, which writes manifests only for the series the
+    project has none for and leaves the registry and every other manifest as
+    they are. Jobs on the project's other series may run meanwhile, since
+    nothing they read changes.
+    """
+
+    inputs = read_inputs(config, add_series=add_series)
+    manifests, kept = list(inputs.manifests), inputs.kept
+    added = [manifest.tilt_series_id for manifest in manifests]
+    manifest_dir = config.output_dir / "manifests"
+    artifact_registry_path = config.output_dir / "artifacts.json"
 
     project_path = config.output_dir / "project.json"
     if add_series and not added:

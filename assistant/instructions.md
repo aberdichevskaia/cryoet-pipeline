@@ -77,7 +77,8 @@ Submit only through `scripts/submit_lanes.py`, for a lane, and
 `salloc`, and never run a `*.sbatch` file yourself.
 
 1. Run the command with `--dry-run`.
-2. Show the person what the dry run printed: the jobs, any problems, and with
+2. Show the person what the dry run printed: the jobs, any problems, what
+   `init` would find for a new project, Slurm's answer for each stage, and with
    `--overwrite` what it may replace.
 3. Ask whether to submit.
 4. After an explicit yes, run the same command again without `--dry-run`,

@@ -58,7 +58,10 @@ lane runs, where its logs are and how to read results is in
 ## Already checked by the code
 
 - **Before the queue.** The dry run checks the lane's keys, folders, tool
-  variables and named programs, and the busy series.
+  variables and named programs, and the busy series. It also asks Slurm with
+  `sbatch --test-only` about every stage (E-16), and for a new project it reads
+  the frames as `init` would (D-4). A submission asks Slurm again before its
+  first `sbatch`.
 - **Before the first step.** The job's preflight checks the tools each stage
   needs, the GPU, and that the registry can be locked from the node.
 - **Each step** refuses to replace its own outputs without `--overwrite`.
@@ -360,6 +363,42 @@ others give valid commands but have not run.
 **Source:** read in `scripts/submit_lanes.py`; the list is in
 [pipeline_map.md](../pipeline_map.md), "Which combinations have run on real
 data".
+
+### E-16. The dry run refuses: Slurm refuses a stage
+
+**Kind:** refused · **Evidence:** code
+
+**Error text:** `Slurm refuses stage '<stage>' (<its sbatch options>): sbatch:
+error: Batch job submission failed: <Slurm's reason>`. Slurm writes the reason
+itself, by the site's configuration.
+
+**Where it shows:** the dry run, and a submission, which asks again before its
+first `sbatch`, so no stage is left in the queue without the ones after it. A
+dry run that Slurm accepts prints Slurm's answer for each stage, under
+`Slurm, asked with sbatch --test-only (nothing submitted):`. Where there is no
+`sbatch`, as on a laptop, the dry run says `not checked whether Slurm takes the
+stages' resources: no sbatch here` and refuses nothing for it.
+
+**Causes, common to rare:**
+1. The lane came from another site: its partition, GPU type or QOS are not this
+   site's. A lane written for MDC asks for `--partition=gpu
+   --gres=gpu:a40:1`, which Stockholm's cryo5000 nodes (`gpu:a5000`) do not have.
+2. A course or group runs in a reservation, and the stage does not name it with
+   `--reservation=<name>`, or names one this account may not use.
+3. The stage asks for more cores, memory or time than a node or the partition
+   gives. The MRA stage of `scripts/mra_port_run.sbatch` brings its own
+   `#SBATCH` lines (four A40s, 64 GB) for any option its stage does not set.
+
+**What to try:** see what the site has with `sinfo -o "%P %G %c %m %l"`
+(partitions, GPUs, cores, memory, time limit) and, for a reservation,
+`scontrol show reservation`. Then change the stage's `sbatch` line in the lane
+and run the dry run again.
+
+**What not to do:** submit around the check, for example with `sbatch` by hand.
+
+**Applies to:** since 24 November 2026.
+
+**Source:** read in `scripts/submit_lanes.py`, `slurm_check`.
 
 ## Questions for reviewers
 

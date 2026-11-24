@@ -139,6 +139,12 @@ _CASE_HEADING = re.compile(r"^### (?P<id>E\d+)\. (?P<title>.+)$", re.MULTILINE)
 # jobs, cut or padded to the fields its -o format asks for.
 _SLURM_CALL = '''#!/usr/bin/env python3
 import os, sys
+# sbatch --test-only submits nothing: a dry run of submit_lanes.py asks it about
+# every stage. It answers as Slurm does and is not noted as a call.
+if os.path.basename(sys.argv[0]) == "sbatch" and "--test-only" in sys.argv[1:]:
+    print("sbatch: Job 4000000 to start at 2026-01-01T00:00:00 using 8 processors "
+          "on nodes node01 in partition gpu", file=sys.stderr)
+    sys.exit(0)
 with open(os.environ["SLURM_CALLS"], "a") as log:
     shown = " ".join(f"{key}={os.environ[key]}" for key in
                      ("PROJECT", "CONFIG", "SERIES", "FROM", "UNTIL", "OVERWRITE")

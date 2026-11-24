@@ -19,8 +19,13 @@ import submit_recipe  # noqa: E402
 
 # Stands in for sbatch: notes what the job would find in its environment and the
 # arguments, fails on the call SBATCH_FAIL_AT counts to, and otherwise answers
-# with a job id.
+# with a job id. With --test-only, which submit_lanes.py's checks give, it submits
+# nothing, notes nothing and answers as Slurm does.
 SBATCH = """#!/bin/bash
+if [[ " $* " == *" --test-only "* ]]; then
+    echo "sbatch: Job 4242 to start at 2026-11-24T16:00:00 using 8 processors on nodes gpu54" >&2
+    exit 0
+fi
 echo "${OVERWRITE:-}|${SERIES:-}|${KEEP_STACK:-}|${LABEL:-}|$*" >> "$SBATCH_CALLS"
 n=$(wc -l < "$SBATCH_CALLS" | tr -d ' ')
 if [[ "$n" == "${SBATCH_FAIL_AT:-0}" ]]; then
