@@ -34,13 +34,13 @@ The submission scripts hold it to its yes themselves: a submission from the
 assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
-> **Status, 23 November 2026.** Every pipeline step up to the particles has run
-> on four of these series on max; 161 crashes in alignment in some runs (step
-> 6). The assistant has
-> run on max in Claude Code since 5 November, and in Codex on 14 November, where
-> Codex's sandbox works. The MRA as a stage of a lane ran on max on 19–20
-> November 2026, in a test of the other tutorial, on the four series. Tell Anna
-> what happened.
+> **Status, 24 November 2026.** In tests of the other tutorial on max, its lane
+> ran through the MRA on four of these series on 19–20 November 2026, and
+> through fine alignment on all five on 23 November; 161 had been left out until
+> then, for a crash in IMOD's `beadtrack` that the pipeline now avoids (playbook
+> entry A-2). The assistant has run on max in Claude Code since 5 November, and
+> in Codex on 14 November, where Codex's sandbox works. Tell Anna what
+> happened.
 
 ## What you need
 
@@ -89,11 +89,9 @@ Do steps 1, 2 and 4 of the other tutorial, then come back:
 4. [Create the project, with all five series](ryr1-without-assistant.md#4-create-the-project-with-all-five-series),
    `outputs/ryr1-tutorial`, with `cryoet init`.
 
-Step 4 is yours, not the assistant's. The project holds all five series, though
-the lane takes four: 161 has a copy of its own (step 6 below), and does not
-always align. A series left out can join later, with the `cryoet init …
---add-series` command the dry run prints, which keeps the rest of the project
-as it is.
+Step 4 is yours, not the assistant's. A series left out can join later, with
+the `cryoet init … --add-series` command the dry run prints, which keeps the
+rest of the project as it is.
 
 **The assistant can help with this setup.** It needs only the clone and its
 client: clone, do steps 2 and 3 below, and ask it to check your setup or to take
@@ -233,9 +231,8 @@ Ask in your own words. A request that gives it what it cannot read for itself:
 
 > I copied RyR1 frames to data/ryr1/frames: SerialEM TIFF, no mdocs, gain.mrc
 > beside them. I created the project outputs/ryr1-tutorial with cryoet init,
-> all five series. I want a bin8 lane up to the MRA for 039, 096, 097 and 125;
-> 161 is left out, it crashes in alignment in some runs. I want to look at the
-> picks before the MRA.
+> all five series. I want a bin8 lane up to the MRA for all five. I want to look
+> at the picks before the MRA.
 > Read the folder and ask me what you cannot read.
 
 What it does, following its `lane-config` skill:
@@ -259,7 +256,7 @@ What it does, following its `lane-config` skill:
    | gain-corrected? | no: `data/ryr1/frames/gain.mrc`, rotation 0, flip 1 |
    | Cs | 2.7 mm; most likely 300 kV and 2-7 µm nominal defocus too (EMD-54612's record, not confirmed for these files) |
    | tilt-axis angle | 84.0°; its sign is not known |
-   | one series first, or all | the four: 039 096 097 125 |
+   | one series first, or all | all five |
    | where the outputs go | `outputs/ryr1-tutorial`, which exists with all five series |
    | MRA right after picking, or look first | look first |
    | particles per tomogram | not known: keep the default, twice pytom's recommendation |
@@ -302,33 +299,7 @@ following command?* Check that it is the dry run's command without
 that says *don't ask again*: it would let every command that starts the same
 way run without asking, for the rest of the session.
 
-## 6. Series 161 (optional; it may crash)
-
-> **Status, 23 November 2026.** 161 does not align reliably. IMOD 5.1.12's
-> `beadtrack` segfaults on it while seeding at tracking binning 2. At 3 it
-> aligned on 14 October, segfaulted on 19 November 2026 and aligned again on
-> 23 November, with the same lane as the crash. The cause is a memory error in
-> IMOD 5.1.12's `beadtrack`, which crashes the job only in some runs (playbook
-> entry A-2). Nothing after this step needs 161: skip it, or try it and expect
-> a crash.
-
-If you try it, ask once the main lane is submitted:
-
-> Process 161 in the same project, in its own copy of the lane, with tracking
-> binning 3: IMOD's beadtrack segfaults on 161 at 2, and at 3 it has aligned
-> twice and crashed once. Name its stages with -161 so I can tell its jobs
-> apart. No MRA in that copy.
-
-It writes the copy, shows you the difference from the main lane (`series`,
-`tracking_binning`, the stage names), dry-runs it and asks. Different series of
-one project may run at the same time, so the dry run should not refuse it as
-busy. The tutorial's version of this copy is
-[`ryr1/ryr1-tutorial-161.toml`](ryr1/ryr1-tutorial-161.toml). If its align job
-fails at `generate-fiducial-seed` with `beadtrack` exiting with status 139, it
-is this crash: the assistant will not resubmit it unchanged. Tell Anna, with
-`fiducials/161/161_autofidseed.log`.
-
-## 7. While the jobs run
+## 6. While the jobs run
 
 Ask it how things stand, as often as you like:
 
@@ -350,7 +321,7 @@ recipes known to be safe, usually a resubmission from the failed stage with
 `--overwrite`. It will not rerun a failure that reproduces without changing
 something first.
 
-## 8. Look at the picks
+## 7. Look at the picks
 
 When the `gpu` jobs have finished, ask it for the project's report:
 
@@ -361,18 +332,18 @@ the client asks you before running it (Codex, to run it outside its sandbox,
 which writes nothing); it only reads the project and writes a PDF,
 `outputs/ryr1-tutorial/reports/report-bin8.pdf`. Or run it yourself, in another
 terminal, as in
-[step 9 of the other tutorial](ryr1-without-assistant.md#9-look-at-the-results-before-the-mra),
+[step 8 of the other tutorial](ryr1-without-assistant.md#8-look-at-the-results-before-the-mra),
 which also says what to look at.
 
 Read the PDF yourself: the alignment, the CTF fits, the membranes, the picks on
 the tomogram and their galleries. Ask the assistant about anything in it. What
 it says about a picture is an impression, and it says so.
 
-## 9. The MRA
+## 8. The MRA
 
 When you are satisfied with the picks:
 
-> Run the MRA on the particles of the four series.
+> Run the MRA on the particles of the five series.
 
 It submits the lane's `mra` stage with `--from-stage mra`. The dry run shows
 the run's folder and every setting with its source; with no `[mra]` section
@@ -381,20 +352,15 @@ of noise), five rounds from coarse to fine, the 340 Å diameter from `[pick]`,
 the mask from it. It refuses while a series has no particles, or while one of
 your jobs still works on the series.
 
-If 161 got through step 6 and its particles are extracted, ask for all five
-instead: the main lane lists four series, so it writes a copy for the MRA with
-all five, and a run name of its own. The tutorial's version is
-[`ryr1/ryr1-tutorial-all.toml`](ryr1/ryr1-tutorial-all.toml).
-
 The job runs on four A40s, for a few hours: in a test of the other tutorial on
-max, on the four series, its first two iterations took 40 and 83 minutes and
+max, on four of the series, its first two iterations took 40 and 83 minutes and
 the last three about 2 minutes together. If it stops on its time limit, the
 same submission carries the run on from its last finished iteration.
 
-## 10. Read the classification report
+## 9. Read the classification report
 
 The job writes `outputs/ryr1-tutorial/mra/<run name>_classification_report.pdf`.
-[Step 11 of the other tutorial](ryr1-without-assistant.md#11-read-the-classification-report)
+[Step 10 of the other tutorial](ryr1-without-assistant.md#10-read-the-classification-report)
 lists its pages and what to look for. Then, for instance:
 
 > Class 2 looks like RyR1. Run only its particles again.
@@ -403,7 +369,7 @@ It writes a copy of the lane whose `[mra]` names the run and the class
 (`from_run`, `from_classes`), with any settings you change, and submits it with
 `--from-stage mra` after the dry run and your yes.
 
-## 11. A class to RELION 5 (optional)
+## 10. A class to RELION 5 (optional)
 
 The MRA sorts the particles; it does not give a resolution. For a gold-standard
 refinement, a class that looks like RyR1 can go to RELION 5:

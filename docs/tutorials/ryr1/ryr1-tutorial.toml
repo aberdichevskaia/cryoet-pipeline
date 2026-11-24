@@ -1,8 +1,7 @@
-# The tutorial lane: RyR1 in native membranes, series 039 096 097 125, from
+# The tutorial lane: RyR1 in native membranes, series 039 096 097 125 161, from
 # SerialEM TIFF frames without mdocs, gold beads, membranes, a bin8 tomogram and
 # an MRA. Used by docs/tutorials/ryr1-without-assistant.md. It is
-# configs/lanes/ryr1-bin8.toml with three changes: four of the five series (161
-# has its own copy, ryr1-tutorial-161.toml), the pick count left to the rule
+# configs/lanes/ryr1-bin8.toml with two changes: the pick count left to the rule
 # (twice pytom's recommendation), and an MRA stage.
 #
 # Paths are relative to the root of your clone. The frames are expected in
@@ -30,11 +29,10 @@ variant = "bin8"          # the label on every output from the tomogram on
 
 [run]
 project = "outputs/ryr1-tutorial"
-# 161 is processed by ryr1-tutorial-161.toml: IMOD's beadtrack segfaults on it at
-# tracking binning 2, the value that suits the other four, and a lane cannot set
-# a value per series. All five are in the project (cryoet init, step 4 of the
-# tutorial), so 161 can join later in the same project.
-series = ["039", "096", "097", "125"]
+# All five. Until 2026-11-24, 161 had a copy of this lane with tracking binning 3:
+# IMOD's beadtrack crashed on it in some runs while seeding, which the seed step
+# now avoids by taking 5 seed views ([fiducials] seed_views; playbook entry A-2).
+series = ["039", "096", "097", "125", "161"]
 
 # MDC partitions: normal (CPU) and gpu. The gpu partition mixes T4, V100, A40,
 # H100, H200 and B300 nodes; MemBrain-seg needs compute capability 7.5 or newer,

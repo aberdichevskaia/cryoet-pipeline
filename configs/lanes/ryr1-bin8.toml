@@ -13,8 +13,8 @@
 #     by the rule, radius + 3 px with a soft edge, box 2x;
 #   - extraction box 2x the particle, and the membrane dilation kept at ~17 nm;
 #   - the cpu stage split at fine alignment, so a rerun starts at the CTF stack.
-# Everything up to fine alignment is shared and stays as it ran: 161's needed
-# tracking binning 3 (see [fiducials]), so redoing it from here would fail.
+# Everything up to fine alignment is shared and stays as it ran, 161's with
+# tracking binning 3 (see [fiducials]).
 # Everything after it has to be redone: the aligned stacks of that run were
 # cropped (newstack -size kept the unrotated frame, fixed 2026-10-16), the CTF
 # stack among them.
@@ -67,7 +67,7 @@ time = "3:00:00"
 sbatch = ["--partition=gpu", "--gres=gpu:a40:1", "--cpus-per-task=8", "--mem=64G"]
 
 # Done on 2026-10-14 and shared with ryr1-bin4; not to be re-run from this file,
-# because 161 aligned only with tracking_binning = 3 (see [fiducials]).
+# because 161's alignment ran from a copy with tracking_binning = 3 (see [fiducials]).
 [[run.stage]]
 name = "align"
 from = "align-tilt-series"
@@ -165,6 +165,9 @@ track_backend = "imod-beadtrack"
 # other four series track. At binning 3 (5.04 A/px, a ~20 px bead) 161 seeds,
 # tracks and aligns with every QC passing. A lane cannot set a value per series,
 # so 161's cpu stage ran from a copy of this file differing only in that line.
+# Binning 3 got round the crash by luck: beadtrack writes past an array whenever
+# autofidseed seeds from all 7 views it tracks, as it did on all five series, and
+# since 2026-11-24 the seed step takes 5 (docs/agent/playbook/alignment.md, A-2).
 tracking_binning = 2
 fiducial_diameter_nm = 10.0
 
