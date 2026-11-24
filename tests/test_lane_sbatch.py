@@ -176,3 +176,14 @@ def test_a_stage_without_estimate_ctf_does_not_check_ctffind(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "preflight   ok" in result.stdout
+
+
+def test_only_a_refusal_is_written_as_a_preflight_line():
+    """show_project and show_failure read a `preflight: ` line as a job that stopped
+    before its first step. A note that lets the job go on must not look like one:
+    in Stockholm, on 24 November 2026, a motion job that completed was listed as
+    failed for its 'GPU code unchecked' note."""
+    script = (ROOT / "scripts" / "lane.sbatch").read_text()
+    writers = [line.strip() for line in script.splitlines()
+               if '"preflight:' in line and not line.strip().startswith("#")]
+    assert writers == ['fail() { echo "preflight: $*" >&2; exit 1; }']

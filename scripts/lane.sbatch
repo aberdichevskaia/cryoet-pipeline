@@ -128,7 +128,9 @@ if needs prepare-tilt-series; then
     [[ -z "$missing" ]] || fail "MotionCor3 cannot load: ${missing}- put their directory on LD_LIBRARY_PATH before submitting"
     cap=$(gpu_cap)
     if [[ -z "$cap" || ! -x "$cuobjdump" ]]; then
-        echo "preflight: no compute capability or cuobjdump here; MotionCor3's GPU code unchecked"
+        # A note, not a refusal: "preflight:" is what fail() says, and the status
+        # tools read it as a job that stopped (Stockholm, 24 November 2026).
+        echo "warning: no compute capability or cuobjdump here; MotionCor3's GPU code unchecked"
     elif ! runs_on "$cap" "$MOTIONCOR3"; then
         fail "MotionCor3 has nothing this GPU (compute $cap) can run." \
             "cubins: $(archs -lelf "$MOTIONCOR3")ptx: $(archs -lptx "$MOTIONCOR3")" \

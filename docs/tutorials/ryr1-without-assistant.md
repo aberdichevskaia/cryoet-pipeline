@@ -367,9 +367,10 @@ or two series: do the picks sit on density at the membranes?
 
 ## 9. A branch: 161 aligned by AreTomo2 (optional)
 
-> **Status, 24 November 2026.** This step has not run yet. AreTomo2 has aligned
-> another dataset in the pipeline (EMPIAR-11830 at MDC, AreTomo2 1.1.3), but not
-> these data. Tell Anna what happens.
+> **Status, 24 November 2026.** The branch has run once, in a test in Stockholm
+> on 24 November 2026, up to the tomogram: AreTomo2 1.1.3 aligned 161 in a minute
+> and a half, and each lane's status and report showed its own results. It has
+> not run at MDC. Tell Anna what happens.
 
 A lane can part from another earlier than at its own tomogram. Here 161 is
 aligned a second way, by AreTomo2's projection matching instead of the gold
@@ -424,6 +425,10 @@ pages for 161 beside those of step 8:
 - **tilt alignment:** the beads' page shows tiltalign's residual per tilt,
   AreTomo2's the shifts of its last projection-matching pass. The two measure
   different things, so their numbers are not to be compared;
+- **tilt angles:** each page says by how much the alignment shifted the angles.
+  In the Stockholm test the beads shifted them by +0.2°, AreTomo2, which tries
+  whole degrees only, by −6°: the two tomograms are turned against each other by
+  that difference, about the tilt axis;
 - **the tomograms:** the same membranes and beads in both? Is one sharper, or
   tilted against the other?
 

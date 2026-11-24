@@ -71,6 +71,7 @@ from cryoet_pipeline.reports.timing import (
     short_duration,
     table_cell,
     took,
+    written_by,
 )
 from cryoet_pipeline.rotations import relion_euler_to_matrix, resample_volume_zyx
 from cryoet_pipeline.score_preview import score_preview_from_volume, write_score_preview
@@ -1988,3 +1989,40 @@ def test_the_warnings_page_says_what_was_written_again_after_use(tmp_path: Path)
     assert ", is newer than the CTF-corrected stack (" in line
     page = [text for text, _ in front.warning_lines([report])]
     assert any(text.startswith("• Written again after use: the CTF fit, dated ") for text in page)
+
+
+def test_a_branch_s_own_alignment_has_the_time_its_labelled_run_took(tmp_path: Path) -> None:
+    """A lane aligning on its own ([lane] alignment_variant) writes its fine
+    alignment under the alignment label, unlike its variant: its row records that
+    label, and the time is found by it (the Stockholm test of 24 November 2026
+    showed the branch's alignment as "not recorded")."""
+
+    def at(seconds: float) -> float:
+        return _T0 + seconds
+
+    def written(name: str, variant: str | None, moment: float) -> Artifact:
+        path = tmp_path / name
+        path.write_text("x")
+        os.utime(path, (moment, moment))
+        return Artifact(id=f"161:{name}", kind=ArtifactKind.ALIGNMENT, path=path,
+                        variant=variant, parameters={"tilt_series_id": "161"})
+
+    def row(label: str | None, finished: float, seconds: float, variant: str) -> dict:
+        when = datetime.fromtimestamp(finished, UTC).isoformat(timespec="seconds")
+        return {"series": "161", "step": "fine-align-tilt-series", "seconds": seconds,
+                "exit_code": 0, "finished_at": when, "lane": "branch", "variant": variant,
+                "label": label}
+
+    (tmp_path / "step_timings.jsonl").write_text("".join(json.dumps(one) + "\n" for one in [
+        row(None, at(100.0), 9.0, "bin8"),
+        row("aretomo", at(300.0), 84.0, "bin8-aretomo"),
+    ]))
+    runs = load_step_runs(tmp_path)
+    shared = written("fine.json", None, at(99.5))
+    own = written("fine_aretomo.json", "aretomo", at(299.5))
+
+    assert written_by([own], runs)["fine-align-tilt-series"].seconds == 84.0
+    assert written_by([shared], runs)["fine-align-tilt-series"].seconds == 9.0
+    # Under another label, the branch's run made nothing of it.
+    other = written("fine_other.json", "patches", at(299.5))
+    assert written_by([other], runs) == {}

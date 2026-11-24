@@ -63,6 +63,11 @@ class StepRun:
     """POSIX time."""
     variant: str | None
     """The lane's label; None in rows written before the runner recorded it."""
+    label: str | None = None
+    """The label the step itself ran under, None for a shared run; recorded since
+    2026-11-24 (`label_recorded`). It differs from `variant` on the alignment and
+    CTF-fit steps of a lane that aligns on its own ([lane] alignment_variant)."""
+    label_recorded: bool = False
 
     @property
     def started_at(self) -> float:
@@ -119,12 +124,15 @@ def _step_run(row: Any) -> StepRun | None:
         # The runner has always written UTC.
         moment = moment.replace(tzinfo=UTC)
     variant = row.get("variant")
+    label = row.get("label")
     return StepRun(
         series=series,
         step=step,
         seconds=float(seconds),
         finished_at=moment.timestamp(),
         variant=variant if isinstance(variant, str) else None,
+        label=label if isinstance(label, str) else None,
+        label_recorded="label" in row,
     )
 
 
@@ -284,8 +292,14 @@ def written_by(artifacts: Sequence[Artifact], runs: Sequence[StepRun]) -> dict[s
 
 
 def _same_lane(run: StepRun, artifact: Artifact) -> bool:
-    # Unlabelled results are shared by every lane, and old rows name none.
-    return run.variant is None or artifact.variant is None or run.variant == artifact.variant
+    # Unlabelled results are shared by every lane, and old rows name none. A row
+    # that records its step's own label is matched by it: a lane aligning on its
+    # own labels its alignment and CTF fit otherwise than its variant.
+    if run.variant is None or artifact.variant is None:
+        return True
+    if run.label_recorded:
+        return run.label == artifact.variant
+    return run.variant == artifact.variant
 
 
 def expected_steps(artifacts: Sequence[Artifact], qc: Mapping[str, object]) -> list[str]:
