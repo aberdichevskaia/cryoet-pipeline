@@ -712,9 +712,12 @@ def test_a_dry_run_asks_slurm_about_every_stage_and_submits_nothing(lane, capsys
         assert args[1 : 1 + len(stage.sbatch)] == list(stage.sbatch)
         assert f"--time={stage.time}" in args and args[-1] == "scripts/lane.sbatch"
         assert not any(arg.startswith("--dependency") for arg in args)
-    assert "  Slurm, asked with sbatch --test-only (nothing submitted):" in out
-    assert ("    cpu: Job 4242 to start at 2026-11-24T16:00:00 using 8 processors on nodes "
+    assert ("  Slurm, asked with sbatch --test-only (nothing submitted; each stage alone, "
+            "without waiting for the one before):") in out
+    # Without the job number Slurm draws for the test, which no job holds.
+    assert ("    cpu: to start at 2026-11-24T16:00:00 using 8 processors on nodes "
             "gpu54 in partition cryo5000") in out
+    assert "4242" not in out
     assert not _overwrite_per_call(lane)
 
 
@@ -800,3 +803,21 @@ def test_a_missing_gain_reference_is_refused_where_motion_correction_runs(
     # A submission from a later stage runs no motion correction, and needs no gain.
     code, _, err = _run(capsys, config, "--dry-run", "--from-stage", "align")
     assert code == 0 and "[motion] gain_reference" not in err
+
+
+def test_a_dry_run_that_would_refuse_makes_no_new_project_folder(lane, monkeypatch, capsys):
+    config = _ryr1_lane(lane, monkeypatch, lane.parent / "no-gain.mrc")
+    project = lane.parent / "ryr1-project"
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0 and "would refuse: " in err
+    assert not project.exists()
+    assert f"not journaled: {project} does not exist yet" in err
+    assert "recorded in" not in out
+    # A project folder that is there gets the entry, problems and all.
+    project.mkdir()
+    code, out, err = _run(capsys, config, "--dry-run")
+    assert code == 0 and "not journaled" not in err
+    journal = (project / submit_lanes.JOURNAL).read_text().splitlines()
+    [entry] = [json.loads(line) for line in journal]
+    assert entry["event"] == "dry-run"
+    assert any("gain_reference: no file" in problem for problem in entry["problems"])

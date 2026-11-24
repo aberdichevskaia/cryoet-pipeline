@@ -53,7 +53,8 @@ lane runs, where its logs are and how to read results is in
 3. **`sacct -j <job> -o JobID,State,Elapsed,AllocTRES,NodeList`**: how the job
    ended, how long it ran, and what it was given.
 4. **The project's `journal.jsonl`**: every dry run and submission, with the
-   config, the reason and the job ids.
+   config, the reason and the job ids. A dry run that would refuse a project
+   not made yet is not in it, since it makes no folder.
 
 ## Already checked by the code
 
@@ -366,16 +367,22 @@ data".
 
 ### E-16. The dry run refuses: Slurm refuses a stage
 
-**Kind:** refused · **Evidence:** code
+**Kind:** refused · **Evidence:** measured on cryoem.se, 24 November 2026: the
+partitions of ryr1-bin8, a lane of MDC's, were refused, and a lane on cryo5000
+with the tomo reservation was taken
 
-**Error text:** `Slurm refuses stage '<stage>' (<its sbatch options>): sbatch:
-error: Batch job submission failed: <Slurm's reason>`. Slurm writes the reason
-itself, by the site's configuration.
+**Error text:** `Slurm refuses stage '<stage>' (<its sbatch options>): <what
+sbatch said>`. Slurm writes the reason itself, by the site's configuration. On
+cryoem.se, for `--partition=gpu`: `sbatch: error: invalid partition specified:
+gpu allocation failure: Invalid partition name specified`.
 
 **Where it shows:** the dry run, and a submission, which asks again before its
 first `sbatch`, so no stage is left in the queue without the ones after it. A
-dry run that Slurm accepts prints Slurm's answer for each stage, under
-`Slurm, asked with sbatch --test-only (nothing submitted):`. Where there is no
+dry run that Slurm accepts prints, under `Slurm, asked with sbatch --test-only
+(nothing submitted; each stage alone, without waiting for the one before):`,
+when and where Slurm would start each stage. The time is for the stage alone:
+the real chain starts each stage after the one before. The job number Slurm
+draws for the test is left out, since no job holds it. Where there is no
 `sbatch`, as on a laptop, the dry run says `not checked whether Slurm takes the
 stages' resources: no sbatch here` and refuses nothing for it.
 

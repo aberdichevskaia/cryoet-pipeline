@@ -37,7 +37,9 @@ submission from that shell, including the ones nobody meant to overwrite with.
 Every dry run and every submission is appended to the project's journal.jsonl:
 the plan, who ran it and through which client, and for a submission also the
 config's text, how it differs from the lane file it was copied from, the commit,
---reason and the job IDs. A submission from the assistant is refused unless it
+--reason and the job IDs. The one exception is a dry run that would refuse, for a
+project whose folder does not exist yet: it makes no folder for its entry, says
+so, and leaves nothing behind. A submission from the assistant is refused unless it
 gives --reason and the config's latest journal entry is the same person's dry
 run of exactly this plan, without problems, at most 30 minutes old: what is
 submitted is what was shown, once. The assistant is known by CRYOET_ASSISTANT,
@@ -164,6 +166,9 @@ CLIENT_VARIABLES = (
 _HEADER_PROJECT = re.compile(r"^project\s+(?P<project>[^\s,]+)")
 _HEADER_SERIES_IN = re.compile(r"^series\s+(?P<series>.+?)\s+in\s+(?P<project>\S+)\s*$")
 _HEADER_SERIES = re.compile(r"^series\s+(?P<series>.+?)\s*$")
+# The job number sbatch --test-only names: Slurm draws one for every test
+# (628553 to 628555 on cryoem.se, 24 November 2026), but no job holds it.
+_TEST_JOB = re.compile(r"^(?:sbatch: )?Job \d+ ")
 # The version line of CTFFIND's start-up banner, as the backend reads it
 # (cryoet_pipeline.backends.ctf.ctffind_version): anchored, so that CTFFIND 5's
 # "Library Version" line is not taken for it.
@@ -568,7 +573,7 @@ def slurm_check(
             asked = shlex.join([*stage.sbatch, f"--time={stage.time}"])
             found.append(f"Slurm refuses stage {stage.name!r} ({asked}): {said}")
         else:
-            said_of.append(f"{stage.name}: {said.removeprefix('sbatch: ')}")
+            said_of.append(f"{stage.name}: {_TEST_JOB.sub('', said, count=1)}")
     return found, said_of
 
 
@@ -1667,6 +1672,13 @@ def main(argv: list[str] | None = None) -> int:
             "plan": one.record, "plan_sha256": _digest(one.record),
             "reason": args.reason, "replaces": one.replaces,
         }
+        if args.dry_run and one.problems and not (ROOT / one.lane.project).exists():
+            # A dry run that would refuse makes no project folder to hold its entry:
+            # no submission may follow it, and the folder would stay behind, as
+            # outputs/ryr1 did on cryoem.se on 24 November 2026 for a lane of MDC's.
+            print(f"not journaled: {one.lane.project} does not exist yet, and a dry run "
+                  "that would refuse does not make it", file=sys.stderr)
+            continue
         if args.dry_run:
             entry |= {"event": "dry-run", "problems": one.problems}
         else:
@@ -1734,7 +1746,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("  " + " -> ".join(f"{name} {job}" for name, job in jobs.items()))
         if args.dry_run and one.slurm_said:
-            print("  Slurm, asked with sbatch --test-only (nothing submitted):")
+            print("  Slurm, asked with sbatch --test-only (nothing submitted; each stage "
+                  "alone, without waiting for the one before):")
             for line in one.slurm_said:
                 print(f"    {line}")
         for line in mra_lines(lane, stages):
