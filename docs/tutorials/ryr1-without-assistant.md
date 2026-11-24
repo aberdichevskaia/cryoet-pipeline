@@ -429,6 +429,11 @@ pages for 161 beside those of step 8:
   In the Stockholm test the beads shifted them by +0.2°, AreTomo2, which tries
   whole degrees only, by −6°: the two tomograms are turned against each other by
   that difference, about the tilt axis;
+- **CTF:** the branch fits the CTF on its own aligned stack, and centres the
+  search of every tilt on the fit of its 0° tilt, which after AreTomo2's −6° is
+  the one collected at +6°. In the Stockholm test that left out two more of the
+  most tilted views than the beads did, 24 of 29 against 26: their defocus lay
+  past the ±1 µm searched (playbook entry C-1);
 - **the tomograms:** the same membranes and beads in both? Is one sharper, or
   tilted against the other?
 

@@ -167,6 +167,8 @@ fit, defocus changes steadily with tilt angle.
 - Widen `min_defocus_angstrom` and `max_defocus_angstrom` instead of the window.
   They bound only the first fit.
 - Count views stopped at the 30 Å end as fitted.
+- Widen the window far past what the trend needs. On 161, ±20000 Å let one weak
+  view settle on a worse fit that ±10000 Å had right (Source).
 
 **When to stop and ask someone:** when fewer than half the views fit even at
 ±10000 Å.
@@ -178,6 +180,15 @@ window key since 16 October.
 and ±10000 Å, 9, 22 and 26 of 29 views fitted better than 20 Å. ryr1-bin8 now
 searches ±10000 Å. Seen on one dataset so far; 161 had the weakest trend and the
 widest fit.
+- RyR1 161 in Stockholm, 24 November 2026, ±10000 against ±20000 Å, in two lanes
+  of one project. Beads: 26 then 27 of 29 views fitted; the outermost fitted
+  view at ±10000 Å sat at the window's edge (6.36 µm, 5.38 at 0°), and the newly
+  fitted −36° came out at 6.67 µm, above the trend through its neighbours (about
+  6.45). An AreTomo2 branch, whose 0° view was the one collected at +6° (0.16 µm
+  less defocused): 24 then 26. The views collected at −42° and −39° stayed
+  unfitted in both, at either window, so the window does not explain them; and
+  at ±20000 Å the branch's +42° view, fitted to 12.3 Å at ±10000, fell to the
+  30 Å end.
 
 ### C-2. The step refuses the CTFFIND it found
 
