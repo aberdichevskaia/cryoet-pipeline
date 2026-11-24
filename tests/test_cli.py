@@ -1497,3 +1497,51 @@ def _write_mrc(path: Path, data: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with mrcfile.new(path, overwrite=True) as mrc:
         mrc.set_data(data)
+
+
+def test_the_steps_from_the_aligned_stack_on_read_the_lanes_own_alignment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A lane aligning on its own ([lane] alignment_variant) has its final stack built,
+    corrected and reconstructed from its own alignment and CTF fit, not the shared."""
+
+    def artifact(kind: ArtifactKind, stem: str, variant: str | None, **parameters) -> Artifact:
+        suffix = f":{variant}" if variant else ""
+        path = tmp_path / f"{stem}{suffix}".replace(":", "_")
+        path.write_text("x")
+        return Artifact(id=f"TS_TEST:{stem}{suffix}", kind=kind, path=path, variant=variant,
+                        parameters={"tilt_series_id": "TS_TEST", **parameters})
+
+    registry = ArtifactRegistry.empty()
+    registry.extend([
+        artifact(ArtifactKind.TILT_STACK, "tilt_stack", None),
+        artifact(ArtifactKind.ALIGNMENT, "alignment:fine", None, stage="fine"),
+        artifact(ArtifactKind.ALIGNMENT, "alignment:fine", "aretomo", stage="fine"),
+        artifact(ArtifactKind.CTF_MODEL, "ctf_model:ctffind5", None, backend="ctffind5"),
+        artifact(ArtifactKind.CTF_MODEL, "ctf_model:ctffind5", "aretomo", backend="ctffind5"),
+        artifact(ArtifactKind.ALIGNED_TILT_STACK, "aligned_tilt_stack:final", "bin8-aretomo",
+                 purpose="final_alignment", alignment_stage="fine"),
+    ])
+    registry.write(tmp_path / "artifacts.json")
+    (tmp_path / "manifest.json").write_text(_manifest(tmp_path / "movie.mrc").model_dump_json())
+    seen: dict[str, list[str]] = {}
+
+    def capture(name: str):
+        def record(backend, *inputs, **kwargs):
+            seen[name] = [item.id for item in inputs if isinstance(item, Artifact)]
+            raise SystemExit(0)
+        return record
+
+    for name in ("build_final_stack_and_register", "correct_ctf_and_register",
+                 "reconstruct_and_register"):
+        monkeypatch.setattr(cli, name, capture(name))
+    common = ["--manifest", str(tmp_path / "manifest.json"),
+              "--registry", str(tmp_path / "artifacts.json"), "--out", str(tmp_path / "out"),
+              "--device", "cpu", "--variant", "bin8-aretomo", "--alignment-variant", "aretomo"]
+    for command in ("build-final-aligned-stack", "correct-ctf", "reconstruct-tomogram"):
+        result = CliRunner().invoke(cli.app, [command, *common])
+        assert result.exit_code == 0, f"{command}: {result.output}"
+
+    assert "TS_TEST:alignment:fine:aretomo" in seen["build_final_stack_and_register"]
+    assert "TS_TEST:ctf_model:ctffind5:aretomo" in seen["correct_ctf_and_register"]
+    assert "TS_TEST:alignment:fine:aretomo" in seen["reconstruct_and_register"]

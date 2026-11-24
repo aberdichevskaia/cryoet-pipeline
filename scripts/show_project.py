@@ -22,11 +22,15 @@ Read-only. It joins what is already written down and decides nothing:
 One project can hold several lanes. Steps before build-final-aligned-stack are
 shared, so every lane's runs of them count. The steps after it each lane labels
 for itself: their timing rows count only under this lane's variant, and their
-failures in a job only if the job ran this lane. A job's log names its lane on
-each series' `# ---- <series> (<lane>) ----` line; a job that stopped before
-its first step is known by the lane config in its header. A timing row written
-before rows named their lane, and a job whose lane cannot be told, count for
-every lane.
+failures in a job only if the job ran this lane. A lane that aligns on its own
+([lane] alignment_variant) labels its fiducial, fine-alignment and CTF-fit steps
+too, with that label: their runs count for it alone, and a shared step's run
+counts for no lane that labels the step. Timing rows say which label a run
+carried since 2026-11-24, and a job's log says it in the command of each step. A
+job's log names its lane on each series' `# ---- <series> (<lane>) ----` line; a
+job that stopped before its first step is known by the lane config in its
+header. A timing row written before rows named their lane, and a job whose lane
+cannot be told, count for every lane.
 
 Disposable, like scripts/run_series.py: a stand-in, for a person and for the
 terminal assistant, until the run entity records all of this.
@@ -105,6 +109,9 @@ _FINISHED = re.compile(r"^finished\s+(?P<when>\S+)")
 _PREFLIGHT = re.compile(r"^preflight: (?P<problem>.*)$")
 _BLOCK = re.compile(r"^# ---- (?P<series>\S+) \((?P<lane>.*)\) ----$")
 _FAILED =re.compile(r"^# FAILED at (?P<step>\S+) \(exit (?P<code>-?\d+)\) for (?P<series>\S+)\.$")
+# run_series prints each step's name, then its command, before running it.
+_STEP = re.compile(r"^# (?P<step>[a-z][a-z0-9-]*)$")
+_LABEL = re.compile(r"\s--variant\s+(?P<label>\S+)")
 
 
 def _load_json(path: Path) -> Any:
@@ -153,25 +160,49 @@ def lane_series(cfg: dict[str, Any], project: Path) -> list[str]:
     return listed + [series for series in found if series not in listed]
 
 
+def step_labels(steps: Iterable[tuple[str, list[str]]]) -> dict[str, str]:
+    """The label each labelled step of a lane carries, by step: the lane's variant
+    from the final aligned stack on, and its alignment_variant, when it aligns on
+    its own, on the steps up to the CTF fit."""
+    return {name: label for name, command in steps
+            if (label := run_series.step_label(command)) is not None}
+
+
 def last_runs(
-    project: Path, series: set[str], labelled: set[str], variant: str
+    project: Path, series: set[str], labelled: dict[str, str] | set[str], variant: str
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """The latest run of each step of each series, among the runs this lane sees."""
+    """The latest run of each step of each series, among the runs this lane sees.
+
+    `labelled` is step_labels' answer; a set of step names stands for steps that
+    carry the lane's variant. A run counts when it carried the label the lane
+    gives the step, or none for a step the lane shares. A row from before rows
+    recorded the label carries only its lane's variant, which until then was the
+    label of every labelled step."""
+    labels = labelled if isinstance(labelled, dict) else dict.fromkeys(labelled, variant)
     runs: dict[tuple[str, str], dict[str, Any]] = {}
     for row in _timings(project):
         if row.get("series") not in series:
             continue
         step = str(row.get("step"))
-        if step in labelled and row.get("variant", variant) != variant:
+        if "label" in row:
+            if row["label"] != labels.get(step):
+                continue  # run under a label this lane does not give the step, or none
+        elif step in labels and row.get("variant", variant) != labels[step]:
             continue  # another lane's run of a step each lane labels for itself
         runs[(row["series"], step)] = row
     return runs
 
 
-def lane_sees(job: dict[str, Any], step: str, lane: str | None, labelled: set[str]) -> bool:
-    """Whether a job's run of a step counts for this lane: a shared step's counts
-    for every lane, a labelled step's only for the lane the job ran."""
-    return step not in labelled or job.get("lane") in (None, lane)
+def lane_sees(
+    job: dict[str, Any], step: str, lane: str | None, labelled: Iterable[str],
+    label: str | None = None,
+) -> bool:
+    """Whether a job's run of a step counts for this lane: a labelled step's only
+    for the lane the job ran; a shared step's for every lane, unless the job ran it
+    under a label (`label`, read from its log), as a lane aligning on its own does."""
+    if step in labelled:
+        return job.get("lane") in (None, lane)
+    return label is None
 
 
 def _config_lane(path: Path) -> str | None:
@@ -196,10 +227,13 @@ def _owner(artifact: dict[str, Any]) -> str | None:
 
 
 def qc_records(
-    root: Path, project: Path, series: set[str], variant: str
+    root: Path, project: Path, series: set[str], variant: str,
+    labels: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """The QC verdicts this lane sees for these series: the shared ones, and its
-    own variant's. An experiment under another label is not the lane's."""
+    own variant's. An experiment under another label is not the lane's. With the
+    lane's step_labels, a step it labels with its alignment label shows that
+    label's verdicts only, and not the shared ones it was set up beside."""
     payload = _load_json(project / "artifacts.json")
     if not isinstance(payload, dict):
         return []
@@ -209,7 +243,11 @@ def qc_records(
         qc_type = parameters.get("qc_type")
         if artifact.get("kind") != "qc" or not isinstance(qc_type, str) or qc_type in _PICTURES:
             continue
-        if artifact.get("variant") not in (None, variant):
+        allowed = {None, variant}
+        own = (labels or {}).get(QC_STEP.get(qc_type) or "")
+        if own is not None and own != variant:
+            allowed = {own}
+        if artifact.get("variant") not in allowed:
             continue
         owner = _owner(artifact)
         if owner not in series:
@@ -288,7 +326,18 @@ def read_job_log(path: Path, root: Path) -> dict[str, Any] | None:
         return None
     shown = path.relative_to(root) if path.is_relative_to(root) else path
     job: dict[str, Any] = {"log": str(shown), "failed": []}
+    # The label each step ran under, from its command: a failure is another
+    # lane's when the step is shared here and ran labelled there.
+    labels: dict[str, str | None] = {}
+    named: str | None = None
     for line in text.splitlines():
+        if match := _STEP.match(line):
+            named = match["step"]
+            continue
+        if named is not None and line.startswith("cryoet "):
+            label = _LABEL.search(line)
+            labels[named] = label["label"] if label else None
+        named = None
         if match := _JOB.match(line):
             job.update(name=match["name"], id=match["id"])
         elif match := _PROJECT.match(line):
@@ -309,11 +358,14 @@ def read_job_log(path: Path, root: Path) -> dict[str, Any] | None:
             # One job runs one lane, named as it was when the job ran.
             job.setdefault("lane", match["lane"])
         elif match := _FAILED.match(line):
-            job["failed"].append({
+            failure: dict[str, Any] = {
                 "series": match["series"],
                 "step": match["step"],
                 "exit_code": int(match["code"]),
-            })
+            }
+            if labels.get(match["step"]) is not None:
+                failure["label"] = labels[match["step"]]
+            job["failed"].append(failure)
     if "lane" not in job and "config" in job:
         # Stopped before its first step: the lane its config names now.
         lane = _config_lane(path.parent / job["config"])
@@ -388,9 +440,9 @@ def summarize(
     chosen = series or lane_series(cfg, project)
     steps = run_series.build_steps(cfg, project, chosen[0] if chosen else "TS_X")
     chain = [name for name, _ in steps]
-    labelled = {name for name, command in steps if "--variant" in command}
+    labelled = step_labels(steps)
     runs = last_runs(project, set(chosen), labelled, lane["variant"])
-    records = qc_records(root, project, set(chosen), lane["variant"])
+    records = qc_records(root, project, set(chosen), lane["variant"], labelled)
 
     rows = []
     for one in chosen:
@@ -448,7 +500,8 @@ def render(summary: dict[str, Any]) -> list[str]:
     labelled = set(summary["labelled"])
     failures = {(failure["series"], failure["step"]): job["log"]
                 for job in summary["jobs"] for failure in job["failed"]
-                if lane_sees(job, failure["step"], summary["lane"], labelled)}
+                if lane_sees(job, failure["step"], summary["lane"], labelled,
+                             failure.get("label"))}
     crashed = [(row["id"], step, entry) for row in summary["series"]
                for step, entry in row["steps"].items() if entry["state"] == "crashed"]
     if crashed:

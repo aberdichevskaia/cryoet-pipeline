@@ -264,7 +264,7 @@ def failures(
     chosen = series or show_project.lane_series(cfg, project)
     steps = run_series.build_steps(cfg, project, chosen[0] if chosen else "TS_X")
     chain = [name for name, _ in steps]
-    labelled = {name for name, command in steps if "--variant" in command}
+    labelled = show_project.step_labels(steps)
     runs = show_project.last_runs(project, set(chosen), labelled, lane["variant"])
     jobs = show_project.job_logs(root, project_name,
                                  show_project.slurm_logs(project) if slurm else ())
@@ -280,8 +280,8 @@ def failures(
     def wanted(one: str, name: str | None) -> bool:
         return one in chosen and (step is None or name == step)
 
-    def sees(job: dict[str, Any], name: str) -> bool:
-        return show_project.lane_sees(job, name, lane.get("name"), labelled)
+    def sees(job: dict[str, Any], name: str, label: str | None = None) -> bool:
+        return show_project.lane_sees(job, name, lane.get("name"), labelled, label)
 
     def add(one: str, name: str, **fields: Any) -> None:
         if wanted(one, name):
@@ -309,7 +309,7 @@ def failures(
         started = _time(job.get("started"))
         for failure in job["failed"]:
             key = (failure["series"], failure["step"])
-            if not sees(job, failure["step"]):
+            if not sees(job, failure["step"], failure.get("label")):
                 continue  # another lane's run of a step each lane labels for itself
             if runs.get(key, {}).get("exit_code") == 0:
                 # Rerun since, and the rerun worked: no longer a failure, but on record.
@@ -370,7 +370,9 @@ def failures(
     qc_failures = [
         {"series": record["series"], "step": record["step"] or record["qc_type"],
          "path": record["path"], "warnings": record["warnings"][:1]}
-        for record in show_project.qc_records(root, project, set(chosen), lane["variant"])
+        for record in show_project.qc_records(
+            root, project, set(chosen), lane["variant"], labelled
+        )
         if record["status"] == "fail"
         and wanted(record["series"], record["step"] or record["qc_type"])
     ]

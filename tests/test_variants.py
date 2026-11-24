@@ -8,12 +8,17 @@ import typer
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.backends.protocols import BackendContext, variant_label, variant_suffix
 from cryoet_pipeline.cli import (
+    _ctf_model_artifact,
     _ctf_weighting_for_tomogram,
-    _tilt_angles_for_tomogram,
+    _derived_low_pass_angstrom,
+    _fiducial_model_artifact,
     _fiducial_seed_artifact,
+    _fiducial_tracking_stack_artifact,
+    _fine_alignment_artifact,
     _particle_stack_artifact,
     _reconstruction_input_stack_artifact,
     _select_variant,
+    _tilt_angles_for_tomogram,
     _tomogram_artifact,
 )
 from cryoet_pipeline.models import Artifact, ArtifactKind, TiltImage, TiltSeriesManifest
@@ -448,3 +453,126 @@ def test_pytom_takes_the_angles_the_tomogram_was_built_from(tmp_path: Path) -> N
     )
     registry.add(older)
     assert _tilt_angles_for_tomogram(registry, _manifest(), older) == all_views
+
+
+# A lane that aligns its series on its own ([lane] alignment_variant) labels its
+# fine alignment and CTF fit "aretomo" beside the shared ones, and reads them by
+# --alignment-variant from the final aligned stack on.
+
+
+def _labelled_copy(kind: ArtifactKind, stem: str, variant: str | None, **parameters) -> Artifact:
+    suffix = f":{variant}" if variant else ""
+    return Artifact(
+        id=f"TS_TEST:{stem}{suffix}",
+        kind=kind,
+        path=Path(f"{stem}{suffix}"),
+        variant=variant,
+        parameters={"tilt_series_id": "TS_TEST", **parameters},
+    )
+
+
+def _fine(variant: str | None) -> Artifact:
+    return _labelled_copy(ArtifactKind.ALIGNMENT, "alignment:fine", variant, stage="fine")
+
+
+def _ctf(variant: str | None) -> Artifact:
+    return _labelled_copy(ArtifactKind.CTF_MODEL, "ctf_model:ctffind5", variant,
+                          backend="ctffind5")
+
+
+def test_unlabelled_lookups_of_shared_stages_take_the_shared_artifact():
+    """The shared lane's steps carry no label; a lane aligning on its own beside it
+    must not leave them two candidates."""
+    registry = ArtifactRegistry.empty()
+    registry.extend([
+        _fine(None), _fine("aretomo"), _seed(None), _seed("aretomo"),
+        _labelled_copy(ArtifactKind.FIDUCIAL_MODEL, "fiducial_model", None),
+        _labelled_copy(ArtifactKind.FIDUCIAL_MODEL, "fiducial_model", "aretomo"),
+        _labelled_copy(ArtifactKind.ALIGNED_TILT_STACK, "tracking", None,
+                       purpose="fiducial_tracking"),
+        _labelled_copy(ArtifactKind.ALIGNED_TILT_STACK, "tracking", "aretomo",
+                       purpose="fiducial_tracking"),
+    ])
+    manifest = _manifest()
+
+    assert _fine_alignment_artifact(registry, manifest).variant is None
+    assert _fine_alignment_artifact(registry, manifest, variant="bin8").variant is None
+    assert _fiducial_seed_artifact(registry, manifest).variant is None
+    assert _fiducial_model_artifact(registry, manifest).variant is None
+    assert _fiducial_tracking_stack_artifact(registry, manifest).variant is None
+    assert _fine_alignment_artifact(registry, manifest, variant="aretomo").variant == "aretomo"
+
+
+def test_a_lane_aligning_on_its_own_reads_its_own_alignment_and_nothing_else():
+    registry = ArtifactRegistry.empty()
+    registry.extend([_fine(None), _fine("aretomo")])
+    manifest = _manifest()
+
+    chosen = _fine_alignment_artifact(
+        registry, manifest, variant="bin8-aretomo", alignment_variant="aretomo"
+    )
+    assert chosen.variant == "aretomo"
+
+    shared_only = ArtifactRegistry.empty()
+    shared_only.add(_fine(None))
+    with pytest.raises(typer.BadParameter, match="no fine alignment.*'aretomo'"):
+        _fine_alignment_artifact(
+            shared_only, manifest, variant="bin8-aretomo", alignment_variant="aretomo"
+        )
+
+
+def test_correction_reads_the_ctf_fit_of_the_lanes_own_alignment():
+    """The shared fit carries the shared alignment's tilt angles, which correction
+    of the lane's own stack would refuse: no falling back to it."""
+    registry = ArtifactRegistry.empty()
+    registry.extend([_ctf(None), _ctf("aretomo")])
+    manifest = _manifest()
+
+    assert _ctf_model_artifact(registry, manifest, variant="bin8").variant is None
+    assert _ctf_model_artifact(
+        registry, manifest, variant="bin8-aretomo", alignment_variant="aretomo"
+    ).variant == "aretomo"
+
+    shared_only = ArtifactRegistry.empty()
+    shared_only.add(_ctf(None))
+    with pytest.raises(typer.BadParameter, match="no CTF model.*'aretomo'"):
+        _ctf_model_artifact(
+            shared_only, manifest, variant="bin8-aretomo", alignment_variant="aretomo"
+        )
+
+
+def test_the_derived_low_pass_reads_the_alignment_the_tomogram_was_built_from(tmp_path):
+    """Two fine alignments of one series: each tomogram's low-pass comes from the
+    residual of the alignment in its own lineage."""
+    import json
+
+    registry = ArtifactRegistry.empty()
+    for variant, residual, lane in ((None, 0.300, "bin8"), ("aretomo", 0.070, "bin8-aretomo")):
+        fine = _fine(variant)
+        report = tmp_path / f"fine_{variant}.json"
+        report.write_text(json.dumps({"residual_mean_nm": residual}))
+        qc = Artifact(
+            id=f"TS_TEST:qc:alignment:fine{':' + variant if variant else ''}",
+            kind=ArtifactKind.QC, path=report, variant=variant, parent_ids=[fine.id],
+            parameters={"tilt_series_id": "TS_TEST", "qc_type": "fine_alignment"},
+        )
+        stack = Artifact(
+            id=f"TS_TEST:aligned_tilt_stack:final:{lane}",
+            kind=ArtifactKind.ALIGNED_TILT_STACK, path=tmp_path / f"{lane}.st",
+            variant=lane, parent_ids=[fine.id],
+            parameters={"tilt_series_id": "TS_TEST", "purpose": "final_alignment"},
+        )
+        tomogram = Artifact(
+            id=f"TS_TEST:tomogram:fine:{lane}", kind=ArtifactKind.TOMOGRAM,
+            path=tmp_path / f"{lane}.zarr", variant=lane, parent_ids=[stack.id],
+            parameters={"tilt_series_id": "TS_TEST"},
+        )
+        registry.extend([fine, qc, stack, tomogram])
+    manifest = _manifest()
+
+    for lane, residual in (("bin8", "0.300 nm"), ("bin8-aretomo", "0.070 nm")):
+        tomogram = registry.get(f"TS_TEST:tomogram:fine:{lane}")
+        _, source = _derived_low_pass_angstrom(
+            registry, manifest, variant=lane, tomogram=tomogram
+        )
+        assert source == residual

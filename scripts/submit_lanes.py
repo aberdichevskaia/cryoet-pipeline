@@ -1024,7 +1024,7 @@ def recorded_runs(
     if not series:
         return {}
     steps = run_series.build_steps(cfg, Path(lane.project), series[0])
-    labelled = {name for name, command in steps if "--variant" in command}
+    labelled = show_project.step_labels(steps)
     # The MRA replaces nothing: a run of its name carries on, or is refused.
     wanted = [
         name

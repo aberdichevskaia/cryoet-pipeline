@@ -19,7 +19,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_series  # noqa: E402
 import submit_lanes  # noqa: E402
 
-LANES = sorted((ROOT / "configs" / "lanes").glob("*.toml"))
+LANES = sorted((ROOT / "configs" / "lanes").glob("*.toml")) + sorted(
+    (ROOT / "docs" / "tutorials" / "ryr1").glob("*.toml")
+)
+BRANCH = ROOT / "docs" / "tutorials" / "ryr1" / "ryr1-tutorial-161-aretomo.toml"
+TRUNK = ROOT / "docs" / "tutorials" / "ryr1" / "ryr1-tutorial.toml"
 
 
 def _options(command) -> tuple[set[str], set[str]]:
@@ -622,3 +626,69 @@ def test_an_expected_count_reaches_picking_and_never_beside_a_count():
     config["pick"]["number_of_particles"] = 600
     with pytest.raises(SystemExit, match="keep one"):
         run_series.build_steps(config, Path("p"), "TS_X")
+
+
+def _labels(config: dict) -> dict[str, tuple[str | None, str | None]]:
+    """Per step: its --variant and its --alignment-variant."""
+    def value(command, option):
+        return command[command.index(option) + 1] if option in command else None
+    return {
+        name: (value(command, "--variant"), value(command, "--alignment-variant"))
+        for name, command in run_series.build_steps(config, Path("outputs/p"), "161")
+    }
+
+
+def test_a_lane_aligning_on_its_own_labels_its_alignment_and_reads_by_that_label():
+    labels = _labels(tomllib.loads(BRANCH.read_text()))
+    shared = ("prepare-tilt-series", "align-tilt-series", "qc-coarse-alignment")
+    assert all(labels[step] == (None, None) for step in shared)
+    for step in ("fine-align-tilt-series", "build-ctf-stack", "estimate-ctf"):
+        assert labels[step] == ("aretomo", None), step
+    for step in ("build-final-aligned-stack", "correct-ctf", "reconstruct-tomogram"):
+        assert labels[step] == ("bin8-aretomo", "aretomo"), step
+    for step in ("segment-tomogram", "pick-particles", "extract-particles"):
+        assert labels[step] == ("bin8-aretomo", None), step
+
+
+def test_a_bead_lane_aligning_on_its_own_labels_its_fiducial_steps_too():
+    config = tomllib.loads(TRUNK.read_text())
+    config["lane"]["alignment_variant"] = "beads-again"
+    labels = _labels(config)
+    for step in ("generate-fiducial-seed", "track-fiducials", "fine-align-tilt-series"):
+        assert labels[step] == ("beads-again", None), step
+    assert labels["reconstruct-tomogram"] == ("bin8", "beads-again")
+    _assert_valid_commands(config, "trunk with alignment_variant")
+
+
+def test_a_lane_that_shares_the_alignment_renders_as_before():
+    labels = _labels(tomllib.loads(TRUNK.read_text()))
+    assert all(alignment is None for _, alignment in labels.values())
+    assert labels["fine-align-tilt-series"] == (None, None)
+    assert labels["build-ctf-stack"] == (None, None)
+    assert labels["build-final-aligned-stack"] == ("bin8", None)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("bin8", "must differ from \\[lane\\] variant"),
+        ("two words", "must be a label"),
+        ("-leading", "must be a label"),
+        (5, "must be a label"),
+    ],
+)
+def test_an_alignment_variant_that_cannot_work_is_refused(value, message):
+    config = tomllib.loads(TRUNK.read_text())
+    config["lane"]["alignment_variant"] = value
+    with pytest.raises(SystemExit, match=message):
+        run_series.build_steps(config, Path("outputs/p"), "161")
+
+
+def test_an_alignment_variant_is_refused_for_series_entered_after_alignment():
+    config = {
+        "lane": {"name": "t", "input": "tomograms", "variant": "bin8",
+                 "alignment_variant": "aretomo"},
+        "run": {"project": "outputs/p"},
+    }
+    with pytest.raises(SystemExit, match="enters them after alignment"):
+        run_series.build_steps(config, Path("outputs/p"), "161")

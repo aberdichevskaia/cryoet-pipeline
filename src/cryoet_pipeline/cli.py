@@ -185,6 +185,13 @@ app = typer.Typer(help="cryo-ET preprocessing pipeline MVP.")
 
 DEFAULT_DOWNLOAD_TILT_SERIES = list(DEFAULT_TILT_SERIES)
 
+_ALIGNMENT_VARIANT_HELP = (
+    "Read the fine alignment and its CTF fit carrying this label, and only those, "
+    "for a lane that aligns its series on its own beside the project's shared "
+    "alignment ([lane] alignment_variant). Unset, they are read by --variant, "
+    "falling back to the shared ones."
+)
+
 
 @app.command()
 def init(
@@ -1935,6 +1942,9 @@ def build_final_aligned_stack(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    alignment_variant: Annotated[
+        str | None, typer.Option(help=_ALIGNMENT_VARIANT_HELP)
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -1956,6 +1966,7 @@ def build_final_aligned_stack(
         artifact_registry,
         tilt_series_manifest,
         variant=variant,
+        alignment_variant=alignment_variant,
     )
     selected_backend = _final_aligned_stack_backend(backend)
     parameters: dict[str, object] = {
@@ -2400,6 +2411,9 @@ def correct_ctf(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    alignment_variant: Annotated[
+        str | None, typer.Option(help=_ALIGNMENT_VARIANT_HELP)
+    ] = None,
     overwrite: Annotated[
         bool,
         typer.Option(help="Overwrite the corrected stack, QC, and registry entries."),
@@ -2422,6 +2436,7 @@ def correct_ctf(
         tilt_series_manifest,
         backend=ctf_model_backend,
         variant=variant,
+        alignment_variant=alignment_variant,
     )
     selected_backend = _ctf_correction_backend(backend)
     parameters: dict[str, object] = {
@@ -2528,6 +2543,9 @@ def reconstruct_tomogram(
             "Use it to compare backends or binnings side by side."
         ),
     ] = None,
+    alignment_variant: Annotated[
+        str | None, typer.Option(help=_ALIGNMENT_VARIANT_HELP)
+    ] = None,
     device: Annotated[
         str,
         typer.Option(help="Runtime device: auto, cuda, mps, or cpu."),
@@ -2561,6 +2579,7 @@ def reconstruct_tomogram(
         artifact_registry,
         tilt_series_manifest,
         variant=variant,
+        alignment_variant=alignment_variant,
     )
     selected_backend = _reconstruction_backend(backend)
     parameters: dict[str, object] = {
@@ -3584,7 +3603,7 @@ def pick_particles(
         parameters["pytom_low_pass"] = pytom_low_pass
     else:
         derived, source = _derived_low_pass_angstrom(
-            artifact_registry, tilt_series_manifest, variant=variant
+            artifact_registry, tilt_series_manifest, variant=variant, tomogram=tomogram
         )
         parameters["pytom_low_pass"] = derived
         parameters["pytom_low_pass_derived_from"] = source
@@ -5753,6 +5772,7 @@ def _ctf_model_artifact(
     *,
     backend: str | None = None,
     variant: str | None = None,
+    alignment_variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -5760,7 +5780,12 @@ def _ctf_model_artifact(
         if artifact.covers(manifest.tilt_series_id)
         and (backend is None or artifact.parameters.get("backend") == backend)
     ]
-    if variant is not None and matches:
+    if alignment_variant is not None:
+        # A lane that aligns on its own fits the CTF on its own aligned stack. The
+        # shared fit carries the shared alignment's tilt angles, which correction
+        # would refuse, so there is no falling back to it.
+        matches = [artifact for artifact in matches if _labelled(artifact, alignment_variant)]
+    elif variant is not None and matches:
         labelled = [artifact for artifact in matches if _labelled(artifact, variant)]
         matches = labelled or [artifact for artifact in matches if _label_of(artifact) is None]
     if not matches:
@@ -5772,7 +5797,8 @@ def _ctf_model_artifact(
         detail = f"; registered estimation backends: {', '.join(available)}" if available else ""
         raise typer.BadParameter(
             f"no CTF model for {manifest.tilt_series_id}"
-            f"{f' from backend {backend!r}' if backend else ''}{detail}",
+            f"{f' from backend {backend!r}' if backend else ''}"
+            f"{f' with variant {alignment_variant!r}' if alignment_variant else ''}{detail}",
             param_hint="registry",
         )
     if len(matches) > 1:
@@ -6118,10 +6144,13 @@ def _select_variant(
     shares. It never falls back to another lane's, so lanes cannot be crossed.
 
     `shared_fallback` extends that to a lookup carrying no label at all, for the
-    stage whose input is the shared artifact by design: CTF is fitted on a stack
-    built without a label so that any lane can use the model. Everywhere else,
-    several candidates and no label stays an error — that refusal is what lets a
-    second reconstruction coexist instead of being chosen by accident.
+    artifacts that are shared by design: CTF is fitted on a stack built without a
+    label so that any lane can use the model, and the fiducials and the fine
+    alignment are the project's own unless a lane aligns on its own beside them
+    ([lane] alignment_variant), when its labelled copies must not stop the shared
+    lane's unlabelled steps. Everywhere else, several candidates and no label stays
+    an error — that refusal is what lets a second reconstruction coexist instead of
+    being chosen by accident.
     """
 
     if variant is not None:
@@ -6385,6 +6414,7 @@ def _fiducial_tracking_stack_artifact(
         what="fiducial tracking stack",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
+        shared_fallback=True,
     )
 
 
@@ -6404,6 +6434,7 @@ def _fiducial_seed_artifact(
         what="fiducial seed model",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
+        shared_fallback=True,
     )
 
 
@@ -6423,6 +6454,7 @@ def _fiducial_model_artifact(
         what="tracked fiducial model",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
+        shared_fallback=True,
     )
 
 
@@ -6431,8 +6463,14 @@ def _derived_low_pass_angstrom(
     manifest: TiltSeriesManifest,
     *,
     variant: str | None = None,
+    tomogram: Artifact | None = None,
 ) -> tuple[float, str]:
     """The matching low-pass from this series' own alignment, or a refusal.
+
+    The alignment is the one the tomogram was built from, when its lineage holds
+    exactly one, so that a lane aligning on its own reads its own residual; else
+    the one --variant finds. Its residual is read from the QC made of it, when one
+    names it as its parent.
 
     Nothing derived this before, so a run that omitted `--pytom-low-pass` matched
     across the whole band out to Nyquist. That is not an error anywhere: it
@@ -6447,8 +6485,21 @@ def _derived_low_pass_angstrom(
 
     from cryoet_pipeline.resolution import low_pass_from_alignment_residual
 
+    built_from = (
+        [
+            artifact
+            for artifact in registry.ancestors_of_kind(tomogram.id, ArtifactKind.ALIGNMENT)
+            if artifact.parameters.get("stage") == "fine"
+        ]
+        if tomogram is not None
+        else []
+    )
     try:
-        _fine_alignment_artifact(registry, manifest, variant=variant)
+        alignment = (
+            built_from[0]
+            if len(built_from) == 1
+            else _fine_alignment_artifact(registry, manifest, variant=variant)
+        )
     except typer.BadParameter as exc:
         raise typer.BadParameter(
             "--pytom-low-pass was not given and cannot be derived: no fine alignment "
@@ -6469,6 +6520,7 @@ def _derived_low_pass_angstrom(
         if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("qc_type") == "fine_alignment"
     ]
+    reports = [artifact for artifact in reports if alignment.id in artifact.parent_ids] or reports
     residual = None
     for candidate in reports:
         if candidate.path.is_file():
@@ -6491,6 +6543,7 @@ def _fine_alignment_artifact(
     manifest: TiltSeriesManifest,
     *,
     variant: str | None = None,
+    alignment_variant: str | None = None,
 ) -> Artifact:
     matches = [
         artifact
@@ -6498,11 +6551,18 @@ def _fine_alignment_artifact(
         if artifact.covers(manifest.tilt_series_id)
         and artifact.parameters.get("stage") == "fine"
     ]
+    if alignment_variant is not None:
+        # A lane that aligns on its own reads its own alignment and nothing else:
+        # falling back to the shared one would build its stacks from the route it
+        # is there to be compared with.
+        matches = [artifact for artifact in matches if _labelled(artifact, alignment_variant)]
+        variant = alignment_variant
     return _select_variant(
         matches,
         what="fine alignment",
         tilt_series_id=manifest.tilt_series_id,
         variant=variant,
+        shared_fallback=True,
     )
 
 

@@ -58,6 +58,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -67,6 +68,10 @@ from pathlib import Path
 from typing import Any
 
 Command = list[str]
+# What a label may be: the pattern the steps themselves check a --variant against
+# (cryoet_pipeline.backends.protocols), so that a lane file is refused by its dry
+# run rather than by its first labelled step.
+LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 # Where the lane files are, for the hint when a config path names no file.
 LANES = Path(__file__).resolve().parents[1] / "configs" / "lanes"
 
@@ -112,6 +117,7 @@ def record_timing(
     disk_delta_bytes: int,
     exit_code: int,
     finished_at: datetime | None = None,
+    label: str | None = None,
 ) -> None:
     """Append one measured step to the project's timing table.
 
@@ -133,6 +139,10 @@ def record_timing(
         # run by one of them is not that step of another (scripts/show_project.py).
         "lane": lane,
         "variant": variant,
+        # The label this run of the step carried, None for a shared run: a lane
+        # that aligns on its own labels steps every other lane shares, so the lane
+        # alone does not say whose a run of them was. Rows before 2026-11-24 lack it.
+        "label": label,
         "seconds": round(seconds, 1),
         "disk_delta_bytes": disk_delta_bytes,
         "exit_code": exit_code,
@@ -242,7 +252,7 @@ RUN_ON_REAL_DATA = frozenset({
 LANE_KEYS: dict[str, frozenset[str]] = {
     # [run] and its [[run.stage]] tables are read by scripts/submit_lanes.py, and
     # the frames half of [data] by `cryoet init`; the rest by build_steps below.
-    "lane": frozenset({"name", "input", "variant"}),
+    "lane": frozenset({"name", "input", "variant", "alignment_variant"}),
     "run": frozenset({"project", "series", "stage"}),
     "data": frozenset().union(*DATA_KEYS.values()),
     "motion": frozenset({"backend", "storage_policy", "gpu", "patch_x", "patch_y",
@@ -502,6 +512,36 @@ def check_input_keys(cfg: dict[str, Any], source: str) -> None:
         )
 
 
+def alignment_variant(cfg: dict[str, Any], source: str, variant: str) -> str | None:
+    """[lane] alignment_variant, checked, or None: the label of a lane that aligns
+    its series on its own, beside the alignment the project's other lanes share."""
+    own = cfg.get("lane", {}).get("alignment_variant")
+    if own is None:
+        return None
+    if source in IMPORTED_INPUTS:
+        raise SystemExit(
+            f"[lane] alignment_variant is for a lane that aligns its series; a lane of "
+            f"input {source!r} enters them after alignment"
+        )
+    if not isinstance(own, str) or not LABEL.fullmatch(own):
+        raise SystemExit(
+            "[lane] alignment_variant must be a label of letters, digits, '.', '_' and "
+            f"'-' that starts with a letter or a digit, not {own!r}"
+        )
+    if own == variant:
+        raise SystemExit(
+            "[lane] alignment_variant must differ from [lane] variant: the lane's CTF "
+            "fit stack carries the one and its final aligned stack the other, and under "
+            "one label they would be one result"
+        )
+    return own
+
+
+def step_label(command: Command) -> str | None:
+    """The label a step's command carries, its --variant; None for a shared step."""
+    return command[command.index("--variant") + 1] if "--variant" in command else None
+
+
 def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[str, Command]]:
     """The lane's chain, in the one order this file fixes.
 
@@ -529,6 +569,11 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     common = ["--manifest", str(manifest), "--registry", str(registry), "--out", str(project)]
 
     lane = _require(cfg, "lane", ("variant",), "every lane")["variant"]
+    # Set, the lane aligns its series on its own, beside the alignment the project's
+    # other lanes share: its fiducial, fine-alignment and CTF-fit steps carry this
+    # label, and its steps from the final aligned stack on read that alignment and
+    # CTF fit by it. Unset, they are the shared ones.
+    own = alignment_variant(cfg, source, lane)
     if source in IMPORTED_INPUTS:
         return _imported_steps(cfg, project, series, source, common, lane)
     binning = _require(cfg, "binning", ("ctf_fit", "tomogram"), "every lane that reconstructs")
@@ -654,7 +699,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
     ):
         raise SystemExit("[align] exclude_tilt_angles must be a list of angles, as [-75, 6]")
     coarse: list[tuple[str, Command]] = [
-        # Everything up to fine alignment is shared and unlabelled.
+        # The coarse alignment is shared and unlabelled whatever the lane; the
+        # fiducials and the fine alignment too, unless the lane aligns on its own.
         (
             "align-tilt-series",
             ["align-tilt-series", *common,
@@ -683,7 +729,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
                  "--aretomo-tilt-cor" if tilt_cor else "--no-aretomo-tilt-cor"
              ]),
              *flag("aretomo-dark-tol", fine.get("aretomo_dark_tol")),
-             *flag("aretomo-gpu", fine.get("aretomo_gpu"))],
+             *flag("aretomo-gpu", fine.get("aretomo_gpu")),
+             *flag("variant", own)],
         ),
     ]
     fiducial_and_fine: list[tuple[str, Command]] = fine_aretomo if aretomo else [
@@ -702,7 +749,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *flag("num-patches-x", fid.get("num_patches_x")),
              *flag("num-patches-y", fid.get("num_patches_y")),
              *flag("patch-overlap", fid.get("patch_overlap")),
-             *flag("patch-margin-px", fid.get("patch_margin_px"))],
+             *flag("patch-margin-px", fid.get("patch_margin_px")),
+             *flag("variant", own)],
         ),
         (
             "track-fiducials",
@@ -717,7 +765,8 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              # Patch path only, and likewise refused for the bead backend.
              *flag("patch-filter-sigma1", fid.get("patch_filter_sigma1")),
              *flag("patch-filter-radius2", fid.get("patch_filter_radius2")),
-             *flag("patch-filter-sigma2", fid.get("patch_filter_sigma2"))],
+             *flag("patch-filter-sigma2", fid.get("patch_filter_sigma2")),
+             *flag("variant", own)],
         ),
         (
             "fine-align-tilt-series",
@@ -728,18 +777,22 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              # One plane for patch tracking, two for beads. Left to the config
              # rather than derived from the tracking backend, because the two are
              # separate choices and a lane comparing backends needs to say so.
-             *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze"))],
+             *flag("surfaces-to-analyze", fine.get("surfaces_to_analyze")),
+             *flag("variant", own)],
         ),
     ]
     alignment: list[tuple[str, Command]] = [
         *coarse,
         *fiducial_and_fine,
         # The CTF fit stack carries NO variant label, so that correct-ctf in any
-        # lane can fall back to the model built from it.
+        # lane can fall back to the model built from it. A lane that aligns on its
+        # own labels it, and its model, with its alignment's label: the shared
+        # fit's tilt angles are the shared alignment's, which its stacks do not have.
         (
             "build-ctf-stack",
             ["build-final-aligned-stack", *common,
-             *flag("output-binning", binning["ctf_fit"])],
+             *flag("output-binning", binning["ctf_fit"]),
+             *flag("variant", own)],
         ),
         (
             "estimate-ctf",
@@ -760,24 +813,29 @@ def build_steps(cfg: dict[str, Any], project: Path, series: str) -> list[tuple[s
              *([] if ctf.get("determine_sample_tilt") is None else [
                  "--ctffind-determine-sample-tilt" if ctf["determine_sample_tilt"]
                  else "--no-ctffind-determine-sample-tilt"
-             ])],
+             ]),
+             *flag("variant", own)],
         ),
-        # The lane parts here.
+        # The lane parts here, or, aligning on its own, reads its own alignment
+        # and CTF fit from here on.
         (
             "build-final-aligned-stack",
             ["build-final-aligned-stack", *common,
              *flag("output-binning", binning["tomogram"]),
-             *flag("variant", lane)],
+             *flag("variant", lane),
+             *flag("alignment-variant", own)],
         ),
         (
             "correct-ctf",
-            ["correct-ctf", *common, *flag("variant", lane)],
+            ["correct-ctf", *common, *flag("variant", lane),
+             *flag("alignment-variant", own)],
         ),
         (
             "reconstruct-tomogram",
             ["reconstruct-tomogram", *common,
              *flag("thickness", recon.get("thickness")),
-             *flag("variant", lane)],
+             *flag("variant", lane),
+             *flag("alignment-variant", own)],
         ),
     ]
 
@@ -1169,6 +1227,7 @@ def main() -> int:
                 disk_delta_bytes=disk_after - disk_before,
                 exit_code=result.returncode,
                 finished_at=finished,
+                label=step_label(command),
             )
             print(
                 f"# {name}: {elapsed / 60:.1f} min, "

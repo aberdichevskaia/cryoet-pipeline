@@ -22,6 +22,11 @@
 name = "my-lane-bin8"     # EDIT: any name, for you
 input = "frames"          # EDIT: "frames" (movies + mdocs or file names) or "stack" (one MRC stack per tilt-series); "tomograms", "picks", "particles": see above
 variant = "bin8"          # label on every output from the tomogram on; keep it short
+# Only for a branch: a second alignment of series that another lane of the same
+# project aligns, such as AreTomo2 beside the beads. This lane's fine alignment
+# and CTF fit then carry this label beside the shared ones, and its stages start
+# at its alignment (docs/agent/pipeline_map.md, [lane] alignment_variant).
+# alignment_variant = "aretomo"
 
 [run]
 # EDIT: where the outputs go (a new folder per project), and the tilt-series

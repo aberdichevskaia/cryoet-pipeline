@@ -241,3 +241,99 @@ def test_a_timing_row_finishes_when_its_step_did(tmp_path):
                              finished_at=ended)
     row = json.loads((tmp_path / "step_timings.jsonl").read_text())
     assert (row["finished_at"], row["seconds"]) == ("2026-10-28T12:00:05+00:00", 54.2)
+
+
+# A lane that aligns its series on its own, beside the shared alignment: the
+# tutorial's branch of 161, whose fine alignment and CTF fit carry "aretomo".
+BRANCH = tomllib.loads(
+    (ROOT / "docs" / "tutorials" / "ryr1" / "ryr1-tutorial-161-aretomo.toml").read_text()
+)
+TRUNK = tomllib.loads((ROOT / "docs" / "tutorials" / "ryr1" / "ryr1-tutorial.toml").read_text())
+
+
+def _labels(config: dict) -> dict[str, str]:
+    return show_project.step_labels(run_series.build_steps(config, Path("outputs/p"), "161"))
+
+
+def test_a_timing_row_records_the_label_its_step_ran_under(tmp_path):
+    run_series.record_timing(tmp_path, series="161", step="fine-align-tilt-series",
+                             lane="ryr1-tutorial-161-aretomo", variant="bin8-aretomo",
+                             seconds=1.0, disk_delta_bytes=0, exit_code=0, label="aretomo")
+    assert json.loads((tmp_path / "step_timings.jsonl").read_text())["label"] == "aretomo"
+
+
+def test_the_labels_of_a_lane_that_aligns_on_its_own():
+    assert _labels(BRANCH) == {
+        "fine-align-tilt-series": "aretomo", "build-ctf-stack": "aretomo",
+        "estimate-ctf": "aretomo", "build-final-aligned-stack": "bin8-aretomo",
+        "correct-ctf": "bin8-aretomo", "reconstruct-tomogram": "bin8-aretomo",
+        "segment-tomogram": "bin8-aretomo", "prepare-template": "bin8-aretomo",
+        "pick-particles": "bin8-aretomo", "visualize-picks": "bin8-aretomo",
+        "extract-particles": "bin8-aretomo",
+    }
+    assert "fine-align-tilt-series" not in _labels(TRUNK)
+
+
+def test_each_lane_sees_its_own_run_of_a_step_the_other_shares(tmp_path):
+    """The trunk shares fine alignment and the branch labels it: neither sees the
+    other's run of it, and a row from before labels were recorded counts for the
+    lane that shares the step, as it did."""
+    step = "fine-align-tilt-series"
+    rows = [
+        _run("161", step, 0, lane="ryr1-tutorial", variant="bin8", label=None),
+        _run("161", step, 1, lane="ryr1-tutorial-161-aretomo", variant="bin8-aretomo",
+             label="aretomo"),
+    ]
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "step_timings.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+
+    trunk = show_project.last_runs(project, {"161"}, _labels(TRUNK), "bin8")
+    branch = show_project.last_runs(project, {"161"}, _labels(BRANCH), "bin8-aretomo")
+    assert trunk[("161", step)]["exit_code"] == 0
+    assert branch[("161", step)]["exit_code"] == 1
+
+    old = _run("161", step, 0, lane="ryr1-tutorial", variant="bin8")
+    (project / "step_timings.jsonl").write_text(json.dumps(old) + "\n")
+    assert ("161", step) in show_project.last_runs(project, {"161"}, _labels(TRUNK), "bin8")
+    assert ("161", step) not in show_project.last_runs(
+        project, {"161"}, _labels(BRANCH), "bin8-aretomo"
+    )
+
+
+def test_each_lane_sees_the_qc_of_its_own_alignment(tmp_path):
+    shared = _qc(tmp_path, "161", "fine_alignment", "pass")
+    own = _qc(tmp_path, "161", "fine_alignment", "warning", variant="aretomo")
+    coarse = _qc(tmp_path, "161", "coarse_alignment", "pass")
+    project = tmp_path / "outputs" / "p"
+    (project / "artifacts.json").write_text(json.dumps({"artifacts": [shared, own, coarse]}))
+
+    def seen(config: dict, variant: str) -> set[tuple[str, str]]:
+        return {(record["qc_type"], record["status"]) for record in show_project.qc_records(
+            tmp_path, project, {"161"}, variant, _labels(config))}
+
+    assert seen(TRUNK, "bin8") == {("fine_alignment", "pass"), ("coarse_alignment", "pass")}
+    assert seen(BRANCH, "bin8-aretomo") == {
+        ("fine_alignment", "warning"), ("coarse_alignment", "pass")
+    }
+
+
+def test_a_failure_is_the_lane_s_whose_label_its_step_ran_under(tmp_path):
+    log = tmp_path / "slurm-p-align-aretomo-300.log"
+    log.write_text(
+        "job         p-align-aretomo (300) on node3\n"
+        "project     outputs/p   config docs/tutorials/ryr1/ryr1-tutorial-161-aretomo.toml\n"
+        "series      161\n\n# ---- 161 (ryr1-tutorial-161-aretomo) ----\n\n"
+        "# fine-align-tilt-series\n"
+        "cryoet fine-align-tilt-series --manifest m --registry r --out p "
+        "--backend aretomo --variant aretomo\n"
+        "# FAILED at fine-align-tilt-series (exit 1) for 161.\n"
+    )
+    job = show_project.read_job_log(log, tmp_path)
+    [failure] = job["failed"]
+    assert failure["label"] == "aretomo"
+    step = failure["step"]
+    assert not show_project.lane_sees(job, step, "ryr1-tutorial", _labels(TRUNK),
+                                      failure["label"])
+    assert show_project.lane_sees(job, step, "ryr1-tutorial-161-aretomo", _labels(BRANCH),
+                                  failure["label"])

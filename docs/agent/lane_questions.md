@@ -142,6 +142,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[lane] name` | rule | `<dataset>-<variant>`, such as `ryr1-bin8`; also the file name, `configs/lanes/<name>.toml`, unless the person names another place |
 | `[lane] input` | data | `frames` or `stack`, as `show_folder.py` reads the folder; `tomograms`, `picks` or `particles` for files made elsewhere, as `show_imports.py` reads them |
 | `[lane] variant` | rule | `bin8`: a new dataset starts at bin8. It labels every output from the tomogram on |
+| `[lane] alignment_variant` | person | unset. Only for a branch: a second alignment of series another lane of the project aligns, such as AreTomo2 beside the beads, asked for by the person. A short label of its own, other than `[lane] variant`; the branch's stages start at its alignment (pipeline_map, `[lane] alignment_variant`) |
 | `[run] project` | person | question 9 |
 | `[run] series` | data, person | the ids `show_folder.py` found; question 8 picks one or all |
 | `[run] stage` | rule, site | one `[[run.stage]]` table per job, as below |

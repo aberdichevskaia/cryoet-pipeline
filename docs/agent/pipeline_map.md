@@ -72,6 +72,26 @@ lane TOML
 - **`[lane] variant`** labels the outputs from `build-final-aligned-stack` on.
   Everything before it is shared by every lane in the project and unlabelled.
   So is the CTF fit stack and the CTF model, so that any lane can use them.
+- **`[lane] alignment_variant`**, set, makes a branch: a lane that aligns its
+  series on its own, beside the alignment the project's other lanes share, such
+  as AreTomo2 beside the beads (since 24 November 2026).
+  - Its fiducial steps, fine alignment, CTF fit stack and CTF fit carry this
+    label, as their `--variant`. Its steps from `build-final-aligned-stack` on
+    carry `[lane] variant` and read the alignment and the CTF fit with
+    `--alignment-variant`, which never falls back to the shared ones: the shared
+    CTF fit holds the shared alignment's tilt angles, which `correct-ctf`
+    refuses for another alignment's stack.
+  - Motion correction and the coarse alignment stay shared. The branch's lane
+    file has stages for them, because stages cover the whole chain, but they
+    are never submitted from it.
+  - The shared lane's unlabelled steps take the shared fiducials and alignment
+    beside the branch's labelled ones. `show_project.py`, `show_failure.py` and
+    the overwrite check of `submit_lanes.py` count a run for the lane whose
+    label it carried: timing rows record the label since 24 November 2026, and a
+    job's log has it in each step's command.
+  - It must differ from `[lane] variant`, and a lane of imported input refuses
+    it. The RyR1 tutorial's branch is
+    `docs/tutorials/ryr1/ryr1-tutorial-161-aretomo.toml`, not run yet.
 
 ### Which combinations have run on real data
 
@@ -296,6 +316,7 @@ checks the files and the answers on the imports' lists before the queue.
     `--patch-overlap`; `patch_margin_px` → `--patch-margin-px`. Unset, the
     margin is 5% of the binned size on each axis, which is etomo's rule. That is
     the default since 27 October 2026; before, it was 100 px.
+  - `[lane] alignment_variant` → `--variant`, in a branch (steps 4 to 8).
 - Writes: `fiducials/<TS>/` (seed model, `<TS>_seed_qc.json`, `autofidseed`
   log).
 - Both seeds track on a binned, prealigned stack. Until 27 October 2026 the
@@ -313,6 +334,7 @@ checks the files and the answers on the imports' lists before the queue.
   - Patches only: `patch_filter_sigma1`, `patch_filter_radius2`,
     `patch_filter_sigma2` → the `--patch-filter-*` flags.
   - Each backend refuses the other's flags.
+  - `[lane] alignment_variant` → `--variant`, in a branch.
 - Writes: `fiducials/<TS>/` (tracked model, `<TS>_tracking_qc.json`,
   `beadtrack` log).
 - QC: fewer fiducials than the minimum (10 by default) → failure. Coverage (the
@@ -327,7 +349,7 @@ checks the files and the answers on the imports' lists before the queue.
   `auto_prune_outliers` → `--auto-prune-outliers`; `max_pruned_fraction` →
   `--max-pruned-fraction` (0.02 by default, sized for beads; 0.08 for a 5 × 5
   patch grid); `surfaces_to_analyze` → `--surfaces-to-analyze` (2 for beads, 1
-  for patches).
+  for patches); `[lane] alignment_variant` → `--variant`, in a branch.
 - Writes: `alignments/<TS>/fine/` (`<TS>_fine_alignment_qc.json`, the
   `tiltalign` logs, the outlier-pruning log).
 - QC: mean residual above 0.8 nm → warning, above 1.5 nm → failure. Largest
@@ -338,7 +360,8 @@ checks the files and the answers on the imports' lists before the queue.
 ### 7. `build-ctf-stack` — `build-final-aligned-stack`, unlabelled
 
 - Keys: `[binning] ctf_fit`* → `--output-binning`. No variant: every lane of
-  the project shares this stack.
+  the project shares this stack. A branch labels it: `[lane] alignment_variant`
+  → `--variant`.
 - Writes: `aligned/<TS>/` (the aligned stack, `newstack` log).
 
 ### 8. `estimate-ctf` — unlabelled
@@ -353,7 +376,8 @@ checks the files and the answers on the imports' lists before the queue.
   `--ctffind-defocus-step-angstrom`; `max_excluded_views` →
   `--ctf-max-excluded-views`; `determine_sample_tilt` →
   `--ctffind-determine-sample-tilt` or its `--no-` form; `[executables]
-  ctffind` → `--ctffind-executable`.
+  ctffind` → `--ctffind-executable`; in a branch, `[lane] alignment_variant` →
+  `--variant`.
 - Without `[executables] ctffind`, the step takes `ctffind5`, then `ctffind`,
   from `PATH`. At MDC `ctffind` can be CTFFIND 4.1.14, which the step refuses;
   name CTFFIND 5 through `$CTFFIND5` there. Since 28 October 2026 the dry run
@@ -372,12 +396,13 @@ checks the files and the answers on the imports' lists before the queue.
 ### 9. `build-final-aligned-stack` — labelled
 
 - Keys: `[binning] tomogram`* → `--output-binning`; `[lane] variant`* →
-  `--variant`.
+  `--variant`; in a branch, `[lane] alignment_variant` → `--alignment-variant`.
 - Writes: `aligned/<TS>/`.
 
 ### 10. `correct-ctf`
 
-- Keys: `[lane] variant` → `--variant`.
+- Keys: `[lane] variant` → `--variant`; in a branch, `[lane]
+  alignment_variant` → `--alignment-variant`.
 - Writes: `ctf/<TS>/`; QC in `qc/<TS>/ctf/`.
 - QC: the views left out as unfitted (by z); a warning when the model was fitted
   at a pixel size other than the stack's.
@@ -385,7 +410,8 @@ checks the files and the answers on the imports' lists before the queue.
 ### 11. `reconstruct-tomogram`
 
 - Keys: `[reconstruct] thickness` → `--thickness` (in binned pixels);
-  `[lane] variant` → `--variant`.
+  `[lane] variant` → `--variant`; in a branch, `[lane] alignment_variant` →
+  `--alignment-variant`.
 - Thickness, if unset, is derived from the beads, which sit on both faces.
   With patches it is required: `run_series.py` refuses a patch lane without it,
   because patches cannot measure the sample depth.
