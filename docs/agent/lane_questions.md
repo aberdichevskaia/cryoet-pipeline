@@ -83,7 +83,11 @@ the person and the date as its source.
    own.
 3. **Are there gold beads, and of what size?** With beads, keep alignment
    block A and set `[fiducials] fiducial_diameter_nm`. Without them (a FIB
-   lamella, usually), keep block B, patch tracking, and ask 3a.
+   lamella, usually), keep block B, patch tracking, and ask 3a. When the person
+   does not know, `scripts/show_tilts.py`, with the arguments `show_folder.py`
+   accepted, writes a PDF of the tilt nearest 0° with its dark round spots
+   circled and the darkest ones close up, and prints how many there are and
+   the filter size most answered to; ask with those as the default.
    - 3a. **How thick is the sample, roughly, in nm?** Patches cannot measure
      it, so `[reconstruct] thickness` is required. Convert it to binned pixels
      and be generous, so the tomogram holds vacuum above and below. If the
@@ -102,7 +106,11 @@ the person and the date as its source.
    `[ctf] spherical_aberration_mm`.
 7. **Only if `show_folder.py` says nothing gives it: the tilt-axis angle.** That
    happens without mdocs, or with mdocs whose RotationAngle the parser does not
-   take as the axis. This fills `[align] tilt_axis_angle`.
+   take as the axis. This fills `[align] tilt_axis_angle`. `show_tilts.py`
+   measures the axis from the high tilts as a line without a sign, such as
+   "84.0° (or -96.0°), horizontal": ask with it as the default, and say that the
+   two signs give tomograms of opposite hand, which the hand check on the first
+   tomogram settles.
 8. **One series first, or all of them?** The default is one, so that its report
    can be read before the rest run. This fills `[run] series`.
 9. **Where do the outputs go?** The default is a new folder,
@@ -175,11 +183,11 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[binning] ctf_fit` | rule | small enough that the fit stack's Nyquist, 2 × stack pixel × `ctf_fit`, is finer than about 6 Å. The stack pixel is the movie pixel times `ftbin` |
 | `[align] binning` | rule | the same as `[binning] tomogram` |
 | `[align] min_std_ratio` | rule | the value of `example.toml` |
-| `[align] tilt_axis_angle` | data, person | unset when the mdocs give the axis; question 7 when `show_folder.py` says nothing does |
+| `[align] tilt_axis_angle` | data, person | unset when the mdocs give the axis; question 7, with `show_tilts.py`'s axis as the default, when `show_folder.py` says nothing does |
 | `[align] exclude_tilt_angles` | person | unset; only views the person has looked at and rejected, by nominal angle, each naming one view within 0.5 deg. Never set to make a QC pass |
 | `[qc_coarse] preview_binning, residual_warning_px` | rule | the values of `example.toml` |
 | `[fiducials] seed_backend, track_backend` | person | block A or block B of `example.toml`, by question 3 |
-| `[fiducials] fiducial_diameter_nm` | card, person | the bead size, question 3; block A only |
+| `[fiducials] fiducial_diameter_nm` | card, person | the bead size, question 3, with `show_tilts.py`'s size as the default; block A only |
 | `[fiducials] tracking_binning` | rule | block A's value |
 | `[fiducials] raw_pixel_spacing_angstrom` | rule | unset: read from the data and checked against the stack |
 | `[fiducials] pre_binning, num_patches_x, num_patches_y, patch_overlap` | rule | block B's values |

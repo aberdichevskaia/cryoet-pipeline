@@ -133,7 +133,10 @@ and do not call the batch scripts directly.
   It reads the folder the way the lane will, writes nothing, and its refusals
   are the pipeline's. Tomograms, picks or particles made elsewhere are read the
   same way with `scripts/show_imports.py`, which says what each answer of their
-  import rests on and leaves the rest as questions.
+  import rests on and leaves the rest as questions. To see whether there are
+  gold beads and which way the tilt axis runs, run `scripts/show_tilts.py` with
+  the arguments `show_folder.py` accepted: it writes a PDF for the person and
+  prints its numbers. Give the person both.
 - A playbook entry seen on one dataset is a lead, not a rule. Follow its "How to
   confirm" before you name its cause.
 - When two readings fit the evidence, give both and say what would tell them

@@ -82,6 +82,20 @@ the repository root.
   tilt scheme they describe or the instrument card. Only then copy the tool's
   config fragment into the config. If the tool says there is no entry, or
   refuses, say so and stop. Do not bend the data into another input.
+- **Beads and the axis.** When no card or person says whether there are gold
+  beads (question 3), or nothing gives the tilt axis (question 7), draw the
+  tilts with the arguments `show_folder.py` accepted:
+
+  ```bash
+  python3 scripts/show_tilts.py <frames folder> --pattern '<re>'   # or --mdocs <folder>
+  python3 scripts/show_tilts.py --stack <stack.mrc> --mdoc <mdoc>
+  ```
+
+  It reads one series unless `--series` or `--all` says more, writes a PDF
+  under `outputs/tilt-previews/`, and prints the bead-like spots, their size and
+  the axis. Give the person the PDF's path and those lines as defaults to
+  confirm. The axis is a line without a sign: say that its two signs give
+  tomograms of opposite hand. It does not read EER movies.
 - **Data made elsewhere.** Tomograms, picks or particles from another program
   make a lane of input `tomograms`, `picks` or `particles`: the import is its
   first step, and `[data]` answers the import's questions

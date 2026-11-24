@@ -588,6 +588,15 @@ def _tilt_axis_angle(manifest: TiltSeriesManifest, context: BackendContext) -> f
         if not np.isfinite(configured):
             raise ValueError("context parameter 'tilt_axis_angle_deg' must be finite")
         return float(configured)
+    return manifest_tilt_axis_angle(manifest)
+
+
+def manifest_tilt_axis_angle(manifest: TiltSeriesManifest) -> float:
+    """The axis alignment takes when none is given: SerialEM's RotationAngle - 90.
+
+    Raises ValueError when the manifest has no RotationAngle for every tilt, as
+    a Tomography mdoc or a frames pattern leaves it, or when they differ.
+    """
 
     rotation_angles = [
         image.rotation_angle_deg
