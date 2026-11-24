@@ -307,11 +307,13 @@ def test_autofidseed_failure_does_not_register_partial_artifacts(
     assert len(registry.by_kind(ArtifactKind.FIDUCIAL_SEED_MODEL)) == 0
 
 
-@pytest.mark.parametrize("seed_views", [None, 5])
-def test_seed_views_reach_autofidseed_only_when_set(
-    tmp_path: Path, seed_views: int | None
+@pytest.mark.parametrize(("seed_views", "expected"), [(None, "5"), (7, "7"), (3, "3")])
+def test_seed_views_reach_autofidseed_as_5_unless_set(
+    tmp_path: Path, seed_views: int | None, expected: str
 ) -> None:
-    # Unset, autofidseed chooses 3, 5 or 7 views itself, as before the option.
+    # Left to choose, autofidseed takes 7 views at 3-degree steps when it finds few
+    # beads, and beadtrack then writes past an array (playbook entry A-2); 5 is passed
+    # unless a lane sets another number.
     stack = _stack_artifact(tmp_path, np.arange(256, dtype=np.float32).reshape(4, 8, 8))
     alignment = _alignment_artifact(tmp_path, stack)
     imod_dir = _fake_imod_dir(tmp_path)
@@ -348,11 +350,9 @@ def test_seed_views_reach_autofidseed_only_when_set(
     )
 
     (command,) = autofidseed
-    if seed_views is None:
-        assert "-views" not in command
-    else:
-        assert command[command.index("-views") + 1] == "5"
-    assert artifacts[1].parameters["seed_views"] == seed_views
+    assert command.count("-views") == 1
+    assert command[command.index("-views") + 1] == expected
+    assert artifacts[1].parameters["seed_views"] == int(expected)
 
 
 @pytest.mark.parametrize("value", [0, True, "5"])

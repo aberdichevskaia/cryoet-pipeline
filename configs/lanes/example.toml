@@ -178,9 +178,9 @@ seed_backend = "imod-autofidseed"
 track_backend = "imod-beadtrack"
 tracking_binning = 4
 fiducial_diameter_nm = 10.0           # EDIT: your gold size
-# The views autofidseed finds seed points on. Left unset, it chooses 3, 5 or 7;
-# set 5 when a series' seeding crashes in beadtrack (docs/agent/playbook/
-# alignment.md, entry A-2).
+# The views autofidseed finds seed points on, 3 to 7; unset, 5. At tilt steps
+# over 2.5 degrees, 7 is the whole range autofidseed tracks, and beadtrack then
+# writes past an array (docs/agent/playbook/alignment.md, entry A-2).
 # seed_views = 5
 # The pixel size the bead diameter is converted with. Left unset, it is read
 # from the data and checked against the stack; set, it is used WITHOUT that

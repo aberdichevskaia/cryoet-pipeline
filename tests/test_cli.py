@@ -624,9 +624,9 @@ def test_qc_coarse_alignment_command_updates_registry(
     assert len(ArtifactRegistry.load(registry_path).by_kind(ArtifactKind.QC)) == 2
 
 
-@pytest.mark.parametrize("given", [[], ["--seed-views", "5"]])
-def test_seed_views_reach_the_seed_backend_only_when_given(
-    tmp_path: Path, monkeypatch, given: list[str]
+@pytest.mark.parametrize(("given", "expected"), [([], 5), (["--seed-views", "7"], 7)])
+def test_seed_views_reach_the_seed_backend_as_5_unless_given(
+    tmp_path: Path, monkeypatch, given: list[str], expected: int
 ) -> None:
     stack = Artifact(
         id="TS_TEST:tilt_stack",
@@ -663,8 +663,21 @@ def test_seed_views_reach_the_seed_backend_only_when_given(
     )
 
     (parameters,) = seen
-    assert parameters.get("seed_views") == (5 if given else None)
-    assert ("seed_views" in parameters) == bool(given)
+    assert parameters["seed_views"] == expected
+
+
+@pytest.mark.parametrize("value", ["2", "8"])
+def test_seed_views_outside_autofidseeds_3_to_7_are_refused(tmp_path: Path, value: str) -> None:
+    # autofidseed itself refuses them; the option says so before anything is read.
+    result = CliRunner().invoke(
+        cli.app,
+        ["generate-fiducial-seed", "--manifest", str(tmp_path / "manifest.json"),
+         "--registry", str(tmp_path / "artifacts.json"), "--out", str(tmp_path / "out"),
+         "--seed-views", value],
+    )
+
+    assert result.exit_code == 2
+    assert "seed-views" in result.output
 
 
 def test_fiducial_seed_and_tracking_commands_update_registry(

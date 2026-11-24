@@ -163,20 +163,23 @@ crashed with a segmentation fault (exit 139) inside `autofidseed`. The
 from view N`.
 
 **How to confirm:**
-- In the same log, `REDOING IMODFINDBEADS with more views` and then
-  `RUNNING IMODFINDBEADS on views` with 7 views, the first of them N.
+- In the same log, `RUNNING IMODFINDBEADS on views` lists 7 views, the first of
+  them N, and the `autofidseed` command has no `-views` (a seed made before
+  24 November 2026) or `-views 7`.
 - The series' coarse QC passed.
 - A rerun that passes does not clear it (Causes).
 
 **Causes, common to rare:**
 1. A heap overrun in IMOD 5.1.12's `beadtrack`. `autofidseed` tracks a range of
-   views around zero tilt, 7 views with 3° steps (12 to 18 on 161), and runs
-   `beadtrack` once from each of its seed views with the other views skipped.
-   When it finds too few beads on 3 seed views it takes 5 or 7, and 7 is the
-   whole range. The run from the range's first view, with more than one local
-   area, makes `tiltAli()` write past an array: the overrun happens in every
-   such run, and the job crashes only when the stray write lands on memory that
-   is not mapped. So the same settings crash in one run and pass in another.
+   views around zero tilt, 7 views at tilt steps over 2.5° (12 to 18 on the
+   RyR1 series), and runs `beadtrack` once from each of its seed views with the
+   other views skipped. Left to choose, it takes 5 or 7 seed views when it finds
+   too few beads on 3, and 7 is the whole range. The run from the range's first
+   view, with more than one local area, makes `tiltAli()` write past an array:
+   the overrun happens in every such run, and the job crashes only when the
+   stray write lands on memory that is not mapped. So the same settings crash in
+   one run and pass in another. Since 24 November 2026 the step passes
+   `-views 5` unless the lane sets `seed_views`.
    - Why, read in `flib/beadtrack/beadtrack.cpp` and `tiltali.cpp` of IMOD's
      nightly source tree (19 October 2026; there is no 5.1.12 source archive,
      and IMOD's change history has no `beadtrack` change after 5.1.12). The
@@ -196,22 +199,34 @@ from view N`.
      30 runs of the same input crashed 11 times. With `-views 5` or `-views 3`,
      no seed view overruns, and the seed keeps as many points (46 to 48
      against 47).
+   - Checked on the Mac on 24 November 2026, under Guard Malloc, with the
+     tracking stacks of all five RyR1 series at binning 2 from one run on max.
+     Left to choose, `autofidseed` took views 12 to 18 on every series, and the
+     view-12 run overran on 096, 097 and 125, which have never crashed, as on
+     161. On 039 it did not: its view 12 had 19 points, and `autofidseed`
+     tracks with local areas from 20. With `-views 5`, no run overran.
 
-**What to try:** `[fiducials] seed_views = 5` for that series, on a config copy
-(recipe B), from `generate-fiducial-seed`. `autofidseed` then takes its seed
-views from the middle of the range out, which leaves out the range's first view,
-except when zero tilt is within three views of the series' first view: then it
-puts the zero-tilt view among its seeds whatever their number. Record the
-setting in the lane file.
+**What to try:** on a config copy (recipe B), from `generate-fiducial-seed`,
+with `--overwrite`:
+- no `-views` in the log's `autofidseed` command: rerun as it is, since the
+  step now takes 5 seed views;
+- `-views 7`: take `seed_views` out of the copy, or set it to 5.
+
+`autofidseed` takes 5 seed views from the middle of the range out, which leaves
+out the range's first view, except when zero tilt is within three views of the
+series' first view: then it puts the zero-tilt view among its seeds whatever
+their number.
 
 **What not to do:**
-- Rerun unchanged until it passes: a pass is luck, and a run that passes has
-  overrun too.
+- Rerun with the same seed views until it passes: a pass is luck, and a run
+  that passes has overrun too.
 - Change `tracking_binning` to get round it: it changes neither the seed views
   nor the array. 161 passed at binning 3 once and crashed at 3 once.
 - Change the binning for every series.
+- Set `seed_views = 7` for more seed points at tilt steps over 2.5°: that is
+  the whole range again.
 
-**When to stop and ask someone:** if it crashes with `seed_views = 5`. Then it
+**When to stop and ask someone:** if it crashes with `-views 5`. Then it
 is a report for IMOD, with the model and the command. Since 23 November 2026 the
 step keeps what `autofidseed` was given when it fails, in
 `fiducials/<TS>/<TS>_autofidseed_failed_bin<N>/`: the prealigned tracking stack,
@@ -219,9 +234,10 @@ the transforms, the tilt angles, `track.com` and `autofidseed.dir`, with the
 `.com` files naming that folder. Send that folder and the log.
 
 **Applies to:** IMOD 5.1.12; the nightly source of 19 October 2026 has the same
-code. A lane leaving `seed_views` unset overruns whenever `autofidseed` takes 7
-seed views from a 7-view range, which all five RyR1 series did in October; only
-161 has crashed.
+code. Seeds made before 24 November 2026, when the step passed no `-views`:
+`autofidseed` took 7 seed views on all five RyR1 series, and on four of them
+the view-12 run overran (Causes). Since then, a lane that sets `seed_views = 7`
+at tilt steps over 2.5°.
 
 **Source:** RyR1 series 161 at MDC.
 - 14 October 2026: binning 2 crashed on two nodes; with binning 3, tilt axis
@@ -233,6 +249,12 @@ seed views from a 7-view range, which all five RyR1 series did in October; only
   and 3988506): the same settings passed. The runs of 19 and 23 November found
   the same 501 bead candidates and differ in their inputs by at most 0.02 px of
   coarse shift: what differs is where the overrun's write landed.
+- 23 November 2026, all five series in one lane at binning 2 with
+  `seed_views = 5`: every series passed seeding, tracking and fine alignment,
+  161 with 46 beads and a mean residual of 0.304 nm. The four others' fine
+  alignments match the colleague's run of 19 November, where `autofidseed`
+  took 7 seed views: at most one bead more or fewer, and mean residuals within
+  0.004 nm.
 
 ### A-3. Patch tracking left every view off by its coarse shift
 

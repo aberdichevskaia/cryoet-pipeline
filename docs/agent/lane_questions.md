@@ -184,7 +184,7 @@ defaults, `example.toml`). "Unset" means the key is left out of the config.
 | `[fiducials] pre_binning, num_patches_x, num_patches_y, patch_overlap` | rule | block B's values |
 | `[fiducials] patch_margin_px` | rule | unset: etomo's margin, 5% of the binned image per axis |
 | `[fiducials] target_beads, rounds, min_tracked_fiducials, coverage_warning, coverage_failure` | rule | unset: the code's defaults |
-| `[fiducials] seed_views` | rule | unset: `autofidseed` chooses 3, 5 or 7 seed views; 5 for a series whose seeding crashed in `beadtrack` (playbook A-2) |
+| `[fiducials] seed_views` | rule | unset: 5. Not 7 at tilt steps over 2.5°: 7 is then the whole range `autofidseed` tracks, and `beadtrack` writes past an array (playbook A-2) |
 | `[fiducials] patch_filter_sigma1, patch_filter_radius2, patch_filter_sigma2` | rule | unset: the code's defaults |
 | `[fine_align] robust_fitting, auto_prune_outliers` | rule | the values of the block kept |
 | `[fine_align] surfaces_to_analyze` | rule | 2 with beads, which sit on both faces; 1 with patches, which are coplanar. The config does not enforce it, so keep the block's value |

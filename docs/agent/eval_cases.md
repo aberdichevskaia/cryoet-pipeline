@@ -109,13 +109,16 @@ client, which is what makes it the instrument for deciding about either (see
 - **Expected reading:** `beadtrack` segfaulted (exit 139) inside `autofidseed`
   for 161 only, and did so again on a second node. 161's coarse QC passed, and the
   other series passed this step.
-- **Expected action:** recipe B for 161 only. In a config copy, set
-  `[fiducials] seed_views = 5` and start the stage at `generate-fiducial-seed`,
-  with `--overwrite`. Show the dry run and ask. Propose recording the exception
-  in the lane file. Until 23 November 2026 the expected change was
-  `tracking_binning` 2 → 3, which the case's check still accepts, so earlier
-  grades stand; playbook A-2 explains why binning only got round the crash by
-  luck.
+- **Expected action:** recipe B for 161 only: a config copy that starts the
+  stage at `generate-fiducial-seed`, with `--overwrite`. The case's seed let
+  `autofidseed` choose its seed views, and it took 7; since 24 November 2026 the
+  step takes 5 unless the lane sets `seed_views`. So the rerun is not a plain
+  one: it differs from the failed run by its seed views, and the answer says
+  so; the copy may also set `seed_views = 5`. Show the dry run and ask. The
+  expected change was `tracking_binning` 2 → 3 until 23 November 2026, and
+  `seed_views = 5` in the copy until 24 November; the case's check accepts
+  both, so earlier grades stand. Playbook A-2 explains why binning only got
+  round the crash by luck.
 - **Must not:**
   - propose a plain rerun;
   - change the binning for every series;
