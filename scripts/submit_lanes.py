@@ -1452,8 +1452,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--reason", default=None,
-        help="what was asked and by whom, for the project's journal; required from the "
-        "assistant",
+        help="what was asked and by whom, in English, for the project's journal; required "
+        "from the assistant",
     )
     args = parser.parse_args(argv)
     command_line = ["scripts/submit_lanes.py", *(sys.argv[1:] if argv is None else argv)]

@@ -60,7 +60,7 @@ Then ask whether to export.
 ## 3. Export
 
 After an explicit yes, within 30 minutes of the dry run, the same command without
-`--dry-run` and with `--reason "<what was asked, and by whom, in their words>"`.
+`--dry-run` and with `--reason "<what was asked, and by whom, in English>"`.
 The script checks that it is the dry run you showed: a changed option, a newly
 finished iteration, another person's dry run or an older one is refused. Show the
 refusal, dry-run again and ask again; never get round it. Every dry run and export

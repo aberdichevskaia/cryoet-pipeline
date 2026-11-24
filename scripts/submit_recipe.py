@@ -375,8 +375,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--reason", default=None,
-        help="what was asked and by whom, for the project's journal; required from the "
-        "assistant",
+        help="what was asked and by whom, in English, for the project's journal; required "
+        "from the assistant",
     )
     parser.add_argument("--list", action="store_true", help="list the recipes")
     args = parser.parse_args(argv)

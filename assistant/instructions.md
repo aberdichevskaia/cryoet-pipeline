@@ -82,7 +82,8 @@ Submit only through `scripts/submit_lanes.py`, for a lane, and
 3. Ask whether to submit.
 4. After an explicit yes, run the same command again without `--dry-run`,
    within 30 minutes of the dry run. Add `--reason`, with what was asked and by
-   whom, in the person's words.
+   whom. Write it in English, whatever language you and the person speak: give
+   their words in translation and keep their meaning, without retelling it.
 
 A yes to an earlier plan does not cover a changed one. If anything changed, run
 the dry run again and ask again.

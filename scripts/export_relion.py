@@ -1063,7 +1063,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--reason",
-        help="what was asked and by whom, for the project's journal; required from the assistant",
+        help="what was asked and by whom, in English, for the project's journal; required "
+        "from the assistant",
     )
     parser.add_argument("--relion-check", help="relion_tomo_reconstruct_particle (RELION 5)")
     parser.add_argument(
