@@ -339,7 +339,25 @@ Read the PDF yourself: the alignment, the CTF fits, the membranes, the picks on
 the tomogram and their galleries. Ask the assistant about anything in it. What
 it says about a picture is an impression, and it says so.
 
-## 8. The MRA
+## 8. A branch: 161 aligned by AreTomo2 (optional)
+
+[Step 9 of the other tutorial](ryr1-without-assistant.md#9-a-branch-161-aligned-by-aretomo2-optional)
+says what the branch is, what it shares with the main lane and what to compare,
+and its status box holds here too. Set `$ARETOMO` as it says before you start
+the assistant, since the jobs take it from the shell the assistant runs in.
+Then ask:
+
+> Align 161 a second way, with AreTomo2, beside the bead alignment, in the same
+> project, up to the tomogram. Then write its report.
+
+It writes a copy of the lane that aligns on its own (`[lane]
+alignment_variant`) and starts at the fine alignment, shows it, dry-runs it and
+asks. The tutorial's version is
+[`ryr1/ryr1-tutorial-161-aretomo.toml`](ryr1/ryr1-tutorial-161-aretomo.toml).
+The branch has to wait until the main lane's jobs are done with 161, and the
+MRA until the branch's are.
+
+## 9. The MRA
 
 When you are satisfied with the picks:
 
@@ -357,10 +375,10 @@ max, on four of the series, its first two iterations took 40 and 83 minutes and
 the last three about 2 minutes together. If it stops on its time limit, the
 same submission carries the run on from its last finished iteration.
 
-## 9. Read the classification report
+## 10. Read the classification report
 
 The job writes `outputs/ryr1-tutorial/mra/<run name>_classification_report.pdf`.
-[Step 10 of the other tutorial](ryr1-without-assistant.md#10-read-the-classification-report)
+[Step 11 of the other tutorial](ryr1-without-assistant.md#11-read-the-classification-report)
 lists its pages and what to look for. Then, for instance:
 
 > Class 2 looks like RyR1. Run only its particles again.
@@ -369,7 +387,7 @@ It writes a copy of the lane whose `[mra]` names the run and the class
 (`from_run`, `from_classes`), with any settings you change, and submits it with
 `--from-stage mra` after the dry run and your yes.
 
-## 10. A class to RELION 5 (optional)
+## 11. A class to RELION 5 (optional)
 
 The MRA sorts the particles; it does not give a resolution. For a gold-standard
 refinement, a class that looks like RyR1 can go to RELION 5:

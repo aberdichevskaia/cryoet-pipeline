@@ -9,6 +9,7 @@ membranes, five tilt-series of SerialEM TIFF frames with gold beads.
 clone + install ─▶ copy frames ─▶ check them ─▶ create the project
    ─▶ submission 1: frames → tomograms → picks → particles  (4 Slurm jobs)
    ─▶ look at the report
+   ─▶ optional: a branch, 161 aligned by AreTomo2           (2 Slurm jobs)
    ─▶ submission 2: MRA classification                      (1 Slurm job, 4 GPUs)
    ─▶ read the classification report
    ─▶ optional: export a class to RELION 5 and refine it there
@@ -17,7 +18,7 @@ clone + install ─▶ copy frames ─▶ check them ─▶ create the project
 You will end with tomograms of the five series at 13.44 Å/px, RyR1 picks on
 their membranes, and an MRA classification of the picks: a few class averages
 and a noise class that collects the false picks. A resolution is not part of the
-pipeline's own steps: step 11 hands a class to RELION 5 for one.
+pipeline's own steps: step 12 hands a class to RELION 5 for one.
 
 There is a second tutorial for the same data with the terminal assistant, in
 Claude Code or in Codex: [ryr1-with-assistant.md](ryr1-with-assistant.md).
@@ -260,7 +261,7 @@ came from. The parts to understand before you submit:
   with a 340 Å particle, and keeps twice as many picks as pytom recommends, so
   that the MRA's noise class has false picks to take.
 - **There is no `[mra]` section.** The MRA then follows the lab's rules, which
-  the dry run in step 9 prints with the source of every value.
+  the dry run in step 10 prints with the source of every value.
 
 For your own data, start from
 [`configs/lanes/example.toml`](../../configs/lanes/example.toml) instead; the
@@ -364,7 +365,72 @@ To see the picks in 3D, `visualize-picks` has written, per series,
 ArtiaX), and the tomogram `.mrc` with the picks as a `.mod` for 3dmod. Open one
 or two series: do the picks sit on density at the membranes?
 
-## 9. Submission 2: the MRA
+## 9. A branch: 161 aligned by AreTomo2 (optional)
+
+> **Status, 24 November 2026.** This step has not run yet. AreTomo2 has aligned
+> another dataset in the pipeline (EMPIAR-11830 at MDC, AreTomo2 1.1.3), but not
+> these data. Tell Anna what happens.
+
+A lane can part from another earlier than at its own tomogram. Here 161 is
+aligned a second way, by AreTomo2's projection matching instead of the gold
+beads, in the same project. The branch's lane is
+[`ryr1-tutorial-161-aretomo.toml`](ryr1/ryr1-tutorial-161-aretomo.toml):
+
+- **Shared:** motion correction and the coarse alignment of 161, which the main
+  lane made. They are not done again.
+- **Its own:** the fine alignment and the CTF fit, labelled `aretomo`
+  (`[lane] alignment_variant`), and the aligned stack, the tomogram and the
+  picks, labelled `bin8-aretomo` (`[lane] variant`). Nothing of the main lane's
+  is replaced: its bead alignment and its `bin8` results stay as they are.
+- **Set for AreTomo2:** no `[fiducials]`, `[fine_align] backend = "aretomo"`,
+  and `[reconstruct] thickness`, since AreTomo2 measures no sample depth. The
+  file's comments say how each value was chosen.
+
+AreTomo2 runs on a GPU and is found through `$ARETOMO`. At MDC, set it in the
+shell you submit from, since the jobs take it from there:
+
+```bash
+module load aretomo/v2-cu12.5
+```
+
+```bash
+export ARETOMO=/fast/AG_Kudryashev/software/AreTomo2-cu12.5/AreTomo2
+```
+
+Submit once the main lane's jobs are done with 161: a series that one of your
+jobs works on is refused to another. The branch starts at its own alignment and
+stops at the tomogram:
+
+```bash
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-161-aretomo.toml \
+    --from-stage align-aretomo --until-stage cpu-aretomo --dry-run
+```
+
+The dry run should show two jobs on 161, `align-aretomo` and then
+`cpu-aretomo`, and no `would refuse:` line. Then the same command without
+`--dry-run`. `show_project.py` given the branch's lane file shows its own runs
+of the steps it labels; the main lane's table does not change.
+
+When `cpu-aretomo` has finished, write the branch's report:
+
+```bash
+cryoet report --project outputs/ryr1-tutorial --variant bin8-aretomo \
+    --config docs/tutorials/ryr1/ryr1-tutorial-161-aretomo.toml --series 161
+```
+
+It goes to `outputs/ryr1-tutorial/reports/report-bin8-aretomo.pdf`. Put its
+pages for 161 beside those of step 8:
+
+- **tilt alignment:** the beads' page shows tiltalign's residual per tilt,
+  AreTomo2's the shifts of its last projection-matching pass. The two measure
+  different things, so their numbers are not to be compared;
+- **the tomograms:** the same membranes and beads in both? Is one sharper, or
+  tilted against the other?
+
+To pick and extract the branch's particles too, submit `gpu-aretomo` the same
+way. They stay out of the MRA of step 10, which reads the `bin8` particles.
+
+## 10. Submission 2: the MRA
 
 The MRA (multi-reference alignment) classifies the particles of all the series
 together: it aligns every particle to a few references and sorts them into
@@ -391,7 +457,7 @@ minutes and the last three about 2 minutes together. If it stops on its time
 limit, submitting it again carries the run on from its last finished
 iteration.
 
-## 10. Read the classification report
+## 11. Read the classification report
 
 The job writes its report beside the run:
 `outputs/ryr1-tutorial/mra/bin8-ssn_classification_report.pdf`. Its pages, in
@@ -412,7 +478,7 @@ particles or only in how they are seen? On these data at bin8, earlier MRA runs
 split the particles by viewing direction, top views against side views, which
 the missing wedge makes look different: two such classes are one particle.
 
-## 11. A class to RELION 5 (optional)
+## 12. A class to RELION 5 (optional)
 
 The MRA sorts the particles; it does not give a resolution. For a gold-standard
 refinement, a class that looks like RyR1 can go to RELION 5.
@@ -488,7 +554,7 @@ export's folder.
   has the keys.
 - **A finer tomogram.** bin4 (6.72 Å/px) is the next step towards ~20 Å:
   `configs/lanes/ryr1-bin4.toml` and its comments.
-- **A resolution.** A class in RELION 5, [step 11](#11-a-class-to-relion-5-optional).
+- **A resolution.** A class in RELION 5, [step 12](#12-a-class-to-relion-5-optional).
   Halves split after a joint classification give the map's consistency, not its
   resolution: [docs/agent/playbook/averaging.md](../agent/playbook/averaging.md),
   entries V-3 and V-4.
