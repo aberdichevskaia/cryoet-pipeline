@@ -56,17 +56,21 @@ assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
 > **Status, 25 November 2026.** On cryoem.se the assistant ran in Claude Code
-> under a course account from 19 to 24 November 2026: it took that account
+> under a course account from 19 to 25 November 2026: it took that account
 > through the installation on 22–23 November, with fixes to the pipeline in
-> between, and wrote a lane for these data. That lane ran on series 161 alone
-> on 24 November, from the frames to the tomogram, with its CPU stages on
-> cryo5000 rather than cs-cpu, and so did the branch of step 12. Not run there
-> yet: Codex, the CPU stages on cs-cpu, the `gpu` stage (membranes, template
-> matching, particles), the MRA on one A5000, and the tilt preview of step 6 on
-> these TIFF frames. The accounts' installation and the session file of step 1
-> were written on 25 November and had not run when this was. The course's
-> results of step 10, for going on after a failure, were still to be made, and
-> going on from a copy of them had not been tried. At MDC the same lane ran
+> between, and wrote a lane for these data. The course's lane ran on all five
+> series on 25 November, from the frames to the tomogram, and the branch of
+> step 12 ran on 161 on 24 November. The `gpu` stage then failed at the first
+> series' picking: pytom-match-pick's CuPy cannot compile one of its kernels
+> there. The assistant found it in the playbook, entry I-9, and narrowed it down
+> with tests on a GPU node; `session.sh` now turns that part of CuPy off, which
+> those tests showed to work, and the lane had not picked with it when this was
+> written. Not run there yet: Codex, picking and particles, the MRA on one
+> A5000, and the tilt preview of step 6 on these TIFF frames. The accounts'
+> installation and the session file of step 1 were written on 25 November and
+> had not run. The course's results of step 10, for going on after a failure,
+> are that run's, so far up to the tomograms; going on from a copy of them had
+> not been tried. At MDC the same lane ran
 > through the MRA on four of the series on 19–20 November, and through fine
 > alignment on all five on 23 November. Tell Anna what happened.
 
@@ -293,6 +297,7 @@ cluster.
 | `LD_LIBRARY_PATH` | begins with `/opt/tcbsys/cuda/12.6.2/lib64`, CUDA 12's libraries, which MotionCor3 and AreTomo2 need |
 | the `cryoet-pipeline` environment | Python 3.13, your clone installed with `pip install -e .`, and `imagecodecs`; its PyTorch a CUDA build |
 | the `pytom_tm` environment | Python 3.12, CuPy for CUDA 12 from conda-forge, pytom-match-pick 0.14.0; `PYTOMO_MP_DIR` is its `bin` folder |
+| `CUPY_ACCELERATORS` | set to nothing: CuPy's CUB off, which pytom-match-pick's CuPy cannot compile here (playbook entry I-9) |
 | the `membrain` environment | Python 3.9, MemBrain-seg 0.0.10; `MEMBRAIN_EXE` is its `bin/membrain` |
 | `MEMBRAIN_CKPT`, `CRYOET_LIBRARY` | from `module load tomobear/2026`; everything above, from `session.sh` |
 

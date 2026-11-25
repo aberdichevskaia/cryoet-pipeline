@@ -298,37 +298,58 @@ main clone's code.
 
 ### I-9. CuPy's kernels do not compile when picking
 
-**Kind:** crash · **Evidence:** seen
+**Kind:** crash · **Evidence:** measured
 
-**Error text:** a compile error in one of CuPy's kernels, such as `incomplete
-type __nv_fp8_e8m0`.
+**Error text:** `NVRTC_ERROR_COMPILATION`, with a compile error in one of
+CuPy's kernels such as `incomplete type "__nv_fp8_e8m0"`, and `42 errors
+detected in the compilation of`.
 
-**Where it shows:** the log of `pick-particles`, in pytom-match-pick's output.
+**Where it shows:** the log of `pick-particles`, in pytom-match-pick's output,
+at its first angle: the GPU stage's job fails within minutes, and the stages
+after it are cancelled.
 
-**How to confirm:** `python3 scripts/show_setup.py`: under pytom-match-pick,
-the CUDA that CuPy is "built for" and the NVRTC it "compiles with" differ in
-their major version.
+**How to confirm:** `python3 scripts/show_setup.py` on a GPU node, through
+`srun`; a login node compiles nothing. Under pytom-match-pick it compiles the
+reduction pytom-match-pick runs on its score map, once with CuPy's CUB and once
+without: `its reduction kernel, with CuPy's CUB: fails`, and `without CUB:
+compiles and sums right`. The versions the check shows above it can all agree:
+on cryoem.se CuPy built for CUDA 12.9 compiled with NVRTC 12.9, and the check
+without this compile found no problem.
 
 **Causes, common to rare:**
-1. CuPy compiles its kernels with an NVRTC from a newer CUDA than the headers it
-   is given. At MDC: NVRTC 13.3 from the system's `/usr/local/cuda-13.3`, with
-   the headers of CUDA 12.5, whose `nvcc` a loaded module had put on `PATH`.
+1. CuPy's CUB reduction does not compile with the CUDA headers it is given; why
+   is not known. On cryoem.se every version agreed: CuPy 14.2.0 built for CUDA
+   12.9, from conda-forge, NVRTC 12.9, and the environment's own headers of 12.9
+   (`cuda-cccl` 12.9.27, `cuda-nvrtc` 12.9.86). At MDC the same CuPy compiled
+   with NVRTC 13.3 from the system's `/usr/local/cuda-13.3`, with the headers of
+   CUDA 12.5, whose `nvcc` a loaded module had put on `PATH`.
 
-**What to try:** not established. An untested lead: `CUPY_ACCELERATORS` set to
-nothing in the submitting shell, which turns off CuPy's CUB reductions; the
-failing kernel was one of those. Picking passes the shell's variables to
-pytom-match-pick.
+**What to try:** turn CuPy's CUB off for picking, `export CUPY_ACCELERATORS=`
+(set to nothing) in the shell the lane is submitted from, then resume with
+recipe A of [rerun_recipes.md](../rerun_recipes.md). Picking passes the
+shell's variables to pytom-match-pick, and a lane's jobs get the shell's. CuPy
+then sums with kernels of its own; whether that slows picking was not measured.
+The check above says, in a note, that this shell turns CUB off. The Stockholm
+course accounts set it in `session.sh`.
 
 **What not to do:** set `CUDA_PATH` to the older CUDA: at MDC that changed
-nothing.
+nothing. Resubmit picking unchanged: it fails at the same kernel.
 
-**When to stop and ask someone:** always, and tell the maintainer how it ended.
+**When to stop and ask someone:** before the first lane on a site is submitted
+with CUB off, and whenever the check says the kernel fails without CUB too.
+Tell the maintainer how it ended.
 
-**Applies to:** CuPy 14.2.0 built for CUDA 12.9, at MDC.
+**Applies to:** pytom-match-pick 0.14.0 with CuPy 14.2.0 built for CUDA 12.9,
+at MDC and on cryoem.se.
 
 **Source:** MDC, 14 October 2026, `pick-particles` of a lane with a z-axis
 symmetry and a tomogram mask. Another lane, with neither, picked on the same
-day. How it ended was not recorded.
+day. How it ended was not recorded. cryoem.se, 25 November 2026, the
+Stockholm RyR1 lane on an RTX A5000: `pick-particles` of 039 at bin8 failed so, and
+`show_setup.py` on the same node found no problem. A probe of the same kernel,
+`4edd3527….cubin.cu` as in the job's log, failed with CUB and gave the right
+sum with `CUPY_ACCELERATORS` empty; CuPy's own `sum` compiled with CUB on. A
+lane with CUB off had not run when this was written.
 
 ### I-10. Wheels for Linux downloaded on a Mac lack the CUDA libraries
 

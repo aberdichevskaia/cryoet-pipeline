@@ -311,9 +311,16 @@ if packages.get("torch"):
 print("@@show_setup@@" + json.dumps(out))
 """
 # Asked of pytom-match-pick's Python: its CuPy, the CUDA it was built for, the
-# NVRTC it compiles kernels with, and whether it sees a GPU.
+# NVRTC it compiles kernels with, and whether it sees a GPU. Where it sees one,
+# it also compiles and runs the reduction pytom-match-pick 0.14.0 runs on its
+# score map within the searched region (pytom_tm/matching.py, square_sum_kernel),
+# once with CuPy's CUB on and once with it off, whatever CUPY_ACCELERATORS says:
+# on cryoem.se on 25 November 2026 it failed to compile with CUB and picking
+# failed on it, while every version this probe reads agreed (I-9). The shape
+# is the bin8 tomogram of RyR1 039, on which it failed; 300 x 70 x 500 voxels are
+# inside the region, so the sum is 10500000.
 CUPY_PROBE = r"""
-import json, sys
+import json, os, sys
 out = {"python": "%d.%d.%d" % tuple(sys.version_info[:3]), "executable": sys.executable}
 facts = {}
 try:
@@ -332,9 +339,41 @@ try:
             facts[key + "_error"] = repr(error)[:300]
 except Exception as error:
     facts["error"] = repr(error)[:300]
+
+
+def why(error):
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    first = next((line for line in lines if "error" in line), lines[0] if lines else "")
+    text = type(error).__name__ + ": " + first
+    if lines and lines[-1] != first:
+        text += " ... " + lines[-1]
+    return text[:400]
+
+
+if "error" not in facts and facts.get("devices"):
+    facts["accelerators_env"] = os.environ.get("CUPY_ACCELERATORS")
+    square_sum = {}
+    try:
+        from cupy._core import _accelerator
+        kernel = cupy.ReductionKernel(
+            "T x", "T y", "x * x", "a + b", "y = a", "0", "variance")
+        for key, accelerators in (("cub", ["cub"]), ("plain", [])):
+            try:
+                _accelerator.set_reduction_accelerators(accelerators)
+                ccc = cupy.ones((512, 107, 720), dtype=cupy.float32)
+                region = cupy.zeros(ccc.shape, dtype=bool)
+                region[100:400, 20:90, 100:600] = True
+                square_sum[key] = float(kernel(ccc * region))
+            except Exception as error:
+                square_sum[key + "_error"] = why(error)
+    except Exception as error:
+        square_sum["error"] = why(error)
+    facts["square_sum"] = square_sum
 out["cupy"] = facts
 print("@@show_setup@@" + json.dumps(out))
 """
+# What CUPY_PROBE's reduction gives when it compiles and runs right.
+SQUARE_SUM = 300 * 70 * 500
 
 
 # --- what the report is made of ----------------------------------------------
@@ -1091,6 +1130,50 @@ def pytom(path: Path, tool: ToolReport, report: Report) -> None:
     if runtime and nvrtc and runtime.split(".")[0] != nvrtc.split(".")[0]:
         report.note(f"pytom-match-pick's CuPy is built for CUDA {runtime} but compiles its kernels "
                     f"with NVRTC {nvrtc}: a mix like this broke picking at MDC", "I-9")
+    square_sum(cupy, tool, report)
+
+
+def square_sum(cupy: dict, tool: ToolReport, report: Report) -> None:
+    """What CUPY_PROBE's compile of pytom-match-pick's reduction said, with CuPy's
+    CUB on and off, and whether this shell's CUPY_ACCELERATORS turns CUB off."""
+
+    if "square_sum" not in cupy:
+        if not cupy.get("devices"):
+            tool.lines.append("its reduction kernel not compiled here: no GPU; run this check "
+                              "on a GPU node to compile it")
+        return
+    found = cupy["square_sum"]
+    if "error" in found:
+        tool.lines.append(f"its reduction kernel not compiled: {found['error']}")
+        return
+
+    def outcome(key: str) -> tuple[bool, str]:
+        if f"{key}_error" in found:
+            return False, f"fails: {found[f'{key}_error']}"
+        if abs(found.get(key, -1.0) - SQUARE_SUM) > 0.5:
+            return False, f"gives {found.get(key)}, not {SQUARE_SUM}"
+        return True, "compiles and sums right"
+
+    cub_ok, cub_text = outcome("cub")
+    plain_ok, plain_text = outcome("plain")
+    tool.lines.append(f"its reduction kernel, with CuPy's CUB: {cub_text}")
+    tool.lines.append(f"its reduction kernel, without CUB: {plain_text}")
+    if cub_ok:
+        return
+    if not plain_ok:
+        report.problem("pytom-match-pick's reduction kernel fails under its CuPy with CUB and "
+                       "without: picking fails at its first angle", "I-9")
+        return
+    setting = cupy.get("accelerators_env")
+    # CuPy reads a comma-separated list; set and without cub, CUB is off.
+    if setting is not None and "cub" not in [name.strip() for name in setting.split(",")]:
+        report.note(f"pytom-match-pick's reduction kernel fails under its CuPy with CUB and "
+                    f"works without; CUPY_ACCELERATORS is '{setting}' in this shell, which turns "
+                    "CUB off, so picking submitted from this shell avoids it", "I-9")
+        return
+    report.problem("pytom-match-pick's reduction kernel fails under its CuPy with CUB and works "
+                   "without: picking fails at its first angle unless it is submitted from a shell "
+                   "with CUPY_ACCELERATORS set to nothing (export CUPY_ACCELERATORS=)", "I-9")
 
 
 def membrain(path: Path, tool: ToolReport, report: Report) -> GpuCode | None:

@@ -328,7 +328,7 @@ with one.
 |---|---|---|
 | MotionCor3 | its own cubins and PTX | `cuobjdump -lelf` and `-lptx` on the program |
 | MemBrain-seg | the PyTorch of its environment | the architectures that PyTorch was built for |
-| pytom-match-pick | CuPy, which compiles its kernels when they are first used, with NVRTC | CuPy's runtime and NVRTC versions (I-9) |
+| pytom-match-pick | CuPy, which compiles its kernels when they are first used, with NVRTC | CuPy's runtime and NVRTC versions; on a GPU node, a compile of the reduction pytom-match-pick runs (I-9) |
 | the MRA (`mra_port_run.py`) | the pipeline's PyTorch | as for MemBrain-seg |
 
 `show_setup.py` reads all of these, on a login node too, and says which of the

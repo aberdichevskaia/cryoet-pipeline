@@ -42,6 +42,11 @@ esac
 # pytom-match-pick and MemBrain-seg, each in an environment of its own.
 export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
 export MEMBRAIN_EXE=$MAMBA_ROOT_PREFIX/envs/membrain/bin/membrain
+# CuPy's CUB off: pytom-match-pick's CuPy (14.2.0, built for CUDA 12.9) cannot
+# compile its CUB reduction here, and picking failed at its first angle on 25
+# November 2026; the same kernel compiles and sums right without CUB. Playbook
+# entry I-9.
+export CUPY_ACCELERATORS=
 
 # The clone's root and the pipeline's environment, once they exist.
 if [[ -d $CRYOET_WORK/cryoet-pipeline ]]; then

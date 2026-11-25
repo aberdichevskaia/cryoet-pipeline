@@ -23,16 +23,19 @@ their membranes, and an MRA classification of the picks: a few class averages
 and a noise class that collects the false picks. A resolution is not part of the
 pipeline's own steps: step 13 hands a class to RELION 5 for one.
 
-> **Status, 25 November 2026.** On cryoem.se, this tutorial's lane ran on series
-> 161 alone on 24 November 2026, from the frames to the tomogram, with its CPU
-> stages on cryo5000 rather than cs-cpu, and so did the branch of step 10. Not
-> run there yet: the CPU stages on cs-cpu, the `gpu` stage (membranes, template
-> matching, particles), the MRA on one A5000, and the tilt preview of step 4 on
-> these TIFF frames. The accounts' installation and the session file of step 1
-> were written on 25 November and had not run when this was; a course account
-> was installed with the assistant on 22–23 November, with the same programs.
-> The course's results of step 8, for going on after a failure,
-> were still to be made, and going on from a copy of them had not been tried. At
+> **Status, 25 November 2026.** On cryoem.se, this tutorial's lane ran on all
+> five series on 25 November, from the frames to the tomogram, and the branch of
+> step 10 ran on 161 on 24 November. The `gpu` stage then failed at the first
+> series' picking: pytom-match-pick's CuPy cannot compile one of its kernels
+> there (playbook entry I-9). `session.sh` now turns that part of CuPy off,
+> which a test of the same kernel showed to work; the lane had not picked with
+> it when this was written. Not run there yet: picking and particles, the MRA on
+> one A5000, and the tilt preview of step 4 on these TIFF frames. The accounts'
+> installation and the session file of step 1 were written on 25 November and
+> had not run; a course account was installed with the assistant on 22–23
+> November, with the same programs. The course's results of step 8, for going
+> on after a failure, are that run's, so far up to the tomograms; going on from
+> a copy of them had not been tried. At
 > MDC the same lane ran through the MRA on four of the series on 19–20 November,
 > and through fine alignment on all five on 23 November. If something fails, the
 > log says why; tell Anna what happened.
@@ -89,6 +92,8 @@ comments say what each line does:
   the cluster also has CTFFIND 4, which the pipeline refuses.
 - `PYTOMO_MP_DIR` and `MEMBRAIN_EXE` are pytom-match-pick and MemBrain-seg,
   each in an environment of its own.
+- `CUPY_ACCELERATORS`, set to nothing, turns off CUB, the part of CuPy that
+  pytom-match-pick's CuPy cannot compile on this cluster (playbook entry I-9).
 - Last, it goes to the clone's root and activates the pipeline's environment,
   and says so: `pipeline session: …/cryoet/cryoet-pipeline, environment
   cryoet-pipeline`. Every command below runs from there.

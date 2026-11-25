@@ -131,7 +131,8 @@ def site(tmp_path, monkeypatch):
     pytom_bin = tmp_path / "pytom_tm" / "bin"
     python = _python(pytom_bin, {"cupy": {"python": "3.12.8", "cupy": {
         "version": "14.2.0", "runtime": 12090, "nvrtc": "12.9", "cuda_path": "/env/targets",
-        "devices": 1}}}, {"pytom-match-pick": "0.14.0"})
+        "devices": 1, "square_sum": {"cub": 10500000.0, "plain": 10500000.0}}}},
+        {"pytom-match-pick": "0.14.0"})
     for script in show_setup.PYTOM_SCRIPTS:
         (pytom_bin / f"{script}.py").write_text(f"#!{python}\n")
 
@@ -299,6 +300,65 @@ def test_cupy_compiling_with_another_cuda_than_it_was_built_for(site):
     notes = _findings(_check(), False)
     assert any(entry == "I-9" and "built for CUDA 12.9 but compiles its kernels with NVRTC 13.3"
                in text for entry, text in notes)
+
+
+# CuPy's compile error on cryoem.se, 25 November 2026, as the probe shortens it.
+CUB_FAILS = ("CompileException: /env/include/cuda/std/__floating_point/nvfp_types.h(30): "
+             "error: incomplete type \"__nv_fp8_e8m0\" is not allowed ... 42 errors detected "
+             "in the compilation of \"/tmp/tmppjbq0mc6/4edd3527.cubin.cu\".")
+
+
+def _square_sum(site, square_sum: dict, setting: str | None = None, devices: int = 1) -> list:
+    facts = {"version": "14.2.0", "runtime": 12090, "nvrtc": "12.9", "devices": devices}
+    if square_sum is not None:
+        facts["square_sum"] = square_sum
+        facts["accelerators_env"] = setting
+    _python(site["pytom"], {"cupy": {"python": "3.12.8", "cupy": facts}},
+            {"pytom-match-pick": "0.14.0"})
+    report = _check()
+    lines = {tool.name: tool for tool in report.tools}["pytom-match-pick"].lines
+    return [report, "\n".join(lines)]
+
+
+def test_a_reduction_that_compiles_is_said_and_raises_nothing(site):
+    report, lines = _square_sum(site, {"cub": 10500000.0, "plain": 10500000.0})
+    assert "with CuPy's CUB: compiles and sums right" in lines
+    assert "without CUB: compiles and sums right" in lines
+    assert "I-9" not in _entries(report) | _entries(report, problem=False)
+
+
+def test_a_reduction_that_fails_with_cub_is_a_problem_while_cub_is_on(site):
+    # The versions agree, as on gpu54: only the compile shows it.
+    for setting in (None, "cub"):
+        report, lines = _square_sum(site, {"cub_error": CUB_FAILS, "plain": 10500000.0}, setting)
+        assert "__nv_fp8_e8m0" in lines and "without CUB: compiles and sums right" in lines
+        (text,) = [text for entry, text in _findings(report, True) if entry == "I-9"]
+        assert "export CUPY_ACCELERATORS=" in text
+
+
+def test_a_shell_that_turns_cub_off_makes_it_a_note(site):
+    for setting in ("", "cutensor"):
+        report, _ = _square_sum(site, {"cub_error": CUB_FAILS, "plain": 10500000.0}, setting)
+        assert "I-9" not in _entries(report)
+        (text,) = [text for entry, text in _findings(report, False) if entry == "I-9"]
+        assert f"CUPY_ACCELERATORS is '{setting}' in this shell" in text
+
+
+def test_a_reduction_that_fails_or_sums_wrong_either_way_is_a_problem(site):
+    for square_sum in ({"cub_error": CUB_FAILS, "plain_error": "CompileException: error"},
+                       {"cub_error": CUB_FAILS, "plain": 4.0}):
+        report, lines = _square_sum(site, square_sum, "")
+        (text,) = [text for entry, text in _findings(report, True) if entry == "I-9"]
+        assert "with CUB and without" in text
+    assert "gives 4.0, not 10500000" in lines
+
+
+def test_a_reduction_is_compiled_only_where_a_gpu_is_seen(site):
+    _, lines = _square_sum(site, None, devices=0)
+    assert "not compiled here: no GPU" in lines
+    report, lines = _square_sum(site, {"error": "AttributeError: no _accelerator"})
+    assert "its reduction kernel not compiled: AttributeError" in lines
+    assert "I-9" not in _entries(report)
 
 
 def test_cupy_that_does_not_import(site):
