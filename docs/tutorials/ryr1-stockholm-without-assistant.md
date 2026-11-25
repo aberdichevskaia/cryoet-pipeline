@@ -1,14 +1,13 @@
 # RyR1 from frames to MRA classes on cryoem.se, without the assistant
 
-This tutorial takes you from an empty home folder to class averages on
-cryoem.se, the cluster of the Stockholm workshop: clone the repository, install
-what the pipeline needs, connect what the course shares, look at the raw tilts,
-and run a real dataset through the whole pipeline with your own commands. The
-data are RyR1 in native membranes, five tilt-series of SerialEM TIFF frames with
-gold beads.
+This tutorial takes you from a course account on cryoem.se, the cluster of the
+Stockholm workshop, to class averages: start a session in the pipeline your
+account already has installed, look at the raw tilts, and run a real dataset
+through the whole pipeline with your own commands. The data are RyR1 in native
+membranes, five tilt-series of SerialEM TIFF frames with gold beads.
 
 ```text
-clone + install ─▶ connect the course's shared files ─▶ check the frames
+start a session ─▶ check the installation ─▶ check the frames
    ─▶ look at the raw tilts: gold beads and the tilt axis   (a PDF)
    ─▶ create the project
    ─▶ submission 1: frames → tomograms → picks → particles  (4 Slurm jobs)
@@ -24,16 +23,19 @@ their membranes, and an MRA classification of the picks: a few class averages
 and a noise class that collects the false picks. A resolution is not part of the
 pipeline's own steps: step 13 hands a class to RELION 5 for one.
 
-> **Status, 24 November 2026.** On cryoem.se, this tutorial's lane ran on series
+> **Status, 25 November 2026.** On cryoem.se, this tutorial's lane ran on series
 > 161 alone on 24 November 2026, from the frames to the tomogram, with its CPU
 > stages on cryo5000 rather than cs-cpu, and so did the branch of step 10. Not
 > run there yet: the CPU stages on cs-cpu, the `gpu` stage (membranes, template
-> matching, particles), the MRA on one A5000, the tilt preview of step 4 on these
-> TIFF frames, and the installation as written here; a course account was
-> installed with the assistant on 22–23 November, with fixes to the pipeline in
-> between. At MDC the same lane ran through the MRA on four of the series on
-> 19–20 November, and through fine alignment on all five on 23 November. If
-> something fails, the log says why; tell Anna what happened.
+> matching, particles), the MRA on one A5000, and the tilt preview of step 4 on
+> these TIFF frames. The accounts' installation and the session file of step 1
+> were written on 25 November and had not run when this was; a course account
+> was installed with the assistant on 22–23 November, with the same programs.
+> The course's results of step 8, for going on after a failure,
+> were still to be made, and going on from a copy of them had not been tried. At
+> MDC the same lane ran through the MRA on four of the series on 19–20 November,
+> and through fine alignment on all five on 23 November. If something fails, the
+> log says why; tell Anna what happened.
 
 ## What you need
 
@@ -42,141 +44,64 @@ pipeline's own steps: step 13 hands a class to RELION 5 for one.
   below runs there unless it says it runs on your laptop. The heavy work runs
   in Slurm jobs, which the pipeline's scripts submit for you.
 - **Room in your home folder**, which has no quota on course accounts. The
-  environments and the downloads take about 27 GB (one course account, 24
-  November 2026). The outputs at bin8 add the motion-corrected sums and stacks
-  and the tomograms: 8.4 GB for 161 alone up to the tomogram, with both
-  alignments of step 10, so plan for some 40 GB for the five series.
+  installation there takes about 27 GB (one course account, 24 November 2026).
+  The outputs at bin8 add the motion-corrected sums and stacks and the
+  tomograms: 8.4 GB for 161 alone up to the tomogram, with both alignments of
+  step 10, so plan for some 40 GB for the five series.
 - **On your laptop**: `scp` or another SFTP client, to copy PDFs and folders
   from the cluster; and ChimeraX with ArtiaX, or IMOD's `3dmod`, to see the
   picks in 3D.
-- **About an hour for the setup**, then waiting for the queue.
 
-## 1. Your folder and the course's shared files (once)
+## 1. Your account, and how every session starts
 
-Everything this tutorial installs and writes goes into one folder in your home,
-`~/cryoet`: the environments, the downloads pip and micromamba keep, and the
-clone with its outputs. The programs the steps run are installed once for the
-whole cluster, under `/opt/cryoem`; the course adds a module, `tomobear/2026`,
-that names the files it shares: the model MemBrain-seg segments membranes with,
-and the assistant's reference library.
+Your account has the pipeline installed, in one folder of your home, `~/cryoet`:
+the environments, the downloads pip and micromamba keep, and the clone,
+`~/cryoet/cryoet-pipeline`, which the outputs go into. The programs the steps
+run are installed once for the whole cluster, under `/opt/cryoem`; the course's
+module, `tomobear/2026`, names the files the course shares: the model
+MemBrain-seg segments membranes with, and the assistant's reference library.
 
-Add these lines at the end of `~/.bashrc`:
+None of it is in `~/.bashrc`: the same account serves another part of the
+workshop, which should see none of it. So **every new terminal** starts with
+two lines:
 
 ```bash
-export CRYOET_WORK=$HOME/cryoet
-export MAMBA_ROOT_PREFIX=$CRYOET_WORK/micromamba
-export PIP_CACHE_DIR=$CRYOET_WORK/cache/pip
-export ENV_MANAGER=micromamba
-module load micromamba/2.5.0
-eval "$(micromamba shell hook --shell bash)"
 module load tomobear/2026
-export IMOD_DIR=/opt/cryoem/imod/5.2.1
-export CTFFIND5=/opt/cryoem/ctffind/5.0.2/bin/ctffind
-export MOTIONCOR3=/opt/cryoem/motioncor3/1.1.1/bin/MotionCor3
-export ARETOMO=/opt/cryoem/aretomo2/1.1.2/bin/AreTomo2
-export LD_LIBRARY_PATH=/opt/tcbsys/cuda/12.6.2/lib64:$LD_LIBRARY_PATH
-export PYTOMO_MP_DIR=$MAMBA_ROOT_PREFIX/envs/pytom_tm/bin
-export MEMBRAIN_EXE=$MAMBA_ROOT_PREFIX/envs/membrain/bin/membrain
+source ~/cryoet/session.sh
 ```
 
-- `CRYOET_WORK` is your folder; the commands below use it.
-- `MAMBA_ROOT_PREFIX` is where micromamba makes environments and keeps its
-  downloads, and `PIP_CACHE_DIR` where pip keeps what it downloads.
+The module sets `MEMBRAIN_CKPT`, MemBrain-seg's model, and `CRYOET_LIBRARY`, the
+reference library, both in the course folder `/mnt/cephfs/home/tomobear`.
+`session.sh` is [`docs/tutorials/ryr1/stockholm-session.sh`](ryr1/stockholm-session.sh),
+copied there by the installation; it refuses to run before the module, and its
+comments say what each line does:
+
+- `CRYOET_WORK`, `MAMBA_ROOT_PREFIX` and `PIP_CACHE_DIR` name `~/cryoet` and the
+  places in it where micromamba keeps environments and downloads and pip keeps
+  its downloads.
 - `ENV_MANAGER` makes the jobs activate the pipeline's environment with
-  micromamba.
-- The two `micromamba` lines make the command `micromamba activate` work in
+  micromamba, and micromamba's shell hook makes `micromamba activate` work in
   your shell.
-- `module load tomobear/2026` sets `MEMBRAIN_CKPT`, MemBrain-seg's model, and
-  `CRYOET_LIBRARY`, the reference library, both in the course folder
-  `/mnt/cephfs/home/tomobear`.
 - `IMOD_DIR`, `CTFFIND5`, `MOTIONCOR3` and `ARETOMO` are the cluster's IMOD
   5.2.1, CTFFIND 5.0.2, MotionCor3 1.1.1 and AreTomo2 (its folder says 1.1.2,
   the program reports 1.1.3). MotionCor3 and AreTomo2 need CUDA 12's libraries,
-  which the `LD_LIBRARY_PATH` line adds. CTFFIND is named by its full path
-  because the cluster also has CTFFIND 4, which the pipeline refuses.
-- `PYTOMO_MP_DIR` and `MEMBRAIN_EXE` are pytom-match-pick and MemBrain-seg, in
-  the environments you make in step 2.
+  which it adds to `LD_LIBRARY_PATH`. CTFFIND is named by its full path because
+  the cluster also has CTFFIND 4, which the pipeline refuses.
+- `PYTOMO_MP_DIR` and `MEMBRAIN_EXE` are pytom-match-pick and MemBrain-seg,
+  each in an environment of its own.
+- Last, it goes to the clone's root and activates the pipeline's environment,
+  and says so: `pipeline session: …/cryoet/cryoet-pipeline, environment
+  cryoet-pipeline`. Every command below runs from there.
 
-Keep the lines outside any check for the host name: jobs take these variables
-from the shell you submit from and read no `~/.bashrc` of their own. Open a new
-terminal so that they take effect, and check:
+Jobs take all of this from the shell you submit from and read no `~/.bashrc` of
+their own: submit from a terminal where both lines ran.
 
-```bash
-echo "$MAMBA_ROOT_PREFIX"
-```
+## 2. Check the installation
 
-```bash
-ls -l "$MEMBRAIN_CKPT"
-```
-
-The first must print your home followed by `/cryoet/micromamba`. The second must
-list `MemBrain_seg_v10_alpha.ckpt` in `/mnt/cephfs/home/tomobear/models`; if it
-says `MEMBRAIN_CKPT` is empty, the module did not load: check that `module load
-tomobear/2026` prints no error in a new terminal.
-
-## 2. Clone and install (once)
-
-Clone into your folder:
-
-```bash
-mkdir -p "$CRYOET_WORK"
-cd "$CRYOET_WORK"
-git clone https://github.com/aberdichevskaia/cryoet-pipeline.git
-cd cryoet-pipeline
-```
-
-**The pipeline's environment.** The pipeline brings PyTorch, which the MRA runs
-on, and matplotlib, which the reports need. `imagecodecs` lets step 4 read the
-TIFF frames itself if they are compressed: tifffile decodes compressed TIFF
-only with it. MotionCor3 reads them through its own library and does not need
-it.
-
-```bash
-micromamba create -n cryoet-pipeline -c conda-forge python=3.13
-micromamba activate cryoet-pipeline
-python -m pip install -e . imagecodecs
-```
-
-If pip stops on a broken download (`error: incomplete-download` or another
-network error), the network dropped, not the pipeline: run the same command
-again. What pip has already downloaded is cached. With `--resume-retries 10`
-pip resumes a broken download itself, which matters most for PyTorch and its
-CUDA libraries, the largest downloads here:
-
-```bash
-python -m pip install --resume-retries 10 -e . imagecodecs
-```
-
-Check that PyTorch is a CUDA build. The second number must be a CUDA version,
-not `None` (the login node has no GPU, which is fine: the jobs run on GPU
-nodes).
-
-```bash
-python -c "import torch; print(torch.__version__, torch.version.cuda)"
-```
-
-**pytom-match-pick**, the template matching, in an environment of its own, at
-version 0.14.0. CuPy comes from conda-forge first: on PyPI, plain `cupy` is
-source code that pip would try to compile.
-
-```bash
-micromamba create -n pytom_tm -c conda-forge python=3.12 cupy "cuda-version=12.*"
-micromamba run -n pytom_tm python -m pip install "pytom-match-pick[plotting]==0.14.0"
-```
-
-**MemBrain-seg**, the membrane segmentation, in an environment of its own, at
-version 0.0.10, with Python 3.9 as its documentation installs it. Its model is
-the course's, through `MEMBRAIN_CKPT`.
-
-```bash
-micromamba create -n membrain -c conda-forge python=3.9
-micromamba run -n membrain python -m pip install "membrain-seg==0.0.10"
-```
-
-**Check what your shell finds.** `show_setup.py` writes nothing. It shows the
-room where the environments, downloads and temporary files go, the pipeline's
-environment and how its PyTorch was built, every tool the lane needs with its
-version, and which of the cluster's GPUs each program can run on:
+`show_setup.py` writes nothing. It shows the room where the environments,
+downloads and temporary files go, the pipeline's environment and how its
+PyTorch was built, every tool the lane needs with its version, and which of the
+cluster's GPUs each program can run on:
 
 ```bash
 python3 scripts/show_setup.py --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
@@ -185,11 +110,12 @@ python3 scripts/show_setup.py --config docs/tutorials/ryr1/ryr1-tutorial-stockho
 Give it a few minutes: it asks every tool for its version. Read its problems
 first: there should be none (`Problems (0): none`). Each problem and each note
 names an entry of the playbook, `docs/agent/playbook/`, which says what to do.
-A tool shown as missing means its variable is not set in this shell: check the
-`.bashrc` lines of step 1, in a new terminal.
+A tool shown as missing means its variable is not set in this shell: run the
+two lines of step 1 in it.
 
-**On a GPU node**, the same check also compares the driver with the CUDA of
-each program. Run it once in a short job on one of the course's cards:
+The installation ran the same check on your account in a short job on one of
+the course's A5000 cards, where it also compares the driver with the CUDA of
+each program. To run that part again:
 
 ```bash
 srun --partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1 \
@@ -198,15 +124,14 @@ srun --partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1 \
     --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
 ```
 
-Its problems should again be none.
-
-**Every time you come back**, start the same way: the clone's root, the
-environment active.
-
-```bash
-cd "$CRYOET_WORK/cryoet-pipeline"
-micromamba activate cryoet-pipeline
-```
+What the installation made, for doing the same on another cluster: three
+environments, each with micromamba from conda-forge. `cryoet-pipeline` holds
+Python 3.13, the clone installed with `pip install -e .`, and `imagecodecs`,
+which lets step 4 read the TIFF frames if they are compressed; its PyTorch is a
+CUDA build. `pytom_tm` holds Python 3.12, CuPy for CUDA 12 and
+pytom-match-pick 0.14.0; `membrain` holds Python 3.9 and MemBrain-seg 0.0.10.
+The README's [one-time setup](../../README.md#0-one-time-setup) says how to
+install the pipeline on a cluster of your own.
 
 ## 3. The data: read in place, checked before anything runs
 
@@ -261,9 +186,9 @@ It reads about nine gigabytes of frames, so give it some minutes. It prints, for
 039, the tilts it read, the dark round spots it found and their size, the tilt
 axis it measured, and a note for anything it left out; the last line names the
 PDF, `outputs/tilt-previews/ryr1_039.pdf`. If it stops saying that tifffile
-needs the imagecodecs package, the install of step 2 missed it: run
-`python -m pip install imagecodecs` in the pipeline's environment, then the same
-command again.
+needs the imagecodecs package, the installation missed it: run
+`python -m pip install imagecodecs` in the pipeline's environment, which step 1
+activated, then the same command again.
 
 **Open the PDF.** In VS Code connected over SSH, open it from the file tree
 (VS Code needs a PDF viewer extension for that). Or copy it to your laptop. In a
@@ -455,6 +380,29 @@ python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
 recorded results it may replace. Do not resubmit a failure that will happen
 again unchanged: find the cause first.
 
+**If the cause cannot be fixed in the course's time**, go on from the course's
+results. The same lane has run through every stage in the course folder, in
+`/mnt/cephfs/home/tomobear/cryoet-pipeline/outputs/ryr1-tutorial`. Copied into
+your clone at the same place, it is a project like your own: its records name
+its files from the clone's root, and it reads the frames from the course folder
+as yours does. Set your project aside, so that nothing of it is lost, and copy
+the course's in its place (some 40 GB, a few minutes):
+
+```bash
+mv outputs/ryr1-tutorial outputs/ryr1-tutorial.mine
+cp -r /mnt/cephfs/home/tomobear/cryoet-pipeline/outputs/ryr1-tutorial outputs/
+```
+
+It holds the results of every stage, the MRA's too, so you can read them right
+away, from step 9 on. To run the rest yourself, submit from the stage after the
+one that failed; its results and those after it are replaced by yours, which
+is why `--overwrite` is needed. After a failed `cpu` job, for example:
+
+```bash
+python3 scripts/submit_lanes.py docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml \
+    --from-stage gpu --until-stage gpu --overwrite --dry-run
+```
+
 ## 9. Look at the results before the MRA
 
 Once the `gpu` job has finished, write the project's report. It reads the
@@ -531,7 +479,8 @@ beads, in the same project. The branch's lane is
   and `[reconstruct] thickness`, since AreTomo2 measures no sample depth. The
   file's comments say how each value was chosen.
 
-AreTomo2 runs on a GPU and is found through `$ARETOMO`, which step 1 set.
+AreTomo2 runs on a GPU and is found through `$ARETOMO`, which `session.sh` of
+step 1 sets.
 
 Submit once the main lane's jobs are done with 161: a series that one of your
 jobs works on is refused to another. The branch starts at its own alignment and
@@ -715,7 +664,8 @@ export's folder.
 
 | It says | What it means |
 |---|---|
-| `$MOTIONCOR3 is not set` (or another `$…`) | the shell lacks the tool variables: the `.bashrc` lines of step 1, then a new terminal |
+| `$MOTIONCOR3 is not set` (or another `$…`) | the shell lacks the tool variables: run the two lines of step 1 in it, and submit from there |
+| `session.sh: load the course module first` | `module load tomobear/2026` comes before `source ~/cryoet/session.sh` |
 | a stage refused by Slurm, with Slurm's reason | the stage's `sbatch` options do not fit what your account may use: compare them with step 6, and ask the organizers if the reservation has ended |
 | `… already exists but has no manifest for …; add them to it …` | the project was created without that series (step 5 was skipped): run the `cryoet init … --add-series` it prints, then the dry run again |
 | `… is a project already …` | `cryoet init` was run on an existing project; add series with `--add-series` |
@@ -723,6 +673,7 @@ export's folder.
 | `OVERWRITE is set in the environment` | `unset OVERWRITE`; give `--overwrite` to the one submission that needs it |
 | `the MRA reads the particles extracted under 'bin8', and cannot` | a series has no particles yet: wait for its `gpu` job, or check why it failed |
 | an existing MRA run with other settings | that name is taken: give the copy its own `[mra] name` |
-| CTFFIND 4 refused | `$CTFFIND5` is not set: the `.bashrc` lines of step 1 |
+| CTFFIND 4 refused | `$CTFFIND5` is not set: the two lines of step 1 |
 | `show_tilts.py`: tifffile needs the imagecodecs package | `python -m pip install imagecodecs` in the pipeline's environment |
-| `micromamba: command not found`, or `activate` does nothing | the two `micromamba` lines of step 1 are missing or come after a line that fails: check them in a new terminal |
+| `micromamba: command not found`, or `cryoet: command not found` | the two lines of step 1 were not run in this terminal, or one of them failed: run them and read what they print |
+| a stage of yours failed and cannot be fixed in time | go on from the course's results: step 8 |

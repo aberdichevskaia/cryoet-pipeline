@@ -1,18 +1,17 @@
 # RyR1 from frames to MRA classes on cryoem.se, with the assistant
 
-This tutorial takes you from an empty home folder to class averages on
-cryoem.se, the cluster of the Stockholm workshop, with the pipeline's terminal
-assistant. You clone the repository and install the assistant's client. From
-there the assistant works beside you: it checks what the cluster has, finds its
-programs and gives you the install commands one at a time; it reads the frames,
-draws the raw tilts into a PDF that shows the gold beads and the tilt axis,
-writes the lane file, checks it and submits it. You run what it hands you,
-answer its questions, read what it shows you, and say yes or no. The data are
-RyR1 in native membranes, five tilt-series of SerialEM TIFF frames with gold
-beads.
+This tutorial takes you from a course account on cryoem.se, the cluster of the
+Stockholm workshop, to class averages, with the pipeline's terminal assistant.
+Your account already has the pipeline installed; you install the assistant's
+client. From there the assistant works beside you: it checks the installation,
+reads the frames, draws the raw tilts into a PDF that shows the gold beads and
+the tilt axis, writes the lane file, checks it and submits it. You run what it
+hands you, answer its questions, read what it shows you, and say yes or no. The
+data are RyR1 in native membranes, five tilt-series of SerialEM TIFF frames
+with gold beads.
 
 ```text
-clone + client ─▶ the assistant checks the cluster, you install
+start a session + client ─▶ the assistant checks the installation
    ─▶ it reads the frames and draws the raw tilts: beads and axis   (a PDF)
    ─▶ you create the project
    ─▶ it writes the lane; dry run, your yes, submission 1
@@ -56,7 +55,7 @@ The submission scripts hold it to its yes themselves: a submission from the
 assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
-> **Status, 24 November 2026.** On cryoem.se the assistant ran in Claude Code
+> **Status, 25 November 2026.** On cryoem.se the assistant ran in Claude Code
 > under a course account from 19 to 24 November 2026: it took that account
 > through the installation on 22–23 November, with fixes to the pipeline in
 > between, and wrote a lane for these data. That lane ran on series 161 alone
@@ -64,9 +63,12 @@ minutes, with the reason you gave, and the project's journal records it.
 > cryo5000 rather than cs-cpu, and so did the branch of step 12. Not run there
 > yet: Codex, the CPU stages on cs-cpu, the `gpu` stage (membranes, template
 > matching, particles), the MRA on one A5000, and the tilt preview of step 6 on
-> these TIFF frames. At MDC the same lane ran through the MRA on four of the
-> series on 19–20 November, and through fine alignment on all five on 23
-> November. Tell Anna what happened.
+> these TIFF frames. The accounts' installation and the session file of step 1
+> were written on 25 November and had not run when this was. The course's
+> results of step 10, for going on after a failure, were still to be made, and
+> going on from a copy of them had not been tried. At MDC the same lane ran
+> through the MRA on four of the series on 19–20 November, and through fine
+> alignment on all five on 23 November. Tell Anna what happened.
 
 ## What you need
 
@@ -75,8 +77,8 @@ minutes, with the reason you gave, and the project's journal records it.
   assistant, run everything there. The heavy work runs in Slurm jobs, which the
   pipeline's scripts submit.
 - **Room in your home folder**, which has no quota on course accounts. The
-  environments and the downloads take about 27 GB (one course account, 24
-  November 2026). The outputs at bin8 add the motion-corrected sums and stacks
+  installation there takes about 27 GB (one course account, 24 November 2026).
+  The outputs at bin8 add the motion-corrected sums and stacks
   and the tomograms: 8.4 GB for 161 alone up to the tomogram, with both
   alignments of step 12, so plan for some 40 GB for the five series. The
   clients add about half a gigabyte (Claude Code) or a gigabyte (Codex), plus
@@ -105,35 +107,34 @@ minutes, with the reason you gave, and the project's journal records it.
 - **On your laptop**: `scp` or another SFTP client, to copy PDFs and folders
   from the cluster; and ChimeraX with ArtiaX, or IMOD's `3dmod`, to see the
   picks in 3D.
-- **One to two hours for the setup**, then waiting for the queue. While the jobs
-  run, the session can be closed.
+- **Time for the client's installation and sign-in**, then for the queue. While
+  the jobs run, the session can be closed.
 
-## 1. Clone, and connect the course's shared files (once)
+## 1. Your account, and how every session starts
 
-Everything this tutorial installs and writes goes into one folder in your home,
-`~/cryoet`: the environments, the downloads, and the clone with its outputs.
-Clone into it:
+Your account has the pipeline installed, in one folder of your home, `~/cryoet`:
+the environments, the downloads, and the clone, `~/cryoet/cryoet-pipeline`,
+which the outputs go into. The programs are installed once for the whole
+cluster, under `/opt/cryoem`. The course's module, `tomobear/2026`, names the
+two files the course shares: MemBrain-seg's model, which segments the
+membranes, and the assistant's reference library, the manuals of IMOD,
+pytom-match-pick and the other tools at the versions installed here.
 
-```bash
-mkdir -p ~/cryoet
-cd ~/cryoet
-git clone https://github.com/aberdichevskaia/cryoet-pipeline.git
-```
-
-The assistant never clones; everything else in the installation it takes you
-through.
-
-The course shares two files through a module, `tomobear/2026`: MemBrain-seg's
-model, which segments the membranes, and the assistant's reference library, the
-manuals of IMOD, pytom-match-pick and the other tools at the versions installed
-here. Add this line at the end of `~/.bashrc`, outside any check for the host
-name:
+None of it is in `~/.bashrc`: the same account serves another part of the
+workshop, which should see none of it. So **every new terminal** starts with
+two lines:
 
 ```bash
 module load tomobear/2026
+source ~/cryoet/session.sh
 ```
 
-Open a new terminal and check that it set both:
+`session.sh` is [`docs/tutorials/ryr1/stockholm-session.sh`](ryr1/stockholm-session.sh),
+copied there by the installation. It names the cluster's programs and the
+environments in `~/cryoet`, goes to the clone's root, activates the pipeline's
+environment, and says so: `pipeline session: …/cryoet/cryoet-pipeline,
+environment cryoet-pipeline`. It refuses to run before the module. Check that
+the module set its two files:
 
 ```bash
 echo "$MEMBRAIN_CKPT" "$CRYOET_LIBRARY"
@@ -142,6 +143,9 @@ echo "$MEMBRAIN_CKPT" "$CRYOET_LIBRARY"
 It should print `/mnt/cephfs/home/tomobear/models/MemBrain_seg_v10_alpha.ckpt`
 and `/mnt/cephfs/home/tomobear/cryoet-library`. The library has to be there
 before the assistant starts: the launcher hands it to the session at the start.
+The assistant runs the pipeline's scripts in the shell it was started from, and
+your jobs take that shell's variables: start it only from a terminal where both
+lines ran.
 
 ## 2. Install the client and sign in (once)
 
@@ -192,8 +196,9 @@ launcher names the other way, a browser login through an SSH tunnel;
 [assistant/README.md](../../assistant/README.md#signing-in-to-codex-on-a-cluster)
 says how. Treat `~/.cryoet-assistant/codex/auth.json` like a password.
 
-If Codex is the only client you will use, this line in `~/.bashrc` makes
-`scripts/assistant` start Codex without `--codex`:
+If Codex is the only client you will use, this line makes `scripts/assistant`
+start Codex without `--codex`. Type it after the two lines of step 1, in each
+new terminal, since `~/.bashrc` stays as it is:
 
 ```bash
 export CRYOET_ASSISTANT_BACKEND=codex
@@ -204,16 +209,14 @@ what gives it the pipeline's rules.
 
 ## 3. Start the assistant
 
-From the root of your clone, in a new terminal:
+In a terminal where the two lines of step 1 ran, which leaves you at the
+clone's root with the pipeline's environment active:
 
 ```bash
-cd ~/cryoet/cryoet-pipeline
 scripts/assistant
 ```
 
-For Codex, the last line is `scripts/assistant --codex`. There is no
-pipeline environment yet: until step 5, the assistant's checks run on the
-system's Python.
+For Codex, `scripts/assistant --codex`.
 
 The launcher prints the reference library it gives the session
 (`library snapshot …, read-only`). If it prints no such line, `CRYOET_LIBRARY`
@@ -231,9 +234,9 @@ is not set in this terminal: the module of step 1 is not loaded.
 Then:
 
 - `scripts/assistant -c` (or `scripts/assistant --codex -c`) continues your
-  last session: after a lost connection, the next day, or a new terminal with
-  new lines in `~/.bashrc`. The jobs do not depend on the session: they run
-  whether it is open or not.
+  last session: after a lost connection, or the next day, in a new terminal
+  after the two lines of step 1 (step 5). The jobs do not depend on the
+  session: they run whether it is open or not.
 - The model. In Claude Code the default is `claude-opus-5-5`, and
   `scripts/assistant --model claude-sonnet-5-5` starts a cheaper one. In Codex
   it is `gpt-6.1-sol`, reasoning at `high`; `scripts/assistant --codex --effort
@@ -242,51 +245,41 @@ Then:
   right one.
 - Write to it in English or in Russian; it answers in the language you use.
 
-## 4. Install with the assistant
+## 4. Have it check the installation
 
 Ask in your own words, with what it cannot know:
 
-> I am on cryoem.se for the Stockholm course. My clone is ~/cryoet/cryoet-pipeline,
-> and everything I install should go into ~/cryoet. I want to run the lane
-> docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml. The module tomobear/2026 is
-> loaded. Check what is there and take me through the installation, one
-> command at a time.
+> I am on cryoem.se for the Stockholm course. The pipeline is installed in
+> ~/cryoet, my clone is ~/cryoet/cryoet-pipeline, and this shell has the module
+> tomobear/2026 and ~/cryoet/session.sh loaded. I want to run the lane
+> docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml. Check the installation.
 
-What it does, following its `install` skill:
+It checks with `scripts/show_setup.py`, following its `install` skill. The
+check writes nothing. It shows the clone, the room where the environments,
+downloads and temporary files go, the pipeline's environment, every tool the
+lane needs with its version, and which of the cluster's GPUs each program can
+run on. Your home has no quota; if the check says it cannot read one, that is
+right. It should show no problems (`Problems (0): none`). Each problem and each
+note names an entry of the playbook, `docs/agent/playbook/`, which the
+assistant reads and explains.
 
-1. **Checks** with `scripts/show_setup.py`, which writes nothing: the clone,
-   the room where the environments, downloads and temporary files go, the
-   pipeline's environment, every tool the lane needs with its version, and
-   which of the cluster's GPUs each program can run on. Your home has no
-   quota; if the check says it cannot read one, that is right.
-2. **Finds the programs** the cluster has installed (`show_setup.py --find`):
-   IMOD, CTFFIND 5, MotionCor3 and AreTomo2 are installed once for everyone,
-   under `/opt/cryoem`, with modules. It proposes the lines that name them for
-   your `~/.bashrc`.
-3. **Gives you the install commands**, one at a time: micromamba's own lines,
-   and three environments, one for the pipeline, one for pytom-match-pick and
-   one for MemBrain-seg. You run each in your own terminal, not in the session,
-   and tell it how it ended; it checks again after each. Installs run for
-   minutes and download gigabytes; if pip stops on a broken download, run the
-   same command again, since what it has downloaded is cached.
-4. **Has you start again after a change to `~/.bashrc`.** The session's shell
-   is the one it started in, and a line added since is not in it. Open a new
-   terminal, `cd ~/cryoet/cryoet-pipeline`, and continue the session with
-   `scripts/assistant -c`.
-5. **Has the setup checked on a GPU node.** It gives you an `srun` line that
-   runs the same check for a few minutes on one of the course's cards, which
-   compares the driver with the CUDA of each program. Check that the line
-   carries `--partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1`: the
-   course's cards are reserved for `tomo`. You run it; it reads what it
-   printed.
+The installation ran the same check on your account in a short job on one of
+the course's A5000 cards, where it also compares the driver with the CUDA of
+each program. If the assistant proposes to run that part again, it gives you an
+`srun` line: check that it carries `--partition=cryo5000 --reservation=tomo
+--gres=gpu:a5000:1`, since the course's cards are reserved for `tomo`. You run
+it; it reads what it printed.
 
-It never installs anything itself and never edits `~/.bashrc`: an install
-writes gigabytes outside the clone, an environment it activated would be gone
-at its next command, and `~/.bashrc` is yours. If it ever offers to, say no.
+It never installs anything itself and never edits `~/.bashrc`. If it finds
+something missing, it gives you the command, and you run it in your own
+terminal; on these accounts nothing should be missing, so tell Anna too. If it
+proposes lines for `~/.bashrc`, say no: on this account the two lines of step 1
+do that job, and a tool it calls missing most often means they were not run in
+the terminal the assistant was started from.
 
-**What the setup should end with.** These are the values that work on cryoem.se,
-for checking what the assistant proposes. If it proposes something else, ask it
-why.
+**What your account has.** These are the installation's values on cryoem.se,
+for checking what the assistant reports, and for doing the same on another
+cluster.
 
 | What | On cryoem.se |
 |---|---|
@@ -301,32 +294,25 @@ why.
 | the `cryoet-pipeline` environment | Python 3.13, your clone installed with `pip install -e .`, and `imagecodecs`; its PyTorch a CUDA build |
 | the `pytom_tm` environment | Python 3.12, CuPy for CUDA 12 from conda-forge, pytom-match-pick 0.14.0; `PYTOMO_MP_DIR` is its `bin` folder |
 | the `membrain` environment | Python 3.9, MemBrain-seg 0.0.10; `MEMBRAIN_EXE` is its `bin/membrain` |
-| `MEMBRAIN_CKPT`, `CRYOET_LIBRARY` | from `module load tomobear/2026` (step 1) |
+| `MEMBRAIN_CKPT`, `CRYOET_LIBRARY` | from `module load tomobear/2026`; everything above, from `session.sh` |
 
 `imagecodecs` lets step 6 read the TIFF frames if they are compressed: tifffile
-decodes compressed TIFF only with it. If the assistant leaves it out, step 6
-says so, and the assistant gives you the command then.
+decodes compressed TIFF only with it. If it is missing, step 6 says so, and the
+assistant gives you the command then.
 
-The setup is done when the check, run in a new terminal and on the GPU node,
-shows no problems (`Problems (0): none`). Each problem and each note names an
-entry of the playbook, `docs/agent/playbook/`, which the assistant reads and
-explains.
+## 5. Every time you come back
 
-## 5. Start again, in the environment
-
-From now on, start the assistant from a terminal where the pipeline's
-environment is active: it runs the pipeline's scripts in this shell, and your
-jobs take this shell's tool variables.
+Start the same way: a new terminal, the two lines of step 1, and the assistant,
+continuing your last session with `-c`:
 
 ```bash
-cd ~/cryoet/cryoet-pipeline
-micromamba activate cryoet-pipeline
+module load tomobear/2026
+source ~/cryoet/session.sh
 scripts/assistant -c
 ```
 
-`-c` continues the installation's session; without it a new session starts.
-For Codex, `scripts/assistant --codex -c`. **Every time you come back**, start
-the same way.
+For Codex, the last line is `scripts/assistant --codex -c`. Without `-c` a new
+session starts.
 
 ## 6. Have it read the frames and look at the raw tilts
 
@@ -533,6 +519,26 @@ recipes known to be safe, usually a resubmission from the failed stage with
 `--overwrite`. It will not rerun a failure that reproduces without changing
 something first.
 
+**If the cause cannot be fixed in the course's time**, go on from the course's
+results. The same lane has run through every stage in the course folder, in
+`/mnt/cephfs/home/tomobear/cryoet-pipeline/outputs/ryr1-tutorial`. Copied into
+your clone at the same place, it is a project like your own: its records name
+its files from the clone's root, and it reads the frames from the course folder
+as yours does. Make the copy yourself, in your own terminal: set your project
+aside, so that nothing of it is lost, and copy the course's in its place (some
+40 GB, a few minutes):
+
+```bash
+mv outputs/ryr1-tutorial outputs/ryr1-tutorial.mine
+cp -r /mnt/cephfs/home/tomobear/cryoet-pipeline/outputs/ryr1-tutorial outputs/
+```
+
+It holds the results of every stage, the MRA's too, so you can read them right
+away, from step 11 on. To run the rest yourself, tell the assistant which stage
+failed and that the project is now the course's copy: it submits from the stage
+after, with its dry run and your yes, and with `--overwrite`, since that stage's
+results and those after it are replaced by yours.
+
 ## 11. Look at the picks
 
 When the `gpu` job has finished, ask it for the project's report:
@@ -602,7 +608,8 @@ beads, in the same project. The branch shares the main lane's motion
 correction and coarse alignment of 161; it has its own fine alignment and CTF
 fit, labelled with `[lane] alignment_variant`, and its own aligned stack,
 tomogram and picks, under its own `[lane] variant`. Nothing of the main lane's
-is replaced. AreTomo2 is found through `$ARETOMO`, which the installation set.
+is replaced. AreTomo2 is found through `$ARETOMO`, which `session.sh` of step 1
+sets.
 Ask:
 
 > Align 161 a second way, with AreTomo2, beside the bead alignment, in the same
@@ -767,9 +774,11 @@ export's folder; the assistant can read it for you.
 
   | It says | What it means |
   |---|---|
-  | `$MOTIONCOR3 is not set` (or another `$…`) | the session's shell lacks the tool variables: the `.bashrc` lines of step 4, a new terminal, and `scripts/assistant -c` |
+  | `$MOTIONCOR3 is not set` (or another `$…`) | the session's shell lacks the tool variables: leave the session, run the two lines of step 1, and `scripts/assistant -c` |
+  | `session.sh: load the course module first` | `module load tomobear/2026` comes before `source ~/cryoet/session.sh` |
   | a stage refused by Slurm, with Slurm's reason | the stage's `sbatch` options do not fit what your account may use: compare them with step 8, and ask the organizers if the reservation has ended |
   | `… already exists but has no manifest for …` | the project lacks that series: run the `cryoet init … --add-series` it prints, yourself |
   | a series is busy, naming a job | one of your jobs works on that series; wait until it has ended |
   | `the MRA reads the particles extracted under 'bin8', and cannot` | a series has no particles yet: wait for its `gpu` job, or ask why it failed |
-  | CTFFIND 4 refused | `$CTFFIND5` is not set: the `.bashrc` lines of step 4 |
+  | CTFFIND 4 refused | `$CTFFIND5` is not set: the two lines of step 1, as above |
+  | a stage of yours failed and cannot be fixed in time | go on from the course's results: step 10 |
