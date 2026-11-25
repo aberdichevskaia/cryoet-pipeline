@@ -129,6 +129,12 @@ srun --partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1 \
     --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
 ```
 
+On the card it also compiles one of pytom-match-pick's kernels, with CuPy's
+CUB and without. A note that the kernel fails with CUB and that this shell
+turns CUB off is expected on this cluster: `session.sh` turns it off (playbook
+entry I-9). In a terminal without the two lines of step 1, the same finding is
+a problem, and picking would fail.
+
 What the installation made, for doing the same on another cluster: three
 environments, each with micromamba from conda-forge. `cryoet-pipeline` holds
 Python 3.13, the clone installed with `pip install -e .`, and `imagecodecs`,

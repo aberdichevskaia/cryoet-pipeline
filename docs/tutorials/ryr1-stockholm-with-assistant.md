@@ -272,7 +272,10 @@ the course's A5000 cards, where it also compares the driver with the CUDA of
 each program. If the assistant proposes to run that part again, it gives you an
 `srun` line: check that it carries `--partition=cryo5000 --reservation=tomo
 --gres=gpu:a5000:1`, since the course's cards are reserved for `tomo`. You run
-it; it reads what it printed.
+it; it reads what it printed. On the card the check also compiles one of
+pytom-match-pick's kernels, with CuPy's CUB and without: a note that the kernel
+fails with CUB and that the shell turns CUB off is expected on this cluster,
+where `session.sh` turns it off (playbook entry I-9).
 
 It never installs anything itself and never edits `~/.bashrc`. If it finds
 something missing, it gives you the command, and you run it in your own
