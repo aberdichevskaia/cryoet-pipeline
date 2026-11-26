@@ -28,8 +28,8 @@ eval "$(micromamba shell hook --shell bash)"
 
 # The cluster's programs, as a course account ran them on 24 November 2026:
 # IMOD 5.2.1, CTFFIND 5.0.2 (the cluster's CTFFIND 4 is refused), MotionCor3
-# 1.1.1 and AreTomo2 (its folder says 1.1.2, it reports 1.1.3), the last two
-# with CUDA 12's libraries. A value the module already set is kept.
+# (its folder says 1.1.1, it reports 1.1.2) and AreTomo2 (its folder says
+# 1.1.2, it reports 1.1.3), the last two with CUDA 12's libraries. A value the module already set is kept.
 export IMOD_DIR=${IMOD_DIR:-/opt/cryoem/imod/5.2.1}
 export CTFFIND5=${CTFFIND5:-/opt/cryoem/ctffind/5.0.2/bin/ctffind}
 export MOTIONCOR3=${MOTIONCOR3:-/opt/cryoem/motioncor3/1.1.1/bin/MotionCor3}
