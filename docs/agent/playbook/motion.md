@@ -249,7 +249,8 @@ at MDC prints "Gain reference has been loaded" when it works.
 
 **What to try:** put the library's directory on `LD_LIBRARY_PATH` in the shell
 you submit from, then resubmit (recipe A). Find it with `ldd "$MOTIONCOR3"` on
-a GPU node.
+a GPU node. On a login node `libcuda.so.1` is always missing, since NVIDIA's
+driver brings it: that is I-11, not this entry.
 
 **When to stop and ask someone:** when the library exists nowhere on the
 cluster. Then MotionCor3 needs another build.

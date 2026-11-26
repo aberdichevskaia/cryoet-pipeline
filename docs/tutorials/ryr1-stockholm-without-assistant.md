@@ -106,21 +106,8 @@ their own: submit from a terminal where both lines ran.
 `show_setup.py` writes nothing. It shows the room where the environments,
 downloads and temporary files go, the pipeline's environment and how its
 PyTorch was built, every tool the lane needs with its version, and which of the
-cluster's GPUs each program can run on:
-
-```bash
-python3 scripts/show_setup.py --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
-```
-
-Give it a few minutes: it asks every tool for its version. Read its problems
-first: there should be none (`Problems (0): none`). Each problem and each note
-names an entry of the playbook, `docs/agent/playbook/`, which says what to do.
-A tool shown as missing means its variable is not set in this shell: run the
-two lines of step 1 in it.
-
-The installation ran the same check on your account in a short job on one of
-the course's A5000 cards, where it also compares the driver with the CUDA of
-each program. To run that part again:
+cluster's GPUs each program can run on. Run it in a short job on one of the
+course's A5000 cards, from the terminal of step 1:
 
 ```bash
 srun --partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1 \
@@ -129,11 +116,34 @@ srun --partition=cryo5000 --reservation=tomo --gres=gpu:a5000:1 \
     --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
 ```
 
-On the card it also compiles one of pytom-match-pick's kernels, with CuPy's
-CUB and without. A note that the kernel fails with CUB and that this shell
-turns CUB off is expected on this cluster: `session.sh` turns it off (playbook
-entry I-9). In a terminal without the two lines of step 1, the same finding is
-a problem, and picking would fail.
+The job takes its variables from this terminal, as the lane's jobs will, so it
+sees what they will see. On the card it also checks what a login node cannot:
+the driver against the CUDA of each program, that MotionCor3 and AreTomo2 load
+the driver's library, `libcuda.so.1`, and one of pytom-match-pick's kernels,
+which it compiles with CuPy's CUB and without. The installation ran the same
+check on your account once; this run checks your terminal.
+
+Give it a few minutes: it asks every tool for its version. Read its problems
+first: there should be none (`Problems (0): none`). Each problem and each note
+names an entry of the playbook, `docs/agent/playbook/`, which says what to do.
+A tool shown as missing means its variable is not set in this shell: run the
+two lines of step 1 in it. A note that the kernel fails with CUB and that this
+shell turns CUB off is expected on this cluster: `session.sh` turns it off
+(playbook entry I-9). In a terminal without the two lines of step 1, the same
+finding is a problem, and picking would fail.
+
+If no card is free, `srun` says the job is queued and waiting for resources.
+You can stop it with Ctrl-C and run the check on the login node instead, at
+once:
+
+```bash
+python3 scripts/show_setup.py --config docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml
+```
+
+The login node has no GPU and no NVIDIA driver, so this run checks everything
+but the card: its notes that no GPU is here and that the driver fits only show
+on a GPU node are expected (I-11), and so is `libcuda.so.1 not here` under
+MotionCor3 and AreTomo2. Run the job on a card once one is free.
 
 What the installation made, for doing the same on another cluster: three
 environments, each with micromamba from conda-forge. `cryoet-pipeline` holds

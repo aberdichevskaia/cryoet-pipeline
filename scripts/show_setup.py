@@ -201,6 +201,13 @@ DRIVER_FOR_CUDA = {"13": "580", "12": "525", "11": "450"}
 SYS_PCI = Path("/sys/bus/pci/devices")
 PCI_IDS = (Path("/usr/share/hwdata/pci.ids"), Path("/usr/share/misc/pci.ids"),
            Path("/usr/share/pci.ids"))
+# The kernel makes this folder when it loads NVIDIA's driver. libcuda.so.1 comes
+# with the driver, not with the CUDA toolkit, so where the folder is absent (a
+# login node, on cryoem.se's login2 on 26 November 2026) no program finds it,
+# and a GPU node's check is the one that says whether MotionCor3 and AreTomo2 load
+# it.
+NVIDIA_DRIVER = Path("/proc/driver/nvidia")
+DRIVER_LIBRARIES = ("libcuda.so.1", "libcuda.so")
 
 # The variable each tool is named by in a shell, for the lines of a setup file.
 VARIABLES = {"imod": "IMOD_DIR", "ctffind": "CTFFIND5", "motioncor3": "MOTIONCOR3",
@@ -1079,6 +1086,13 @@ def gpu_binary(path: Path, holder: str, tool: ToolReport, report: Report, entry:
         result = run([ldd, str(path)])
         missing = sorted({line.split()[0] for line in result.output.splitlines()
                           if "not found" in line})
+        if not NVIDIA_DRIVER.exists():
+            driver_only = [name for name in missing if name in DRIVER_LIBRARIES]
+            missing = [name for name in missing if name not in DRIVER_LIBRARIES]
+            if driver_only:
+                tool.lines.append(f"{' '.join(driver_only)} not here: NVIDIA's driver brings it, "
+                                  "and this node has not loaded the driver; run this check on a "
+                                  "GPU node to see it load")
         if missing:
             tool.lines.append("libraries not found: " + " ".join(missing))
             tool.usable = False

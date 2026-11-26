@@ -169,6 +169,10 @@ def site(tmp_path, monkeypatch):
     # here it would ask GitHub every time.
     monkeypatch.setattr(show_setup, "clone_state", lambda report, root=None: None)
     monkeypatch.setattr(show_setup, "SYS_PCI", tmp_path / "no-pci")
+    # A GPU node: its kernel has loaded NVIDIA's driver.
+    driver = tmp_path / "proc-driver-nvidia"
+    driver.mkdir()
+    monkeypatch.setattr(show_setup, "NVIDIA_DRIVER", driver)
     monkeypatch.setattr(show_setup, "SEARCH_ROOTS", ())
     monkeypatch.setattr(show_setup, "module_names", lambda: [])
     return {"tmp": tmp_path, "bin": bin_, "env_bin": env_bin, "temp": temp, "pytom": pytom_bin,
@@ -646,6 +650,57 @@ def _no_gpu_here(site):
     torch.pop("devices")
     _python(site["env_bin"], {"env": _env_answer(torch=torch)})
     (site["bin"] / "nvidia-smi").unlink()
+    show_setup.NVIDIA_DRIVER.rmdir()
+
+
+def _ldd(site, *missing):
+    """ldd's answer: CUDA 12's runtime found, and each of `missing` not found."""
+    lines = "\\tlibcudart.so.12 => /usr/local/cuda/lib64/libcudart.so.12\\n" + "".join(
+        f"\\t{name} => not found\\n" for name in missing)
+    _program(site["bin"] / "ldd", f'printf "{lines}"\n')
+
+
+def test_on_a_login_node_libcuda_is_the_drivers_and_not_missing(site):
+    # cryoem.se's login2 on 26 November 2026: no driver, so ldd found no
+    # libcuda.so.1 for MotionCor3 or AreTomo2, and the check called both
+    # unloadable and motion correction impossible, while the course's lane had
+    # corrected the motion of all five series on the GPU nodes the day before.
+    _healthy(site)
+    _no_gpu_here(site)
+    _ldd(site, "libcuda.so.1")
+    report = _check()
+    assert _entries(report) == set(), _findings(report, True)
+    motioncor3 = {tool.name: tool for tool in report.tools}["MotionCor3"]
+    assert motioncor3.usable
+    assert any(line.startswith("libcuda.so.1 not here: NVIDIA's driver brings it")
+               for line in motioncor3.lines), motioncor3.lines
+    assert not any(line.startswith("libraries not found") for line in motioncor3.lines)
+    assert _steps(report)["motion correction"] == ("yes", "on the GPU nodes: a40")
+
+
+def test_on_a_login_node_another_missing_library_is_still_a_problem(site):
+    _healthy(site)
+    _no_gpu_here(site)
+    _ldd(site, "libcuda.so.1", "libtiff.so.6")
+    report = _check()
+    (problem,) = [text for entry, text in _findings(report, True) if entry == "M-5"]
+    assert "libtiff.so.6" in problem and "libcuda" not in problem
+    motioncor3 = {tool.name: tool for tool in report.tools}["MotionCor3"]
+    assert not motioncor3.usable
+    assert "libraries not found: libtiff.so.6" in motioncor3.lines
+
+
+def test_on_a_gpu_node_a_missing_libcuda_is_a_problem(site):
+    # Where the driver is loaded, a program that cannot find its library cannot
+    # use the GPU: the driver's libraries are off the loader's path.
+    _healthy(site)
+    _ldd(site, "libcuda.so.1")
+    report = _check()
+    (problem,) = [text for entry, text in _findings(report, True) if entry == "M-5"]
+    assert "libcuda.so.1" in problem
+    motioncor3 = {tool.name: tool for tool in report.tools}["MotionCor3"]
+    assert not motioncor3.usable
+    assert not any("not here" in line for line in motioncor3.lines)
 
 
 def test_on_a_cluster_each_gpu_step_runs_on_the_types_its_code_fits(site):
