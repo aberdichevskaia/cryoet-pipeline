@@ -705,9 +705,13 @@ refinement, a class that looks like RyR1 can go to RELION 5:
 
 > Export class 2 of bin8-ssn to RELION.
 
-> **Status, 24 November 2026.** The export is new. A RyR1 class was exported
-> at MDC on 10 November 2026; RELION's Extract and Refine3D have not run on its
-> exports yet, at MDC or on cryoem.se. Tell Anna what happens.
+> **Status, 26 November 2026.** The export is new. On cryoem.se on 26 November
+> 2026, with the module `relion/5.1`, RELION's Extract ran on a class of this
+> lane and Refine3D stopped at its first iteration ("subtomo multiplicity
+> correction only applies to ctf_premultiplied data"): RELION 5.1.1 refuses its
+> own 3D pseudo-subtomograms. The export now has Extract write 2D stacks, which
+> has not run yet. An export whose `relion_commands.sh` lacks `--stack2d` has
+> to be written again. Tell Anna what happens.
 
 Its `relion-export` skill runs `scripts/export_relion.py` as a dry run and
 shows you what it printed:
@@ -738,11 +742,11 @@ It then gives you the `sbatch` line the export printed. RELION is yours to run:
 the assistant never runs RELION, `relion_commands.sh` or `mpirun`, and cannot
 call `sbatch`. `relion_commands.sh` takes RELION from your `PATH`, from the
 modules `RELION5_MODULE` names, and from an installation `RELION5_HOME` names.
-Which module gives RELION 5 on cryoem.se is the organizers' to say. In your own
-terminal (not with `!`), set it for the job, which takes it from your shell:
+On cryoem.se the module is `relion/5.1`. In your own terminal (not with `!`),
+set it for the job, which takes it from your shell:
 
 ```bash
-export RELION5_MODULE=<the RELION 5 module>
+export RELION5_MODULE=relion/5.1
 ```
 
 Then run that line, with the course's GPU options in place of
