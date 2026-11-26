@@ -8,7 +8,9 @@ Run it on the cluster, in a slogin job or a small job of its own, and open the
 link it prints from a laptop through the SSH tunnel it also prints. The page
 shows each series' tomogram as slabs on a slider, through z and through y, with
 the picks drawn on them, a score histogram with a threshold, and each pick's
-views turned into the template's frame.
+views turned into the template's frame. For the classification runs in
+<project>/mra (or --mra): every iteration's classes, their sizes, each map's z
+sections and central views, the maps in Mol*, and the FSC between half runs.
 
 Run it from the clone's root, like every command: the registry names files from
 there. Read-only: it reads the registry, never locks it, and writes only its cache of
@@ -29,6 +31,7 @@ import sys
 from pathlib import Path
 
 from cryoet_pipeline.dashboard.data import ResultsProject
+from cryoet_pipeline.dashboard.mra import ClassificationRuns
 from cryoet_pipeline.dashboard.server import ResultsServer, tunnel_lines
 
 ASSETS = Path(__file__).resolve().parents[1] / "vendor"
@@ -46,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="address to listen on; the default lets only this node in")
     parser.add_argument("--cache-dir", type=Path, default=None,
                         help="where pictures are kept; default <project>/results_cache")
+    parser.add_argument("--mra", type=Path, default=None,
+                        help="the folder of classification runs and FSC curves; default "
+                        "<project>/mra, where a lane's MRA writes them")
     parser.add_argument("--assets", type=Path, default=ASSETS,
                         help="the libraries scripts/fetch_viewer_assets.py fetched; "
                         f"default {ASSETS}")
@@ -56,7 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     cache = args.cache_dir or args.project / "results_cache"
     project = ResultsProject(args.project, cache_dir=cache, variant=args.variant)
     token = secrets.token_urlsafe(24)
-    server = ResultsServer((args.host, args.port), project, token, assets=args.assets)
+    classification = ClassificationRuns(args.mra or args.project / "mra", cache_dir=cache)
+    server = ResultsServer((args.host, args.port), project, token, assets=args.assets,
+                           classification=classification)
     node = socket.gethostname()
     login = os.environ.get("SLURM_SUBMIT_HOST")
     print(f"serving {args.project.resolve()} on {node}, port {server.port}")

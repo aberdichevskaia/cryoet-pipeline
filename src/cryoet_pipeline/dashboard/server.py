@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import sys
 import traceback
 from http import HTTPStatus
@@ -27,10 +28,12 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from cryoet_pipeline.dashboard.data import ResultsProject
+from cryoet_pipeline.dashboard.mra import ClassificationRuns
 
 STATIC = Path(__file__).with_name("static")
 STATIC_FILES = {
     "app.js": "text/javascript; charset=utf-8",
+    "mra.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
 }
 VIEWER_FILES = {
@@ -44,11 +47,13 @@ class ResultsServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], project: ResultsProject, token: str,
-                 assets: Path | None = None) -> None:
+                 assets: Path | None = None,
+                 classification: ClassificationRuns | None = None) -> None:
         super().__init__(address, ResultsHandler)
         self.project = project
         self.token = token
         self.assets = assets
+        self.classification = classification
 
     @property
     def viewer_available(self) -> bool:
@@ -131,10 +136,17 @@ class ResultsHandler(BaseHTTPRequestHandler):
             self._bytes(HTTPStatus.OK, (self.server.assets / name).read_bytes(),
                         VIEWER_FILES[name], cache="private, max-age=31536000, immutable")
         elif parts == ["api", "project"]:
-            self._json(HTTPStatus.OK,
-                       {**project.overview(), "viewer3d": self.server.viewer_available})
+            classification = self.server.classification
+            self._json(HTTPStatus.OK, {
+                **project.overview(),
+                "viewer3d": self.server.viewer_available,
+                "classification": classification.listing() if classification else None,
+            })
         elif parts[0] == "api" and len(parts) == 3 and parts[1] == "series":
             self._json(HTTPStatus.OK, project.series(parts[2]))
+        elif (parts[0] == "api" and len(parts) == 3 and parts[1] in {"mra", "fsc"}) \
+                or parts[0] in {"mra", "fsc"}:
+            self._classification(parts)
         elif parts[0] == "map" and len(parts) == 4:
             map_path = project.map_file(parts[1], parts[2], parts[3])
             self._bytes(HTTPStatus.OK, map_path.read_bytes(), "application/octet-stream",
@@ -147,11 +159,32 @@ class ResultsHandler(BaseHTTPRequestHandler):
         else:
             raise KeyError(f"nothing at {path}")
 
+    def _classification(self, parts: list[str]) -> None:
+        """/api/mra/<run>, /mra/<run>/<key>/<file>, /api/fsc/<name>, /fsc/<name>/<key>/<file>."""
+
+        runs = self.server.classification
+        if runs is None:
+            raise KeyError("this server was started without a folder of classification runs")
+        if parts[0] == "api" and len(parts) == 3:
+            document = runs.run(parts[2]) if parts[1] == "mra" else runs.fsc(parts[2])
+            self._json(HTTPStatus.OK, document)
+        elif parts[0] == "mra" and len(parts) == 4:
+            body = runs.run_file(parts[1], parts[2], parts[3])
+            kind = "image/png" if parts[3].endswith(".png") else "application/octet-stream"
+            self._bytes(HTTPStatus.OK, body, kind, cache="private, max-age=31536000, immutable")
+        elif parts[0] == "fsc" and len(parts) == 4:
+            self._bytes(HTTPStatus.OK, runs.fsc_file(parts[1], parts[2], parts[3]),
+                        "application/octet-stream", cache="no-store")
+        else:
+            raise KeyError(f"nothing at /{'/'.join(parts)}")
+
     def _file(self, path: Path, content_type: str) -> None:
         self._bytes(HTTPStatus.OK, path.read_bytes(), content_type, cache="no-store")
 
     def _json(self, status: HTTPStatus, document: Any) -> None:
-        self._bytes(status, json.dumps(document).encode(), "application/json", cache="no-store")
+        # A browser's JSON has no NaN or Infinity: any that slipped through become null.
+        body = json.dumps(_finite_only(document), allow_nan=False).encode()
+        self._bytes(status, body, "application/json", cache="no-store")
 
     def _text(self, status: HTTPStatus, text: str) -> None:
         self._bytes(status, text.encode(), "text/plain; charset=utf-8", cache="no-store")
@@ -164,6 +197,16 @@ class ResultsHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+
+
+def _finite_only(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _finite_only(one) for key, one in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_only(one) for one in value]
+    return value
 
 
 def tunnel_lines(host: str, port: int, node: str, login: str | None) -> list[str]:

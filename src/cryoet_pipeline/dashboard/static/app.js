@@ -75,31 +75,62 @@ async function start() {
   $("project").textContent = overview.project + (overview.variant ? ` · ${overview.variant}` : "");
   document.title = `${overview.project} · results`;
   const select = $("series");
-  for (const series of overview.series) {
-    const option = document.createElement("option");
-    option.value = series.id;
-    option.textContent = series.id + (
-      series.picks ? ""
-        : series.tomogram ? " · tomogram only"
-          : series.problems.length ? " · could not be read" : " · no tomogram");
-    select.append(option);
+  const group = (label, entries) => {
+    if (!entries.length) return;
+    const element = document.createElement("optgroup");
+    element.label = label;
+    for (const [value, text] of entries) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = text;
+      element.append(option);
+    }
+    select.append(element);
+  };
+  group("Tilt-series", overview.series.map((series) => [`series/${series.id}`, series.id + (
+    series.picks ? ""
+      : series.tomogram ? " · tomogram only"
+        : series.problems.length ? " · could not be read" : " · no tomogram")]));
+  const classification = overview.classification;
+  if (classification) {
+    group("Classification", classification.runs.map((run) => [`mra/${run.name}`, run.name + (
+      run.problem ? " · could not be read"
+        : ` · ${run.finished} of ${run.planned ?? "?"} iterations`)]));
+    group("Resolution", classification.fsc.map((one) => [`fsc/${one.name}`, `${one.name} · FSC`]));
   }
-  select.addEventListener("change", () => loadSeries(select.value));
+  select.addEventListener("change", () => route(select.value));
+  const values = [...select.options].map((option) => option.value);
   const wanted = decodeURIComponent(location.hash.slice(1));
-  const first = overview.series.find((s) => s.id === wanted)
-    || overview.series.find((s) => s.picks)
-    || overview.series.find((s) => s.tomogram)
-    || overview.series[0];
+  const preferred = overview.series.find((s) => s.picks) || overview.series.find((s) => s.tomogram);
+  const first = values.includes(wanted) ? wanted
+    : values.includes(`series/${wanted}`) ? `series/${wanted}`
+      : preferred ? `series/${preferred.id}` : values[0];
   if (!first) {
-    setStatus("This project has no series yet.");
+    setStatus("This project has no series and no classification yet.");
     return;
   }
-  select.value = first.id;
-  loadSeries(first.id);
+  select.value = first;
+  route(first);
+}
+
+// The views: a tilt-series, a classification run (mra.js), an FSC (mra.js).
+function route(value) {
+  history.replaceState(null, "", `#${encodeURI(value)}`);
+  const cut = value.indexOf("/");
+  const kind = value.slice(0, cut);
+  const name = value.slice(cut + 1);
+  showView(kind);
+  if (kind === "series") loadSeries(name);
+  else if (kind === "mra") loadRun(name);
+  else if (kind === "fsc") loadFsc(name);
+}
+
+function showView(kind) {
+  for (const one of ["series", "mra", "fsc"]) $(`${one}-view`).hidden = one !== kind;
+  parkViewer3d();
 }
 
 async function loadSeries(id) {
-  history.replaceState(null, "", `#${encodeURIComponent(id)}`);
   setStatus(`Reading ${id}. The first look at a series cuts its slabs, which takes a few seconds.`);
   $("viewers").hidden = true;
   $("side").hidden = true;
@@ -110,7 +141,7 @@ async function loadSeries(id) {
     setStatus(`${id}: ${error.message}`, true);
     return;
   }
-  if ($("series").value !== id) return; // another series was chosen meanwhile
+  if ($("series").value !== `series/${id}`) return; // something else was chosen meanwhile
   state.doc = doc;
   state.selected = null;
   state.base = `/img/${encodeURIComponent(id)}/${doc.key}/`;
@@ -178,18 +209,62 @@ function loadMolstar() {
   return molstarLoading;
 }
 
+// One Mol* viewer for the whole page, moved into the slot of the view that shows maps.
+const MOLSTAR_OPTIONS = {
+  layoutIsExpanded: false,
+  layoutShowControls: true,
+  collapseRightPanel: true,
+  layoutShowRemoteState: false,
+  layoutShowSequence: false,
+  layoutShowLog: false,
+  layoutShowLeftPanel: false,
+  viewportShowExpand: true,
+  viewportShowSelectionMode: false,
+  viewportShowAnimation: false,
+  viewportShowTrajectoryControls: false,
+};
+
+function parkViewer3d() {
+  const host = $("viewer3d");
+  host.hidden = true;
+  document.body.append(host);
+  if (state.viewer) state.viewer.plugin.clear();
+}
+
+// volumes: [{ url, type: "relative" | "absolute", value, color, alpha }], drawn as isosurfaces.
+async function showVolumes(slotId, volumes) {
+  if (!state.overview.viewer3d) {
+    throw new Error("Mol* is not installed next to this server: run scripts/fetch_viewer_assets.py.");
+  }
+  await loadMolstar();
+  const host = $("viewer3d");
+  $(slotId).append(host);
+  host.hidden = false;
+  if (!state.viewer) {
+    state.viewer = await molstar.Viewer.create("viewer3d", MOLSTAR_OPTIONS);
+  } else {
+    await state.viewer.plugin.clear();
+    state.viewer.handleResize();
+  }
+  for (const volume of volumes) {
+    await state.viewer.loadVolumeFromUrl(
+      { url: volume.url, format: "ccp4", isBinary: true },
+      [{ type: volume.type, value: volume.value, color: volume.color, alpha: volume.alpha ?? 1 }],
+    );
+  }
+}
+
 function resetViewer3d() {
   const template = state.doc && state.doc.template;
   const section = $("viewer3d-section");
   section.hidden = !template || !template.maps.includes("template.mrc");
   if (section.hidden) return;
-  $("viewer3d").hidden = true;
+  parkViewer3d();
   $("show-3d").hidden = false;
   $("show-3d").disabled = !state.overview.viewer3d;
   $("viewer3d-note").textContent = state.overview.viewer3d
     ? "Mol* is loaded the first time it is asked for (5 MB)."
     : "Mol* is not installed next to this server: run scripts/fetch_viewer_assets.py.";
-  if (state.viewer) state.viewer.plugin.clear();
 }
 
 async function show3d() {
@@ -199,37 +274,14 @@ async function show3d() {
   $("show-3d").disabled = true;
   note.textContent = "Loading Mol*…";
   try {
-    await loadMolstar();
-    $("viewer3d").hidden = false;
-    if (!state.viewer) {
-      state.viewer = await molstar.Viewer.create("viewer3d", {
-        layoutIsExpanded: false,
-        layoutShowControls: true,
-        collapseRightPanel: true,
-        layoutShowRemoteState: false,
-        layoutShowSequence: false,
-        layoutShowLog: false,
-        layoutShowLeftPanel: false,
-        viewportShowExpand: true,
-        viewportShowSelectionMode: false,
-        viewportShowAnimation: false,
-        viewportShowTrajectoryControls: false,
-      });
-    } else {
-      await state.viewer.plugin.clear();
-    }
     const base = `/map/${encodeURIComponent(doc.series)}/${doc.key}/`;
     const level = 1.0 * template.protein_sign;
-    await state.viewer.loadVolumeFromUrl(
-      { url: `${base}template.mrc`, format: "ccp4", isBinary: true },
-      [{ type: "relative", value: level, color: 0xfacc15, alpha: 1 }],
-    );
+    const volumes = [{ url: `${base}template.mrc`, type: "relative", value: level, color: 0xfacc15 }];
     if (template.maps.includes("mask.mrc")) {
-      await state.viewer.loadVolumeFromUrl(
-        { url: `${base}mask.mrc`, format: "ccp4", isBinary: true },
-        [{ type: "absolute", value: 0.5, color: 0x9aa1aa, alpha: 0.25 }],
-      );
+      volumes.push({ url: `${base}mask.mrc`, type: "absolute", value: 0.5, color: 0x9aa1aa,
+        alpha: 0.25 });
     }
+    await showVolumes("template-3d-slot", volumes);
     $("show-3d").hidden = true;
     note.textContent =
       `The template as it was matched, its surface at ${level > 0 ? "+" : "−"}1σ on the ` +
@@ -567,7 +619,7 @@ $("reset-display").addEventListener("click", () => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!state.doc || !state.doc.tomogram) return;
+  if ($("series-view").hidden || !state.doc || !state.doc.tomogram) return;
   const target = event.target;
   if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement) return;
   const stack = state.doc.tomogram.stacks.xy;

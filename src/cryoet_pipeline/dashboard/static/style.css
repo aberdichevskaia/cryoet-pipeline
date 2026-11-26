@@ -27,6 +27,9 @@
 
 * { box-sizing: border-box; }
 
+/* An element's own display (main is a grid) must not undo the hidden attribute. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -117,7 +120,49 @@ code { font-family: var(--mono); font-size: 12px; }
 .tile img { width: 100%; display: block; background: var(--stage); image-rendering: auto; }
 .tile figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
 
-#problems { margin: 0; padding-left: 18px; color: var(--error); }
+.problems { margin: 0; padding-left: 18px; color: var(--error); }
+
+.chart-figure { margin: 0 0 12px; }
+.chart-figure figcaption { margin-bottom: 6px; }
+.chart-figure .title, .control .title { font-weight: 600; color: var(--ink); }
+#mra-sizes { width: 100%; height: 180px; display: block; }
+#fsc-chart { width: 100%; height: 320px; display: block; }
+
+.control { margin: 10px 0; }
+.control label { display: block; }
+.control input[type="range"] { width: 100%; margin: 6px 0 0; }
+
+.class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.class-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--channel, var(--muted));
+  border-radius: 8px;
+  padding: 10px;
+}
+.class-card h3 { font-size: 14px; margin: 0 0 2px; color: var(--channel, var(--ink)); }
+.class-card p { margin: 0 0 8px; }
+.class-card canvas { width: 100%; display: block; background: var(--stage); }
+.class-card img { width: 100%; display: block; margin-top: 6px; image-rendering: pixelated;
+                  background: var(--stage); }
+.class-card .views-label { display: flex; justify-content: space-around; font-size: 11px;
+                           color: var(--muted); }
+.class-card button { margin-top: 8px; width: 100%; }
+
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+details summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+.parameters { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; }
+.parameters th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 0 2px; }
+.parameters td { padding: 2px 8px 2px 0; vertical-align: top; }
+.parameters td:first-child { color: var(--muted); white-space: nowrap; }
 
 .viewer3d { margin-top: 16px; }
 .molstar { position: relative; width: 100%; height: 480px; margin-top: 8px; }

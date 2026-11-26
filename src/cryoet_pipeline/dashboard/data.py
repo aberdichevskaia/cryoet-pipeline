@@ -94,6 +94,25 @@ def template_files(artifacts: SeriesArtifacts) -> dict[str, Path]:
     return found
 
 
+def sign_inside(volume: np.ndarray, mask: np.ndarray | None) -> int | None:
+    """+1 or -1: the sign of a map's mean inside its mask less its mean outside.
+
+    The particle is denser than what surrounds it, whichever way the map is
+    inverted, so this is the side its protein is on. None without a mask of the
+    map's shape, or when the two means are equal.
+    """
+
+    if mask is None or mask.shape != volume.shape:
+        return None
+    inside = mask > 0.5
+    if not inside.any() or inside.all():
+        return None
+    difference = float(np.nanmean(volume[inside]) - np.nanmean(volume[~inside]))
+    if not np.isfinite(difference) or difference == 0.0:
+        return None
+    return 1 if difference > 0 else -1
+
+
 def protein_sign(template: TemplateInfo) -> tuple[int, str]:
     """Which sign the template's protein has, +1 or -1, and how that is known.
 
@@ -104,14 +123,9 @@ def protein_sign(template: TemplateInfo) -> tuple[int, str]:
     negative protein.
     """
 
-    mask = template.mask
-    if mask is not None and mask.shape == template.template.shape:
-        inside = mask > 0.5
-        if inside.any() and (~inside).any():
-            difference = float(template.template[inside].mean() - template.template[~inside].mean())
-            if difference != 0.0:
-                return (1 if difference > 0 else -1,
-                        "measured: the template's mean inside its mask against outside it")
+    measured = sign_inside(template.template, template.mask)
+    if measured is not None:
+        return measured, "measured: the template's mean inside its mask against outside it"
     if template.inverted is not None:
         return (-1 if template.inverted else 1, "prepare-template's record of inverting it")
     return 1, "assumed: neither a mask nor a record says"
@@ -183,18 +197,23 @@ def band_rows(centre: int, half: int, *, factor: int, rows: int) -> list[float]:
     ]
 
 
-def png_bytes(image: np.ndarray, limits: tuple[float, float]) -> bytes:
-    """A grey PNG on the given scale, low values dark, drawn upwards; NaN is transparent."""
+def png_bytes(image: np.ndarray, limits: tuple[float, float], *, upwards: bool = True) -> bytes:
+    """A grey PNG on the given scale, low values dark; NaN is transparent.
+
+    `upwards`: the image's first row is drawn at the bottom, as the PDF draws with
+    origin="lower"; otherwise its rows are the PNG's, top first.
+    """
 
     low, high = limits
     span = high - low if high > low else 1.0
     finite = np.isfinite(image)
     grey = np.clip((np.where(finite, image, low) - low) / span, 0.0, 1.0)
-    pixels = np.round(grey * 255.0).astype(np.uint8)[::-1]
+    order = slice(None, None, -1) if upwards else slice(None)
+    pixels = np.round(grey * 255.0).astype(np.uint8)[order]
     if finite.all():
         picture = Image.fromarray(np.ascontiguousarray(pixels), mode="L")
     else:
-        alpha = np.where(finite, 255, 0).astype(np.uint8)[::-1]
+        alpha = np.where(finite, 255, 0).astype(np.uint8)[order]
         picture = Image.fromarray(np.ascontiguousarray(np.stack([pixels, alpha], axis=-1)),
                                   mode="LA")
     buffer = io.BytesIO()

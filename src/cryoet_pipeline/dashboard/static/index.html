@@ -9,10 +9,11 @@
 <body>
 <header>
   <h1 id="project">Results</h1>
-  <label class="series-choice">Series <select id="series"></select></label>
+  <label class="series-choice">Show <select id="series"></select></label>
   <p id="status" role="status"></p>
 </header>
-<main>
+
+<main id="series-view">
   <section class="viewers" id="viewers" hidden>
     <figure class="viewer" id="xy-viewer">
       <figcaption><span class="title">XY slab</span> <span id="xy-label" class="numbers"></span></figcaption>
@@ -30,7 +31,7 @@
       <h2>Template in 3D</h2>
       <button type="button" id="show-3d">Show the template and its mask in Mol*</button>
       <p id="viewer3d-note" class="note"></p>
-      <div id="viewer3d" class="molstar" hidden></div>
+      <div id="template-3d-slot"></div>
     </section>
   </section>
   <aside id="side" hidden>
@@ -70,10 +71,77 @@
     </section>
     <section id="problems-panel" hidden>
       <h2>Could not be read</h2>
-      <ul id="problems"></ul>
+      <ul id="problems" class="problems"></ul>
     </section>
   </aside>
 </main>
+
+<main id="mra-view" hidden>
+  <section>
+    <figure class="chart-figure">
+      <figcaption><span class="title">Class sizes</span> <span class="numbers">particles in each class after each iteration; a click picks the iteration</span></figcaption>
+      <canvas id="mra-sizes"></canvas>
+    </figure>
+    <div class="control">
+      <label for="mra-iteration"><span class="title">Iteration</span> <span id="mra-iteration-label" class="numbers"></span></label>
+      <input type="range" id="mra-iteration" min="0" max="0" value="0">
+    </div>
+    <div class="control">
+      <label for="mra-section"><span class="title">z section</span> <span id="mra-section-label" class="numbers"></span></label>
+      <input type="range" id="mra-section" min="0" max="0" value="0">
+    </div>
+    <div id="mra-classes" class="class-grid"></div>
+    <p class="caption" id="mra-caption"></p>
+    <section class="viewer3d" id="mra-3d-section">
+      <h2>Classes in 3D</h2>
+      <label class="check"><input type="checkbox" id="mra-3d-mask" checked> with the alignment mask at 0.5, translucent</label>
+      <p id="mra-3d-note" class="note"></p>
+      <div id="mra-3d-slot"></div>
+    </section>
+  </section>
+  <aside>
+    <section>
+      <h2>Run</h2>
+      <dl id="mra-facts" class="facts"></dl>
+    </section>
+    <section>
+      <details>
+        <summary>Parameters</summary>
+        <table id="mra-parameters" class="parameters"></table>
+      </details>
+    </section>
+    <section id="mra-problems-panel" hidden>
+      <h2>Could not be read</h2>
+      <ul id="mra-problems" class="problems"></ul>
+    </section>
+  </aside>
+</main>
+
+<main id="fsc-view" hidden>
+  <section>
+    <figure class="chart-figure">
+      <figcaption><span class="title">Fourier shell correlation between the two halves</span></figcaption>
+      <canvas id="fsc-chart"></canvas>
+    </figure>
+    <label class="check"><input type="checkbox" id="fsc-unmasked"> also the curve without the mask, in grey</label>
+    <p class="caption" id="fsc-caption"></p>
+    <section class="viewer3d" id="fsc-3d-section">
+      <h2>Mean of the two halves in 3D</h2>
+      <button type="button" id="fsc-show-3d">Show the mean map in Mol*</button>
+      <p id="fsc-3d-note" class="note"></p>
+      <div id="fsc-3d-slot"></div>
+    </section>
+  </section>
+  <aside>
+    <section>
+      <h2>Resolution</h2>
+      <dl id="fsc-facts" class="facts"></dl>
+    </section>
+  </aside>
+</main>
+
+<div id="viewer3d" class="molstar" hidden></div>
 <script src="/static/app.js"></script>
+<script src="/static/mra.js"></script>
 </body>
 </html>

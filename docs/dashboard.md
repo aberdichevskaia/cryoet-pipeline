@@ -1,8 +1,8 @@
 # Results in a browser: from PDF reports to pages
 
 Drafted 2026-11-26 from a discussion with Anna on 2026-11-25 and 2026-11-26. A
-prototype of step 1, with Mol\* for the template, was built the same day (Status,
-at the end).
+prototype of step 1, with Mol\* for the template, the classification runs and
+their FSC, was built the same day (Status, at the end).
 What was agreed and what is only proposed are listed apart, at
 the end, with the open questions.
 
@@ -301,5 +301,44 @@ checked: a map with a non-zero origin or start, and the same file in ChimeraX.
 Tests: 17 in test_dashboard; 10 of 11 mutants caught, the eleventh equivalent
 (a map name outside the two is refused a second time further on).
 
+**Classification and FSC, 2026-11-26.** The page's choice of what to show lists
+the tilt-series, then the classification runs in `<project>/mra` (folders with a
+plan.json, the run-record layout; `--mra` names another folder), then the FSC
+curves beside them (`<out>_fsc.json` from `scripts/consensus_halves.py maps`).
+`dashboard/mra.py` reads a run with the classification report's own reader
+(`read_classification`, without the initial average) and gives, per run: the
+class sizes over the iterations as a chart whose click picks an iteration, the
+particles that changed class (`class_changes`), and for each class of the chosen
+iteration, the starting references as iteration 0, its members, decoys and
+median CC, every z section on a shared slider and its central XY, XZ and YZ
+sections, one grey scale per map, values as they are, y and z upwards, in the
+report's channel colours. A class goes to Mol\* in its colour at 1σ on the
+protein's side, with the alignment mask translucent if asked; the side is
+measured once per run, on the last iteration's largest class inside the mask
+against outside it. The map handed to Mol\* is the reader's array written back
+as a standard MRC at the run's pixel size, so Mol\* draws what the pictures show
+in either layout. The FSC view draws the curve against spatial frequency, with
+0.5 and 0.143 and where it falls through them as consensus_halves reads it (a/b
+for more than one fall); the curve without the mask only behind a check box, as
+the slides show the masked one alone; facts on the halves, their start, the
+pixel size and any rise toward Nyquist; and the mean of the halves in Mol\* with
+their mask. Old Dynamo-layout projects are not listed: the folder of runs lists
+only plan.json runs.
+
+Checked: the pictures against marker voxels placed by hand in a 9-voxel box,
+read back from the PNGs (every section, and XY, XZ, YZ each in its place); the
+maps for Mol\* against the reader's arrays (class, reference and mask, header
+1, 2, 3, the pixel size); the run against `read_classification` on a real short
+MRA computed by `run_plan` (test_mra_setup's twelve particles, three
+iterations), sizes and changes included. In the browser, the drawn z section 5
+of that run's last class correlates 1.000 with the run's own
+`ite_0003/average_1.mrc` read with y upwards, 0.686 with y downwards, 0.489
+transposed. The FSC view's 0.5 at 29.2 Å and "never crossed" at 0.143 match the
+file (its last point 0.1487 at Nyquist). Tests: 11 in test_dashboard_mra; 14 of
+14 mutants caught on the new and changed code (flips, order of sections,
+transposed views, a transposed or unscaled map, file names, the reference of
+iteration 0, frequency, the protein's side).
+
 Unverified so far: the tunnel at either site, whether the sites allow ssh to a
-node running one's job, the page with 600 picks, and Mol\* on a real template.
+node running one's job, the page with 600 picks, Mol\* on a real template, and
+every classification view on a real run: none is on the Mac.
