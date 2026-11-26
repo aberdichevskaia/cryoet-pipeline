@@ -489,14 +489,20 @@ capabilities; CUDA 12.8's release notes. Not met in a job yet.
 **Kind:** false alarm · **Evidence:** seen
 
 **Where it shows:** `torch.cuda.is_available()` is `False`, and `nvidia-smi`
-is missing, on a login node.
+is missing, on a login node. `show_setup.py` says `libcuda.so.1 not here`
+under MotionCor3 and AreTomo2.
 
 **What it means:** login nodes have no GPU. What counts is the GPU nodes: check
 there ([setup.md](../setup.md), "GPU and CUDA"). An interactive job without a
 GPU looks the same; one with a GPU sees it, as `slogin` sessions on max's A40
-nodes did on 19 November 2026.
+nodes did on 19 November 2026. `libcuda.so.1` comes with NVIDIA's driver, not
+with the CUDA toolkit, so where no driver is loaded no program finds it. Until
+26 November 2026 `show_setup.py` counted it as a library MotionCor3 and
+AreTomo2 cannot load and called motion correction impossible; it now counts it
+only on a node whose kernel has loaded the driver (`/proc/driver/nvidia`).
 
-**Source:** max's login nodes, October 2026.
+**Source:** max's login nodes, October 2026; cryoem.se's login2, 26 November
+2026, where both programs had run on the GPU nodes the day before.
 
 ## Questions for reviewers
 
