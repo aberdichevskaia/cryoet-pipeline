@@ -55,22 +55,23 @@ The submission scripts hold it to its yes themselves: a submission from the
 assistant must repeat the dry run you were shown, unchanged, within 30
 minutes, with the reason you gave, and the project's journal records it.
 
-> **Status, 25 November 2026.** On cryoem.se the assistant ran in Claude Code
+> **Status, 26 November 2026.** On cryoem.se the assistant ran in Claude Code
 > under a course account from 19 to 25 November 2026: it took that account
 > through the installation on 22–23 November, with fixes to the pipeline in
-> between, and wrote a lane for these data. The course's lane ran on all five
-> series on 25 November, from the frames to the tomogram, and the branch of
-> step 12 ran on 161 on 24 November. The `gpu` stage then failed at the first
-> series' picking: pytom-match-pick's CuPy cannot compile one of its kernels
-> there. The assistant found it in the playbook, entry I-9, and narrowed it down
-> with tests on a GPU node; `session.sh` now turns that part of CuPy off, which
-> those tests showed to work, and the lane had not picked with it when this was
-> written. Not run there yet: Codex, picking and particles, the MRA on one
-> A5000, and the tilt preview of step 6 on these TIFF frames. The accounts'
-> installation and the session file of step 1 were written on 25 November and
-> had not run. The course's results of step 10, for going on after a failure,
-> are that run's, so far up to the tomograms; going on from a copy of them had
-> not been tried. At MDC the same lane ran
+> between, and wrote a lane for these data. The course's lane then ran through
+> the MRA on all five series on 25–26 November: motion correction, alignment
+> and the tomograms in 30 minutes, picking and particles in 1 hour 28 minutes,
+> and the MRA in 8 hours on one A5000. Picking had first failed at its first
+> angle: pytom-match-pick's CuPy cannot compile one of its kernels there. The
+> assistant found it in the playbook, entry I-9, and narrowed it down with
+> tests on a GPU node; `session.sh` now turns that part of CuPy off, and the
+> run above picked with it off. The branch of step 12 ran on 161 on 24
+> November. That run's results are the course's results of step 10. A course
+> account was installed on 26 November as yours was, in about ten minutes, and
+> its check on an A5000 found no problem; `session.sh` ran there. Not run there
+> yet: Codex, going on from a copy of the course's results (a copy was made on
+> one account on 26 November, and nothing has been submitted from it), and the
+> tilt preview of step 6 on these TIFF frames. At MDC the same lane ran
 > through the MRA on four of the series on 19–20 November, and through fine
 > alignment on all five on 23 November. Tell Anna what happened.
 
@@ -132,6 +133,10 @@ two lines:
 module load tomobear/2026
 source ~/cryoet/session.sh
 ```
+
+Loading the module prints a warning that `MAMBA_ROOT_PREFIX` is not set. It
+comes from the micromamba module that the course's module loads, and is
+expected: `session.sh`, the second line, sets it.
 
 `session.sh` is [`docs/tutorials/ryr1/stockholm-session.sh`](ryr1/stockholm-session.sh),
 copied there by the installation. It names the cluster's programs and the
@@ -263,7 +268,10 @@ check writes nothing. It shows the clone, the room where the environments,
 downloads and temporary files go, the pipeline's environment, every tool the
 lane needs with its version, and which of the cluster's GPUs each program can
 run on. Your home has no quota; if the check says it cannot read one, that is
-right. It should show no problems (`Problems (0): none`). Each problem and each
+right. It should show no problems (`Problems (0): none`). Notes that IMOD
+5.2.1 or MotionCor3 1.1.2 has not run in the pipeline are expected: the check
+knows one tested version of each, and both ran in the course's run of 25
+November. Each problem and each
 note names an entry of the playbook, `docs/agent/playbook/`, which the
 assistant reads and explains.
 
@@ -295,7 +303,7 @@ cluster.
 | `ENV_MANAGER` | `micromamba`: the jobs activate the pipeline's environment with it |
 | `IMOD_DIR` | `/opt/cryoem/imod/5.2.1` |
 | `CTFFIND5` | `/opt/cryoem/ctffind/5.0.2/bin/ctffind`; the cluster's CTFFIND 4 is refused |
-| `MOTIONCOR3` | `/opt/cryoem/motioncor3/1.1.1/bin/MotionCor3` |
+| `MOTIONCOR3` | `/opt/cryoem/motioncor3/1.1.1/bin/MotionCor3`, which reports itself as 1.1.2 |
 | `ARETOMO` | `/opt/cryoem/aretomo2/1.1.2/bin/AreTomo2`, which reports itself as 1.1.3 |
 | `LD_LIBRARY_PATH` | begins with `/opt/tcbsys/cuda/12.6.2/lib64`, CUDA 12's libraries, which MotionCor3 and AreTomo2 need |
 | the `cryoet-pipeline` environment | Python 3.13, your clone installed with `pip install -e .`, and `imagecodecs`; its PyTorch a CUDA build |
@@ -538,8 +546,13 @@ aside, so that nothing of it is lost, and copy the course's in its place (some
 
 ```bash
 mv outputs/ryr1-tutorial outputs/ryr1-tutorial.mine
+mkdir -p outputs
 cp -r /mnt/cephfs/home/tomobear/cryoet-pipeline/outputs/ryr1-tutorial outputs/
 ```
+
+Without a project of your own, skip the `mv`, but not `mkdir -p outputs`: in a
+clone without an `outputs` folder, `cp` would make `outputs` itself the copy,
+and the pipeline would not find the project (one course account, 26 November).
 
 It holds the results of every stage, the MRA's too, so you can read them right
 away, from step 11 on. To run the rest yourself, tell the assistant which stage
@@ -666,8 +679,9 @@ series.
 
 The job runs on one A5000, for hours. At MDC, on four A40s and four of the
 series, its first two iterations took 40 and 83 minutes and the last three
-about 2 minutes together; one A5000 should take several times as long, which
-has not been measured. If it stops on its time limit, the same submission
+about 2 minutes together. On one A5000 here, the course's run of the five
+series took 8 hours, on 25–26 November. If it stops on its time limit, the
+same submission
 carries the run on from its last finished iteration.
 
 ## 14. Read the classification report
@@ -725,6 +739,11 @@ shows you what it printed:
 - a note per series. For these frames, which have no mdocs, the notes say that
   the acquisition order comes from the tilt order, here the angle order, and
   that there is no dose.
+
+**From a copy of the course's results** (step 10), tell it so: the export
+needs `--project outputs/ryr1-tutorial`. The MRA run names the folder it ran
+in, the course's, where you cannot write, and the export writes into that
+project unless told otherwise.
 
 **For these data, no dose.** If it offers `--dose-per-tilt`, say no: with the
 order unknown, a dose would weight the wrong tilts if they were taken
@@ -788,6 +807,7 @@ export's folder; the assistant can read it for you.
   |---|---|
   | `$MOTIONCOR3 is not set` (or another `$…`) | the session's shell lacks the tool variables: leave the session, run the two lines of step 1, and `scripts/assistant -c` |
   | `session.sh: load the course module first` | `module load tomobear/2026` comes before `source ~/cryoet/session.sh` |
+  | `Cannot activate, prefix does not exist`, naming `~/.local/share/mamba`, or `Shell not initialized` | `micromamba activate` ran in a terminal without `session.sh`, which says where the environments are: run the two lines of step 1 instead; `session.sh` activates the environment itself |
   | a stage refused by Slurm, with Slurm's reason | the stage's `sbatch` options do not fit what your account may use: compare them with step 8, and ask the organizers if the reservation has ended |
   | `… already exists but has no manifest for …` | the project lacks that series: run the `cryoet init … --add-series` it prints, yourself |
   | a series is busy, naming a job | one of your jobs works on that series; wait until it has ended |

@@ -348,8 +348,9 @@ day. How it ended was not recorded. cryoem.se, 25 November 2026, the
 Stockholm RyR1 lane on an RTX A5000: `pick-particles` of 039 at bin8 failed so, and
 `show_setup.py` on the same node found no problem. A probe of the same kernel,
 `4edd3527….cubin.cu` as in the job's log, failed with CUB and gave the right
-sum with `CUPY_ACCELERATORS` empty; CuPy's own `sum` compiled with CUB on. A
-lane with CUB off had not run when this was written.
+sum with `CUPY_ACCELERATORS` empty; CuPy's own `sum` compiled with CUB on. With
+CUB off, the same lane picked all five series the same day (job 628640, 1 h 28 min
+for picking and particles).
 
 ### I-10. Wheels for Linux downloaded on a Mac lack the CUDA libraries
 
