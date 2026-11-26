@@ -1,7 +1,8 @@
 # Results in a browser: from PDF reports to pages
 
-Drafted 2026-11-26 from a discussion with Anna on 2026-11-25 and 2026-11-26.
-Nothing is built. What was agreed and what is only proposed are listed apart, at
+Drafted 2026-11-26 from a discussion with Anna on 2026-11-25 and 2026-11-26. A
+prototype of step 1, without Mol\*, was built the same day (Status, at the end).
+What was agreed and what is only proposed are listed apart, at
 the end, with the open questions.
 
 ## Purpose
@@ -165,10 +166,15 @@ names, keeps them in a cache, and cuts again when an artifact is newer than its
 images. Reading a bin8 tomogram slab by slab through a memory map takes seconds.
 Where the cache lives, and under which storage class, is open question 3.
 
-**Sizes, estimated, to be measured.** A 5760×4092 tilt at bin8 gives about
-720×512 in the plane. For a tomogram 300 sections deep: slabs of 10 sections are
-30 images, about 1.5 MB at ~50 KB each; every section is about 15 MB; the volume
-itself in uint8 about 110 MB, which no page should carry.
+**Sizes.** Estimated first: a 5760×4092 tilt at bin8 gives about 720×512 in the
+plane; for a tomogram 300 sections deep, slabs of 10 sections are 30 images,
+about 1.5 MB at ~50 KB each; every section is about 15 MB; the volume itself in
+uint8 about 110 MB, which no page should carry. Measured on 2026-11-26 on the
+Mac, with the prototype's PNGs on dev-ts01 (TS_01 fine, 296×928×960 at 5.4 Å,
+about 1 GB in float32): 16 XY slabs of 19 voxels and 49 XZ slabs, 65 pictures,
+23 MB, about 350 KB each, cut in 3.9 s and read from the cache in 0.01 s. PNG is
+seven times the JPEG guess; JPEG or WebP is the obvious change if a tunnel finds
+23 MB slow.
 
 ## Checks before believing a page
 
@@ -240,6 +246,33 @@ On 2026-11-25 and 2026-11-26:
 
 ## Status
 
-Nothing built. Unverified so far: Mol\* loading from bytes and its reading of our
-headers, the sizes above, and whether the sites allow ssh to a node running one's
-job.
+**2026-11-26: a prototype of step 1, without Mol\*.** `scripts/serve_results.py`
+starts the server (`src/cryoet_pipeline/dashboard/`: `data.py` cuts and places,
+`server.py` serves with the token, `static/` is the page). For each series: XY
+slabs through z and XZ slabs through y on sliders, each view marking where the
+other's slab cuts it; the picks as sphere sections coloured by score; a score
+histogram (in σ where the search recorded its noise) with the one-false-peak
+height, a threshold slider, and the `[pick] cut_off` line with its count; picks
+stepped through by score or clicked, each shown as the PDF gallery's tile, beside
+the template's. No library: plain JS and canvas.
+
+The tomogram, picks and template are resolved by the report command's own
+`_report_artifacts`, a private function of `cli.py` imported as it is; an
+unlabelled registry with two tomograms (dev-ts01: coarse and fine) is refused as
+the PDF refuses it.
+
+Checked: on test_report's synthetic project, whose first 24 picks are dark blobs
+written into the volume, every circle cut through its centre sits within a
+pixel of its blob's darkness centroid in the PNG, with no common shift (mean
+under 0.02 px), at full size and reduced three times, in XY and XZ
+(tests/test_dashboard.py, 13 tests; 7 of 7 mutants caught: either half voxel,
+either flip, rows counted from the volume after reduction, a slab band's edge,
+any token accepted). In the browser, the canvas under those circles' centres
+read 0 of 255 at all 18 on view, the decoys' about 200 against a picture mean of
+about 180. Not
+checked on real picks: there are none on the Mac; the first run on the cluster
+is the test.
+
+Unverified so far: everything about Mol\*, the tunnel at either site, whether
+the sites allow ssh to a node running one's job, and how the page feels with
+600 picks.

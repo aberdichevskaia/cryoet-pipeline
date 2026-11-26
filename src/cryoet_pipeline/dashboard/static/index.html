@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Results</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1 id="project">Results</h1>
+  <label class="series-choice">Series <select id="series"></select></label>
+  <p id="status" role="status"></p>
+</header>
+<main>
+  <section class="viewers" id="viewers" hidden>
+    <figure class="viewer" id="xy-viewer">
+      <figcaption><span class="title">XY slab</span> <span id="xy-label" class="numbers"></span></figcaption>
+      <div class="stage"><canvas class="picture"></canvas><canvas class="overlay"></canvas></div>
+      <input type="range" id="xy-slider" min="0" max="0" value="0" aria-label="XY slab">
+    </figure>
+    <figure class="viewer" id="xz-viewer">
+      <figcaption><span class="title">XZ slab</span> <span id="xz-label" class="numbers"></span></figcaption>
+      <div class="stage"><canvas class="picture"></canvas><canvas class="overlay"></canvas></div>
+      <input type="range" id="xz-slider" min="0" max="0" value="0" aria-label="XZ slab">
+    </figure>
+    <p class="hint">↑ ↓ move the XY slab, n and p go to the next and previous pick by score. A click on a circle shows that pick; a click elsewhere on one view moves the other to that place.</p>
+    <p id="caption" class="caption"></p>
+  </section>
+  <aside id="side" hidden>
+    <section id="scores-panel" hidden>
+      <h2>Scores</h2>
+      <canvas id="histogram"></canvas>
+      <input type="range" id="threshold" min="0" max="1000" value="0" aria-label="Score threshold">
+      <p id="threshold-label" class="numbers"></p>
+      <label class="check"><input type="checkbox" id="show-below"> draw picks below the threshold too, in grey</label>
+      <div class="toml">
+        <pre id="toml-line"></pre>
+        <button type="button" id="copy-toml">Copy</button>
+      </div>
+      <p class="note">This page changes nothing. The line is pytom's <code>cut_off</code> on the score these picks carry; it takes effect when pasted into the lane's <code>[pick]</code> and pick-particles runs again, or when handed to the assistant.</p>
+    </section>
+    <section id="pick-panel" hidden>
+      <h2>Pick</h2>
+      <div class="pick-nav">
+        <button type="button" id="previous">◀ higher score</button>
+        <button type="button" id="next">lower score ▶</button>
+      </div>
+      <p id="pick-details" class="numbers">Click a circle, or step through the picks by score.</p>
+      <figure class="tile" id="pick-figure" hidden>
+        <img id="pick-tile" alt="The selected pick: XY, XZ and YZ views">
+        <figcaption id="pick-tile-caption"></figcaption>
+      </figure>
+      <figure class="tile" id="template-figure" hidden>
+        <img id="template-tile" alt="The template: XY, XZ and YZ views">
+        <figcaption>Template, shown the same way</figcaption>
+      </figure>
+    </section>
+    <section id="display-panel">
+      <h2>Display</h2>
+      <label class="range">Brightness <input type="range" id="brightness" min="0.4" max="2" step="0.05" value="1"></label>
+      <label class="range">Contrast <input type="range" id="contrast" min="0.4" max="3" step="0.05" value="1"></label>
+      <button type="button" id="reset-display">Reset</button>
+    </section>
+    <section id="problems-panel" hidden>
+      <h2>Could not be read</h2>
+      <ul id="problems"></ul>
+    </section>
+  </aside>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
