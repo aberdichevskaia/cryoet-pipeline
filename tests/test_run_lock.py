@@ -18,6 +18,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -244,15 +245,17 @@ def _stand_in_repo(tmp_path: Path) -> Path:
 
 def _job(
     repo: Path, job: str, *, script: str = "mra_port_run.sbatch", by_hand: bool = False,
-    **env: str,
+    log: IO[str] | None = None, **env: str,
 ) -> subprocess.Popen[str]:
-    """A job script as SLURM runs it, by an absolute path, or by hand from the repo root."""
+    """A job script as SLURM runs it, by an absolute path, or by hand from the repo root;
+    its output into `log`, as into a Slurm log, when given."""
     here = repo.parent
     path = f"scripts/{script}"
     if not by_hand:
         path = str(repo / path)
     return subprocess.Popen(
-        ["bash", path], cwd=repo, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ["bash", path], cwd=repo, text=True,
+        stdout=subprocess.PIPE if log is None else log, stderr=subprocess.PIPE,
         env={
             "PATH": f"{here / 'tools'}{os.pathsep}{os.environ['PATH']}", "HOME": str(here),
             "PYTHONPATH": str(ROOT / "src"), "SLURM_SUBMIT_DIR": str(repo),
@@ -470,6 +473,28 @@ def test_a_run_from_a_registry_is_made_and_locked_in_the_project(tmp_path: Path)
     _, err = missing.communicate(timeout=60)
     assert missing.returncode != 0 and "set SERIES" in err
     assert len(_calls(repo)) == 1
+
+
+def test_the_port_s_lines_reach_the_job_s_log_while_it_runs(tmp_path: Path) -> None:
+    """The port prints a line as each iteration ends, and the job's log shows it then:
+    printing into a file, Python held its lines until it exited (25 November 2026),
+    so an MRA's log said nothing of its iterations before the job ended."""
+    repo = _stand_in_repo(tmp_path)
+    line = "ite_0001: class 1 2, class 2 1; 0.1 min, 0.1 of it searching"
+    port = repo / "scripts" / "mra_port_run.py"
+    port.write_text(port.read_text().replace("while not", f"print({line!r})\nwhile not", 1))
+    project = tmp_path / "export" / "mra_t"
+    project.mkdir()
+    path = tmp_path / "slurm-mra_t-41.log"
+    with path.open("w") as log:
+        job = _job(repo, "41", PROJECT=str(project), log=log)
+        try:
+            _wait_until(lambda: line in path.read_text(), job)
+        finally:
+            (tmp_path / "release").write_text("")
+        _, err = job.communicate(timeout=60)
+    assert job.returncode == 0, err
+    assert path.read_text().count(line) == 1
 
 
 def test_a_consensus_half_is_refined_beside_its_split(tmp_path: Path) -> None:

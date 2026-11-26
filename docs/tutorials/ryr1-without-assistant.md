@@ -467,6 +467,26 @@ minutes and the last three about 2 minutes together. If it stops on its time
 limit, submitting it again carries the run on from its last finished
 iteration.
 
+**Following it.** The job's log in the clone's root,
+`slurm-ryr1-tutorial-mra-<id>.log`, gets a line for the setup, with the number
+of iterations planned, and then one as each iteration ends, with the size of
+each class and the iteration's minutes:
+
+```
+ite_0001: class 1 …, class 2 …, class 3 …; … min, … of it searching
+```
+
+Within an iteration nothing new appears, for up to an hour and a half here.
+The run's folder shows where it is: `ite_0001` and the others like it are
+finished, and the one named `ite_000N.tmp-…` is being computed.
+
+```bash
+ls outputs/ryr1-tutorial/mra/bin8-ssn
+```
+
+Beside the log, `slurm-ryr1-tutorial-mra-<id>-gpus.csv` gets a line per card
+every minute; its fifth column is how busy the card is, in percent.
+
 ## 11. Read the classification report
 
 The job writes its report beside the run:

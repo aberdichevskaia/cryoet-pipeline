@@ -118,6 +118,12 @@
 # busy sample held 1740 MHz.
 
 set -euo pipefail
+# Python's lines reach this job's log as they are printed, the port's one per
+# finished iteration among them. Printing into a file, as into a Slurm log, Python
+# otherwise holds them until it exits, and loses them when killed: measured on the
+# Mac on 25 November 2026, a line printed by a running process was in its file
+# only with this set, and after a SIGTERM, as at a time limit, only with it too.
+export PYTHONUNBUFFERED=1
 
 # This script, to run again under the run's lock below: SLURM runs a copy of it,
 # by an absolute path in its spool; run by hand, it is found from here.
