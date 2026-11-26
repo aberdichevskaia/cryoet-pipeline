@@ -101,6 +101,30 @@ median 11 deg, which says nothing either way: these picks hold no particle for p
 to converge on. The gold-standard command is for max (or any machine with a working
 MPI), with a real class.
 
+### RELION 5.1.1 on cryoem.se (26 November 2026)
+
+The first run of relion_commands.sh on a real class: class 1 of the Stockholm
+tutorial lane's `bin8-ssn` MRA, from the course's clone, with the module
+`relion/5.1` (RELION `5.1.1-commit-afdd81`, Open MPI 4.1.8), one A5000, 3 ranks of 8
+threads. Extract wrote 3D pseudo-subtomograms for all five tomograms (2 particles
+left out at the edges). Refine3D read them, estimated the noise spectra, set its
+local searches (3.75 deg, 105 orientations, at 41 A) and stopped at its first
+expectation, in every thread: "subtomo multiplicity correction only applies to
+ctf_premultiplied data" (`ml_optimiser.cpp` line 10615).
+
+RELION's source says why. At tag 5.1.1, `relion_tomo_subtomo` writes
+`rlnCtfDataAreCtfPremultiplied` as `do_ctf` for 2D stacks and as false for 3D
+pseudo-subtomograms, though its 3D path still multiplies each tilt image by its CTF
+and writes the CTF-squared and multiplicity volume; 5.0 (7f45a71) writes true for
+them. Refine3D's `get3DCTFAndMulti` refuses a multiplicity volume on data not marked
+premultiplied, so 5.1.1 refuses its own 3D extraction. An export run by RELION 5.0
+(the Mac, MDC's 5.0.1) does not meet this.
+
+relion_commands.sh now extracts with `--stack2d`, the format RELION's GUI writes by
+default since 4.1 (5.1.1: "Subtomogram format: 2D stacks"), which 5.0 and 5.1.1
+both mark premultiplied. The step's version is 3. Not run yet: Refine3D on 2D
+stacks of an export, in 5.0 or 5.1.1.
+
 ### The assistant (10 November 2026)
 
 The terminal assistant exports on request with the skill `relion-export`

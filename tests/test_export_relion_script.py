@@ -170,6 +170,8 @@ def test_the_commands_run_extract_then_refine(tmp_path) -> None:
     assert "RELION version: 5.0.1" in result.stdout
     calls = log.read_text().splitlines()
     assert calls[0].startswith("relion_tomo_subtomo --i optimisation_set.star")
+    # 2D stacks: RELION 5.1.1 refuses its own 3D pseudo-subtomograms in Refine3D.
+    assert " --stack2d " in calls[0]
     assert calls[1].startswith("mpirun -n 3 relion_refine_mpi --ios Extract/job001/")
     assert "--gpu" not in calls[1]
     assert (script.parent / "Extract" / "job001").is_dir()

@@ -99,7 +99,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import submit_lanes  # noqa: E402  (the journal and the dry-run gate of submissions)
 
 # Step version 2 (11 November 2026): halves balanced over the whole class.
-STEP, STEP_VERSION, BACKEND, BACKEND_VERSION = "export-relion", 2, "relion5", 1
+STEP, STEP_VERSION, BACKEND, BACKEND_VERSION = "export-relion", 3, "relion5", 1
 JOURNAL_ACTION = "export-relion"
 """What the project's journal calls this script's dry runs and exports."""
 """Declared: raised by hand when a change moves what the export writes."""
@@ -412,6 +412,18 @@ echo "$version" | head -1
 """
 
 
+# Why Extract writes 2D stacks (--stack2d), RELION's own default since 4.1. On
+# cryoem.se on 26 November 2026, RELION 5.1.1 extracted 3D pseudo-subtomograms from a
+# RyR1 export and Refine3D stopped at its first expectation: "subtomo multiplicity
+# correction only applies to ctf_premultiplied data". 5.1.1's relion_tomo_subtomo still
+# multiplies 3D pseudo-subtomograms by the CTF but marks them as not premultiplied
+# (5.0 marked them premultiplied); 2D stacks are marked premultiplied in both.
+STACK2D_COMMENT = (
+    "# As 2D stacks: RELION 5.1.1 marks 3D pseudo-subtomograms as not CTF-premultiplied,\n"
+    "# though it multiplies them, and its Refine3D refuses them (docs/relion_export.md)."
+)
+
+
 def relion_environment(programs: str) -> str:
     """Where RELION comes from, and a stop before anything runs when `programs`, or
     RELION itself, cannot start on this node."""
@@ -459,9 +471,10 @@ fi
 
 # Pseudo-subtomograms at the MRA's pixel ({plan.chosen.pixel_angstrom:.3f} A) and box,
 # so the reference fits them as it is.
+{STACK2D_COMMENT}
 mkdir -p Extract/job001
 relion_tomo_subtomo --i optimisation_set.star --o Extract/job001/ \\
-    --b {2 * box} --crop {box} --bin {relion_bin} --float16 --j "$THREADS"
+    --b {2 * box} --crop {box} --bin {relion_bin} --stack2d --float16 --j "$THREADS"
 
 # Gold-standard refinement from the MRA poses: local searches only, C1.
 mkdir -p Refine3D/job002
@@ -501,9 +514,10 @@ THREADS=${{THREADS:-8}}
 {relion_environment(programs)}
 
 # Pseudo-subtomograms at the tomograms' pixel ({chosen.pixel_angstrom:.3f} A), {box} voxels.
+{STACK2D_COMMENT}
 mkdir -p Extract/job001
 relion_tomo_subtomo --i optimisation_set.star --o Extract/job001/ \\
-    --b {2 * box} --crop {box} --bin {relion_bin} --float16 --j "$THREADS"
+    --b {2 * box} --crop {box} --bin {relion_bin} --stack2d --float16 --j "$THREADS"
 """
     if chosen.angles == "given":
         text += f"""
@@ -568,8 +582,9 @@ def readme_text(plan: ExportPlan, written: dict, diameter: float, ini_high: floa
         "",
         "## Commands",
         "",
-        "`relion_commands.sh` extracts pseudo-subtomograms at the MRA's pixel and box (so the",
-        "reference fits them as it is, RELION refuses a reference of another size) and",
+        "`relion_commands.sh` extracts pseudo-subtomograms, as 2D stacks, at the MRA's pixel",
+        "and box (so the reference fits them as it is, RELION refuses a reference of another",
+        "size) and",
         "refines with local searches from the MRA poses (healpix 4, sigma 3 deg, offsets of",
         f"3 pixels), C1, from the reference low-passed to {ini_high:g} A, with a particle",
         f"diameter of {diameter:g} A. They are starting points; finer pixels come after, by",
@@ -646,7 +661,8 @@ def particles_readme_text(plan: ExportPlan, written: dict) -> str:
         "",
         "## Commands",
         "",
-        "`relion_commands.sh` extracts pseudo-subtomograms at the tomograms' pixel and a box",
+        "`relion_commands.sh` extracts pseudo-subtomograms, as 2D stacks, at the tomograms'",
+        "pixel and a box",
         f"of {chosen.box} voxels"
         + (
             ", and reconstructs the average at the picks' poses from the tilt images, a"

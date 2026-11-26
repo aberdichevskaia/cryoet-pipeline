@@ -256,5 +256,7 @@ def test_the_commands_extract_and_with_poses_reconstruct(
     assert result.returncode == 0, result.stderr
     calls = log.read_text().splitlines()
     assert calls[0].startswith("relion_tomo_subtomo --i optimisation_set.star")
+    # 2D stacks: RELION 5.1.1 refuses its own 3D pseudo-subtomograms in Refine3D.
+    assert " --stack2d " in calls[0]
     assert (len(calls) == 2 and calls[1].startswith(
         "relion_tomo_reconstruct_particle --i optimisation_set.star")) is reconstructs
