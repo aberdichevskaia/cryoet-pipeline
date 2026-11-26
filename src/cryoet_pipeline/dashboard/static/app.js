@@ -148,7 +148,101 @@ async function loadSeries(id) {
   $("viewers").hidden = false;
   setStatus("");
   drawAll();
+  resetViewer3d();
 }
+
+// ---- Mol* ---------------------------------------------------------------------------
+// Loaded only when asked for: the script is 5 MB, served by this server from its
+// own pinned copy (configs/viewer_assets.toml), never from a CDN.
+
+let molstarLoading = null;
+
+function loadMolstar() {
+  if (window.molstar && window.molstar.Viewer) return Promise.resolve();
+  if (!molstarLoading) {
+    molstarLoading = new Promise((resolve, reject) => {
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "/vendor/molstar/molstar.css";
+      document.head.append(css);
+      const script = document.createElement("script");
+      script.src = "/vendor/molstar/molstar.js";
+      script.onload = resolve;
+      script.onerror = () => {
+        molstarLoading = null;
+        reject(new Error("Mol* could not be loaded from this server"));
+      };
+      document.head.append(script);
+    });
+  }
+  return molstarLoading;
+}
+
+function resetViewer3d() {
+  const template = state.doc && state.doc.template;
+  const section = $("viewer3d-section");
+  section.hidden = !template || !template.maps.includes("template.mrc");
+  if (section.hidden) return;
+  $("viewer3d").hidden = true;
+  $("show-3d").hidden = false;
+  $("show-3d").disabled = !state.overview.viewer3d;
+  $("viewer3d-note").textContent = state.overview.viewer3d
+    ? "Mol* is loaded the first time it is asked for (5 MB)."
+    : "Mol* is not installed next to this server: run scripts/fetch_viewer_assets.py.";
+  if (state.viewer) state.viewer.plugin.clear();
+}
+
+async function show3d() {
+  const doc = state.doc;
+  const template = doc.template;
+  const note = $("viewer3d-note");
+  $("show-3d").disabled = true;
+  note.textContent = "Loading Mol*…";
+  try {
+    await loadMolstar();
+    $("viewer3d").hidden = false;
+    if (!state.viewer) {
+      state.viewer = await molstar.Viewer.create("viewer3d", {
+        layoutIsExpanded: false,
+        layoutShowControls: true,
+        collapseRightPanel: true,
+        layoutShowRemoteState: false,
+        layoutShowSequence: false,
+        layoutShowLog: false,
+        layoutShowLeftPanel: false,
+        viewportShowExpand: true,
+        viewportShowSelectionMode: false,
+        viewportShowAnimation: false,
+        viewportShowTrajectoryControls: false,
+      });
+    } else {
+      await state.viewer.plugin.clear();
+    }
+    const base = `/map/${encodeURIComponent(doc.series)}/${doc.key}/`;
+    const level = 1.0 * template.protein_sign;
+    await state.viewer.loadVolumeFromUrl(
+      { url: `${base}template.mrc`, format: "ccp4", isBinary: true },
+      [{ type: "relative", value: level, color: 0xfacc15, alpha: 1 }],
+    );
+    if (template.maps.includes("mask.mrc")) {
+      await state.viewer.loadVolumeFromUrl(
+        { url: `${base}mask.mrc`, format: "ccp4", isBinary: true },
+        [{ type: "absolute", value: 0.5, color: 0x9aa1aa, alpha: 0.25 }],
+      );
+    }
+    $("show-3d").hidden = true;
+    note.textContent =
+      `The template as it was matched, its surface at ${level > 0 ? "+" : "−"}1σ on the ` +
+      `protein's side (sign: ${template.protein_sign_source})` +
+      (template.maps.includes("mask.mrc") ? "; its mask at 0.5, translucent" : "") +
+      ". Mol*'s panel on the right changes the levels.";
+  } catch (error) {
+    note.textContent = error.message;
+    $("show-3d").disabled = false;
+  }
+}
+
+$("show-3d").addEventListener("click", show3d);
 
 function showProblems(problems) {
   const list = $("problems");

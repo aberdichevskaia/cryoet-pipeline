@@ -31,6 +31,8 @@ from pathlib import Path
 from cryoet_pipeline.dashboard.data import ResultsProject
 from cryoet_pipeline.dashboard.server import ResultsServer, tunnel_lines
 
+ASSETS = Path(__file__).resolve().parents[1] / "vendor"
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -44,6 +46,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="address to listen on; the default lets only this node in")
     parser.add_argument("--cache-dir", type=Path, default=None,
                         help="where pictures are kept; default <project>/results_cache")
+    parser.add_argument("--assets", type=Path, default=ASSETS,
+                        help="the libraries scripts/fetch_viewer_assets.py fetched; "
+                        f"default {ASSETS}")
     args = parser.parse_args(argv)
 
     if not (args.project / "artifacts.json").is_file():
@@ -51,11 +56,14 @@ def main(argv: list[str] | None = None) -> int:
     cache = args.cache_dir or args.project / "results_cache"
     project = ResultsProject(args.project, cache_dir=cache, variant=args.variant)
     token = secrets.token_urlsafe(24)
-    server = ResultsServer((args.host, args.port), project, token)
+    server = ResultsServer((args.host, args.port), project, token, assets=args.assets)
     node = socket.gethostname()
     login = os.environ.get("SLURM_SUBMIT_HOST")
     print(f"serving {args.project.resolve()} on {node}, port {server.port}")
     print(f"pictures are kept in {cache.resolve()}")
+    if not server.viewer_available:
+        print(f"no Mol* in {args.assets}: the 3D view is off until "
+              "scripts/fetch_viewer_assets.py has run")
     if login is not None or os.environ.get("SLURM_JOB_ID"):
         print("on your laptop, open a tunnel first:")
         for line in tunnel_lines(args.host, server.port, node, login):

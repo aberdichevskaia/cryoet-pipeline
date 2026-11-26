@@ -38,5 +38,8 @@ predict_output/
 *.obj
 *.npz
 
+# Libraries the result pages load, fetched by scripts/fetch_viewer_assets.py
+vendor/
+
 # CTFFIND scratch
 .Ctffind.dff

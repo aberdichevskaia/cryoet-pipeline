@@ -1,7 +1,8 @@
 # Results in a browser: from PDF reports to pages
 
 Drafted 2026-11-26 from a discussion with Anna on 2026-11-25 and 2026-11-26. A
-prototype of step 1, without Mol\*, was built the same day (Status, at the end).
+prototype of step 1, with Mol\* for the template, was built the same day (Status,
+at the end).
 What was agreed and what is only proposed are listed apart, at
 the end, with the open questions.
 
@@ -113,7 +114,7 @@ tested. Where the node has no internet at installation, the install checklist
 gets one item: copy the folder of libraries. The static export copies them into
 itself.
 
-Candidates, none chosen:
+Candidates; Mol\* was chosen and is in the prototype (Status):
 
 - **Mol\*** for maps. It reads MRC/CCP4/MAP directly and shows isosurfaces, slices
   and volume rendering; EMDB's entry pages use it. One JS bundle of a few MB, no
@@ -273,6 +274,32 @@ about 180. Not
 checked on real picks: there are none on the Mac; the first run on the cluster
 is the test.
 
-Unverified so far: everything about Mol\*, the tunnel at either site, whether
-the sites allow ssh to a node running one's job, and how the page feels with
-600 picks.
+**Mol\*, the same day.** Mol\* 5.13.1 (MIT, on npm since 2026-10-08), its viewer
+build only: `molstar.js` (5.3 MB) and `molstar.css`, pinned in
+`configs/viewer_assets.toml` by the sha256 jsdelivr's package listing gave, and
+fetched by `scripts/fetch_viewer_assets.py` into `vendor/` (git-ignored), whose
+downloads matched those hashes. `--from <folder>` copies them on a node without
+internet, under the same check. The server serves them and the page loads them
+only when asked (a button), so slicing never waits for 5 MB. It shows the
+template's own file at 1σ on the protein's side and the mask at 0.5,
+translucent; Mol\*'s own panel changes the levels. The protein's side is
+measured, the template's mean inside its mask against outside it, and falls back
+to prepare-template's record of inverting it only without a mask of the same
+shape. The server hands out only the template and mask files the series
+resolves to, by those two names.
+
+Checked against the MRC format's own definition rather than another viewer: a
+tripod phantom, box X 16, Y 14, Z 12 at 10 Å, arms along +x (long), +y and +z
+(short) ending in voxels of 10, 20 and 30, written once in the standard axis
+order and once with X slowest (mapc, mapr, maps = 3, 2, 1, as EMD-4805). Read
+back from Mol\*'s parsed volume in the browser, both files gave a grid of
+16 × 14 × 12 along X, Y, Z, a cell of 160 × 140 × 120 Å from origin 0, and the
+three markers at (13, 4, 3), (4, 10, 3) and (4, 4, 7), where they were written.
+Drawn, the long arm points right, the medium one up and the short one at the
+viewer, as Mol\*'s axis indicator has x, y and z: a right-handed reading. Not
+checked: a map with a non-zero origin or start, and the same file in ChimeraX.
+Tests: 17 in test_dashboard; 10 of 11 mutants caught, the eleventh equivalent
+(a map name outside the two is refused a second time further on).
+
+Unverified so far: the tunnel at either site, whether the sites allow ssh to a
+node running one's job, the page with 600 picks, and Mol\* on a real template.

@@ -1,0 +1,25 @@
+# The libraries the result pages load (scripts/serve_results.py), fetched once by
+# scripts/fetch_viewer_assets.py into vendor/ at the clone's root, which git
+# ignores, and served from there: no page reaches a CDN, so a laptop without
+# internet still sees everything, and the version in use is the one tested
+# (docs/dashboard.md, "Libraries, and a node without internet").
+#
+# Each file is named by its path under vendor/, the URL it is fetched from, and
+# its sha256 and size; a file whose sha256 differs is refused. Where the node has
+# no internet, copy vendor/ from a clone that has fetched it, or run the script
+# with --from <folder holding the files>.
+
+# Mol* 5.13.1 (MIT), published on npm on 2026-10-08: the viewer build, one
+# script and its stylesheet. Hashes from jsdelivr's package listing on
+# 2026-11-26, matched by the files it served the same day.
+[[file]]
+path = "molstar/molstar.js"
+url = "https://cdn.jsdelivr.net/npm/molstar@5.13.1/build/viewer/molstar.js"
+sha256 = "4fc6493c2471db8834dcc391151b344d7017e4eb8a4eb76c152be5f9dbd23874"
+bytes = 5268685
+
+[[file]]
+path = "molstar/molstar.css"
+url = "https://cdn.jsdelivr.net/npm/molstar@5.13.1/build/viewer/molstar.css"
+sha256 = "22fbf73b75c11ef57687d08437c95dbfe8430ea895264f6da2b9b01e28bacc49"
+bytes = 72904

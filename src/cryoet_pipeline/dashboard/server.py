@@ -33,15 +33,28 @@ STATIC_FILES = {
     "app.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
 }
+VIEWER_FILES = {
+    "molstar/molstar.js": "text/javascript; charset=utf-8",
+    "molstar/molstar.css": "text/css; charset=utf-8",
+}
+"""The libraries a page may load from the assets folder (configs/viewer_assets.toml)."""
 
 
 class ResultsServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], project: ResultsProject, token: str) -> None:
+    def __init__(self, address: tuple[str, int], project: ResultsProject, token: str,
+                 assets: Path | None = None) -> None:
         super().__init__(address, ResultsHandler)
         self.project = project
         self.token = token
+        self.assets = assets
+
+    @property
+    def viewer_available(self) -> bool:
+        return self.assets is not None and all(
+            (self.assets / name).is_file() for name in VIEWER_FILES
+        )
 
     @property
     def port(self) -> int:
@@ -110,10 +123,22 @@ class ResultsHandler(BaseHTTPRequestHandler):
             self._file(STATIC / "index.html", "text/html; charset=utf-8")
         elif parts[0] == "static" and len(parts) == 2 and parts[1] in STATIC_FILES:
             self._file(STATIC / parts[1], STATIC_FILES[parts[1]])
+        elif parts[0] == "vendor" and "/".join(parts[1:]) in VIEWER_FILES:
+            name = "/".join(parts[1:])
+            if not self.server.viewer_available or self.server.assets is None:
+                raise KeyError("Mol* is not installed here: run scripts/fetch_viewer_assets.py")
+            # Pinned by sha256, so a file at a path never changes.
+            self._bytes(HTTPStatus.OK, (self.server.assets / name).read_bytes(),
+                        VIEWER_FILES[name], cache="private, max-age=31536000, immutable")
         elif parts == ["api", "project"]:
-            self._json(HTTPStatus.OK, project.overview())
+            self._json(HTTPStatus.OK,
+                       {**project.overview(), "viewer3d": self.server.viewer_available})
         elif parts[0] == "api" and len(parts) == 3 and parts[1] == "series":
             self._json(HTTPStatus.OK, project.series(parts[2]))
+        elif parts[0] == "map" and len(parts) == 4:
+            map_path = project.map_file(parts[1], parts[2], parts[3])
+            self._bytes(HTTPStatus.OK, map_path.read_bytes(), "application/octet-stream",
+                        cache="no-store")
         elif parts[0] == "img" and len(parts) == 4:
             body = project.picture(parts[1], parts[2], parts[3])
             # The key is in the path, so a picture at a path never changes.

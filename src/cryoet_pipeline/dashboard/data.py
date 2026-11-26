@@ -42,7 +42,12 @@ from PIL import Image
 
 from cryoet_pipeline.artifacts import ArtifactRegistry
 from cryoet_pipeline.models import Artifact, TiltSeriesManifest
-from cryoet_pipeline.reports.collect import SeriesArtifacts, SeriesReport, load_series
+from cryoet_pipeline.reports.collect import (
+    SeriesArtifacts,
+    SeriesReport,
+    TemplateInfo,
+    load_series,
+)
 from cryoet_pipeline.reports.imaging import (
     SMOOTHING_SIGMA_PX,
     block_mean,
@@ -54,13 +59,62 @@ from cryoet_pipeline.reports.imaging import (
     sphere_sections,
 )
 
-CACHE_FORMAT = 1
+CACHE_FORMAT = 2
 """Raised whenever what a cache holds changes, so that old caches are cut again."""
 
 MAX_PAGE_PX = 1024
 """Pictures larger than this are block-averaged down; a bin8 tomogram is not."""
 
 PICTURE_NAME = re.compile(r"^(?:(?:xy|xz)_\d{3}|pick_\d+|template)\.png$")
+
+MAP_FILES = ("template.mrc", "mask.mrc")
+"""The maps a page may ask for, served as their files are, for Mol\\*."""
+
+
+def template_files(artifacts: SeriesArtifacts) -> dict[str, Path]:
+    """The template and mask the picks were matched with, found as the report finds them.
+
+    Registered, or else the files the picks name, as `collect.load_template` does.
+    """
+
+    from cryoet_pipeline.reports.collect import _path_parameter
+
+    template = (
+        Path(artifacts.template.path) if artifacts.template is not None
+        else _path_parameter(artifacts.picks, "pytom_template_path")
+    )
+    mask = (
+        Path(artifacts.template_mask.path) if artifacts.template_mask is not None
+        else _path_parameter(artifacts.picks, "pytom_template_mask_path")
+    )
+    found = {}
+    for name, path in zip(MAP_FILES, (template, mask), strict=True):
+        if path is not None and path.is_file():
+            found[name] = path
+    return found
+
+
+def protein_sign(template: TemplateInfo) -> tuple[int, str]:
+    """Which sign the template's protein has, +1 or -1, and how that is known.
+
+    Measured where there is a mask of the template's shape: the mean inside it
+    against the mean outside, since the particle is denser than what surrounds
+    it whichever way the map is inverted. Otherwise prepare-template's record of
+    inverting it, where a template inverted to match a tomogram has dark,
+    negative protein.
+    """
+
+    mask = template.mask
+    if mask is not None and mask.shape == template.template.shape:
+        inside = mask > 0.5
+        if inside.any() and (~inside).any():
+            difference = float(template.template[inside].mean() - template.template[~inside].mean())
+            if difference != 0.0:
+                return (1 if difference > 0 else -1,
+                        "measured: the template's mean inside its mask against outside it")
+    if template.inverted is not None:
+        return (-1 if template.inverted else 1, "prepare-template's record of inverting it")
+    return 1, "assumed: neither a mask nor a record says"
 
 
 def slab_centres(size: int, half: int) -> list[int]:
@@ -309,12 +363,16 @@ def series_document(report: SeriesReport, folder: Path, *, max_px: int = MAX_PAG
 
     template = report.template
     if template is not None:
+        sign, sign_source = protein_sign(template)
         document["template"] = {
             "box_px": template.box_px,
             "voxel_angstrom": template.voxel_spacing_angstrom,
             "source": template.source,
             "low_pass_angstrom": template.low_pass_angstrom,
             "mask_radius_px": template.mask_radius_px,
+            "maps": sorted(template_files(report.artifacts)),
+            "protein_sign": sign,
+            "protein_sign_source": sign_source,
         }
     return document
 
@@ -387,6 +445,7 @@ class _Series:
     key: str
     folder: Path
     document: dict[str, Any]
+    artifacts: SeriesArtifacts
     report: SeriesReport | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -474,7 +533,7 @@ class ResultsProject:
                 document["key"] = key
                 (partial / "series.json").write_text(json.dumps(document))
                 partial.replace(folder)
-            prepared = _Series(key, folder, document, report)
+            prepared = _Series(key, folder, document, artifacts, report)
             self._series[name] = prepared
             return prepared
 
@@ -501,6 +560,19 @@ class ResultsProject:
                     path.write_bytes(png_bytes(image, display_range([image])))
             return path.read_bytes()
         raise KeyError(f"no picture {file}")
+
+    def map_file(self, name: str, key: str, file: str) -> Path:
+        """The template or mask file of a series, as registered: only these two, by name."""
+
+        if file not in MAP_FILES:
+            raise KeyError(f"no map {file}")
+        prepared = self._prepared(name)
+        if prepared.key != key:
+            raise KeyError(f"{name} has been cut again since this page was loaded; reload it")
+        found = template_files(prepared.artifacts)
+        if file not in found:
+            raise KeyError(f"{name} has no {file[:-4]} file")
+        return found[file]
 
     def _report(self, name: str, prepared: _Series) -> SeriesReport:
         if prepared.report is None:

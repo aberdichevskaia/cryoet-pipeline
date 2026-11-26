@@ -9,13 +9,17 @@ row count after block-averaging moves the circles off the blobs.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
+import sys
 import threading
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -29,9 +33,14 @@ from cryoet_pipeline.dashboard.data import (
     ResultsProject,
     band_rows,
     placed,
+    protein_sign,
     slab_centres,
 )
-from cryoet_pipeline.dashboard.server import ResultsServer, tunnel_lines
+from cryoet_pipeline.dashboard.server import VIEWER_FILES, ResultsServer, tunnel_lines
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import fetch_viewer_assets  # noqa: E402
 
 # test_report gives its blobs scores of 0.09 to 0.16 and its decoys 0.05 to 0.065.
 BLOB_SCORE = 0.08
@@ -183,9 +192,75 @@ def test_a_pick_and_the_template_are_shown_as_tiles(tmp_path: Path) -> None:
         results.picture("TS_A", document["key"], "../artifacts.json")
 
 
+def test_the_protein_side_is_measured_against_the_mask_before_any_record(tmp_path: Path) -> None:
+    results = _results(tmp_path)
+    document = results.series("TS_A")
+    # test_report's template is a negative Gaussian, recorded as inverted.
+    assert document["template"]["protein_sign"] == -1
+    assert document["template"]["protein_sign_source"].startswith("measured")
+    assert document["template"]["maps"] == ["mask.mrc", "template.mrc"]
+
+    report = results._report("TS_A", results._prepared("TS_A"))
+    template = report.template
+    assert template is not None
+    # The record says inverted, the map says otherwise: the map wins.
+    assert protein_sign(replace(template, template=-template.template))[0] == 1
+    assert protein_sign(replace(template, mask=None)) == (
+        -1, "prepare-template's record of inverting it")
+    assert protein_sign(replace(template, mask=None, inverted=None))[0] == 1
+
+
+def test_only_the_template_and_its_mask_are_served_as_maps(tmp_path: Path) -> None:
+    results = _results(tmp_path)
+    document = results.series("TS_A")
+    key = document["key"]
+    path = results.map_file("TS_A", key, "template.mrc")
+    assert path.name == "template.mrc" and path.is_file()
+    assert results.map_file("TS_A", key, "mask.mrc").name == "mask.mrc"
+    for wrong in ("tomogram.zarr", "../artifacts.json", "template.MRC"):
+        with pytest.raises(KeyError):
+            results.map_file("TS_A", key, wrong)
+    with pytest.raises(KeyError, match="cut again"):
+        results.map_file("TS_A", "0" * 16, "template.mrc")
+    with pytest.raises(KeyError, match="no template"):
+        results.map_file("TS_B", results.series("TS_B")["key"], "template.mrc")
+
+
+def test_a_viewer_file_is_taken_only_with_its_sha256(tmp_path: Path) -> None:
+    body = b"var molstar = {};\n"
+    entry = {"path": "molstar/molstar.js", "url": "unused",
+             "sha256": hashlib.sha256(body).hexdigest(), "bytes": len(body)}
+    source = tmp_path / "copy"
+    (source / "molstar").mkdir(parents=True)
+    (source / "molstar" / "molstar.js").write_bytes(body)
+    vendor = tmp_path / "vendor"
+    assert "sha256 matches" in fetch_viewer_assets.fetch(entry, vendor, source)
+    assert (vendor / "molstar" / "molstar.js").read_bytes() == body
+    assert "already here" in fetch_viewer_assets.fetch(entry, vendor, source)
+
+    other = tmp_path / "other"
+    (other / "molstar").mkdir(parents=True)
+    (other / "molstar" / "molstar.js").write_bytes(b"something else")
+    with pytest.raises(ValueError, match="sha256"):
+        fetch_viewer_assets.fetch(entry, tmp_path / "fresh", other)
+    assert list((tmp_path / "fresh" / "molstar").iterdir()) == []
+
+
+def test_the_viewer_config_names_exactly_the_files_the_server_serves() -> None:
+    entries = tomllib.loads((ROOT / "configs" / "viewer_assets.toml").read_text())["file"]
+    assert sorted(one["path"] for one in entries) == sorted(VIEWER_FILES)
+    for one in entries:
+        assert len(one["sha256"]) == 64 and one["url"].startswith("https://")
+        assert one["url"].endswith(one["path"].split("/")[-1])
+
+
 @pytest.fixture
 def served(tmp_path: Path) -> Iterator[tuple[str, str]]:
-    server = ResultsServer(("127.0.0.1", 0), _results(tmp_path), "secret-token")
+    assets = tmp_path / "assets"
+    for name in VIEWER_FILES:
+        (assets / name).parent.mkdir(parents=True, exist_ok=True)
+        (assets / name).write_text(f"/* {name} */")
+    server = ResultsServer(("127.0.0.1", 0), _results(tmp_path), "secret-token", assets=assets)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -235,6 +310,17 @@ def test_the_server_answers_only_with_the_token(served: tuple[str, str]) -> None
     assert _get(f"{base}/api/series/TS_X", cookie)[0] == 404
     assert _get(f"{base}/static/data.py", cookie)[0] == 404
     assert _get(f"{base}/static/%2e%2e/data.py", cookie)[0] == 404
+
+    status, _, body = _get(f"{base}/api/project", cookie)
+    assert json.loads(body)["viewer3d"] is True
+    status, headers, body = _get(f"{base}/vendor/molstar/molstar.js", cookie)
+    assert status == 200 and body == b"/* molstar/molstar.js */"
+    assert headers["Content-Type"].startswith("text/javascript")
+    assert _get(f"{base}/vendor/molstar/molstar.js")[0] == 403
+    assert _get(f"{base}/vendor/molstar/other.js", cookie)[0] == 404
+    status, _, body = _get(f"{base}/map/TS_A/{document['key']}/template.mrc", cookie)
+    assert status == 200 and body[208:212] == b"MAP "
+    assert _get(f"{base}/map/TS_A/{document['key']}/artifacts.json", cookie)[0] == 404
 
 
 def test_the_tunnel_ends_on_the_node_when_only_the_node_may_connect() -> None:
