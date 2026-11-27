@@ -52,8 +52,9 @@ pipeline's own steps: step 13 hands a class to RELION 5 for one.
   tomograms: 8.4 GB for 161 alone up to the tomogram, with both alignments of
   step 10, so plan for some 40 GB for the five series.
 - **On your laptop**: `scp` or another SFTP client, to copy PDFs and folders
-  from the cluster; and ChimeraX with ArtiaX, or IMOD's `3dmod`, to see the
-  picks in 3D.
+  from the cluster; and ChimeraX with ArtiaX, installed as the course's
+  [setup guide](https://cryoem-sweden.github.io/sta-workshop/2612/setup-guide.html) says, or IMOD's
+  `3dmod`, to see the picks in 3D.
 
 ## 1. Your account, and how every session starts
 
@@ -487,8 +488,11 @@ tomogram with its picks in 3dmod:
 ```
 
 ArtiaX did not start in ChimeraX 1.12 for one of the organizers (a NumPy
-conflict, ArtiaX issue #56); 3dmod shows the same picks. Open one or two series:
-do the picks sit on density at the membranes?
+conflict, ArtiaX issue #56). Their fix, in the course's
+[setup guide](https://cryoem-sweden.github.io/sta-workshop/2612/setup-guide.html): after
+`toolshed install ArtiaX`, run `pip install pandas==3.0.5` in ChimeraX's
+command line. 3dmod shows the same picks. Open one or two series: do the picks
+sit on density at the membranes?
 
 ## 10. A branch: 161 aligned by AreTomo2 (optional)
 

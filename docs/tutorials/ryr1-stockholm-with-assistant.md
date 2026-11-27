@@ -110,8 +110,9 @@ minutes, with the reason you gave, and the project's journal records it.
   lane files, QC records, the output of the checks, and any picture it opens.
   The frames and the tomograms do not.
 - **On your laptop**: `scp` or another SFTP client, to copy PDFs and folders
-  from the cluster; and ChimeraX with ArtiaX, or IMOD's `3dmod`, to see the
-  picks in 3D.
+  from the cluster; and ChimeraX with ArtiaX, installed as the course's
+  [setup guide](https://cryoem-sweden.github.io/sta-workshop/2612/setup-guide.html) says, or IMOD's
+  `3dmod`, to see the picks in 3D.
 - **Time for the client's installation and sign-in**, then for the queue. While
   the jobs run, the session can be closed.
 
@@ -613,8 +614,11 @@ tomogram with its picks in 3dmod:
 ```
 
 ArtiaX did not start in ChimeraX 1.12 for one of the organizers (a NumPy
-conflict, ArtiaX issue #56); 3dmod shows the same picks. Open one or two series:
-do the picks sit on density at the membranes?
+conflict, ArtiaX issue #56). Their fix, in the course's
+[setup guide](https://cryoem-sweden.github.io/sta-workshop/2612/setup-guide.html): after
+`toolshed install ArtiaX`, run `pip install pandas==3.0.5` in ChimeraX's
+command line. 3dmod shows the same picks. Open one or two series: do the picks
+sit on density at the membranes?
 
 ## 12. A branch: 161 aligned by AreTomo2 (optional)
 
