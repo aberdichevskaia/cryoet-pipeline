@@ -65,12 +65,14 @@ function scoreText(i) {
 // ---- loading -----------------------------------------------------------------
 
 async function start() {
+  setStatus("Reading the project.");
   try {
     state.overview = await api("/api/project");
   } catch (error) {
     setStatus(error.message, true);
     return;
   }
+  setStatus("");
   const overview = state.overview;
   $("project").textContent = overview.project + (overview.variant ? ` · ${overview.variant}` : "");
   document.title = `${overview.project} · results`;

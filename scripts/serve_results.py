@@ -23,9 +23,13 @@ sections and central views, the maps in Mol*, and the FSC between half runs.
 
 Run it from the clone's root, like every command: the registry names files from
 there. Read-only: it reads the registry, never locks it, and writes only its cache of
-pictures (by default <project>/results_cache). The first look at a series cuts
-its slabs, a few seconds for a bin8 tomogram; later looks read the cache, until
-the tomogram or the picks are newer than it.
+pictures (by default <project>/results_cache). Before it prints the link it reads the
+project once, as the page's first request does, and says what it found and how long
+that took: the first reading imports the pipeline's commands, torch, scipy and
+matplotlib among them (7 s on a Mac), and a page opened before then stays empty. The
+first look at a series cuts its slabs, a few seconds for a bin8 tomogram; later looks
+read the cache, until the tomogram or the picks are newer than it. Each answer is
+logged with the time it took.
 
 A prototype of step 1 of docs/dashboard.md.
 """
@@ -34,10 +38,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib
 import os
 import secrets
 import socket
 import sys
+import time
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -123,7 +129,67 @@ def access_lines(host: str, port: int, token: str, *, node: str, user: str,
         lines += ["  (where the node refuses ssh, start this again with --host 0.0.0.0: the "
                   "tunnel then",
                   "  ends on the login node)"]
+    else:
+        # Munich, 27 November 2026: hpc-submit02 answered "connect failed: No route to
+        # host" for a node's port, and the tunnel through to the node worked.
+        lines += ['  (if ssh answers "connect failed", the login node cannot reach this port; '
+                  "the tunnel",
+                  "  can end on the node instead, where this server listens too:",
+                  *(f"  {one})" for one in tunnel_lines("127.0.0.1", port, node, named, user))]
+    # Munich, 27 November 2026: VS Code, connected to the login node, had forwarded the
+    # port from there and held 127.0.0.1:<port> on the laptop, so the tunnel took only
+    # [::1] and a browser met one dead end or the other.
+    lines += ["  (from VS Code on the login node: VS Code may forward this port from the login "
+              "node,",
+              "  where the server is not; if ssh then says the port is in use, stop that forward "
+              "in",
+              "  VS Code's Ports panel, and open the link in your browser, not in VS Code)"]
     return [*lines, "then open:", link]
+
+
+def read_once(project: ResultsProject, classification: ClassificationRuns) -> str:
+    """Read the project as the page's first request will, and say what was found and
+    how long each part took.
+
+    The page's first request resolves each series' results through the pipeline's
+    commands (cryoet_pipeline.cli), whose first import brings in torch, scipy and
+    matplotlib, and reads every classification run's records. In Munich on 27 November
+    2026 a page whose scripts had arrived stayed empty, with no answer to that request
+    in the log yet. Read here, before the link is printed, the wait is in the terminal
+    with its time, and a page opened from the link is answered at once. A failure is
+    said, not raised: the page says the same.
+    """
+
+    began = time.monotonic()
+    parts: list[str] = []
+
+    def lap(since: float) -> str:
+        return f"{time.monotonic() - since:.1f} s"
+
+    try:
+        importlib.import_module("cryoet_pipeline.cli")
+        parts.append(f"the pipeline's modules {lap(began)}")
+        mark = time.monotonic()
+        series = project.overview()["series"]
+        with_picks = sum(1 for one in series if one["picks"])
+        parts.append(f"{len(series)} series, {with_picks} with picks, {lap(mark)}")
+        mark = time.monotonic()
+        if classification.folder.is_dir():
+            listing = classification.listing()
+            runs = listing["runs"]
+            unread = sum(1 for one in runs if "problem" in one)
+            parts.append(
+                f"{len(runs)} classification run{'' if len(runs) == 1 else 's'}"
+                + (f" ({unread} could not be read)" if unread else "")
+                + ("" if runs else " (a run is listed by its plan.json; Dynamo's layout is not)")
+                + f" and {len(listing['fsc'])} FSC in {classification.folder}, {lap(mark)}"
+            )
+        else:
+            parts.append(f"no classification runs: no folder {classification.folder}")
+    except Exception as exc:  # noqa: BLE001 - the page says the same failure
+        parts.append(f"then failed: {type(exc).__name__}: {exc}")
+        return f"reading the project took {lap(began)}: " + "; ".join(parts)
+    return f"read in {lap(began)}: " + "; ".join(parts)
 
 
 def arguments() -> argparse.ArgumentParser:
@@ -171,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
     project = ResultsProject(folder, cache_dir=cache, variant=variant)
     token = secrets.token_urlsafe(24)
     classification = ClassificationRuns(args.mra or folder / "mra", cache_dir=cache)
+    print(f"reading {folder.resolve()} once before serving it...", flush=True)
+    print(f"  {read_once(project, classification)}", flush=True)
     server = ResultsServer((args.host, args.port), project, token, assets=args.assets,
                            classification=classification)
     node = socket.gethostname()

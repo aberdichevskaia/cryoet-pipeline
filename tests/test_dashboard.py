@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import threading
 import tomllib
@@ -36,6 +37,7 @@ from cryoet_pipeline.dashboard.data import (
     protein_sign,
     slab_centres,
 )
+from cryoet_pipeline.dashboard.mra import ClassificationRuns
 from cryoet_pipeline.dashboard.server import VIEWER_FILES, ResultsServer, tunnel_lines
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -386,6 +388,7 @@ def test_the_printed_tunnel_names_the_cluster_user_and_the_laptops_way_to_the_lo
                                       user="someone", login="max-login", environ=job)
     assert wide[1] == "  ssh -N -L 41451:max027:41451 max-login"
     assert "--host 0.0.0.0" not in "\n".join(wide)
+    assert "  ssh -N -L 41451:localhost:41451 -J max-login someone@max027)" in wide
 
     unnamed = serve_results.access_lines("127.0.0.1", 41451, "t0k", node="max027",
                                          user="someone", login=None,
@@ -394,6 +397,112 @@ def test_the_printed_tunnel_names_the_cluster_user_and_the_laptops_way_to_the_lo
     assert serve_results.access_lines("127.0.0.1", 8765, "t0k", node="mac", user="someone",
                                       login=None, environ={}) == [
         "open:", "  http://localhost:8765/?token=t0k"]
+
+
+def test_a_wide_server_also_offers_the_tunnel_to_the_node_and_warns_of_vs_code() -> None:
+    # Munich, 27 November 2026, replayed: from a laptop the printed tunnel reached
+    # hpc-submit02, which answered "connect failed: No route to host" for the node's
+    # port; the tunnel through to the node worked. VS Code, connected to
+    # hpc-submit02, had forwarded the port from there and held 127.0.0.1:37425 on the
+    # laptop (lsof), so the laptop's tunnel bound only [::1].
+    job = {"SLURM_JOB_ID": "4101", "SLURM_SUBMIT_HOST": "hpc-submit02"}
+    lines = serve_results.access_lines("0.0.0.0", 37425, "t0k", node="cpusrv83.scidom.de",
+                                       user="someone", login="hpc-submit02.scidom.de",
+                                       environ=job)
+    assert lines[1] == "  ssh -N -L 37425:cpusrv83.scidom.de:37425 hpc-submit02.scidom.de"
+    text = "\n".join(lines)
+    assert 'if ssh answers "connect failed", the login node cannot reach this port' in text
+    assert ("  ssh -N -L 37425:localhost:37425 -J hpc-submit02.scidom.de "
+            "someone@cpusrv83.scidom.de)") in lines
+    assert "VS Code may forward this port from the login node" in text
+    assert "stop that forward in\n  VS Code's Ports panel" in text
+    assert lines.index("then open:") > max(
+        index for index, line in enumerate(lines) if "VS Code" in line)
+
+    narrow = serve_results.access_lines("127.0.0.1", 37425, "t0k", node="cpusrv83.scidom.de",
+                                        user="someone", login="hpc-submit02.scidom.de",
+                                        environ=job)
+    assert "connect failed" not in "\n".join(narrow)
+    assert "VS Code may forward this port" in "\n".join(narrow)
+    assert not any("VS Code" in line for line in serve_results.access_lines(
+        "127.0.0.1", 8765, "t0k", node="mac", user="someone", login=None, environ={}))
+
+
+def test_the_project_is_read_once_before_the_link_with_what_it_holds(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    imported: list[str] = []
+    real_import = serve_results.importlib.import_module
+
+    def recorded(name: str) -> object:
+        imported.append(name)
+        return real_import(name)
+
+    # The pipeline's modules are timed on their own, apart from reading the project.
+    monkeypatch.setattr(serve_results.importlib, "import_module", recorded)
+    results = _results(tmp_path)
+    missing = ClassificationRuns(tmp_path / "no-mra", cache_dir=tmp_path / "cache")
+    line = serve_results.read_once(results, missing)
+    assert imported == ["cryoet_pipeline.cli"]
+    assert re.fullmatch(
+        r"read in \d+\.\d s: the pipeline's modules \d+\.\d s; 3 series, 1 with picks, "
+        rf"\d+\.\d s; no classification runs: no folder {re.escape(str(tmp_path / 'no-mra'))}",
+        line,
+    ), line
+
+    empty = tmp_path / "mra"
+    empty.mkdir()
+    line = serve_results.read_once(results, ClassificationRuns(empty, cache_dir=tmp_path / "c"))
+    assert (f"0 classification runs (a run is listed by its plan.json; Dynamo's layout is not)"
+            f" and 0 FSC in {empty}, ") in line
+
+    broken = empty / "run_a"
+    broken.mkdir()
+    (broken / "plan.json").write_text("{")
+    line = serve_results.read_once(results, ClassificationRuns(empty, cache_dir=tmp_path / "c"))
+    assert f"1 classification run (1 could not be read) and 0 FSC in {empty}, " in line
+
+
+def test_the_link_is_printed_only_after_the_project_was_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    def stop(self: ResultsServer) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(serve_results.ResultsServer, "serve_forever", stop)
+    project = _project(tmp_path)
+    assert serve_results.main(["--project", str(project),
+                               "--cache-dir", str(tmp_path / "cache")]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    read = [index for index, line in enumerate(printed) if line.startswith("  read in ")]
+    link = [index for index, line in enumerate(printed) if "/?token=" in line]
+    assert len(read) == 1 and len(link) == 1 and read[0] < link[0], printed
+    assert "3 series, 1 with picks" in printed[read[0]]
+
+
+def test_a_project_that_cannot_be_read_is_said_not_raised(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "artifacts.json").write_text("{")
+    line = serve_results.read_once(
+        ResultsProject(project, cache_dir=tmp_path / "cache"),
+        ClassificationRuns(project / "mra", cache_dir=tmp_path / "cache"),
+    )
+    assert re.fullmatch(r"reading the project took \d+\.\d s: the pipeline's modules \d+\.\d s; "
+                        r"then failed: \w+: .+", line, re.DOTALL), line
+
+
+def test_each_answer_is_logged_with_the_time_it_took(
+        served: tuple[str, str], capsys: pytest.CaptureFixture[str]) -> None:
+    base, cookie_name = served
+    capsys.readouterr()
+    assert _get(f"{base}/api/project", f"{cookie_name}=secret-token")[0] == 200
+    assert _get(f"{base}/api/project")[0] == 403
+    logged = capsys.readouterr().err.splitlines()
+    assert len(logged) == 2, logged
+    assert re.fullmatch(r'\d\d:\d\d:\d\d 127\.0\.0\.1 "GET /api/project HTTP/1\.1" 200 - '
+                        r"\d+\.\d s", logged[0]), logged
+    assert re.fullmatch(r'\d\d:\d\d:\d\d 127\.0\.0\.1 "GET /api/project HTTP/1\.1" 403 - '
+                        r"\d+\.\d s", logged[1]), logged
 
 
 def test_the_login_for_the_tunnel_can_be_set_once_in_the_environment(

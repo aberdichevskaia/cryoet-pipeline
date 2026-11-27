@@ -19,6 +19,7 @@ import hmac
 import json
 import math
 import sys
+import time
 import traceback
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -75,7 +76,15 @@ class ResultsHandler(BaseHTTPRequestHandler):
     server_version = "cryoet-results"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-        sys.stderr.write(f"{self.address_string()} {format % args}\n")
+        """One line per answer, when it is sent: the clock, the client, the request, the
+        status, and how long the answer took to make. A line is written only once the
+        answer is ready, so a page waiting on a request shows nothing here until then."""
+
+        began = getattr(self, "_began", None)
+        took = f" {time.monotonic() - began:.1f} s" if began is not None else ""
+        sys.stderr.write(
+            f"{time.strftime('%H:%M:%S')} {self.address_string()} {format % args}{took}\n"
+        )
 
     def _cookie_token(self) -> str | None:
         header = self.headers.get("Cookie")
@@ -93,6 +102,7 @@ class ResultsHandler(BaseHTTPRequestHandler):
         return value is not None and hmac.compare_digest(value, self.server.token)
 
     def do_GET(self) -> None:  # noqa: N802
+        self._began = time.monotonic()
         url = urlsplit(self.path)
         query = parse_qs(url.query)
         if "token" in query:

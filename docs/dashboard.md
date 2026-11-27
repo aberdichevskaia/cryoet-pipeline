@@ -362,7 +362,32 @@ nor X11 gets through there from outside (Anna), so MDC is parked and the next
 test is on the Munich cluster, which the same laptop reaches directly. Tests:
 2 new in test_dashboard and one changed; 9 of 9 mutants caught.
 
-Unverified so far: a tunnel at either site, whether the sites allow ssh to a node
-running one's job or let the login node reach a port on a node, the page with
-600 picks, Mol\* on a real template, and every classification view on a real
-run: none is on the Mac.
+**2026-11-27, Munich.** The server ran under srun on cpusrv83.scidom.de, with
+`--lane configs/lanes/gag-bin8.toml --host 0.0.0.0 --login hpc-submit02.scidom.de`;
+Mol\* was fetched on hpc-submit02, which has internet, and both hashes matched.
+The printed tunnel ran on the laptop as it was and reached hpc-submit02, which
+answered `connect failed: No route to host` for the node's port: there the login
+node did not reach a port on a node, by a firewall or by routing, not told apart.
+The tunnel through to the node, `ssh -N -L 37425:localhost:37425 -J
+hpc-submit02.scidom.de <user>@cpusrv83.scidom.de`, worked with the same server,
+whose 0.0.0.0 takes in the node's own localhost: the page, its scripts and its
+style arrived, from 127.0.0.1 in the server's log. A server on 0.0.0.0 now
+offers that line as well. VS Code, connected to hpc-submit02, had forwarded port
+37425 from hpc-submit02, where the server was not, and held 127.0.0.1:37425 on the
+laptop (`lsof`): the laptop's own tunnel bound only [::1], and VS Code's browser
+answered ERR_CONNECTION_RESET. The printed lines now say what to do about it.
+
+The page then stayed empty: its first request, `/api/project`, had no answer in
+the log while the page's scripts had been served. That request is the first to
+import the pipeline's commands (`cryoet_pipeline.cli`: 1416 modules, torch, scipy
+and matplotlib among them; 6.9 s on the Mac in a fresh process); whether it was
+slow there or stuck is not known. The server now reads the project once before it
+prints the link and says what it found and how long the modules, the series and
+the classification runs took; the page says it is reading the project while it
+waits; and each line of the log gives the clock and the time its answer took.
+Tests: 5 new in test_dashboard and one changed; 15 of 15 mutants caught.
+
+Unverified so far: a tunnel at MDC; the Munich page once its first request is
+answered, and how long the first import and the first look at a series take on a
+node there; the page with 600 picks, Mol\* on a real template, and every
+classification view on a real run.
