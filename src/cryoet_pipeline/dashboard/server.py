@@ -209,16 +209,25 @@ def _finite_only(value: Any) -> Any:
     return value
 
 
-def tunnel_lines(host: str, port: int, node: str, login: str | None) -> list[str]:
+LOCAL_ONLY = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def tunnel_lines(host: str, port: int, node: str, login: str | None,
+                 user: str | None = None) -> list[str]:
     """What to type on a laptop to reach a server on a cluster node, by how it listens.
 
-    Listening on 127.0.0.1, only the node itself reaches the port, so the tunnel
-    has to end on the node: through the login node with -J, which a site allows
-    when it lets a user ssh to a node running their job. Listening on every
-    address, the login node can forward to the node's port directly.
+    `login` is the login node as the laptop reaches it: a Host of the laptop's
+    ~/.ssh/config, which may itself go through a gateway, or user@host. Listening
+    on 127.0.0.1, only the node itself reaches the port, so the tunnel has to end
+    on the node: through the login node with -J, which a site allows when it lets
+    a user ssh to a node running their job. The node is named with the cluster's
+    user name, since the laptop's own is seldom the same and no Host of its
+    ~/.ssh/config names a compute node. Listening on every address, the login
+    node can forward to the node's port directly.
     """
 
     login_name = login or "<login node>"
-    if host in {"127.0.0.1", "localhost", "::1"}:
-        return [f"ssh -N -L {port}:localhost:{port} -J {login_name} {node}"]
+    if host in LOCAL_ONLY:
+        target = f"{user}@{node}" if user else node
+        return [f"ssh -N -L {port}:localhost:{port} -J {login_name} {target}"]
     return [f"ssh -N -L {port}:{node}:{port} {login_name}"]

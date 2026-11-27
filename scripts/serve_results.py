@@ -10,7 +10,11 @@ same by hand, and --variant overrides the lane's label. A project holding severa
 lanes' picks (outputs/ryr1 holds bin8's and bin4's) needs the label.
 
 Run it on the cluster, in a slogin job or a small job of its own, and open the
-link it prints from a laptop through the SSH tunnel it also prints. The page
+link it prints from a laptop through the SSH tunnel it also prints. The tunnel
+goes through the login node as Slurm names it, which a laptop outside the site
+may reach only by another name or through a gateway: --login (or
+CRYOET_SSH_LOGIN) gives the Host of the laptop's ~/.ssh/config to print instead,
+for example --login max-login where that Host jumps through MDC's gateway. The page
 shows each series' tomogram as slabs on a slider, through z and through y, with
 the picks drawn on them, a score histogram with a threshold, and each pick's
 views turned into the template's frame. For the classification runs in
@@ -29,16 +33,18 @@ A prototype of step 1 of docs/dashboard.md.
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import secrets
 import socket
 import sys
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 from cryoet_pipeline.dashboard.data import ResultsProject
 from cryoet_pipeline.dashboard.mra import ClassificationRuns
-from cryoet_pipeline.dashboard.server import ResultsServer, tunnel_lines
+from cryoet_pipeline.dashboard.server import LOCAL_ONLY, ResultsServer, tunnel_lines
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "vendor"
@@ -89,7 +95,38 @@ def registry_hint(project: Path) -> str:
     return "".join(f"\n  {one}" for one in hints)
 
 
-def main(argv: list[str] | None = None) -> int:
+def access_lines(host: str, port: int, token: str, *, node: str, user: str,
+                 login: str | None, environ: Mapping[str, str]) -> list[str]:
+    """What to do on a laptop to open the pages: in a Slurm job, or with the login
+    node named, the tunnel first; then the link.
+
+    Without --login the login node is the host Slurm took the job from, under the
+    cluster's user name. A laptop may not reach it by that name: from outside MDC
+    max-login2 is reached only through MDC's ssh gateway, under a Host of the
+    laptop's ~/.ssh/config, and a short name resolves only inside a site.
+    """
+
+    submit = environ.get("SLURM_SUBMIT_HOST")
+    named = login or (f"{user}@{submit}" if submit else None)
+    link = f"  http://localhost:{port}/?token={token}"
+    if named is None and not environ.get("SLURM_JOB_ID"):
+        return ["open:", link]
+    lines = ["on your laptop, open a tunnel first:"]
+    lines += [f"  {one}" for one in tunnel_lines(host, port, node, named, user)]
+    if login is None:
+        lines += [f"  ({named or '<login node>'} is the login node as Slurm names it: where your "
+                  "laptop reaches it",
+                  "  by another name or through a gateway, write that Host of its ~/.ssh/config "
+                  "instead,",
+                  "  or name it once with --login or CRYOET_SSH_LOGIN)"]
+    if host in LOCAL_ONLY:
+        lines += ["  (where the node refuses ssh, start this again with --host 0.0.0.0: the "
+                  "tunnel then",
+                  "  ends on the login node)"]
+    return [*lines, "then open:", link]
+
+
+def arguments() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     where = parser.add_mutually_exclusive_group(required=True)
     where.add_argument("--lane", type=Path, default=None,
@@ -104,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="port to listen on; 0 (the default) takes a free one")
     parser.add_argument("--host", default="127.0.0.1",
                         help="address to listen on; the default lets only this node in")
+    parser.add_argument("--login", default=os.environ.get("CRYOET_SSH_LOGIN"),
+                        help="the login node as your laptop reaches it, for the tunnel line: a "
+                        "Host of the laptop's ~/.ssh/config, or user@host; default "
+                        "$CRYOET_SSH_LOGIN, else the host Slurm took the job from")
     parser.add_argument("--cache-dir", type=Path, default=None,
                         help="where pictures are kept; default <project>/results_cache")
     parser.add_argument("--mra", type=Path, default=None,
@@ -112,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assets", type=Path, default=ASSETS,
                         help="the libraries scripts/fetch_viewer_assets.py fetched; "
                         f"default {ASSETS}")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = arguments()
     args = parser.parse_args(argv)
 
     if args.lane is not None:
@@ -128,21 +174,15 @@ def main(argv: list[str] | None = None) -> int:
     server = ResultsServer((args.host, args.port), project, token, assets=args.assets,
                            classification=classification)
     node = socket.gethostname()
-    login = os.environ.get("SLURM_SUBMIT_HOST")
     print(f"serving {folder.resolve()}" + (f", picks labelled {variant}" if variant else "")
           + f", on {node}, port {server.port}")
     print(f"pictures are kept in {cache.resolve()}")
     if not server.viewer_available:
         print(f"no Mol* in {args.assets}: the 3D view is off until "
               "scripts/fetch_viewer_assets.py has run")
-    if login is not None or os.environ.get("SLURM_JOB_ID"):
-        print("on your laptop, open a tunnel first:")
-        for line in tunnel_lines(args.host, server.port, node, login):
-            print(f"  {line}")
-        print("then open:")
-    else:
-        print("open:")
-    print(f"  http://localhost:{server.port}/?token={token}")
+    for line in access_lines(args.host, server.port, token, node=node, user=getpass.getuser(),
+                             login=args.login, environ=os.environ):
+        print(line)
     print("Ctrl-C stops it.", flush=True)
     try:
         server.serve_forever()

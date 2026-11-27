@@ -351,9 +351,56 @@ def test_a_lane_given_as_a_project_is_named_with_its_project(
 
 
 def test_the_tunnel_ends_on_the_node_when_only_the_node_may_connect() -> None:
-    assert tunnel_lines("127.0.0.1", 8765, "node7", "login1") == [
-        "ssh -N -L 8765:localhost:8765 -J login1 node7"
+    assert tunnel_lines("127.0.0.1", 8765, "node7", "login1", "someone") == [
+        "ssh -N -L 8765:localhost:8765 -J login1 someone@node7"
     ]
-    assert tunnel_lines("0.0.0.0", 8765, "node7", None) == [
+    assert tunnel_lines("0.0.0.0", 8765, "node7", None, "someone") == [
         "ssh -N -L 8765:node7:8765 <login node>"
     ]
+
+
+def test_the_printed_tunnel_names_the_cluster_user_and_the_laptops_way_to_the_login() -> None:
+    # max, 27 November 2026: from a laptop outside MDC, max-login2 is reached only
+    # through MDC's ssh gateway, by a Host of the laptop's ~/.ssh/config, and the
+    # laptop's user name is not the cluster's. The line printed then could not work.
+    job = {"SLURM_JOB_ID": "3950001", "SLURM_SUBMIT_HOST": "max-login2"}
+    lines = serve_results.access_lines("127.0.0.1", 41451, "t0k", node="max027",
+                                       user="someone", login=None, environ=job)
+    assert lines[:2] == [
+        "on your laptop, open a tunnel first:",
+        "  ssh -N -L 41451:localhost:41451 -J someone@max-login2 someone@max027",
+    ]
+    assert "  ssh -N -L 41451:localhost:41451 -J max-login2 max027" not in lines
+    text = "\n".join(lines)
+    assert "(someone@max-login2 is the login node as Slurm names it" in text
+    assert "--login or CRYOET_SSH_LOGIN" in text
+    assert "start this again with --host 0.0.0.0" in text
+    assert lines[-2:] == ["then open:", "  http://localhost:41451/?token=t0k"]
+
+    named = serve_results.access_lines("127.0.0.1", 41451, "t0k", node="max027",
+                                       user="someone", login="max-login", environ=job)
+    assert named[1] == "  ssh -N -L 41451:localhost:41451 -J max-login someone@max027"
+    assert "Slurm names it" not in "\n".join(named)
+
+    wide = serve_results.access_lines("0.0.0.0", 41451, "t0k", node="max027",
+                                      user="someone", login="max-login", environ=job)
+    assert wide[1] == "  ssh -N -L 41451:max027:41451 max-login"
+    assert "--host 0.0.0.0" not in "\n".join(wide)
+
+    unnamed = serve_results.access_lines("127.0.0.1", 41451, "t0k", node="max027",
+                                         user="someone", login=None,
+                                         environ={"SLURM_JOB_ID": "3950001"})
+    assert unnamed[1] == "  ssh -N -L 41451:localhost:41451 -J <login node> someone@max027"
+    assert serve_results.access_lines("127.0.0.1", 8765, "t0k", node="mac", user="someone",
+                                      login=None, environ={}) == [
+        "open:", "  http://localhost:8765/?token=t0k"]
+
+
+def test_the_login_for_the_tunnel_can_be_set_once_in_the_environment(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CRYOET_SSH_LOGIN", "max-login")
+    assert serve_results.arguments().parse_args(["--project", "p"]).login == "max-login"
+    assert serve_results.arguments().parse_args(
+        ["--project", "p", "--login", "other"]).login == "other"
+    monkeypatch.delenv("CRYOET_SSH_LOGIN")
+    assert serve_results.arguments().parse_args(["--project", "p"]).login is None

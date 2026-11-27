@@ -233,7 +233,9 @@ On 2026-11-25 and 2026-11-26:
 
 ## Open questions
 
-1. Does max, or cryoem.se, run JupyterHub or Open OnDemand?
+1. Does max, or cryoem.se, run JupyterHub or Open OnDemand? At MDC, where from
+   outside neither VS Code nor X11 gets through, it may be the only way besides
+   the static export.
 2. Which chart library: Plotly (large, complete), uPlot (small, line charts),
    Vega-Lite (declarative, moderate)?
 3. Where the image cache lives and its storage class
@@ -343,6 +345,24 @@ file (its last point 0.1487 at Nyquist). Tests: 11 in test_dashboard_mra; 14 of
 transposed views, a transposed or unscaled map, file names, the reference of
 iteration 0, frequency, the protein's side).
 
-Unverified so far: the tunnel at either site, whether the sites allow ssh to a
-node running one's job, the page with 600 picks, Mol\* on a real template, and
-every classification view on a real run: none is on the Mac.
+**2026-11-27: the first try from a laptop, at MDC.** The link was refused on a
+laptop outside MDC: no tunnel was open there, and the line the server printed
+could not have opened one. It named the login node by Slurm's name, max-login2,
+which that laptop reaches only through MDC's ssh gateway under a Host of its
+`~/.ssh/config`, and it named no user, while the laptop's user name is not the
+cluster's. `ssh -G` on that laptop's config, which connects nowhere, resolves the
+old line to max-login2 directly under the laptop's name, and the new one, with
+`--login`, to the cluster's name through the gateway. The line now names the
+cluster's user for the node and, by default, for the login node; it takes the
+laptop's name for the login node from `--login` or `CRYOET_SSH_LOGIN`, says so
+when it falls back to Slurm's name, and, when the server listens on 127.0.0.1,
+says that `--host 0.0.0.0` gives a tunnel that ends on the login node. Whether MDC
+lets any tunnel through from outside is not measured: neither VS Code Remote-SSH
+nor X11 gets through there from outside (Anna), so MDC is parked and the next
+test is on the Munich cluster, which the same laptop reaches directly. Tests:
+2 new in test_dashboard and one changed; 9 of 9 mutants caught.
+
+Unverified so far: a tunnel at either site, whether the sites allow ssh to a node
+running one's job or let the login node reach a port on a node, the page with
+600 picks, Mol\* on a real template, and every classification view on a real
+run: none is on the Mac.
