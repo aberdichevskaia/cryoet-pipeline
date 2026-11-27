@@ -59,7 +59,7 @@ from cryoet_pipeline.reports.imaging import (
     sphere_sections,
 )
 
-CACHE_FORMAT = 2
+CACHE_FORMAT = 3
 """Raised whenever what a cache holds changes, so that old caches are cut again."""
 
 MAX_PAGE_PX = 1024
@@ -116,18 +116,27 @@ def sign_inside(volume: np.ndarray, mask: np.ndarray | None) -> int | None:
 def protein_sign(template: TemplateInfo) -> tuple[int, str]:
     """Which sign the template's protein has, +1 or -1, and how that is known.
 
-    Measured where there is a mask of the template's shape: the mean inside it
-    against the mean outside, since the particle is denser than what surrounds
-    it whichever way the map is inverted. Otherwise prepare-template's record of
-    inverting it, where a template inverted to match a tomogram has dark,
-    negative protein.
+    prepare-template's record of inverting it first: the map it starts from has
+    positive protein, as EMDB's maps do, and a template inverted to match a
+    tomogram has dark, negative protein. Without a record, measured where there is
+    a mask of the template's shape: the mean inside it against the mean outside.
+    That reading holds for a particle in solvent, not for a map filled with density
+    to its edges. In Munich on 27 November 2026 the Gag lane's template, EMD-2638,
+    a box filled with lattice, was drawn reversed (Anna) on the side the mask's
+    means gave, while its picks had matched, so its protein was the dark side, as
+    its default inversion says. Where the two disagree, the source says so.
     """
 
     measured = sign_inside(template.template, template.mask)
+    if template.inverted is not None:
+        recorded = -1 if template.inverted else 1
+        source = "prepare-template's record of inverting it"
+        if measured is not None and measured != recorded:
+            source += ("; its mean inside the mask against outside it says the other side, "
+                       "as it can where density fills the box, as a lattice's does")
+        return recorded, source
     if measured is not None:
         return measured, "measured: the template's mean inside its mask against outside it"
-    if template.inverted is not None:
-        return (-1 if template.inverted else 1, "prepare-template's record of inverting it")
     return 1, "assumed: neither a mask nor a record says"
 
 

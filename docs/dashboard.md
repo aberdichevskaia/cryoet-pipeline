@@ -288,10 +288,10 @@ downloads matched those hashes. `--from <folder>` copies them on a node without
 internet, under the same check. The server serves them and the page loads them
 only when asked (a button), so slicing never waits for 5 MB. It shows the
 template's own file at 1σ on the protein's side and the mask at 0.5,
-translucent; Mol\*'s own panel changes the levels. The protein's side is
-measured, the template's mean inside its mask against outside it, and falls back
+translucent; Mol\*'s own panel changes the levels. The protein's side was
+measured, the template's mean inside its mask against outside it, and fell back
 to prepare-template's record of inverting it only without a mask of the same
-shape. The server hands out only the template and mask files the series
+shape (since 2026-11-27 the record comes first: see Munich below). The server hands out only the template and mask files the series
 resolves to, by those two names.
 
 Checked against the MRC format's own definition rather than another viewer: a
@@ -387,7 +387,24 @@ the classification runs took; the page says it is reading the project while it
 waits; and each line of the log gives the clock and the time its answer took.
 Tests: 5 new in test_dashboard and one changed; 15 of 15 mutants caught.
 
-Unverified so far: a tunnel at MDC; the Munich page once its first request is
-answered, and how long the first import and the first look at a series take on a
-node there; the page with 600 picks, Mol\* on a real template, and every
-classification view on a real run.
+With that change the page opened in Munich, through the tunnel to the node: TS_01
+of gag-bin8 with its slabs, and the template in Mol\*, which Anna saw reversed.
+The page had drawn EMD-2638 at +1σ, the side its mean inside the mask against
+outside it gave; but prepare-template inverts a map by default and the lane does
+not change that, and the Gag picks had matched, so the template's protein was the
+dark side. That map is a box filled with lattice (the lane's own comment), so the
+mask's inside and outside both hold protein and solvent, and the comparison has no
+particle to find; why it came out on the bright side is not measured. The
+template's side is now prepare-template's record of inverting it, an EMDB map's
+protein being positive; the mask's means decide only without a record, and where
+the two disagree the note under the view says so. The series cache's format is
+raised, so a cached page is cut again with the new side. The classification views
+and the FSC still take a map's side from its mean inside the alignment mask
+against outside it, with the tomograms' dark protein only as the fallback; a
+lattice's averages fill their box as well, so a Gag run may be drawn reversed
+there too: no Gag run has been shown yet. Tests: test_dashboard's sign test
+rewritten for the new order; 6 of 6 mutants caught.
+
+Unverified so far: a tunnel at MDC; how long the first import and the first look
+at a series take on a node in Munich; the template drawn on the record's side
+there; the page with 600 picks, and every classification view on a real run.

@@ -195,22 +195,37 @@ def test_a_pick_and_the_template_are_shown_as_tiles(tmp_path: Path) -> None:
         results.picture("TS_A", document["key"], "../artifacts.json")
 
 
-def test_the_protein_side_is_measured_against_the_mask_before_any_record(tmp_path: Path) -> None:
+def test_the_protein_side_is_the_record_of_inverting_before_the_mask(tmp_path: Path) -> None:
     results = _results(tmp_path)
     document = results.series("TS_A")
     # test_report's template is a negative Gaussian, recorded as inverted.
     assert document["template"]["protein_sign"] == -1
-    assert document["template"]["protein_sign_source"].startswith("measured")
+    assert document["template"]["protein_sign_source"] == (
+        "prepare-template's record of inverting it")
     assert document["template"]["maps"] == ["mask.mrc", "template.mrc"]
 
     report = results._report("TS_A", results._prepared("TS_A"))
     template = report.template
     assert template is not None
-    # The record says inverted, the map says otherwise: the map wins.
-    assert protein_sign(replace(template, template=-template.template))[0] == 1
+    # Munich, 27 November 2026: the Gag template, a box filled with lattice, measured
+    # the other side from its record, and the page drew it reversed. The record wins,
+    # and the disagreement is said.
+    sign, source = protein_sign(replace(template, template=-template.template))
+    assert sign == -1
+    assert source.startswith("prepare-template's record of inverting it; ")
+    assert "says the other side" in source
+    assert protein_sign(replace(template, inverted=False)) == (
+        1, "prepare-template's record of inverting it; its mean inside the mask against "
+        "outside it says the other side, as it can where density fills the box, as a "
+        "lattice's does")
     assert protein_sign(replace(template, mask=None)) == (
         -1, "prepare-template's record of inverting it")
-    assert protein_sign(replace(template, mask=None, inverted=None))[0] == 1
+    # Without a record, the mask decides; without either, protein is taken as positive.
+    assert protein_sign(replace(template, inverted=None)) == (
+        -1, "measured: the template's mean inside its mask against outside it")
+    assert protein_sign(replace(template, template=-template.template, inverted=None))[0] == 1
+    assert protein_sign(replace(template, mask=None, inverted=None)) == (
+        1, "assumed: neither a mask nor a record says")
 
 
 def test_only_the_template_and_its_mask_are_served_as_maps(tmp_path: Path) -> None:
