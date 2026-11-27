@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """A project's results in a browser, served from where the data are.
 
-    python3 scripts/serve_results.py --project outputs/ryr1-bin8
-    python3 scripts/serve_results.py --project outputs/ryr1-bin8 --variant bin8 --port 8765
+    python3 scripts/serve_results.py --lane configs/lanes/ryr1-bin8.toml
+    python3 scripts/serve_results.py --project outputs/ryr1 --variant bin8 --port 8765
+
+A lane config names its project ([run] project) and the label of its picks ([lane]
+variant), as scripts/show_project.py reads them; --project and --variant say the
+same by hand, and --variant overrides the lane's label. A project holding several
+lanes' picks (outputs/ryr1 holds bin8's and bin4's) needs the label.
 
 Run it on the cluster, in a slogin job or a small job of its own, and open the
 link it prints from a laptop through the SSH tunnel it also prints. The page
@@ -28,21 +33,73 @@ import os
 import secrets
 import socket
 import sys
+import tomllib
 from pathlib import Path
 
 from cryoet_pipeline.dashboard.data import ResultsProject
 from cryoet_pipeline.dashboard.mra import ClassificationRuns
 from cryoet_pipeline.dashboard.server import ResultsServer, tunnel_lines
 
-ASSETS = Path(__file__).resolve().parents[1] / "vendor"
+ROOT = Path(__file__).resolve().parents[1]
+ASSETS = ROOT / "vendor"
+LANES = ROOT / "configs" / "lanes"
+
+
+def _from_root(path: str | Path) -> Path:
+    """Paths in a lane config are relative to the repository root."""
+
+    path = Path(path)
+    return path if path.is_absolute() else ROOT / path
+
+
+def lane_project(lane: Path) -> tuple[Path, str | None]:
+    """A lane config's project folder and the label of its picks."""
+
+    import run_series
+
+    _, config = run_series.read_config(lane)
+    name = (config.get("run") or {}).get("project")
+    if not name:
+        raise SystemExit(f"{lane}: no [run] project")
+    return _from_root(name), (config.get("lane") or {}).get("variant")
+
+
+def registry_hint(project: Path) -> str:
+    """What a --project that holds no registry probably meant: the project of a lane
+    of that name, and the folders beside it that hold one."""
+
+    hints = []
+    lane = LANES / f"{project.name}.toml"
+    if lane.is_file():
+        try:
+            config = tomllib.loads(lane.read_text())
+        except tomllib.TOMLDecodeError:
+            config = {}
+        target = (config.get("run") or {}).get("project")
+        label = (config.get("lane") or {}).get("variant")
+        if target:
+            hints.append(f"{project.name} is a lane, whose project is {target}"
+                         + (f" and whose picks are labelled {label}" if label else "")
+                         + f": give --lane {lane.relative_to(ROOT)}")
+    parent = project.parent
+    if parent.is_dir():
+        found = sorted(one.name for one in parent.iterdir() if (one / "artifacts.json").is_file())
+        if found:
+            hints.append(f"the folders in {parent} that hold a registry: {', '.join(found)}")
+    return "".join(f"\n  {one}" for one in hints)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--project", type=Path, required=True,
-                        help="the project folder, holding artifacts.json and manifests/")
+    where = parser.add_mutually_exclusive_group(required=True)
+    where.add_argument("--lane", type=Path, default=None,
+                       help="a lane config: its [run] project, and its [lane] variant as the "
+                       "label of the picks")
+    where.add_argument("--project", type=Path, default=None,
+                       help="the project folder, holding artifacts.json and manifests/")
     parser.add_argument("--variant", default=None,
-                        help="label of the picks to show, as for cryoet report --variant")
+                        help="label of the picks to show, as for cryoet report --variant; "
+                        "with --lane, instead of the lane's")
     parser.add_argument("--port", type=int, default=0,
                         help="port to listen on; 0 (the default) takes a free one")
     parser.add_argument("--host", default="127.0.0.1",
@@ -57,17 +114,23 @@ def main(argv: list[str] | None = None) -> int:
                         f"default {ASSETS}")
     args = parser.parse_args(argv)
 
-    if not (args.project / "artifacts.json").is_file():
-        parser.error(f"no registry at {args.project / 'artifacts.json'}")
-    cache = args.cache_dir or args.project / "results_cache"
-    project = ResultsProject(args.project, cache_dir=cache, variant=args.variant)
+    if args.lane is not None:
+        folder, label = lane_project(args.lane)
+        variant = args.variant or label
+    else:
+        folder, variant = args.project, args.variant
+    if not (folder / "artifacts.json").is_file():
+        parser.error(f"no registry at {folder / 'artifacts.json'}{registry_hint(folder)}")
+    cache = args.cache_dir or folder / "results_cache"
+    project = ResultsProject(folder, cache_dir=cache, variant=variant)
     token = secrets.token_urlsafe(24)
-    classification = ClassificationRuns(args.mra or args.project / "mra", cache_dir=cache)
+    classification = ClassificationRuns(args.mra or folder / "mra", cache_dir=cache)
     server = ResultsServer((args.host, args.port), project, token, assets=args.assets,
                            classification=classification)
     node = socket.gethostname()
     login = os.environ.get("SLURM_SUBMIT_HOST")
-    print(f"serving {args.project.resolve()} on {node}, port {server.port}")
+    print(f"serving {folder.resolve()}" + (f", picks labelled {variant}" if variant else "")
+          + f", on {node}, port {server.port}")
     print(f"pictures are kept in {cache.resolve()}")
     if not server.viewer_available:
         print(f"no Mol* in {args.assets}: the 3D view is off until "

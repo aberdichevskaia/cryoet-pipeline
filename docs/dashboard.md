@@ -248,7 +248,11 @@ On 2026-11-25 and 2026-11-26:
 ## Status
 
 **2026-11-26: a prototype of step 1, without Mol\*.** `scripts/serve_results.py`
-starts the server (`src/cryoet_pipeline/dashboard/`: `data.py` cuts and places,
+starts the server, from a lane config (`--lane`, its [run] project and [lane]
+variant, as `show_project.py` takes one) or from `--project` and `--variant`; a
+--project that holds no registry is answered with the project of a lane of that
+name and the folders beside it that hold one, after the first try on max gave
+the lane's name, outputs/ryr1-bin8, as the project (`src/cryoet_pipeline/dashboard/`: `data.py` cuts and places,
 `server.py` serves with the token, `static/` is the page). For each series: XY
 slabs through z and XZ slabs through y on sliders, each view marking where the
 other's slab cuts it; the picks as sphere sections coloured by score; a score

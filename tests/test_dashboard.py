@@ -41,6 +41,7 @@ from cryoet_pipeline.dashboard.server import VIEWER_FILES, ResultsServer, tunnel
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import fetch_viewer_assets  # noqa: E402
+import serve_results  # noqa: E402
 
 # test_report gives its blobs scores of 0.09 to 0.16 and its decoys 0.05 to 0.065.
 BLOB_SCORE = 0.08
@@ -321,6 +322,32 @@ def test_the_server_answers_only_with_the_token(served: tuple[str, str]) -> None
     status, _, body = _get(f"{base}/map/TS_A/{document['key']}/template.mrc", cookie)
     assert status == 200 and body[208:212] == b"MAP "
     assert _get(f"{base}/map/TS_A/{document['key']}/artifacts.json", cookie)[0] == 404
+
+
+def test_a_lane_names_its_project_and_the_label_of_its_picks() -> None:
+    folder, label = serve_results.lane_project(ROOT / "configs" / "lanes" / "ryr1-bin8.toml")
+    assert folder == ROOT / "outputs" / "ryr1" and label == "bin8"
+
+
+def test_a_lane_given_as_a_project_is_named_with_its_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On max, 2026-11-26: --project outputs/ryr1-bin8, the lane's name, not its project."""
+
+    outputs = tmp_path / "outputs"
+    for name in ("ryr1", "ribo-mdc"):
+        (outputs / name).mkdir(parents=True)
+        (outputs / name / "artifacts.json").write_text("{}")
+    (outputs / "eval-runs").mkdir()
+    with pytest.raises(SystemExit):
+        serve_results.main(["--project", str(outputs / "ryr1-bin8")])
+    error = capsys.readouterr().err
+    assert "no registry at" in error
+    assert ("ryr1-bin8 is a lane, whose project is outputs/ryr1 and whose picks are labelled "
+            "bin8: give --lane configs/lanes/ryr1-bin8.toml") in error
+    assert f"the folders in {outputs} that hold a registry: ribo-mdc, ryr1" in error
+    assert serve_results.registry_hint(outputs / "nothing-like-it") == (
+        f"\n  the folders in {outputs} that hold a registry: ribo-mdc, ryr1")
 
 
 def test_the_tunnel_ends_on_the_node_when_only_the_node_may_connect() -> None:
