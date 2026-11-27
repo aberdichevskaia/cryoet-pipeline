@@ -47,7 +47,9 @@ lane runs, where its logs are and how to read results is in
 
 1. **`python3 scripts/show_failure.py <lane config>`**: each failed step with
    its command and error lines, from the Slurm log and from the programs' own
-   logs.
+   logs. A job that stopped before `lane.sbatch` printed its header is listed
+   apart, with its log's lines: it ran no step, so it is no failed step, and
+   the cause is the job's environment, IMOD or the config.
 2. **The Slurm log**, `slurm-<project>-<stage>-<job>.log`. A job submitted from
    another folder logs there; `sacct -j <job> -o WorkDir` says where (E-12).
 3. **`sacct -j <job> -o JobID,State,Elapsed,AllocTRES,NodeList`**: how the job

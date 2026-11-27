@@ -44,7 +44,7 @@ If a job is working on a series the request touches:
 
 | The person wants | Start from | Written to |
 |---|---|---|
-| a new dataset | `configs/lanes/example.toml`, or a lane in `configs/lanes/` with the same kind of data | `configs/lanes/<name>.toml`; the client asks the person to approve the new file |
+| a new dataset | `configs/lanes/example.toml`, with the rows marked *site* copied from the closest lane at the same site (`docs/agent/lane_questions.md`, step 2). Never another lane's other values: they are that lane's choices | `configs/lanes/<name>.toml`; the client asks the person to approve the new file |
 | a one-off rerun or a test | a copy of the lane's own file | the project space or the site's scratch, never `/tmp` |
 | a permanent change to a lane | nothing written: propose the edit | the person makes it, with a comment saying what changed, when and why |
 
@@ -192,6 +192,9 @@ Then:
    - for an MRA, its run folder, its particles, and the settings that are not
      the lab's rules;
    - every "would refuse" line, and what it means;
+   - every value under "set where the lab's rules leave the key unset", and
+     where each came from: the person's request or a reason in the lane's
+     comments. Take out one with neither before asking;
    - with `--overwrite`, the outputs it may replace.
 2. If it refused anything, fix the cause and run the dry run again. If it
    refused a busy series, wait for the job, as section 1 says.

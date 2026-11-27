@@ -68,6 +68,12 @@ among the movies, a movie it cannot read. Otherwise it prints a line per series
 init would find. A stage that runs motion correction needs the file its
 [motion] gain_reference names.
 
+The dry run and the submission list every key the config sets that the lab's
+rules leave unset, with the rule, as docs/agent/lane_questions.md's table of
+every key says it ("rule" its only source, "unset" its rule): a value copied
+with a whole lane is that lane's choice, and changes results without anyone
+having asked for it. Listed, not refused.
+
 The recipes, experiments written in advance that run a lane's steps another way
 (scripts/ctf_window_test.sbatch and the like), are submitted by
 scripts/submit_recipe.py, with these checks and into the same journal.
@@ -398,6 +404,48 @@ UNSET_HINT = (
     "setup\"; at MDC, the lines that source "
     "/fast/AG_Kudryashev/software/cryoet-tools.sh and set PYTOMO_MP_DIR)"
 )
+
+
+# The table of every lane key, with where each value comes from (tests/test_lane_questions.py
+# reads the same rows). A row whose only source is the lab's rules and whose rule begins
+# "unset" names keys a lane leaves out unless someone asked otherwise.
+LANE_QUESTIONS = ROOT / "docs" / "agent" / "lane_questions.md"
+_KEY_ROW = re.compile(
+    r"^\| `\[(?P<section>[a-z_.]+)\] (?P<keys>[a-z0-9_, ]+)` \| (?P<sources>[a-z, ]+) \| "
+    r"(?P<how>.+) \|$"
+)
+_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
+def set_against_rules(cfg: dict[str, Any]) -> list[str]:
+    """The keys the config sets that the lab's rules leave unset, each with its rule.
+
+    A lane copied whole from another carries that lane's choices with it: the
+    assistant's ryr1-assistant lane on cryoem.se, 26 November 2026, took
+    number_of_particles = 2000 and number_of_false_positives = 100 from ryr1-bin8
+    and picked 755 on series 125 where the rule's twice-the-peaks gave 632. Listed,
+    not refused: a person may have asked for any of them."""
+
+    try:
+        text = LANE_QUESTIONS.read_text()
+    except OSError as error:
+        return [f"not compared with the lab's rules: {error}"]
+    found = []
+    for line in text.splitlines():
+        row = _KEY_ROW.match(line)
+        if not row or {s.strip() for s in row["sources"].split(",")} != {"rule"}:
+            continue
+        if not row["how"].lower().startswith("unset"):
+            continue
+        table = cfg.get(row["section"])
+        if not isinstance(table, dict):
+            continue
+        for key in (k.strip() for k in row["keys"].split(",")):
+            if key in table:
+                how = _LINK.sub(r"\1", row["how"])
+                found.append(f"[{row['section']}] {key} = {json.dumps(table[key])}; "
+                             f"the rule: {how}")
+    return found
 
 
 def unset_variables(stages: tuple[Stage, ...]) -> list[tuple[str, Stage]]:
@@ -1745,6 +1793,13 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 1
         print("  " + " -> ".join(f"{name} {job}" for name, job in jobs.items()))
+        against = set_against_rules(cfg)
+        if against:
+            print("  set where the lab's rules leave the key unset "
+                  "(docs/agent/lane_questions.md, \"Every key\"); each needs its reason, "
+                  "a request or a comment in the lane:")
+            for line in against:
+                print(f"    {line}")
         if args.dry_run and one.slurm_said:
             print("  Slurm, asked with sbatch --test-only (nothing submitted; each stage "
                   "alone, without waiting for the one before):")

@@ -353,3 +353,199 @@ def test_no_failed_step_still_says_what_failed_before(tmp_path):
         "no failed step on record for this lane",
     ]
     assert "failed before, and passed when run again since:" in text
+
+
+# What lane.sbatch leaves when it stops before its header, as a job did on
+# cryoem.se on 26 November 2026, one second after it started.
+NO_HEADER = (
+    "scripts/activate_env.sh: line 12: micromamba: command not found\n"
+    "no environment cryoet-pipeline: run session.sh first\n"
+)
+
+
+def test_a_job_that_stopped_before_its_header_is_counted_and_shown(tmp_path):
+    _project(tmp_path)
+    _write(tmp_path / "slurm-p-gpu-130.log", NO_HEADER, datetime(2026, 10, 28, 9, tzinfo=UTC))
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    [early] = result["before_start"]
+    assert (early["id"], early["name"], early["log"]) == ("130", "p-gpu", "slurm-p-gpu-130.log")
+    assert [line["text"] for line in early["lines"]] == NO_HEADER.splitlines()
+    assert result["before_start_since"] == []
+    # Not a failed step: no step or series is known for it.
+    assert all(entry.get("job", {}).get("id") != "130" for entry in result["failures"])
+
+    text = show_failure.render(result)
+    assert text[0].endswith("3 failed steps, 1 job stopped before the pipeline started")
+    joined = "\n".join(text)
+    assert "slurm-p-gpu-130.log (job p-gpu 130, written 2026-10-28T09:00:00+00:00)" in joined
+    assert re.search(r"^\s+1  scripts/activate_env.sh: line 12: micromamba", joined, re.M)
+
+
+def test_with_no_failed_step_the_job_is_not_hidden_behind_none_on_record(tmp_path):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    _write(tmp_path / "slurm-p-cpu-131.log", NO_HEADER, datetime(2026, 10, 28, 9, tzinfo=UTC))
+    text = show_failure.render(show_failure.failures(_config(), tmp_path, slurm=False))
+    assert text[0].endswith("0 failed steps, 1 job stopped before the pipeline started")
+    assert "no failed step on record for this lane" not in text
+
+
+def test_an_empty_log_is_shown_as_empty(tmp_path):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    _write(tmp_path / "slurm-p-cpu-132.log", "", datetime(2026, 10, 28, 9, tzinfo=UTC))
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    assert [entry["id"] for entry in result["before_start"]] == ["132"]
+    assert "      (empty)" in show_failure.render(result)
+
+
+def test_one_followed_by_a_job_of_the_same_stage_is_listed_apart(tmp_path):
+    _project(tmp_path)
+    # Before jobs 124 and 125 of the same stage started.
+    _write(tmp_path / "slurm-p-gpu-121.log", NO_HEADER, datetime(2026, 10, 27, 10, tzinfo=UTC))
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    assert result["before_start"] == []
+    [since] = result["before_start_since"]
+    assert (since["id"], since["later"]["id"]) == ("121", "124")
+    text = show_failure.render(result)
+    assert text[0].endswith("3 failed steps")
+    assert "  p-gpu 121, then p-gpu 124 (slurm-p-gpu-124.log)" in text
+
+
+def test_only_the_lanes_own_lane_sbatch_stages_and_the_step_asked_about(tmp_path):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    config = _config()
+    config["run"]["stage"].append({"name": "mra", "from": "mra", "until": "mra",
+                                   "time": "1:00:00", "sbatch": []})
+    when = datetime(2026, 10, 28, 9, tzinfo=UTC)
+    # The MRA's job prints its project line later than lane.sbatch does.
+    _write(tmp_path / "slurm-p-mra-140.log", "started     2026-10-28T09:00:00\n", when)
+    # Another job of the project's name, not a stage of this lane.
+    _write(tmp_path / "slurm-p-ctf_window-141.log", NO_HEADER, when)
+    _write(tmp_path / "slurm-p-gpu-142.log", NO_HEADER, when)
+    _write(tmp_path / "slurm-p-cpu-143.log", NO_HEADER, when)
+
+    def ids(**options: object) -> list[str]:
+        result = show_failure.failures(config, tmp_path, slurm=False, **options)
+        return [entry["id"] for entry in result["before_start"]]
+
+    assert ids() == ["142", "143"]
+    assert ids(step="track-fiducials") == ["143"]
+    assert ids(step="pick-particles") == ["142"]
+
+
+def _sacct(monkeypatch, workdir: Path, rows: dict[str, tuple[str, str]]) -> None:
+    """sacct as it answers show_project and show_failure: the jobs' folders, and
+    their states. `rows` is {job id: (job name, state)}."""
+    def slurm(command: list[str]) -> list[list[str]]:
+        if "JobID,JobName,WorkDir" in command:
+            return [[job, name, str(workdir)] for job, (name, _) in rows.items()]
+        if "JobID,State,ExitCode,Elapsed" in command:
+            asked = command[command.index("-j") + 1].split(",")
+            return [[job, state, "1:0", "00:00:01"] for job, (_, state) in rows.items()
+                    if job in asked]
+        return []
+    monkeypatch.setattr(show_project, "_slurm", slurm)
+
+
+def test_slurm_says_how_it_ended_and_a_job_still_starting_is_left_out(tmp_path, monkeypatch):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    when = datetime(2026, 10, 28, 9, tzinfo=UTC)
+    _write(tmp_path / "slurm-p-gpu-150.log", NO_HEADER, when)
+    _write(tmp_path / "slurm-p-cpu-151.log", "", when)
+    _sacct(monkeypatch, tmp_path, {"150": ("p-gpu", "FAILED"), "151": ("p-cpu", "RUNNING")})
+    result = show_failure.failures(_config(), tmp_path)
+    [early] = result["before_start"]
+    assert early["id"] == "150"
+    assert early["slurm"] == {"state": "FAILED", "exit_code": "1:0", "elapsed": "00:00:01"}
+    assert ("(job p-gpu 150, written 2026-10-28T09:00:00+00:00; Slurm: FAILED, exit 1:0, "
+            "after 00:00:01)") in "\n".join(show_failure.render(result))
+
+
+def test_a_missing_log_counts_only_when_slurm_says_the_job_failed(
+    tmp_path, tmp_path_factory, monkeypatch
+):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    away = tmp_path_factory.mktemp("away")
+    _sacct(monkeypatch, away, {"160": ("p-gpu", "NODE_FAIL"), "161": ("p-cpu", "COMPLETED"),
+                                "162": ("p-cpu", "CANCELLED by 501")})
+    result = show_failure.failures(_config(), tmp_path)
+    assert [(entry["id"], entry.get("missing")) for entry in result["before_start"]] == [
+        ("160", True), ("162", True)]
+    text = "\n".join(show_failure.render(result))
+    assert f"  job p-gpu 160: no log at {away}/slurm-p-gpu-160.log; Slurm: NODE_FAIL" in text
+
+
+# A header, then a command of lane.sbatch's checks failing under set -e: no
+# "preflight:" line and no "preflight   ok".
+IN_CHECKS = (
+    "job         p-gpu (170) on node2\nstarted     2026-10-28T10:00:00+00:00\n" + HEADER
+    + "series      A B\nsteps       prepare-template pick-particles extract-particles\n"
+    "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n"
+    "IndexError: list index out of range\n"
+)
+
+
+def test_a_job_stopped_inside_the_checks_without_a_preflight_line_is_a_preflight_stop(tmp_path):
+    _project(tmp_path)
+    (tmp_path / "slurm-p-gpu-170.log").write_text(IN_CHECKS)
+    found = _found(tmp_path)
+    # A's entry is the later of its two stops, job 124's preflight line and this.
+    for series in ("A", "B"):
+        entry = found[series, "preflight"]
+        assert entry["problem"] == show_failure.CHECKS_STOPPED
+        assert entry["job"]["id"] == "170"
+        assert "IndexError: list index out of range" in [
+            line["text"] for line in entry["slurm_lines"]]
+    text = "\n".join(show_failure.render(show_failure.failures(_config(), tmp_path, slurm=False)))
+    assert "B  preflight  preflight: stopped in lane.sbatch's checks" in text
+
+
+def test_a_job_slurm_still_runs_in_its_checks_is_not_a_failure(tmp_path, monkeypatch):
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    (tmp_path / "slurm-p-gpu-170.log").write_text(IN_CHECKS)
+    _sacct(monkeypatch, tmp_path, {"170": ("p-gpu", "RUNNING")})
+    assert show_failure.failures(_config(), tmp_path)["failures"] == []
+    _sacct(monkeypatch, tmp_path, {"170": ("p-gpu", "FAILED")})
+    [entry] = [e for e in show_failure.failures(_config(), tmp_path)["failures"]
+               if e["series"] == "B"]
+    assert entry["problem"] == show_failure.CHECKS_STOPPED
+
+
+def test_a_log_without_the_checks_line_that_ran_its_steps_is_not_a_preflight_stop(tmp_path):
+    # As a job of a lane.sbatch older than its "preflight   ok" line would read,
+    # stopped between two steps: no end line, and no step in progress.
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    (tmp_path / "slurm-p-cpu-171.log").write_text(
+        "job         p-cpu (171) on node1\nstarted     2026-10-28T10:00:00+00:00\n" + HEADER
+        + "series      B\n\n# ---- B (ribo-bin8) ----\n\n# align-tilt-series\n"
+        "cryoet align-tilt-series --manifest outputs/p/manifests/B.json\n"
+        "# align-tilt-series: 2.0 min, +0.10 GB\n"
+    )
+    assert show_failure.failures(_config(), tmp_path, slurm=False)["failures"] == []
+
+
+def test_a_log_that_lost_its_header_but_shows_steps_is_not_a_job_stopped_before_it(tmp_path):
+    """Eval case E01 keeps the last 50 lines of a job's log, without its header,
+    so that the evidence tools do not list that job."""
+    (tmp_path / "outputs" / "p").mkdir(parents=True)
+    when = datetime(2026, 10, 28, 9, tzinfo=UTC)
+    _write(tmp_path / "slurm-p-cpu-180.log",
+           "RuntimeError: IMOD autofidseed failed with exit code 1\n"
+           "# generate-fiducial-seed: 0.4 min, +0.00 GB\n\n"
+           "# FAILED at generate-fiducial-seed (exit 1) for B.\n", when)
+    _write(tmp_path / "slurm-p-cpu-181.log",
+           "matching rotations 1/3\n# pick-particles\n", when)
+    _write(tmp_path / "slurm-p-cpu-182.log", "\n# ---- B (ribo-bin8) ----\n", when)
+    result = show_failure.failures(_config(), tmp_path, slurm=False)
+    assert result["before_start"] == [] and result["before_start_since"] == []
+
+
+def test_no_eval_case_gains_a_job_stopped_before_its_header():
+    """The cases' evidence stays what it was: E01's headerless copy of a log
+    in particular, which is there so that the tools do not list that job."""
+    checked = 0
+    for tree in sorted((ROOT / "docs" / "agent" / "cases").glob("*/tree")):
+        for config in sorted((tree / "configs" / "lanes").glob("*.toml")):
+            result = show_failure.failures(tomllib.loads(config.read_text()), tree, slurm=False)
+            assert result["before_start"] == [] and result["before_start_since"] == [], config
+            checked += 1
+    assert checked >= 9

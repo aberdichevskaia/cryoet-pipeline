@@ -357,6 +357,10 @@ at the picks first. The dry run should show:
   (`--dependency=afterok`), and their chain: `motion -> align -> cpu -> gpu`;
 - what Slurm said of each stage: when and where it would start, each stage
   judged alone, without waiting for the one before;
+- three values under *set where the lab's rules leave the key unset*: `[ctf]
+  defocus_search_window_angstrom`, `[ctf] max_excluded_views` and `[extract]
+  pad_edges`. The lane's comments give the reason for each. Any other line
+  there is a value someone added to the lane: find out why before you submit;
 - no line that starts with `would refuse:`. If there is one, it names what to
   fix; a stage Slurm refuses comes with Slurm's own reason, for example a
   reservation or partition your account may not use.

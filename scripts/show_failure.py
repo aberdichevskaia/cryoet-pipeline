@@ -18,9 +18,24 @@ shared steps only):
 * a step whose last run exited non-zero;
 * a job that stopped in its preflight, before any step ran, unless one of its
   steps has run for the series since. Another lane's job counts only if every
-  step it was to run is shared;
+  step it was to run is shared. That is a `preflight:` line, or a log that
+  stops inside lane.sbatch's checks with neither that nor `preflight   ok`, as
+  a command failing under set -e leaves it; a job Slurm still runs is left out;
 * a job whose log stops in the middle of a step: still running, or stopped by
   Slurm (time limit, memory, node). sacct, where it can be run, says which.
+
+Listed apart, since no step or series is known for them: the lane's jobs that
+stopped before lane.sbatch printed its header, so before the preflight and any
+step. What lane.sbatch does first, under set -e, can stop a job within a second
+and leave only an error in its log: the environment's activation, IMOD's
+startup script, the config read by run_series.py. On cryoem.se, 26 November
+2026, such a job read here as "0 failed steps". They are the logs named for one
+of the lane's lane.sbatch stages (<project>-<stage>) that hold no "project" line,
+and nothing run_series.py prints after it, and, where sacct can be run, the
+lane's jobs that Slurm ended in a failed state and whose log is missing; a job Slurm still runs is left out, and one that a
+later job of the same stage followed is listed as such. The name is all that
+ties such a log to the project: another project whose folder has the same name
+shares it.
 
 The jobs are found by their Slurm logs, in the repository root and, where sacct
 can be run, wherever else a job of the project was submitted from.
@@ -42,6 +57,7 @@ Disposable, like scripts/run_series.py.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import re
 import sys
@@ -93,6 +109,24 @@ MAX_LOGS = 5
 MAX_WIDTH = 300
 # Clock and file-system skew around a step's run.
 SLACK = timedelta(minutes=2)
+# A lane job's log, as lane.sbatch's --output names it: slurm-%x-%j.log.
+_LOG_NAME = re.compile(r"^slurm-(?P<name>.+)-(?P<id>\d+)\.log$")
+# Slurm's states of a job not yet over: no header yet is no failure yet.
+_NOT_OVER = {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING",
+             "SUSPENDED"}
+# Slurm's states of a job that ended without a failure.
+_ENDED_WELL = {"COMPLETED"}
+# What lane.sbatch prints when its checks pass, and the problem given for a log
+# that stops in them without saying why.
+_CHECKS_PASSED = "preflight   ok"
+CHECKS_STOPPED = ("stopped in lane.sbatch's checks, before any step, without a preflight "
+                  "line: a command failed under set -e; see the log's last lines")
+
+
+def _state(job: dict[str, Any]) -> str:
+    """Slurm's state of a job, its first word ("CANCELLED by 1234" is CANCELLED);
+    empty when Slurm was not asked."""
+    return str((job.get("slurm") or {}).get("state") or "").partition(" ")[0]
 
 
 def _time(text: Any) -> datetime | None:
@@ -248,6 +282,81 @@ def program_logs(
     return shown, max(0, len(newest) - MAX_LOGS)
 
 
+def before_start(
+    cfg: dict[str, Any], root: Path, elsewhere: list[Path], jobs: list[dict[str, Any]],
+    chain: list[str], step: str | None = None, slurm: bool = True,
+) -> list[dict[str, Any]]:
+    """The lane's jobs that stopped before lane.sbatch's header, each with its log's
+    error lines and last lines, Slurm's state where sacct can be run, and the
+    later job of the same stage, if one started after it (`jobs`, the jobs with a
+    header). With `step`, only the stages that were to run it."""
+
+    prefix = Path(cfg["run"]["project"]).name
+    stages: dict[str, list[str]] = {}
+    for stage in cfg["run"].get("stage") or []:
+        start, end = stage.get("from"), stage.get("until")
+        if start not in chain or end not in chain:
+            # The MRA's stage: its step is in no series' chain, and its job,
+            # mra_port_run.sbatch's, prints its project line later than lane.sbatch.
+            continue
+        stages[f"{prefix}-{stage.get('name')}"] = chain[chain.index(start):chain.index(end) + 1]
+    if step is not None:
+        stages = {name: steps for name, steps in stages.items() if step in steps}
+
+    found: dict[str, dict[str, Any]] = {}
+    here = root.glob(f"slurm-{glob.escape(prefix)}-*.log")
+    paths = {path.resolve(): path for path in [*elsewhere, *here]}
+    for path in sorted(paths.values(), key=lambda path: path.name):
+        match = _LOG_NAME.match(path.name)
+        if not match or match["name"] not in stages:
+            continue
+        shown = str(path.relative_to(root) if path.is_relative_to(root) else path)
+        entry: dict[str, Any] = {"id": match["id"], "name": match["name"], "log": shown}
+        if not path.is_file():
+            entry["missing"] = True  # kept only if Slurm says the job failed
+        else:
+            job = show_project.read_job_log(path, root)
+            if job is None or "project" in job:
+                continue
+            lines = _read_lines(path)
+            if job["failed"] or any(_BLOCK.match(line) or show_project._STEP.match(line)
+                                    for line in lines):
+                # What run_series prints, after the header: the log lost its header
+                # (a copy of its last lines, as eval case E01 keeps), the job did not.
+                continue
+            entry["written"] = datetime.fromtimestamp(path.stat().st_mtime, UTC).isoformat()
+            entry["lines"] = [_line(lines, index) for index in sorted(
+                set(_errors(lines, range(len(lines))))
+                | set(range(max(0, len(lines) - TAIL), len(lines)))
+            )]
+        found[entry["id"]] = entry
+
+    if slurm and found:
+        for parts in show_project._slurm(["sacct", "-n", "-P", "-X", "-j", ",".join(found),
+                                         "-o", "JobID,State,ExitCode,Elapsed"]):
+            if len(parts) == 4 and parts[0] in found:
+                found[parts[0]]["slurm"] = {
+                    "state": parts[1], "exit_code": parts[2], "elapsed": parts[3],
+                }
+    result = []
+    for entry in found.values():
+        state = _state(entry)
+        if state in _NOT_OVER:
+            continue  # still starting: its header may yet come
+        if entry.get("missing") and (not state or state in _ENDED_WELL):
+            continue  # a log not found says nothing on its own
+        written = _time(entry.get("written"))
+        later = [
+            job for job in jobs
+            if job.get("name") == entry["name"] and written is not None
+            and (started := _time(job.get("started"))) is not None and started > written
+        ]
+        if later:
+            entry["later"] = _job(later[0])
+        result.append(entry)
+    return sorted(result, key=lambda entry: int(entry["id"]))
+
+
 def _job(job: dict[str, Any]) -> dict[str, Any]:
     return {key: job[key] for key in ("id", "name", "lane", "log", "started", "outcome", "slurm")
             if key in job}
@@ -266,8 +375,8 @@ def failures(
     chain = [name for name, _ in steps]
     labelled = show_project.step_labels(steps)
     runs = show_project.last_runs(project, set(chosen), labelled, lane["variant"])
-    jobs = show_project.job_logs(root, project_name,
-                                 show_project.slurm_logs(project) if slurm else ())
+    elsewhere = show_project.slurm_logs(project) if slurm else []
+    jobs = show_project.job_logs(root, project_name, elsewhere)
     jobs.sort(key=lambda job: int(job["id"]) if str(job.get("id", "")).isdigit() else 0)
     if slurm:
         names = {f"{Path(project_name).name}-{stage.get('name')}"
@@ -324,7 +433,13 @@ def failures(
                 slurm_lines=slurm_excerpt(lines, window) if window else [])
         # A stop before the first step is about every step the job was to run, the
         # whole chain if its log does not say: another lane's, if any is labelled.
-        if "preflight" in job and all(sees(job, name) for name in job.get("steps") or chain):
+        problem = job.get("preflight")
+        if (problem is None and not job["failed"] and "finished" not in job
+                and _CHECKS_PASSED not in lines
+                and not any(_BLOCK.match(line) for line in lines)
+                and _state(job) not in _NOT_OVER):
+            problem = CHECKS_STOPPED
+        if problem is not None and all(sees(job, name) for name in job.get("steps") or chain):
             stop = next((index for index, line in enumerate(lines)
                          if line.startswith("preflight: ")), len(lines) - 1)
             excerpt = [_line(lines, index) for index in sorted(
@@ -333,7 +448,7 @@ def failures(
             for one in job.get("series", []):
                 passed = ran_since(one, job)
                 if passed is None:
-                    add(one, "preflight", kind="preflight", problem=job["preflight"],
+                    add(one, "preflight", kind="preflight", problem=problem,
                         job=_job(job), slurm_lines=excerpt)
                 elif wanted(one, "preflight"):
                     # A later job got past the preflight: on record, no longer a failure.
@@ -376,9 +491,12 @@ def failures(
         if record["status"] == "fail"
         and wanted(record["series"], record["step"] or record["qc_type"])
     ]
+    early = before_start(cfg, root, elsewhere, jobs, chain, step=step, slurm=slurm)
     return {"project": project_name, "lane": lane.get("name"), "variant": lane["variant"],
             "failures": result, "rerun_since": sorted(rerun.values(), key=place),
-            "qc_failures": sorted(qc_failures, key=place)}
+            "qc_failures": sorted(qc_failures, key=place),
+            "before_start": [entry for entry in early if "later" not in entry],
+            "before_start_since": [entry for entry in early if "later" in entry]}
 
 
 def _describe(entry: dict[str, Any]) -> str:
@@ -410,12 +528,35 @@ def _excerpt(lines: list[dict[str, Any]], indent: str) -> list[str]:
     return out
 
 
+def _slurm_said(entry: dict[str, Any]) -> str:
+    slurm = entry.get("slurm")
+    if not slurm:
+        return ""
+    return f"; Slurm: {slurm['state']}, exit {slurm['exit_code']}, after {slurm['elapsed']}"
+
+
 def render(result: dict[str, Any]) -> list[str]:
     count = len(result["failures"])
-    lines = [f"{result['project']}: lane {result['lane']} (variant {result['variant']}), "
-             f"{count} failed step{'' if count == 1 else 's'}"]
-    if not count:
+    early = result.get("before_start") or []
+    head = (f"{result['project']}: lane {result['lane']} (variant {result['variant']}), "
+            f"{count} failed step{'' if count == 1 else 's'}")
+    if early:
+        head += (f", {len(early)} job{'' if len(early) == 1 else 's'} stopped before the "
+                 "pipeline started")
+    lines = [head]
+    if not count and not early:
         lines.append("no failed step on record for this lane")
+    if early:
+        lines += ["", "stopped before lane.sbatch's header, so before the preflight and any "
+                  "step (the environment, IMOD, the config):"]
+        for entry in early:
+            if entry.get("missing"):
+                lines.append(f"  job {entry['name']} {entry['id']}: no log at {entry['log']}"
+                             f"{_slurm_said(entry)}")
+                continue
+            lines.append(f"  {entry['log']} (job {entry['name']} {entry['id']}, written "
+                         f"{entry['written']}{_slurm_said(entry)})")
+            lines += _excerpt(entry["lines"], "  ") if entry["lines"] else ["      (empty)"]
     for entry in result["failures"]:
         lines += ["", f"{entry['series']}  {entry['step']}  {_describe(entry)}"]
         job = entry.get("job")
@@ -433,6 +574,13 @@ def render(result: dict[str, Any]) -> list[str]:
             jobs = ", ".join(_job_name(job, result["lane"]) for job in entry["jobs"])
             passed = f"; passed {entry['passed_at']}" if entry.get("passed_at") else ""
             lines.append(f"  {entry['series']}  {entry['step']}  failed in {jobs}{passed}")
+    if result.get("before_start_since"):
+        lines += ["", "stopped before lane.sbatch's header, and a later job of the same stage "
+                  "started since:"]
+        for entry in result["before_start_since"]:
+            later = entry["later"]
+            lines.append(f"  {entry['name']} {entry['id']}, then {later.get('name')} "
+                         f"{later.get('id')} ({later.get('log')})")
     if result.get("qc_failures"):
         lines += [
             "", "ran, but the result failed QC (scripts/show_project.py lists every verdict):"

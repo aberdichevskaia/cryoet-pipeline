@@ -16,7 +16,7 @@ from cryoet_pipeline.backends.template import (
     PytomTemplateBackend,
     _density_extent_px,
     _mask_radii_px,
-    _mask_versus_density_warnings,
+    _mask_versus_density,
     _MaskRadii,
     _VolumeStatistics,
     prepare_template_and_register,
@@ -700,7 +700,7 @@ def test_mask_much_smaller_than_the_density_warns() -> None:
         density_extent_px=(40.0, 40.0, 40.0),
     )
 
-    warnings = _mask_versus_density_warnings(
+    warnings, notes = _mask_versus_density(
         _MaskRadii(x=5.0, y=5.0, z=5.0), statistics, voxel_size_angstrom=10.0
     )
 
@@ -717,7 +717,7 @@ def test_mask_matching_the_density_is_quiet() -> None:
         density_extent_px=(20.0, 20.0, 20.0),
     )
 
-    warnings = _mask_versus_density_warnings(
+    warnings, notes = _mask_versus_density(
         _MaskRadii(x=11.0, y=11.0, z=11.0), statistics, voxel_size_angstrom=10.0
     )
 
@@ -736,12 +736,85 @@ def test_spherical_mask_on_anisotropic_density_warns() -> None:
         density_extent_px=(18.0, 18.0, 64.0),
     )
 
-    warnings = _mask_versus_density_warnings(
+    warnings, notes = _mask_versus_density(
         _MaskRadii(x=10.0, y=10.0, z=10.0), statistics, voxel_size_angstrom=10.0
     )
 
     assert any("not isotropic" in warning for warning in warnings)
     assert any("--template-mask-radius-z-px" in warning for warning in warnings)
+    assert notes == []
+
+
+def _flat(extents: tuple[float, float, float]) -> _VolumeStatistics:
+    return _VolumeStatistics(
+        box_size=64,
+        minimum=0.0,
+        maximum=1.0,
+        median=0.0,
+        voxel_size_angstrom=10.0,
+        density_extent_px=extents,
+    )
+
+
+def test_the_rules_sphere_on_a_flat_particle_is_a_note_not_a_warning() -> None:
+    """RyR1 at bin8 on cryoem.se, 26 November 2026: a sphere 31.3 px across over
+    density 30 px wide and 15 px deep warned on every series, and the warning
+    suggested other radii while playbook T-2 says not to shrink the mask."""
+
+    radius = 31.3 / 2.0
+    radii = _MaskRadii(x=radius, y=radius, z=radius)
+    warnings, notes = _mask_versus_density(
+        radii, _flat((30.0, 29.0, 15.0)), voxel_size_angstrom=10.0, by_rule=True
+    )
+    assert warnings == []
+    [note] = notes
+    assert "30.0/29.0/15.0 px" in note and "31.3 px across" in note
+    assert "as the lab's rule asks" in note and "playbook T-2" in note
+    assert "--template-mask-radius" not in note
+    # The same mask set by hand still warns, as for the Gag lattice.
+    warnings, notes = _mask_versus_density(
+        radii, _flat((30.0, 29.0, 15.0)), voxel_size_angstrom=10.0
+    )
+    assert any("mostly background" in warning for warning in warnings)
+    assert any("not isotropic" in warning for warning in warnings)
+    assert notes == []
+
+
+def test_the_rules_sphere_larger_than_the_particle_at_its_widest_warns() -> None:
+    """A diameter that is not the particle's: the mask is loose even where the
+    density is widest."""
+
+    radii = _MaskRadii(x=20.0, y=20.0, z=20.0)
+    warnings, notes = _mask_versus_density(
+        radii, _flat((20.0, 20.0, 10.0)), voxel_size_angstrom=10.0, by_rule=True
+    )
+    [warning] = warnings
+    assert "spans only 20.0 px (200 angstrom) at its widest" in warning
+    assert "check that the diameter is the particle's widest" in warning
+    assert len(notes) == 1
+    # Just inside the limit along the widest axis: no warning.
+    warnings, _ = _mask_versus_density(
+        _MaskRadii(x=17.9, y=17.9, z=17.9), _flat((20.0, 20.0, 10.0)),
+        voxel_size_angstrom=10.0, by_rule=True,
+    )
+    assert warnings == []
+
+
+def test_the_rules_sphere_that_cuts_the_particle_still_warns() -> None:
+    radii = _MaskRadii(x=5.0, y=5.0, z=5.0)
+    warnings, notes = _mask_versus_density(
+        radii, _flat((40.0, 40.0, 40.0)), voxel_size_angstrom=10.0, by_rule=True
+    )
+    assert len(warnings) == 3 and all("cuts the particle" in w for w in warnings)
+    assert notes == []
+
+
+def test_the_rules_sphere_on_a_round_particle_says_nothing() -> None:
+    warnings, notes = _mask_versus_density(
+        _MaskRadii(x=11.0, y=11.0, z=11.0), _flat((20.0, 20.0, 19.0)),
+        voxel_size_angstrom=10.0, by_rule=True,
+    )
+    assert warnings == [] and notes == []
 
 
 def _fake_pytom_scripts(tmp_path: Path) -> tuple[Path, Path]:
@@ -1074,3 +1147,79 @@ def test_a_header_that_names_no_axis_order_goes_to_pytom_as_stored_and_is_warned
     assert (report["source_axis_order"], report["source_reordered"]) == ([0, 0, 0], False)
     assert report["status"] == QcStatus.WARNING.value
     assert any("names no order of X, Y and Z" in warning for warning in report["warnings"])
+
+
+def _flat_particle(box_size: int = 32) -> np.ndarray:
+    """Dark, wide in x and y and thin in z, as RyR1 is at bin8."""
+
+    axis = np.arange(box_size, dtype=np.float32) - (box_size - 1) / 2.0
+    z, y, x = np.meshgrid(axis, axis, axis, indexing="ij")
+    density = np.exp(-(x**2 + y**2) / (2.0 * 4.0**2) - z**2 / (2.0 * 1.5**2))
+    return -density.astype(np.float32)
+
+
+@pytest.mark.parametrize("by_hand", [False, True])
+def test_prepare_template_notes_the_rules_sphere_and_warns_on_one_set_by_hand(
+    tmp_path: Path, by_hand: bool
+) -> None:
+    """The diameter's sphere is the lab's rule, and a note; the same radius given
+    by hand, or as an ellipsoid, is a choice the QC still questions."""
+
+    tomogram = _tomogram(tmp_path)
+    create_template, create_mask = _executables(tmp_path)
+    diameter_px = 14.0
+    parameters: dict[str, object] = {
+        "pytom_create_template_executable": create_template,
+        "pytom_create_mask_executable": create_mask,
+        "template_particle_diameter_angstrom": diameter_px * _VOXEL_SIZE,
+    }
+    if by_hand:
+        parameters["template_mask_radius_px"] = diameter_px / 2.0 + 3.0
+
+    artifacts = PytomTemplateBackend(_runner_factory(template_data=_flat_particle())).prepare(
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs", device=DevicePreference.CPU,
+            parameters=parameters,
+        ),
+    )
+
+    qc = next(artifact for artifact in artifacts if artifact.kind is ArtifactKind.QC)
+    report = json.loads(Path(qc.path).read_text())
+    assert report["mask_radius_px"] == pytest.approx(10.0)
+    assert report["density_extent_z_px"] * 1.8 < 20.0 < report["density_extent_x_px"] * 1.8
+    if by_hand:
+        assert report["status"] == QcStatus.WARNING.value
+        assert any("not isotropic" in warning for warning in report["warnings"])
+        assert report["notes"] == []
+    else:
+        assert report["status"] == QcStatus.PASS.value, report["warnings"]
+        assert report["warnings"] == []
+        [note] = report["notes"]
+        assert "as the lab's rule asks" in note
+
+
+def test_an_ellipsoid_is_never_the_rules_mask(tmp_path: Path) -> None:
+    tomogram = _tomogram(tmp_path)
+    create_template, create_mask = _executables(tmp_path)
+    artifacts = PytomTemplateBackend(_runner_factory(template_data=_flat_particle())).prepare(
+        _source_map(tmp_path),
+        tomogram,
+        _manifest(),
+        BackendContext(
+            output_dir=tmp_path / "outputs", device=DevicePreference.CPU,
+            parameters={
+                "pytom_create_template_executable": create_template,
+                "pytom_create_mask_executable": create_mask,
+                "template_particle_diameter_angstrom": 14.0 * _VOXEL_SIZE,
+                # 3 px across along z, where the density spans 6.
+                "template_mask_radius_z_px": 1.5,
+            },
+        ),
+    )
+    qc = next(artifact for artifact in artifacts if artifact.kind is ArtifactKind.QC)
+    report = json.loads(Path(qc.path).read_text())
+    assert report["notes"] == []
+    assert any("cuts the particle" in warning for warning in report["warnings"])

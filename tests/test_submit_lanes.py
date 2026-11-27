@@ -821,3 +821,94 @@ def test_a_dry_run_that_would_refuse_makes_no_new_project_folder(lane, monkeypat
     [entry] = [json.loads(line) for line in journal]
     assert entry["event"] == "dry-run"
     assert any("gain_reference: no file" in problem for problem in entry["problems"])
+
+
+RULES_HEADER = ("  set where the lab's rules leave the key unset (docs/agent/lane_questions.md, "
+                "\"Every key\"); each needs its reason, a request or a comment in the lane:")
+
+
+def test_a_dry_run_lists_what_the_lane_sets_against_the_lab_rules_with_the_rule(lane, capsys):
+    # ribo-bin8 picks the best 600 by hand; the rule leaves the count unset.
+    code, out, err = _run(capsys, lane, "--dry-run")
+    assert code == 0, err
+    lines = out.splitlines()
+    start = lines.index(RULES_HEADER)
+    listed = []
+    for line in lines[start + 1:]:
+        if not line.startswith("    ["):
+            break
+        listed.append(line)
+    assert ("    [pick] number_of_particles = 600; the rule: unset: twice the peaks above "
+            "pytom's false-positive cut-off, by the lab's rule. A number only when the "
+            "person asks for one") in listed
+    assert "    [pick] cut_off = 0.0; the rule: unset: twice the peaks" in "\n".join(listed)
+    # Keys the rule sets to a value, not to unset, are not listed: ribo-bin8 sets
+    # [ctf] amplitude_contrast as example.toml does.
+    assert not any("amplitude_contrast" in line for line in listed)
+    # Shown on the submission too, as the untried-combination warning is.
+    code, out, err = _run(capsys, lane)
+    assert code == 0, err
+    assert RULES_HEADER in out
+
+
+def test_the_lab_rules_own_lane_sets_nothing_against_them():
+    cfg = tomllib.loads((ROOT / "configs" / "lanes" / "example.toml").read_text())
+    assert submit_lanes.set_against_rules(cfg) == []
+
+
+def test_the_course_lane_sets_the_three_the_tutorials_name():
+    cfg = tomllib.loads(
+        (ROOT / "docs" / "tutorials" / "ryr1" / "ryr1-tutorial-stockholm.toml").read_text())
+    keys = [line.split(" = ", 1)[0] for line in submit_lanes.set_against_rules(cfg)]
+    assert keys == ["[ctf] defocus_search_window_angstrom", "[ctf] max_excluded_views",
+                    "[extract] pad_edges"]
+    for name in ("ryr1-stockholm-with-assistant.md", "ryr1-stockholm-without-assistant.md"):
+        text = re.sub(r"\s+", " ", (ROOT / "docs" / "tutorials" / name).read_text())
+        assert ("`[ctf] defocus_search_window_angstrom`, `[ctf] max_excluded_views` and "
+                "`[extract] pad_edges`") in text, name
+
+
+def test_ryr1_bin8_carries_the_pick_counts_the_assistant_copied():
+    # What the ryr1-assistant lane took from it on 26 November 2026.
+    cfg = tomllib.loads((ROOT / "configs" / "lanes" / "ryr1-bin8.toml").read_text())
+    keys = [line.split(" = ", 1)[0] for line in submit_lanes.set_against_rules(cfg)]
+    assert "[pick] number_of_particles" in keys
+    assert "[pick] number_of_false_positives" in keys
+
+
+def test_only_rows_whose_one_source_is_a_rule_that_leaves_the_key_unset_count(monkeypatch,
+                                                                             tmp_path):
+    doc = tmp_path / "lane_questions.md"
+    doc.write_text(
+        "| Keys | From | How |\n|---|---|---|\n"
+        "| `[pick] number_of_particles, cut_off` | rule | unset: the rule |\n"
+        "| `[fine_align] backend` | rule, person | unset: tiltalign |\n"
+        "| `[ctf] amplitude_contrast` | rule | 0.07, as [example](../x.md) says |\n"
+        "| `[pick] volume_split` | rule | Unset, unless [memory](../y.md) runs out |\n"
+    )
+    monkeypatch.setattr(submit_lanes, "LANE_QUESTIONS", doc)
+    cfg = {"pick": {"number_of_particles": 5, "cut_off": 0.1, "volume_split": "2,2,1"},
+           "fine_align": {"backend": "aretomo"}, "ctf": {"amplitude_contrast": 0.1}}
+    assert submit_lanes.set_against_rules(cfg) == [
+        "[pick] number_of_particles = 5; the rule: unset: the rule",
+        "[pick] cut_off = 0.1; the rule: unset: the rule",
+        '[pick] volume_split = "2,2,1"; the rule: Unset, unless memory runs out',
+    ]
+    assert submit_lanes.set_against_rules({"pick": {}}) == []
+
+
+def test_every_row_of_the_key_table_is_one_the_dry_run_reads():
+    text = submit_lanes.LANE_QUESTIONS.read_text()
+    start = text.index("## Every key")
+    end = text.find("\n## ", start + 1)
+    rows = [line for line in text[start:end if end > 0 else None].splitlines()
+            if line.startswith("| `[")]
+    assert rows
+    unread = [row[:80] for row in rows if not submit_lanes._KEY_ROW.match(row)]
+    assert not unread
+
+
+def test_a_missing_table_is_said_not_skipped(monkeypatch, tmp_path):
+    monkeypatch.setattr(submit_lanes, "LANE_QUESTIONS", tmp_path / "nothing.md")
+    [line] = submit_lanes.set_against_rules({"pick": {"number_of_particles": 5}})
+    assert line.startswith("not compared with the lab's rules: ")

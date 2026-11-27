@@ -632,7 +632,7 @@ class ImodCtfPhaseFlipBackend:
         """Return a CTF-corrected aligned stack and its QC artifact."""
 
         stack_shape = _validate_final_aligned_stack(tilt_stack)
-        model_warnings = _validate_ctf_model(ctf_model, tilt_stack, manifest)
+        model_warnings, fitted_elsewhere = _validate_ctf_model(ctf_model, tilt_stack, manifest)
         pixel_spacing_angstrom = _voxel_spacing(tilt_stack)
         overwrite = _bool_parameter(context, "overwrite", default=False)
         optics = _consistent_optics(context, ctf_model)
@@ -653,7 +653,7 @@ class ImodCtfPhaseFlipBackend:
             ctf_model,
             tilt_stack,
             [entry.angle_start_deg for entry in entries],
-            require_tilt_file=bool(model_warnings),
+            require_tilt_file=fitted_elsewhere,
         )
         stack_z = _stack_z_values(tilt_stack, stack_shape[0])
         dropped_z = _views_to_leave_out(ctf_model, stack_z)
@@ -1021,8 +1021,11 @@ def _validate_ctf_model(
     ctf_model: Artifact,
     tilt_stack: Artifact,
     manifest: TiltSeriesManifest,
-) -> list[str]:
-    """Check a CTF model may correct this stack, returning any caveats to record.
+) -> tuple[list[str], bool]:
+    """Check a CTF model may correct this stack.
+
+    Returns the caveats to record, and whether the model was fitted on another
+    stack, whose views then have to be checked against this one's.
 
     Defocus is a physical quantity, and the IMOD file records it against tilt
     angles rather than pixels, so a model fitted on the same views at a
@@ -1032,6 +1035,15 @@ def _validate_ctf_model(
     binning, and coarse binning is where fitting is least reliable — few Thon
     rings fall below Nyquist. What must agree is the set of views, which
     `_validate_model_tilt_angles` checks against the stack's own tilt angles.
+
+    A model fitted on a stack of the same alignment, at another binning, is the
+    bin8 lanes' own route: fitted on the final stack at the fit's binning,
+    applied to the one at the tomogram's. Both are made from one alignment,
+    which the model and the stack then both have as a parent, and that is not
+    worth a warning: it made every bin8 series WARN in the correction's column,
+    so that a real problem looked the same (cryoem.se, 26 November 2026). A model
+    from another alignment, or from a stack whose parents are not on record,
+    still is.
     """
 
     if ctf_model.kind is not ArtifactKind.CTF_MODEL:
@@ -1057,7 +1069,9 @@ def _validate_ctf_model(
                 f"CTF model was fitted at {float(recorded_spacing)} angstrom/pixel but "  # type: ignore[arg-type]
                 f"{tilt_stack.id} is {stack_spacing} angstrom/pixel"
             )
-        return []
+        return [], False
+    if set(ctf_model.parent_ids) & set(tilt_stack.parent_ids):
+        return [], True
 
     warnings = [
         f"CTF model was fitted on {fitted_stack_id!r}, not on {tilt_stack.id!r}; "
@@ -1069,7 +1083,7 @@ def _validate_ctf_model(
             f"fitted at {_angstrom(float(recorded_spacing))} angstrom/pixel and applied at "  # type: ignore[arg-type]
             f"{_angstrom(stack_spacing)} angstrom/pixel"
         )
-    return warnings
+    return warnings, True
 
 
 def _angstrom(value: float) -> str:

@@ -874,8 +874,9 @@ def test_ctfphaseflip_applies_a_model_fitted_at_another_binning(tmp_path: Path) 
 
     Coarse binning is where CTF fitting is least reliable — few Thon rings fall
     below Nyquist — so being able to fit once at the finest binning and apply the
-    result elsewhere is the point. The transfer is recorded as a warning, not
-    silently accepted, and ctfphaseflip still gets this stack's pixel size.
+    result elsewhere is the point. From a model whose alignment is not on record,
+    as here, the transfer is recorded as a warning, not silently accepted, and
+    ctfphaseflip still gets this stack's pixel size.
     """
 
     source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
@@ -1184,3 +1185,106 @@ def test_ctffind5_estimation_keeps_evidence_when_a_view_fails(tmp_path: Path) ->
     log = (out / "ctf" / "TS_TEST" / "TS_TEST_ctffind5.log").read_text()
     assert "<<stdin>>" in log, "the exact stdin belongs in the log"
     assert "answer is not recognized" in log
+
+
+def _flipping_runner(captured: list[list[str]]):
+    def runner(
+        command: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, stdin
+        command_list = list(command)
+        captured.append(command_list)
+        with mrcfile.new(
+            Path(command_list[command_list.index("-OutputFileName") + 1]), overwrite=True
+        ) as output:
+            output.set_data(_CORRECTED_DATA)
+        return subprocess.CompletedProcess(command, 0, stdout="flipped", stderr="")
+
+    return runner
+
+
+def _bin8_route(tmp_path: Path, model_alignment: str) -> tuple[Artifact, Artifact, list]:
+    """A model fitted on the final stack, with the parents estimation gives it
+    (the stack and the alignment), and the same alignment's stack at bin8."""
+
+    source_stack, alignment, aligned_stack = _input_artifacts(tmp_path)
+    ctf_model = _ctf_model_artifact(tmp_path, aligned_stack)
+    model = ctf_model.model_copy(update={
+        "parent_ids": [aligned_stack.id, model_alignment],
+        "parameters": {**ctf_model.parameters, "pixel_spacing_angstrom": 1.35},
+    })
+    coarse = aligned_stack.model_copy(update={"id": "TS_TEST:aligned_tilt_stack:final:bin8"})
+    assert coarse.parent_ids == [source_stack.id, alignment.id]
+    others = [source_stack, alignment, aligned_stack, coarse]
+    if model_alignment != alignment.id:
+        # A branch's alignment of the same series, such as AreTomo2's.
+        others.insert(2, alignment.model_copy(update={"id": model_alignment}))
+    return model, coarse, others
+
+
+def test_a_model_of_the_same_alignment_at_another_binning_is_not_a_warning(
+    tmp_path: Path,
+) -> None:
+    """The bin8 lanes' route: fitted at the fit's binning, applied at the
+    tomogram's. It made every bin8 series WARN in the correction's column on
+    cryoem.se, 26 November 2026, so that a real problem looked the same."""
+
+    model, coarse, others = _bin8_route(tmp_path, "TS_TEST:alignment:fine")
+    registry = ArtifactRegistry.empty()
+    registry.extend([*others, model])
+    captured: list[list[str]] = []
+
+    _, qc_artifact = correct_ctf_and_register(
+        ImodCtfPhaseFlipBackend(_flipping_runner(captured)),
+        coarse,
+        model,
+        _manifest(),
+        _context(tmp_path, {"imod_dir": _fake_imod_dir(tmp_path)}),
+        registry,
+    )
+
+    assert captured[0][captured[0].index("-PixelSize") + 1] == "0.270000"
+    report = CtfCorrectionQc.model_validate_json(qc_artifact.path.read_text())
+    assert report.warnings == []
+    assert report.status == QcStatus.PASS
+
+
+def test_the_same_alignment_at_another_binning_still_has_its_views_checked(
+    tmp_path: Path,
+) -> None:
+    model, coarse, _ = _bin8_route(tmp_path, "TS_TEST:alignment:fine")
+    untilted = coarse.model_copy(update={"parameters": {
+        key: value for key, value in coarse.parameters.items() if key != "tilt_file_path"
+    }})
+
+    with pytest.raises(ValueError, match="records no readable tilt-angle file"):
+        ImodCtfPhaseFlipBackend(_flipping_runner([])).correct(
+            untilted,
+            model,
+            _manifest(),
+            _context(tmp_path, {"imod_dir": _fake_imod_dir(tmp_path)}),
+        )
+
+
+def test_a_model_of_another_alignment_is_still_a_warning(tmp_path: Path) -> None:
+    model, coarse, others = _bin8_route(tmp_path, "TS_TEST:alignment:fine_aretomo")
+    registry = ArtifactRegistry.empty()
+    registry.extend([*others, model])
+
+    _, qc_artifact = correct_ctf_and_register(
+        ImodCtfPhaseFlipBackend(_flipping_runner([])),
+        coarse,
+        model,
+        _manifest(),
+        _context(tmp_path, {"imod_dir": _fake_imod_dir(tmp_path)}),
+        registry,
+    )
+
+    report = CtfCorrectionQc.model_validate_json(qc_artifact.path.read_text())
+    assert report.status == QcStatus.WARNING
+    assert any("not on 'TS_TEST:aligned_tilt_stack:final:bin8'" in w for w in report.warnings)
+    assert any("1.35 angstrom/pixel" in warning for warning in report.warnings)

@@ -52,6 +52,14 @@ nothing is broken now, not that nothing ever failed: say which of these it
 lists. A QC failure is a verdict on a result, not a crash; its details are in
 `show_project.py`.
 
+A job that stopped before `lane.sbatch` printed its header ran no step, so it
+is no failed step. The first line counts such jobs ("1 job stopped before the
+pipeline started"), and each is listed with its log's lines and what Slurm says.
+The cause is in the job's environment: the environment's activation, IMOD's
+startup script, the config. The setup check on a GPU node finds what the job's
+environment lacks: give the person its `srun` command, as the install skill
+does (`setup.md`, "On a GPU node").
+
 Two more sources, where needed:
 
 - `python3 scripts/show_series.py --project <project> --series <TS>`: what one

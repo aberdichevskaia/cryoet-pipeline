@@ -254,10 +254,19 @@ class PytomTemplateBackend:
         if clipped is not None:
             status = QcStatus.WARNING
             warnings.append(clipped)
-        shape_warnings = _mask_versus_density_warnings(
+        # The lab's rule: a sphere at the particle's widest radius plus
+        # MASK_MARGIN_PX, sized from the diameter. Neither a radius set by hand
+        # nor one measured off the map.
+        mask_by_rule = (
+            not mask_radius_derived
+            and mask_radii.is_sphere
+            and _optional_positive_float_parameter(context, "template_mask_radius_px") is None
+        )
+        shape_warnings, notes = _mask_versus_density(
             mask_radii,
             template_statistics,
             voxel_size_angstrom=output_voxel_size,
+            by_rule=mask_by_rule,
         )
         if shape_warnings:
             status = QcStatus.WARNING
@@ -302,6 +311,7 @@ class PytomTemplateBackend:
             source_reordered=reordered,
             status=status,
             warnings=warnings,
+            notes=notes,
         )
         _write_json(paths.report, report.model_dump(mode="json"))
 
@@ -513,13 +523,16 @@ _MASK_TOO_LOOSE = 1.8
 _ANISOTROPIC = 1.5
 
 
-def _mask_versus_density_warnings(
+def _mask_versus_density(
     radii: _MaskRadii,
     statistics: _VolumeStatistics,
     *,
     voxel_size_angstrom: float,
-) -> list[str]:
+    by_rule: bool = False,
+) -> tuple[list[str], list[str]]:
     """Compare the mask that was asked for against the density that is there.
+
+    Returns warnings, which make the QC a WARN, and notes, which do not.
 
     The only existing guard on the requested size is that the mask fits in the
     box, which catches a diameter larger than the whole map and nothing else.
@@ -532,12 +545,22 @@ def _mask_versus_density_warnings(
     "extent" rather than on a fact about the map, a deliberately tight mask is a
     legitimate choice for a lattice, and refusing to run on a judgement call
     would be worse than saying what was noticed.
+
+    `by_rule` is a sphere sized from the particle's diameter by the lab's rule:
+    the widest radius plus MASK_MARGIN_PX. On a particle that is not round, such
+    a sphere holds background along the narrower axes by design, so that, and
+    the density not being isotropic, are a note rather than a warning: warning
+    on every series of a flat particle (RyR1, cryoem.se, 26 November 2026) said
+    to change the radii while playbook T-2 says not to shrink the mask. What
+    stays a warning is a mask that cuts the particle, and one larger than the
+    density at its widest, which says the diameter is not the particle's.
     """
 
     warnings: list[str] = []
-    axes = zip(
-        ("x", "y", "z"), (radii.x, radii.y, radii.z), statistics.density_extent_px, strict=True
-    )
+    notes: list[str] = []
+    extents = statistics.density_extent_px
+    smallest, largest = min(extents), max(extents)
+    axes = zip(("x", "y", "z"), (radii.x, radii.y, radii.z), extents, strict=True)
     for name, radius, extent in axes:
         if extent <= 0.0:
             continue
@@ -548,7 +571,7 @@ def _mask_versus_density_warnings(
                 f"{extent:.1f} px ({extent * voxel_size_angstrom:.0f} angstrom), and that is a "
                 "floor; the mask cuts the particle, which lowers every score without failing"
             )
-        elif ratio > _MASK_TOO_LOOSE:
+        elif ratio > _MASK_TOO_LOOSE and not by_rule:
             warnings.append(
                 f"mask is {radius * 2.0:.1f} px across along {name} but 95% of the density "
                 f"spans only {extent:.1f} px ({extent * voxel_size_angstrom:.0f} angstrom); "
@@ -556,16 +579,35 @@ def _mask_versus_density_warnings(
                 "mostly background, which dilutes the correlation"
             )
 
-    extents = statistics.density_extent_px
-    smallest, largest = min(extents), max(extents)
-    if radii.is_sphere and smallest > 0.0 and largest / smallest > _ANISOTROPIC:
+    across = radii.x * 2.0
+    if by_rule and largest > 0.0 and across / largest > _MASK_TOO_LOOSE:
+        warnings.append(
+            f"mask is {across:.1f} px across, sized from the particle's diameter by the lab's "
+            f"rule, but 95% of the density spans only {largest:.1f} px "
+            f"({largest * voxel_size_angstrom:.0f} angstrom) at its widest: check that the "
+            "diameter is the particle's widest; the mask is mostly background, which dilutes "
+            "the correlation"
+        )
+    anisotropic = radii.is_sphere and smallest > 0.0 and largest / smallest > _ANISOTROPIC
+    loose_somewhere = any(
+        extent > 0.0 and across / extent > _MASK_TOO_LOOSE for extent in extents
+    )
+    if by_rule and (anisotropic or loose_somewhere):
+        notes.append(
+            f"density spans {extents[0]:.1f}/{extents[1]:.1f}/{extents[2]:.1f} px along "
+            f"x/y/z and the mask is a sphere {across:.1f} px across, as the lab's rule asks: "
+            f"the particle's widest radius plus {MASK_MARGIN_PX:g} px. Along a narrower axis "
+            "it holds background; that is expected, and not a reason to shrink it "
+            "(playbook T-2)"
+        )
+    elif anisotropic:
         warnings.append(
             f"density is not isotropic — x/y/z span {extents[0]:.1f}/{extents[1]:.1f}/"
             f"{extents[2]:.1f} px — but the mask is a sphere; consider "
             "--template-mask-radius-y-px and --template-mask-radius-z-px, and note that a "
             "non-spherical mask also changes how pytom normalises the score"
         )
-    return warnings
+    return warnings, notes
 
 
 def _contrast_matches_inversion(
@@ -765,7 +807,9 @@ def _mask_radii_px(
     value is a sphere on the largest measured axis, never an ellipsoid: a
     non-spherical mask changes how pytom normalises the score, which is too
     consequential to start doing without being asked. When the map really is
-    anisotropic the QC warning says so and names the per-axis options.
+    anisotropic the QC says so, as a note when the diameter sized the sphere by
+    the lab's rule, and otherwise as a warning that names the per-axis options
+    (`_mask_versus_density`).
 
     A map whose density fills its box — a lattice, say — derives a radius that
     does not fit, and the existing box check refuses it. That refusal is the

@@ -101,16 +101,26 @@ nothing.
 
 ### T-2. The mask cuts the particle, or is mostly background
 
-**Kind:** warning · **Evidence:** code
+**Kind:** warning · **Evidence:** code, seen
+
+The lab's rule is a sphere: the particle's widest radius plus 3 px, sized from
+`[pick] particle_diameter_angstrom`. On a particle that is not round, such as
+RyR1 at bin8 (31.3 px across, density 15 px deep), the sphere holds background
+along the narrower axes by design. The QC record says so as a note, not a
+warning: `density spans <x>/<y>/<z> px along x/y/z and the mask is a sphere
+<n> px across, as the lab's rule asks: …`. Nothing to do.
 
 **Error text:**
 - `mask is <n> px across along <axis> but 95% of the density spans <m> px (<a>
   angstrom), and that is a floor; the mask cuts the particle, which lowers every
   score without failing`
-- `mask is <n> px across along <axis> but 95% of the density spans only <m> px
-  (<a> angstrom); the mask is mostly background, which dilutes the correlation`
-- `density is not isotropic — x/y/z span <x>/<y>/<z> px — but the mask is a
-  sphere; …`
+- `mask is <n> px across, sized from the particle's diameter by the lab's rule,
+  but 95% of the density spans only <m> px (<a> angstrom) at its widest: check
+  that the diameter is the particle's widest; …`
+- For a mask set by hand (`[template] mask_radius_px`, an ellipsoid, or none
+  given): `mask is <n> px across along <axis> but 95% of the density spans only
+  <m> px (<a> angstrom); the mask is mostly background, …` and `density is not
+  isotropic — x/y/z span <x>/<y>/<z> px — but the mask is a sphere; …`
 
 **Causes, common to rare:**
 1. `[pick] particle_diameter_angstrom` is not the particle's widest diameter.
@@ -118,11 +128,14 @@ nothing.
 
 **What to try:** measure the particle at its widest in the map, and set the
 diameter to that. Set `mask_radius_px` and `box_size_px` by hand only for a map
-with no single particle in it (T-4).
+with no single particle in it (T-4); the per-axis radii the last warning names
+are for such a map too.
 
-**What not to do:** shrink the mask to raise the scores.
+**What not to do:** shrink the mask to raise the scores, or give a particle
+per-axis radii because its density is flat.
 
-**Source:** read in `backends/template.py`.
+**Source:** read in `backends/template.py`; the RyR1 note from the Stockholm
+course's run, 26 November 2026.
 
 ### T-3. The mask does not fit in the box
 

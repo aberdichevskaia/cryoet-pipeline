@@ -441,8 +441,9 @@ What it does, following its `lane-config` skill:
 
 1. **Reads the closest lane at this site.** That is likely
    `docs/tutorials/ryr1/ryr1-tutorial-stockholm.toml`, made for these frames
-   on cryoem.se, or `configs/lanes/ryr1-bin8.toml`, which ran on them at MDC:
-   their comments say where each value came from.
+   on cryoem.se: its comments say where each value came from. It copies the
+   rows marked *site* from it, such as the partitions; the other values come
+   from the data, your answers and the lab's rules.
 2. **Asks what is left**, in one message, each question with its default. Your
    answers for these data:
 
@@ -497,6 +498,15 @@ means. A stage Slurm refuses comes with Slurm's own reason, for example a
 reservation or partition your account may not use. It submits with
 `--until-stage` set to the stage that ends at particle extraction, because you
 said you would look at the picks first.
+
+The dry run also lists, under *set where the lab's rules leave the key unset*,
+every value the lane sets that a rule would leave out, with the rule. The
+course's lane sets three, each with its reason in a comment: `[ctf]
+defocus_search_window_angstrom`, `[ctf] max_excluded_views` and `[extract]
+pad_edges`. Ask where any other one came from. A count such as `[pick]
+number_of_particles` changes how many picks you get and whether pick QC
+passes: on 26 November 2026 a lane that had copied 2000 from another lane
+picked 755 on series 125, where the rule gave 632.
 
 It asks whether to submit. Answer with a clear yes. It then runs the same
 command without `--dry-run` and with `--reason`, and reports the job IDs. If

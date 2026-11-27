@@ -1010,6 +1010,10 @@ class TemplatePreparationQc(BaseModel):
     sections Z and was rewritten in that order for pytom, which reads every map so."""
     status: QcStatus
     warnings: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    """What was noticed and needs no action, such as a sphere sized by the lab's
+    rule holding background along a flat particle's narrower axis. Not in
+    documents written before 27 November 2026."""
 
     @model_validator(mode="after")
     def validate_statistics(self) -> TemplatePreparationQc:
